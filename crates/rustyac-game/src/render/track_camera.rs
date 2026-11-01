@@ -318,6 +318,14 @@ impl TrackCameras {
         Ok(cameras)
     }
 
+    /// `CameraTrack::setCurrentCameraSet` 0x1400cbe10 (the replay's camera spinner): a set
+    /// the track has.
+    pub fn set_current_set(&mut self, index: usize) {
+        if index < self.sets.len() {
+            self.current_set = index;
+        }
+    }
+
     /// `CameraTrack::nextSet` 0x1400cbc90 (F3 again): the next set, after the last the first;
     /// its name.
     pub fn next_set(&mut self) -> String {

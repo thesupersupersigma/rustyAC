@@ -719,7 +719,7 @@ impl DrivingCamera {
         self.shown = None;
         match self.last_camera.0 {
             0 => (self.mode, self.last_driving) = (CameraMode::Cockpit, CameraMode::Cockpit),
-            1 => self.mode = CameraMode::Car,
+            1 => (self.mode, self.near) = (CameraMode::Car, 0.05),
             2 => (self.mode, self.last_driving) = (CameraMode::Drivable, CameraMode::Drivable),
             3 => self.mode = CameraMode::Track,
             mode @ 4..=6 => return Some(mode),
@@ -794,16 +794,41 @@ impl DrivingCamera {
         self.random = false;
         self.shown = None;
         self.mode = CameraMode::Car;
+        // setMode(eCar): the scene camera's near plane
+        self.near = 0.05;
         self.car_index = index;
+    }
+
+    /// `ACCameraManager::setDrivableCarIndex` 0x140033fd0 (the Camera editor's F1 buttons):
+    /// 0 the cockpit, 1.. the drivable views; the random camera stays as it is.
+    pub fn set_drivable_car_index(&mut self, index: i32) {
+        self.shown = None;
+        if index != 0 {
+            self.mode = CameraMode::Drivable;
+            self.set_drivable(index - 1);
+        } else {
+            self.mode = CameraMode::Cockpit;
+        }
+        self.last_driving = self.mode;
+        self.remember();
+    }
+
+    /// `FormCamera::selectCamera` 0x1402f8760 after its `setMode(mode, false, false)`:
+    /// `setDrivableCarIndex` (mode 0) or `setCameraCarIndex` (mode 1, only while the car's
+    /// cameras show, only an index the focused car has).
+    pub fn select_index(&mut self, mode: i32, index: i32, count: usize) {
+        match mode {
+            0 => self.set_drivable_car_index(index),
+            1 if self.mode == CameraMode::Car && (index as u32 as usize) < count => self.car_index = index as usize,
+            _ => {}
+        }
     }
 
     /// F1 (or F6) from the free camera or the start camera: `setMode(eCockpit)` from a mode
     /// that is not a driving one is `lastDrivingMode`, without moving on.
     pub fn back_to_driving(&mut self) {
         self.shown = None;
-        if matches!(self.mode, CameraMode::Car | CameraMode::Track) {
-            self.mode = self.last_driving;
-        }
+        self.mode = self.last_driving;
         self.remember();
     }
 

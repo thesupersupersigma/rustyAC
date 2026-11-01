@@ -685,6 +685,8 @@ pub fn set_mode(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartC
             *start = None;
             camera.shown = None;
             camera.random = false;
+            // (setMode(eFree): the scene camera's near plane)
+            camera.near = 0.05;
             if free.is_none() {
                 *free = last.map(MouseCamera::new);
             }

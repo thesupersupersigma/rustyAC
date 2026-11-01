@@ -810,6 +810,11 @@ pub unsafe fn track_micro(acs: &Acs, ac: &std::path::Path, seed: u32, steps: usi
 const VA_MANAGER_SET_MODE: usize = 0x1_4003_40d0;
 const VA_MANAGER_UPDATE: usize = 0x1_4003_45e0;
 const VA_AUDIO_DISTANCE_SCALE: usize = 0x1_4003_3e20;
+const VA_DRIVABLE_SET_CURRENT: usize = 0x1_400c_6960;
+const VA_TRACK_SET_CURRENT_SET: usize = 0x1_400c_be10;
+const VA_MANAGER_SET_DRIVABLE_CAR_INDEX: usize = 0x1_4003_3fd0;
+const VA_MANAGER_SET_CAMERA_CAR_INDEX: usize = 0x1_4003_3fb0;
+const VA_MANAGER_LOAD_PREVIOUS: usize = 0x1_4003_37e0;
 
 /// Task 46: F2, the game's random camera (`ACCameraManager::update` 0x1400345e0 with
 /// `stepCameraRandom` 0x140034300 and `setMode` 0x1400340d0) on a manager made by hand, with
@@ -818,11 +823,25 @@ const VA_AUDIO_DISTANCE_SCALE: usize = 0x1_4003_3e20;
 /// <car cameras> <mode> <last driving> <view> <car camera> <set> <times 3> <probabilities 4>`,
 /// then per event `key <F>` or `dt <bits>`, each `-> <mode> <last driving> <view> <car camera>
 /// <set> <random> <last random> <time> <old time> <near> <global index>`.
+///
+/// Task 46b: the windows' calls on the same manager, and the last camera remembered: the
+/// replay's camera spinner (`spin <value>`: lambda 0x14014b370's `setCurrentCamera` /
+/// `setCurrentCameraSet`, then `setMode(mode, true, false)`), the Camera editor's F1 and F6
+/// buttons (`select <mode> <index>`: `FormCamera::selectCamera`'s `setMode(mode, false, false)`
+/// then `setDrivableCarIndex` / `setCameraCarIndex`), the photo mode's Start and back (`photo`,
+/// `photoback <mode>`: `setMode(eFree)`, `setMode(the mode it found)`), the ESC menu's first
+/// Drive (`load`: `loadPreviousSessionUserCamera`). The group line ends with the remembered
+/// camera and drivable view, each line with `persistanceCameraMode`'s two.
 pub unsafe fn random_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, String> {
     acs.patch(acs.va(VA_AUDIO_DISTANCE_SCALE), &[0xc3]);
     let set_mode: extern "C" fn(*mut u8, i32, bool, bool) = std::mem::transmute(acs.va(VA_MANAGER_SET_MODE));
     let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_MANAGER_UPDATE));
     let next_camera: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_CAMERAS_NEXT));
+    let set_current_camera: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_DRIVABLE_SET_CURRENT));
+    let set_current_set: extern "C" fn(*mut u8, u32) = std::mem::transmute(acs.va(VA_TRACK_SET_CURRENT_SET));
+    let set_drivable_car_index: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_MANAGER_SET_DRIVABLE_CAR_INDEX));
+    let set_camera_car_index: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_MANAGER_SET_CAMERA_CAR_INDEX));
+    let load_previous: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MANAGER_LOAD_PREVIOUS));
     // (the game's rand() is the oracle's own, see `rand`)
     SEED.store(seed, Ordering::Relaxed);
     let mut rng = Rng(seed as u64 ^ 0x2f2);
@@ -884,17 +903,67 @@ pub unsafe fn random_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String,
             wr(p, 4 * i, *v);
         }
         wr(manager, 0x10c, 3i32);
+        // (camera_manager.ini's [LAST_CAMERA]: the cockpit, car, drivable or track cameras)
+        let remembered = [(rng.next() % 4) as i32, (rng.next() % 5) as i32];
+        wr(manager, 0x190, remembered[0]);
+        wr(manager, 0x194, remembered[1]);
         write!(tape, "group {sets} {cameras} {mode} {last} {view} {index} {set}").unwrap();
         bits(&mut tape, &times);
         for v in probabilities {
             write!(tape, " {v}").unwrap();
         }
-        tape.push('\n');
+        writeln!(tape, " {} {}", remembered[0], remembered[1]).unwrap();
+        let mut photo: Option<i32> = None;
         for _ in 0..500 {
             let r = rng.next() % 40;
-            // (F6 on a car without cameras of its own: the port shows the view driven with)
-            let r = if cameras == 0 && r == 3 { 39 } else { r };
-            if r < 4 {
+            // (F6, the car's camera buttons and the photo mode on a car without cameras of its
+            // own: the port shows the view driven with)
+            let r = if cameras == 0 && matches!(r, 3 | 7 | 8) { 39 } else { r };
+            if (4..10).contains(&r) {
+                match r {
+                    4 | 5 => {
+                        let value = 1 + (rng.next() % (6 + sets as u64)) as i32;
+                        write!(tape, "spin {value}").unwrap();
+                        let mode = if value < 2 {
+                            0
+                        } else if value < 7 {
+                            set_current_camera(drivable, value - 2);
+                            2
+                        } else {
+                            set_current_set(track, (value - 7) as u32);
+                            3
+                        };
+                        set_mode(manager, mode, true, false);
+                    }
+                    6 | 7 => {
+                        let mode = if r == 6 { 0 } else { 1 };
+                        let index = (rng.next() % if mode == 0 { 6 } else { cameras as u64 + 1 }) as i32;
+                        write!(tape, "select {mode} {index}").unwrap();
+                        set_mode(manager, mode, false, false);
+                        if mode == 0 {
+                            set_drivable_car_index(manager, index);
+                        } else {
+                            set_camera_car_index(manager, index);
+                        }
+                    }
+                    8 => match photo.take() {
+                        None => {
+                            tape.push_str("photo");
+                            photo = Some(rd::<i32>(manager, 0x120));
+                            set_mode(manager, 6, false, false);
+                        }
+                        Some(before) => {
+                            write!(tape, "photoback {before}").unwrap();
+                            set_mode(manager, before, false, false);
+                        }
+                    },
+                    _ => {
+                        tape.push_str("load");
+                        photo = None;
+                        load_previous(manager);
+                    }
+                }
+            } else if r < 4 {
                 let key = [1, 2, 3, 6][r as usize];
                 write!(tape, "key {key}").unwrap();
                 match key {
@@ -926,7 +995,7 @@ pub unsafe fn random_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String,
             )
             .unwrap();
             bits(&mut tape, &[rd(manager, 0xe0), rd(manager, 0xe4), rd(camera, 0x70)]);
-            writeln!(tape, " {}", rd::<i32>(manager, 0xdc)).unwrap();
+            writeln!(tape, " {} {} {}", rd::<i32>(manager, 0xdc), rd::<i32>(manager, 0x190), rd::<i32>(manager, 0x194)).unwrap();
         }
     }
     Ok(tape)

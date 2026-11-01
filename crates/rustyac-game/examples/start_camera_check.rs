@@ -26,7 +26,7 @@
 //!
 //! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder> [<random_camera.tape> <seed> [<orbit_camera.tape>]]]]]`
 
-use rustyac_game::render::onboard_free::{CinematicCamera, HelicopterCamera, OnboardFreeCamera, OrbitInput, ShotCamera};
+use rustyac_game::render::onboard_free::{self, CinematicCamera, HelicopterCamera, OnboardFreeCamera, OrbitInput, ShotCamera};
 use rustyac_game::render::track_camera::{CameraSet, RandomCamera, TrackCamera, TrackCameras};
 use rustyac_game::render::scene::{CameraFrame, CameraMode, CarCamera, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::view::CarView;
@@ -141,6 +141,7 @@ fn random(tape: &str, seed: u32) -> bool {
     let mut track = TrackCameras::default();
     let mut random = RandomCamera::new(None, &mut rustyac_physics::session::MsvcRand(0));
     let (mut cameras, mut global) = (0usize, 0i32);
+    let (mut free, mut start, mut shot): (Option<MouseCamera>, Option<StartCamera>, Option<ShotCamera>) = (None, None, None);
     for line in tape.lines() {
         lines += 1;
         if let Some(group) = line.strip_prefix("group ") {
@@ -158,33 +159,64 @@ fn random(tape: &str, seed: u32) -> bool {
             camera.track_set = track.current_set;
             let t: Vec<f32> = w[7..10].iter().map(|x| float(x)).collect();
             random = RandomCamera { min_time: t[0], max_time: t[1], time: t[2], old_time: 0.0, probabilities: [0, 1, 2, 3].map(|i| w[10 + i].parse().unwrap()), last: 3 };
+            camera.last_camera = (w[14].parse().unwrap(), w[15].parse().unwrap());
+            (free, start, shot) = (None, None, None);
             global = 0;
             continue;
         }
         let (input, output) = line.split_once(" -> ").expect("a line of the tape");
-        // (the game's currentGlobalCameraIndex changes in setMode only: on a key or a draw)
-        let set_mode = input.starts_with("key") || (camera.random && random.old_time >= random.time);
-        match input.split_once(' ').expect("an event") {
-            ("key", "1") => camera.f1(),
-            ("key", "2") => {
-                if camera.f3() {
-                    track.next_set();
-                }
-                camera.random = true;
+        // (the game's currentGlobalCameraIndex changes in setMode only: on a key, a window's
+        // call or a draw)
+        let set_mode = !input.starts_with("dt") || (camera.random && random.old_time >= random.time);
+        // (the desktop's calls, the free camera an overlay on the driving ones)
+        let last = CameraFrame { matrix: rustyac_game::view::IDENTITY, fov: 60.0, near: 0.1 };
+        let mut mode_to = |mode: i32, camera: &mut DrivingCamera, track: &mut TrackCameras, free: &mut Option<MouseCamera>| {
+            onboard_free::set_mode(mode, camera, &mut start, free, &mut shot, Some(&last), cameras, false, track)
+        };
+        match input.split_once(' ').unwrap_or((input, "")) {
+            ("key", "1") => onboard_free::f1(&mut camera, &mut start, &mut free),
+            ("key", "2") => mode_to(7, &mut camera, &mut track, &mut free),
+            ("key", "3") => mode_to(3, &mut camera, &mut track, &mut free),
+            ("key", _) => onboard_free::f6(&mut camera, &mut start, &mut free, cameras),
+            // the replay's spinner: setCurrentCamera / setCurrentCameraSet, setMode(mode, true)
+            ("spin", v) => {
+                let v: i32 = v.parse().unwrap();
+                free = None;
+                let mode = match v {
+                    ..=1 => 0,
+                    2..=6 => {
+                        camera.set_drivable(v - 2);
+                        2
+                    }
+                    _ => {
+                        track.set_current_set((v - 7) as usize);
+                        3
+                    }
+                };
+                camera.set_mode_kept(mode);
             }
-            ("key", "3") => {
-                if camera.f3() {
-                    track.next_set();
+            ("select", v) => {
+                let (mode, index) = v.split_once(' ').unwrap();
+                let (mode, index) = (mode.parse().unwrap(), index.parse().unwrap());
+                mode_to(mode, &mut camera, &mut track, &mut free);
+                camera.select_index(mode, index, cameras);
+            }
+            ("photo", _) => mode_to(6, &mut camera, &mut track, &mut free),
+            ("photoback", v) => mode_to(v.parse().unwrap(), &mut camera, &mut track, &mut free),
+            ("load", _) => {
+                free = None;
+                if let Some(mode) = camera.load_previous() {
+                    mode_to(mode, &mut camera, &mut track, &mut free);
                 }
             }
-            ("key", _) => camera.f6(cameras),
             (_, dt) => random.update(float(dt), &mut camera, cameras, &mut track, &mut rand),
         }
         camera.track_set = track.current_set;
-        if let Some(g) = camera.global_index().filter(|_| set_mode) {
+        if let Some(g) = camera.global_index().filter(|_| set_mode && free.is_none()) {
             global = g;
         }
         let mode = match camera.mode {
+            _ if free.is_some() => 6,
             CameraMode::Cockpit => 0,
             CameraMode::Car => 1,
             CameraMode::Drivable => 2,
@@ -195,8 +227,8 @@ fn random(tape: &str, seed: u32) -> bool {
         drivable.mode = CameraMode::Drivable;
         let view = drivable.global_index().expect("a drivable view") - 1;
         let port = format!(
-            "{mode} {last} {view} {} {} {} {} {:08x} {:08x} {:08x} {global}",
-            camera.car_index, track.current_set, camera.random as u8, random.last, random.time.to_bits(), random.old_time.to_bits(), camera.near.to_bits()
+            "{mode} {last} {view} {} {} {} {} {:08x} {:08x} {:08x} {global} {} {}",
+            camera.car_index, track.current_set, camera.random as u8, random.last, random.time.to_bits(), random.old_time.to_bits(), camera.near.to_bits(), camera.last_camera.0, camera.last_camera.1
         );
         if port != output {
             wrong += 1;
@@ -234,13 +266,14 @@ fn driving(tape: &str) -> bool {
             let rand = camera.cockpit.rand;
             camera = DrivingCamera::chase();
             camera.cockpit.rand = rand;
-            camera.near = 0.0;
             camera.set_drivable(view);
             match mode {
                 0 => camera.set_mode_kept(0),
                 2 => camera.set_car_camera(index),
                 _ => {}
             }
+            // (the tape's scene camera starts at a near plane of 0, setMode's 0.05 or not)
+            camera.near = 0.0;
             let three = |i: usize| [c[i], c[i + 1], c[i + 2]];
             shape = CarShape {
                 graphics_offset: three(0),

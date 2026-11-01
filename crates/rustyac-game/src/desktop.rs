@@ -2041,11 +2041,13 @@ fn run_window(options: &Options) -> Result<(), String> {
                             }
                         }
                     }
-                    // its camera spinner (the track's cameras are not ported: it has no
-                    // such entries)
+                    // its camera spinner: setCurrentCamera / setCurrentCameraSet, then setMode(mode, true)
                     SimAction::SetDrivableCamera(view) => camera.set_drivable(view),
-                    SimAction::SetCameraModeKept(mode) => camera.set_mode_kept(mode),
-                    SimAction::SetTrackCameraSet(_) => {}
+                    SimAction::SetCameraModeKept(mode) => {
+                        (start_camera, mouse_camera) = (None, None);
+                        camera.set_mode_kept(mode);
+                    }
+                    SimAction::SetTrackCameraSet(set) => track_cameras.set_current_set(set.max(0) as usize),
                 }
             }
             // Task 34: the chat's lines and the votes to the client (the physics thread's)
@@ -2077,6 +2079,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                     link.lap_marks = if focus.index < manager.recorders.len() { manager.get_normalized_lap_change(focus.index) } else { Vec::new() };
                 }
                 link.auto_file_name = rig.auto_file_name();
+                // (the spinner's entries after the cockpit and the drivable views: getCameraSetName)
+                link.track_camera_sets = track_cameras.sets.iter().map(|set| set.name.clone()).collect();
                 link.camera_manager = true;
                 if let Some(on) = options.post {
                     link.post_processing = Some(on);
@@ -2232,15 +2236,10 @@ fn run_window(options: &Options) -> Result<(), String> {
             }
             // Camera editor: its cameras, views and choices for the player's car; the eye point and
             // pitch come back through the Onboard actions
+            // (FormCamera::selectCamera: setMode(mode, false, false), then the index)
             for (mode, index) in std::mem::take(&mut gui.apps.camera_selects) {
-                match (mode, index) {
-                    (0, 0) => camera.set_mode_kept(0),
-                    (0, _) => {
-                        camera.set_mode_kept(2);
-                        camera.set_drivable(index - 1);
-                    }
-                    _ => camera.set_car_camera(index.max(0) as usize),
-                }
+                onboard_free::set_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), shapes[focus.index].car_cameras.len(), cinematic.is_some(), &mut track_cameras);
+                camera.select_index(mode, index, shapes[focus.index].car_cameras.len());
             }
             if let Some(l) = gui.gui.apps.camera_editor.as_mut().filter(|_| gui.apps.app("cameraeditor").is_some()) {
                 shapes[0].car_cameras = l.cameras.iter().map(|c| rustyac_game::render::scene::CarCamera { matrix: c.matrix.m, fov: c.fov }).collect();
@@ -2255,11 +2254,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             // view and roll move the free camera
             for action in std::mem::take(&mut gui.apps.photo_actions) {
                 match action {
-                    rustyac_gui::apps::AppAction::SetCameraMode(6) => {
-                        start_camera = None;
-                        mouse_camera = last_frame.as_ref().map(MouseCamera::new);
-                    }
-                    rustyac_gui::apps::AppAction::SetCameraMode(_) => mouse_camera = None,
+                    // (AppPhotoMode's Start: setMode(eFree), then back to the mode it found)
+                    rustyac_gui::apps::AppAction::SetCameraMode(mode) => onboard_free::set_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), shapes[focus.index].car_cameras.len(), cinematic.is_some(), &mut track_cameras),
                     rustyac_gui::apps::AppAction::PausePhysics(paused) => shared.paused.store(paused, Ordering::Relaxed),
                     rustyac_gui::apps::AppAction::TakeScreenshot => gui.take_screen(),
                     _ => {}
@@ -2359,7 +2355,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             let p = &mut gui.gui.apps.photo;
             (p.matrix, p.fov) = (rustyac_physics::vecmath::Mat44f { m: frame.matrix }, frame.fov);
             p.end_pick = end_pick;
-            p.camera_mode = if mouse_camera.is_some() { 6 } else { camera.shown.unwrap_or(0) };
+            p.camera_mode = if mouse_camera.is_some() { 6 } else { camera.manager_mode() };
             p.in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some();
             // SAFETY: plain calls.
             [p.right_button, p.middle_button] = [0x02, 0x04].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);

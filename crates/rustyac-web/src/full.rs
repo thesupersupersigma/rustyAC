@@ -285,7 +285,11 @@ impl GuiLoop {
                     }
                 }
                 SimAction::SetDrivableCamera(view) => session.camera.set_drivable(view),
-                SimAction::SetCameraModeKept(mode) => session.camera.set_mode_kept(mode),
+                SimAction::SetCameraModeKept(mode) => {
+                    (self.start_camera, self.free_camera) = (None, None);
+                    session.camera.set_mode_kept(mode);
+                }
+                SimAction::SetTrackCameraSet(set) => self.track_cameras.set_current_set(set.max(0) as usize),
                 // the results' on-board free camera and back, the ESC menu's slow turn
                 SimAction::SetCameraMode(mode) => self.set_mode(session, mode),
                 SimAction::SetIntroMode(on) => {

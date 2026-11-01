@@ -33,7 +33,20 @@
   the ESC menu's Drive button): Documents 2 3 → bumper, written 2 3; the next run with
   Documents 0 0 → bumper again (the own copy wins); Documents 0 3 → cockpit, written 0 3.
   The page writes no files: it takes the launcher's Documents' last camera.
-- Next: steps 5-7.
+- Step 5: the windows' camera calls as the game makes them. The replay's camera spinner now
+  lists the track's camera sets after the cockpit and the five drivable views (`getCameraSetName`)
+  and picks a set (`setCurrentCameraSet`, it was ignored); the Camera editor's F1 / F6 buttons
+  go through `setMode(mode, false, false)` (which cycles, as F1 does) and then
+  `setDrivableCarIndex` / `setCameraCarIndex` (the old code kept the mode); the photo mode's
+  Start and back are `setMode(eFree)` and `setMode(the mode it found)`; `setMode(eCar)` and
+  `setMode(eFree)` set the near plane 0.05; F1 from the free, start or F5 camera goes to the
+  last driving camera from any mode. The random tape (`random_micro`) now also drives the
+  spinner, the editor's buttons, the photo mode and `loadPreviousSessionUserCamera` on the same
+  manager, with a made-up `[LAST_CAMERA]`, and checks `persistanceCameraMode` on every line:
+  seeds 1 and 2 IDENTICAL (60,120 lines on seed 2: 2,665 spins, 2,832 editor buttons, 827
+  photo starts, 412 backs, 1,510 loads). The page has no apps: only the spinner's set and the
+  mode kept apply there (no AC replay either).
+- Next: steps 6-7.
 
 ## Resume here
 
