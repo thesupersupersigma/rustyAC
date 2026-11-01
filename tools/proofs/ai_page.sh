@@ -69,12 +69,12 @@ for name in ta drift drag; do
         printf 'for (let i = 0; i < 600 && !(window.rustyac && window.rustyac.frameProof && window.rustyac.launcher); i++) await new Promise((r) => setTimeout(r, 100));\n'
         printf 'return await window.rustyac.frameProof(%s, %s, "%s", 0, 0);\n' "$(js "$m/$name/race.ini")" "$(js "$m/$name/assists.ini")" "$(base64 -w0 "$m/$name/drive.ryin")"
     } > "$m/$name/page.js"
-    node web/check.mjs --url "http://127.0.0.1:8137/?seed=$seed" --launcher --script "$m/$name/page.js" --profile "$out/chrome_profile" --port 9338 --timeout 3600 > "$m/$name/page.json" 2> "$m/$name/page.err"
+    node web/check.mjs --url "http://127.0.0.1:8137/?seed=$seed" --launcher --script "$m/$name/page.js" --profile "$out/chrome_profile_$name" --port 9338 --timeout 3600 > "$m/$name/page.json" 2> "$m/$name/page.err"
     node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); require("fs").writeFileSync(process.argv[2], (r.script || {}).race_out || ""); console.log(`step ${(r.script||{}).step}, error ${r.error}`);' "$m/$name/page.json" "$m/$name/page_race_out.json" > "$m/$name/page.txt" 2>&1
     cmp -s "$m/$name/page_race_out.json" "$m/$name/desktop/race_out.json" && verdict "$name: page frameProof race_out.json" IDENTICAL "$(cat "$m/$name/page.txt")" \
         || verdict "$name: page frameProof race_out.json" DIFFERENT "$(cat "$m/$name/page.txt")"
-    rm -rf "$out/chrome_profile"
+    rm -rf "$out/chrome_profile_$name"  # a folder per page: the browser before can hold its folder a while
 done
 kill $sp 2>/dev/null
-rm -rf "$out/chrome_profile"
+rm -rf "$out"/chrome_profile*
 summary

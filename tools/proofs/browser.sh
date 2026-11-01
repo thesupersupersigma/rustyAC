@@ -49,7 +49,8 @@ node tools/proofs/ondemand_site.mjs 8140 8139 tools/proofs/ondemand_servers.json
 fp=$!
 trap 'kill $sp $fp 2>/dev/null' EXIT
 sleep 5
-page() { node web/check.mjs --url "http://127.0.0.1:8140/play/app/?$1" $2 --script tools/proofs/ondemand_page.js --profile "$out/chrome_profile" --port 9339 --timeout 600 2> "$out/page.err" | node -e 'let t="";process.stdin.on("data",(d)=>(t+=d)).on("end",()=>{const r=JSON.parse(t||"{}");console.log(JSON.stringify(r.script??r.error??null))})'; }
+# a profile folder per page: a browser of the page before can still hold its folder for a while
+page() { node web/check.mjs --url "http://127.0.0.1:8140/play/app/?$1" $2 --script tools/proofs/ondemand_page.js --profile "$out/chrome_profile_$(echo "$1" | cksum | cut -d" " -f1)" --port 9339 --timeout 600 2> "$out/page.err" | node -e 'let t="";process.stdin.on("data",(d)=>(t+=d)).on("end",()=>{const r=JSON.parse(t||"{}");console.log(JSON.stringify(r.script??r.error??null))})'; }
 r=$(page "launcher=1" --launcher)
 echo "$r" | grep -qF '{"name":"Proof Laguna","track":"ks_laguna_seca","cars":["bmw_z4_gt3"],"pass":true}' && verdict "theme lists the on-demand server" IDENTICAL "$r" || verdict "theme lists the on-demand server" DIFFERENT "$r"
 r=$(page "join=x-proof-laguna&name=proof39" --menu)
@@ -57,5 +58,5 @@ echo "$r" | grep -qF '"server":"x-proof-laguna"' && echo "$r" | grep -qF 'no con
 r=$(page "join=x-not-running&name=proof39" --menu)
 echo "$r" | grep -qF 'x-not-running is not running now' && ! echo "$r" | grep -qF 'connecting' && verdict "?join of an unlisted server" IDENTICAL "$r" || verdict "?join of an unlisted server" DIFFERENT "$r"
 kill $sp $fp 2>/dev/null
-rm -rf "$out/chrome_profile"
+rm -rf "$out"/chrome_profile*
 summary
