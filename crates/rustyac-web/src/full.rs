@@ -209,6 +209,13 @@ pub struct GuiLoop {
     pub track_camera: String,
     /// F2's random camera (Full mode)
     pub random_camera: Option<rustyac_game::render::track_camera::RandomCamera>,
+    /// Task 46b: F5's camera, F7's cinematic one (`video_editing.ini [CINEMATIC_CAMERAS]
+    /// ACTIVE`), the scene camera they move while one shows, and the left and middle mouse
+    /// buttons (AC's 1 and 4)
+    pub onboard_free: Option<rustyac_game::render::onboard_free::OnboardFreeCamera>,
+    pub cinematic: Option<rustyac_game::render::onboard_free::CinematicCamera>,
+    pub shot: Option<rustyac_game::render::onboard_free::ShotCamera>,
+    pub buttons: [bool; 2],
     /// (the setup editor's car: its jobs applied, and the 64-step slice it was taken in)
     published: Option<(usize, u64)>,
     generation: u64,
@@ -276,6 +283,13 @@ impl GuiLoop {
                 }
                 SimAction::SetDrivableCamera(view) => session.camera.set_drivable(view),
                 SimAction::SetCameraModeKept(mode) => session.camera.set_mode_kept(mode),
+                // the results' on-board free camera and back, the ESC menu's slow turn
+                SimAction::SetCameraMode(mode) => self.set_mode(session, mode),
+                SimAction::SetIntroMode(on) => {
+                    if let Some(f5) = self.onboard_free.as_mut() {
+                        f5.esc_mode = on;
+                    }
+                }
                 SimAction::Shutdown => self.exit = true,
                 // (the page has no AC replay and no other car to watch; the rest are the
                 // sound's, the chat's and the referee's)
@@ -341,6 +355,32 @@ impl GuiLoop {
     }
 }
 
+impl GuiLoop {
+    /// `ACCameraManager::setMode(mode, false, false)`, as rustyac.exe.
+    pub fn set_mode(&mut self, session: &mut Session, mode: i32) {
+        let gui = self;
+        rustyac_game::render::onboard_free::set_mode(mode, &mut session.camera, &mut gui.start_camera, &mut gui.free_camera, &mut gui.shot, gui.last_frame.as_ref(), session.shape.car_cameras.len(), gui.cinematic.is_some(), &mut gui.track_cameras);
+    }
+
+    /// What F5's and the cinematic camera read: the held keys and mouse buttons, the mouse.
+    fn orbit_input(&self, session: &Session) -> rustyac_game::render::onboard_free::OrbitInput {
+        let mut input = rustyac_game::render::onboard_free::OrbitInput::default();
+        for code in &session.input.lock().unwrap().keys {
+            input.keys[*code as usize & 0xff] = true;
+        }
+        // (either Shift, either Ctrl: GetAsyncKeyState(VK_SHIFT) is held for both)
+        input.keys[0x10] |= input.keys[0xa0] | input.keys[0xa1];
+        input.keys[0x11] |= input.keys[0xa2] | input.keys[0xa3];
+        let (x, y, right) = self.mouse;
+        [input.keys[0x01], input.keys[0x02], input.keys[0x04]] = [self.buttons[0], right, self.buttons[1]];
+        // shortcut: a page cannot move the mouse, so the cinematic look's wrap at the desktop's
+        // edges is kept out of reach (far from them); pointer lock would give the game's wrap
+        input.cursor = (x + 1_000_000, y + 1_000_000);
+        input.screen = (i32::MAX, i32::MAX);
+        input
+    }
+}
+
 /// One frame of the page's game: the player's car first, then the others.
 pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo, gui: &mut GuiLoop) {
     let dt = seconds.clamp(0.0, crate::session::MAX_FRAME_SECONDS as f32);
@@ -351,7 +391,28 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
         random.update(dt, &mut session.camera, session.shape.car_cameras.len(), &mut gui.track_cameras, &mut rand);
         session.camera.cockpit.rand = rand;
     }
+    let shown = session.camera.shown.filter(|_| gui.start_camera.is_none() && gui.free_camera.is_none());
     let camera = match (&mut gui.start_camera, &mut gui.free_camera) {
+        (None, None) if shown.is_some() => {
+            // ACCameraManager::update: F5 (5) or the cinematic F7 (6) on the scene camera
+            let input = gui.orbit_input(session);
+            let last = gui.last_frame.unwrap_or(rustyac_game::render::scene::CameraFrame { matrix: rustyac_game::view::IDENTITY, fov: 60.0, near: 0.1 });
+            let shot = gui.shot.get_or_insert_with(|| rustyac_game::render::onboard_free::ShotCamera::new(&last));
+            let body = rustyac_game::render::scene::model_matrix(&view.body, &session.shape);
+            match (shown, gui.cinematic.as_mut(), gui.onboard_free.as_mut()) {
+                (Some(4), _, _) => rustyac_game::render::onboard_free::HelicopterCamera::default().update(shot, &body),
+                (Some(6), Some(cinematic), _) => {
+                    // (Backspace's system message is the GUI's; the page shows none)
+                    cinematic.update(shot, &input, dt);
+                }
+                // (the page has no AC replay: none loaded, none playing)
+                (_, _, Some(f5)) => {
+                    f5.update(shot, &body, false, false, [0.0; 2], &input, dt);
+                }
+                _ => {}
+            }
+            shot.frame()
+        }
         (Some(start), _) => start.update(view, session.shape.eye_model[0], dt),
         (None, Some(free)) => {
             // (the held keys as rustyac.exe's GetAsyncKeyState: either Shift, either Ctrl)
@@ -386,8 +447,12 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
         focus.post_gui(dt, &world, &[]);
         // F3 at its black frame: setMode(eTrack), from the track's cameras CameraTrack::nextSet
         // (F2: and randomMode on)
+        if focus.camera_change == Some(rustyac_game::focus::FocusCommand::OnboardFreeCamera) {
+            focus.camera_change = None;
+            rustyac_game::render::onboard_free::set_mode(5, &mut session.camera, &mut gui.start_camera, &mut gui.free_camera, &mut gui.shot, gui.last_frame.as_ref(), session.shape.car_cameras.len(), gui.cinematic.is_some(), &mut gui.track_cameras);
+        }
         if let Some(change) = focus.camera_change.take() {
-            let overlay = gui.start_camera.take().is_some() | gui.free_camera.take().is_some();
+            let overlay = gui.start_camera.take().is_some() | gui.free_camera.take().is_some() | session.camera.shown.take().is_some();
             if session.camera.f3() && !overlay {
                 gui.track_cameras.next_set();
             }

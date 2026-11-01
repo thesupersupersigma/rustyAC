@@ -14,7 +14,13 @@
   F5 (`SetIntroMode`, `SetCameraMode`), the pit crew's F5 (locked, theta/phi forced), Python's
   `setCameraMode` 0-7 through one `setMode` (helicopter 4), F7 as the cinematic camera when
   `video_editing.ini [CINEMATIC_CAMERAS] ACTIVE` (this PC has no such file).
-- Next: F5 and the helicopter in the page, then steps 3b-7.
+- Page (Full mode): F5 through the fade, the left button's drag, the wheel, F1 back
+  (`tools/web_checks/task46/f5.sh`: HUD hook `camera` "chase" → "onboard free" → "chase");
+  the results' and the pit crew's F5, F7 as the cinematic camera when `video_editing.ini` says
+  so. One mode-switch for both (`onboard_free::set_mode`, `f1`, `f6`). The helicopter is
+  Python's only, and the page runs no Python. Shortcut: the page cannot move the mouse, so the
+  cinematic look's wrap at the desktop's edges never happens there.
+- Next: steps 3b-7.
 
 ## Resume here
 

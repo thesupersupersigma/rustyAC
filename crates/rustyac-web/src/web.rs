@@ -564,6 +564,10 @@ impl Game {
             let setup = &session.sim.setup;
             gui.track_cameras = rustyac_game::render::track_camera::of_track(&Path::new(ROOT).join("content/tracks").join(&setup.track), &setup.layout).unwrap_or_default();
             gui.random_camera = Some(rustyac_game::render::track_camera::RandomCamera::of_install(&mut session.camera.cockpit.rand));
+            session.camera.track_sets = gui.track_cameras.sets.len();
+            // Task 46b: F5's camera and F7's cinematic one, from the page's Documents and the game's folder
+            let (f5, cinematic) = rustyac_game::render::onboard_free::load(None, Some(&session.sim.car_info().data_path));
+            (gui.onboard_free, gui.cinematic) = (Some(f5), cinematic);
         }
         if session.sim.setup.esc_start {
             if full.as_ref().and_then(|full| full.gui.as_ref()).is_some_and(|gui| gui.has_esc_menu()) {
@@ -573,6 +577,10 @@ impl Game {
             } else {
                 session.request(rustyac_game::input_file::event::PITS_DRIVE);
             }
+        }
+        // Sim::Sim: setIntroMode(false) unless the session begins in the ESC menu
+        if let Some(f5) = gui.onboard_free.as_mut() {
+            f5.esc_mode = gui.start_camera.is_some();
         }
         // (what the renderer asked for and did not find: the page fetches it and starts again)
         // (and what it drew without: a texture of the skin, a font)
@@ -685,7 +693,16 @@ impl Game {
                 }
                 crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &hud, &mut self.gui);
                 let calls = std::mem::take(&mut full.crew.sound);
-                full.crew.camera.clear();
+                // the crew's camera: F5 turned on the car, held still, and back at the stop's end
+                for asked in std::mem::take(&mut full.crew.camera) {
+                    use rustyac_game::render::ac::CrewCamera;
+                    match asked {
+                        CrewCamera::SetMode(mode) => self.gui.set_mode(&mut self.session, mode),
+                        CrewCamera::ForceThetaPhi(theta, phi, radius) => self.gui.onboard_free.iter_mut().for_each(|f5| f5.force_theta_phi(theta, phi, radius)),
+                        CrewCamera::Lock(locked) => self.gui.onboard_free.iter_mut().for_each(|f5| f5.locked = locked),
+                    }
+                }
+                full.crew.camera_mode = if self.gui.free_camera.is_some() { 6 } else { self.session.camera.manager_mode() };
                 if let Some(sound) = &mut self.sound {
                     use rustyac_game::render::ac::CrewSound;
                     for call in calls {
@@ -862,13 +879,20 @@ impl Game {
     /// The mouse over the picture, in its pixels: `action` 0 move, 1 down, 2 up (`button` 0 left,
     /// 1 right, 2 middle), 3 the wheel (`delta` in notches, up positive).
     pub fn gui_mouse(&mut self, x: i32, y: i32, action: u32, button: u32, delta: f32) {
-        // (the free camera's right button: AC's 1)
+        // (the free camera's right button: AC's 1; F5's left and middle ones)
         let right = match (action, button) {
             (1, 1) => true,
             (2, 1) => false,
             _ => self.gui.mouse.2,
         };
         self.gui.mouse = (x, y, right);
+        match (action, button) {
+            (1 | 2, 0) => self.gui.buttons[0] = action == 1,
+            (1 | 2, 2) => self.gui.buttons[1] = action == 1,
+            // CameraOnBoardFree's wheel handler (a notch is 120)
+            (3, _) => self.gui.onboard_free.iter_mut().for_each(|f5| f5.wheel((delta * 120.0) as i32)),
+            _ => {}
+        }
         if let Some(gui) = self.full.as_mut().and_then(|full| full.gui.as_mut()) {
             match action {
                 0 => gui.mouse_move(x, y),
@@ -911,22 +935,13 @@ impl Game {
 
     /// F1: the next view (chase, chase 2, bonnet, bumper, dash, cockpit).
     pub fn next_camera(&mut self) {
-        // (F1 from AC's start camera: back to the driving view, as rustyac.exe's camera_f1)
-        self.gui.free_camera = None;
-        if self.gui.start_camera.take().is_some() {
-            self.session.camera.back_to_driving();
-        } else {
-            self.session.camera.f1();
-        }
+        // (F1 from AC's start camera: back to the driving view, as rustyac.exe)
+        rustyac_game::render::onboard_free::f1(&mut self.session.camera, &mut self.gui.start_camera, &mut self.gui.free_camera);
     }
 
     /// F6: the car's own cameras (`cameras.ini`), as rustyac.exe's camera_f6.
     pub fn car_camera(&mut self) {
-        self.gui.free_camera = None;
-        if self.gui.start_camera.take().is_some() && self.session.camera.mode == rustyac_game::render::scene::CameraMode::Car {
-            return;
-        }
-        self.session.camera.f6(self.session.shape.car_cameras.len());
+        rustyac_game::render::onboard_free::f6(&mut self.session.camera, &mut self.gui.start_camera, &mut self.gui.free_camera, self.session.shape.car_cameras.len());
     }
 
     /// Task 42c, Full mode: F7, AC's free camera (`setMode(eFree)`), where the last frame's
@@ -936,12 +951,8 @@ impl Game {
         if self.full.is_none() || !crate::full::free_camera_allowed(Path::new(ROOT)) {
             return false;
         }
-        self.gui.start_camera = None;
-        // (setMode(eFree): the random camera ends)
-        self.session.camera.random = false;
-        if self.gui.free_camera.is_none() {
-            self.gui.free_camera = self.gui.last_frame.as_ref().map(rustyac_game::render::scene::MouseCamera::new);
-        }
+        // (setMode(eFree): the random camera ends; the cinematic camera when video_editing.ini has it)
+        self.gui.set_mode(&mut self.session, 6);
         true
     }
 
@@ -953,6 +964,16 @@ impl Game {
         }
         let world: Vec<CarView> = std::iter::once(self.view).chain(self.session.remote_views()).collect();
         self.gui.focus.get_or_insert_with(|| rustyac_game::focus::Focus::new(0)).command(rustyac_game::focus::FocusCommand::TrackCamera, &world, &[]);
+    }
+
+    /// Task 46b, Full mode: F5, the on-board free camera (through the camera's fade; not again
+    /// while it shows), as rustyac.exe.
+    pub fn onboard_camera(&mut self) {
+        if self.full.is_none() || self.session.camera.shown == Some(5) {
+            return;
+        }
+        let world: Vec<CarView> = std::iter::once(self.view).chain(self.session.remote_views()).collect();
+        self.gui.focus.get_or_insert_with(|| rustyac_game::focus::Focus::new(0)).command(rustyac_game::focus::FocusCommand::OnboardFreeCamera, &world, &[]);
     }
 
     /// Task 46, Full mode: F2, the random camera (from the track's cameras, through the same

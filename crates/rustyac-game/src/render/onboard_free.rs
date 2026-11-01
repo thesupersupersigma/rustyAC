@@ -12,7 +12,8 @@ use rustyac_physics::vecmath::{xm_matrix_inverse, xm_matrix_multiply, Mat44f, Ve
 
 use std::path::{Path, PathBuf};
 
-use super::scene::{create_target_exact, mul, rotate_pitch, three, CameraFrame};
+use super::scene::{create_target_exact, mul, rotate_pitch, three, CameraFrame, DrivingCamera, MouseCamera, StartCamera};
+use super::track_camera::TrackCameras;
 use crate::input::ini::ControlsIni;
 use crate::view::{Mat, IDENTITY};
 
@@ -641,4 +642,70 @@ impl HelicopterCamera {
         camera.far = 35000.0;
         camera.dof[0] = 0.0;
     }
+}
+
+/// F1 (`setMode(eCockpit)`): from the free or the start camera back to the last driving view,
+/// otherwise the next one.
+pub fn f1(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>) {
+    if start.take().is_some() | free.take().is_some() | camera.shown.take().is_some() {
+        camera.back_to_driving();
+    } else {
+        camera.f1();
+    }
+}
+
+/// `ACCameraManager::setMode(mode, false, false)` (F5 and F7, Python's `ac.setCameraMode`, the
+/// results' and the pit crew's on-board free camera) on the views rustyAC has: 4 the
+/// helicopter, 5 F5, 6 F7 (the cinematic camera when `video_editing.ini` turns it on), 7
+/// `ac_setCameraMode`'s track cameras in random mode. A camera shown anew starts from the
+/// scene camera as the last frame left it (`shot` is made then).
+#[allow(clippy::too_many_arguments)]
+pub fn set_mode(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, shot: &mut Option<ShotCamera>, last: Option<&CameraFrame>, count: usize, cinematic: bool, track_cameras: &mut TrackCameras) {
+    match mode {
+        0 => f1(camera, start, free),
+        1 if count > 0 => {
+            (*start, *free) = (None, None);
+            camera.set_car_camera(camera.car_index.min(count - 1));
+        }
+        2 => {
+            (*start, *free) = (None, None);
+            camera.set_mode_kept(2);
+        }
+        // setMode(eTrack): CameraTrack::nextSet when the track's cameras show already
+        3 | 7 => {
+            let overlay = start.take().is_some() | free.take().is_some() | camera.shown.take().is_some();
+            if camera.f3() && !overlay && !track_cameras.sets.is_empty() {
+                track_cameras.next_set();
+            }
+            camera.random = mode == 7;
+        }
+        4 | 5 => show_camera(mode, camera, start, free, shot),
+        6 if cinematic => show_camera(6, camera, start, free, shot),
+        6 => {
+            *start = None;
+            camera.shown = None;
+            camera.random = false;
+            if free.is_none() {
+                *free = last.map(MouseCamera::new);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn show_camera(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, shot: &mut Option<ShotCamera>) {
+    (*start, *free) = (None, None);
+    camera.random = false;
+    if camera.shown != Some(mode) {
+        camera.shown = Some(mode);
+        *shot = None;
+    }
+}
+
+/// F6 (`setMode(eCar)`, or the car's next camera when one shows already).
+pub fn f6(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, count: usize) {
+    if (start.take().is_some() | free.take().is_some() | camera.shown.take().is_some()) && camera.mode == super::scene::CameraMode::Car {
+        return;
+    }
+    camera.f6(count);
 }

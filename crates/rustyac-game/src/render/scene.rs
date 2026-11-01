@@ -810,6 +810,12 @@ impl DrivingCamera {
 
     /// The view's name, for the display.
     pub fn name(&self) -> String {
+        match self.shown {
+            Some(4) => return "helicopter".to_string(),
+            Some(5) => return "onboard free".to_string(),
+            Some(6) => return "cinematic".to_string(),
+            _ => {}
+        }
         match self.mode {
             CameraMode::Cockpit => "cockpit".to_string(),
             CameraMode::Drivable => self.drivable.name().to_string(),

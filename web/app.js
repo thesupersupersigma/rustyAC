@@ -2231,7 +2231,7 @@ const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F2', 'F3', 'F4', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 // The page's keys that give way to the layout: a key the player's controls.ini drives with
 // keeps that job (the desktop's rule for its own plain keys).
 const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
@@ -2267,7 +2267,7 @@ window.addEventListener('keydown', (event) => {
   // that a Ctrl key is itself a driving key (gear down)
   const isControl = event.code === 'ControlLeft' || event.code === 'ControlRight';
   if (event.metaKey || event.altKey || (event.ctrlKey && !isControl)) return;
-  // every other key the page has no use for stays the browser's too (F5, F11, F12, Tab ...)
+  // every other key the page has no use for stays the browser's too (F12, Tab ...)
   if (!pageUses(event)) return;
   const code = VK[event.code];
   event.preventDefault();
@@ -2318,6 +2318,11 @@ window.addEventListener('keydown', (event) => {
     // Full mode: the random camera (AC's fade, then a camera of its own choosing every few seconds)
     case 'F2':
       state.game.random_camera();
+      break;
+    // Full mode: the on-board free camera (AC's fade; the left button drags it round the car,
+    // the wheel takes it nearer or farther)
+    case 'F5':
+      state.game.onboard_camera();
       break;
     case 'KeyR':
       state.game.request(event.shiftKey ? EVENT.TO_TRACK : EVENT.RESET);
