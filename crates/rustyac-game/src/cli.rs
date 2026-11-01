@@ -149,7 +149,7 @@ pub struct Options {
     /// `--focus <n>`: the car the camera is on at the start (0: yours; `Sim::focusedCarIndex`).
     pub focus: usize,
     /// `--focus-script next@2,previous@4,player@6`: the focus keys by the clock (for unattended
-    /// checks; seconds since the window opened)
+    /// checks; seconds since the window opened); `track@8`: F3
     pub focus_script: Vec<(f64, String)>,
     /// `--auto-shifter`: the automatic gearbox aid on at start.
     pub auto_shifter: bool,
@@ -745,7 +745,7 @@ usage: rustyac [options]
   --controls <ini>      bindings file to use (default: AC's own controls.ini, read-only)
   --default-controls    ignore AC's controls.ini and use the built-in Xbox / keyboard layout
   --camera <name>       the view to start in: chase (default), chase2, bonnet, bumper, dash,
-                        cockpit, or car0, car1 ... (the cameras of the car's cameras.ini);
+                        cockpit, track (F3's), or car0, car1 ... (the cameras of the car's cameras.ini);
                         F1 goes through the first six while driving, F6 through the car's
   --sun <angle>         the sun's angle whatever race.ini says: -80 sunrise, 0 one o'clock,
                         80 sunset, beyond that night
@@ -989,8 +989,8 @@ impl Options {
                 "--focus-script" => {
                     for item in value("--focus-script")?.split(',').filter(|s| !s.is_empty()) {
                         let (name, at) = item.split_once('@').ok_or("--focus-script next@2,previous@4,player@6")?;
-                        if !matches!(name, "next" | "previous" | "player") {
-                            return Err(format!("--focus-script: {name:?} is not next, previous or player"));
+                        if !matches!(name, "next" | "previous" | "player" | "track") {
+                            return Err(format!("--focus-script: {name:?} is not next, previous, player or track (F3)"));
                         }
                         o.focus_script.push((at.parse().map_err(|_| format!("--focus-script {name}@<seconds>"))?, name.to_string()));
                     }
@@ -1160,7 +1160,7 @@ impl Options {
             return Err("--flat-out-brake needs --flat-out".to_string());
         }
         let car_camera = o.camera.strip_prefix("car").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        if !["cockpit", "chase", "chase2", "bonnet", "bumper", "dash"].contains(&o.camera.as_str()) && !car_camera {
+        if !["cockpit", "chase", "chase2", "bonnet", "bumper", "dash", "track"].contains(&o.camera.as_str()) && !car_camera {
             return Err(crate::render::scene::camera_name_error(&o.camera));
         }
         if o.grip.is_some_and(|grip| !(grip > 0.0 && grip <= 150.0)) {

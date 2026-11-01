@@ -1500,6 +1500,15 @@ fn run_window(options: &Options) -> Result<(), String> {
     let mut photo_seen = rustyac_gui::app_photo_mode::PhotoLink::default();
     let mut photo_sun = None;
     let mut last_frame: Option<CameraFrame> = None;
+    // F3: the track's TV cameras (CameraTrack's sets)
+    let mut track_cameras = match car_info.track_folder.as_deref().map(|folder| rustyac_game::render::track_camera::of_track(folder, &car_info.track_layout)) {
+        Some(Ok(cameras)) => cameras,
+        Some(Err(e)) => {
+            eprintln!("track cameras: {e}");
+            Default::default()
+        }
+        None => Default::default(),
+    };
     start_camera_editor(renderer.gui(), options, &car_names[0], &car_info.data_path, &shapes[0]);
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
     // replay shows from its first frame (the physics stands still for good)
@@ -1651,6 +1660,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                         if !ac_replay_key(rig, &shared, &bindings, key, ctrl, alt, is_online) && !ctrl && !alt {
                             match key {
                                 0x70 | 0x43 => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
+                                0x72 => focus.command(FocusCommand::TrackCamera, &world, &car_names),
                                 0x73 => focus.command(FocusCommand::Player, &world, &car_names),
                                 0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
                                 _ => {}
@@ -1797,6 +1807,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // cameras of the car's cameras.ini
                             0x70 | 0x43 => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
                             // F4: back to your car (with other cars only; through the fade)
+                            // F3: the track's cameras, again: their next set (through the fade)
+                            0x72 => focus.command(FocusCommand::TrackCamera, &world, &car_names),
                             0x73 => focus.command(FocusCommand::Player, &world, &car_names),
                             0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
                             // F7: the free camera (`setMode(eFree)`; again: the same, kept)
@@ -2155,6 +2167,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             let command = match name.as_str() {
                 "next" => FocusCommand::Next,
                 "previous" => FocusCommand::Previous,
+                "track" => FocusCommand::TrackCamera,
                 _ => FocusCommand::Player,
             };
             println!("focus script at {at:.2} s: {name}");
@@ -2247,6 +2260,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             // SAFETY: plain calls.
             gui.apps.suspension_keys = [0x08, 0x11, 0x61, 0x62, 0x63, 0x64].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
         }
+        let mut track_look = None;
         let frame = if let Some(start) = start_camera.as_mut() {
             start.update(&world[0], shapes[0].eye_model[0], dt.as_secs_f32())
         } else if let Some(free) = mouse_camera.as_mut() {
@@ -2263,11 +2277,22 @@ fn run_window(options: &Options) -> Result<(), String> {
             } else {
                 free.frame()
             }
+        } else if camera.mode == rustyac_game::render::scene::CameraMode::Track && !track_cameras.sets.is_empty() {
+            // shortcut: a replay's slow motion does not slow the camera (CameraTrack::update times dt by the replay's speed), when replays show F3
+            camera.track_set = track_cameras.current_set;
+            track_cameras.still = shared.paused.load(Ordering::Relaxed);
+            let body = rustyac_game::render::scene::model_matrix(&view.body, &shapes[focus.index]);
+            let previous = last_frame.as_ref().map_or(rustyac_game::view::IDENTITY, |f| f.matrix);
+            let look = track_cameras.update(&previous, &body, renderer.steer_place(focus.index), view.lap.position, view.speed_ms, dt.as_secs_f32()).expect("the track has cameras");
+            let frame = CameraFrame { matrix: look.matrix, fov: look.fov, near: look.near };
+            track_look = Some(look);
+            frame
         } else {
             // the look keys are the focused car's (`actionsState`): the player's, or none
             camera.actions = if focus.index == 0 { shared.look.load(Ordering::Relaxed) } else { 0 };
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
+        renderer.set_track_look(track_look.take().as_ref());
         // SAFETY: a plain call.
         let end_key = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x23) } != 0;
         let end_pick = end_key.then(|| renderer.pick_centre(frame.fov, &rustyac_physics::vecmath::Mat44f { m: frame.matrix }));
@@ -2406,6 +2431,14 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
         // Game::evOnPostGui: the focus changes at the fade's black frame
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
+        // F3 at its black frame: setMode(eTrack), from the track's cameras CameraTrack::nextSet
+        if std::mem::take(&mut focus.camera_change) {
+            let overlay = start_camera.take().is_some() | mouse_camera.take().is_some();
+            if camera.f3() && !overlay {
+                let name = track_cameras.next_set();
+                println!("TRACK CAMERAS: set {} {name}", track_cameras.current_set);
+            }
+        }
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
             let audio_start = Instant::now();

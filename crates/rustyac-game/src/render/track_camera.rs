@@ -423,6 +423,16 @@ impl TrackCameras {
     }
 }
 
+/// The track's cameras as `CameraTrack`'s ctor finds them for `folder` (`content/tracks/<track>`)
+/// and its `layout`: the sets, their distances to the AI line, the install's
+/// `system/cfg/camera_track.ini`.
+pub fn of_track(folder: &Path, layout: &str) -> Result<TrackCameras, String> {
+    let data = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
+    let line = rustyac_physics::track::spline::AiSpline::load(&data.join("ai/fast_lane.ai")).map(|ai| ai.spline).unwrap_or_default();
+    let ini = rustyac_content::install::ac_root().map(|ac| ac.join("system/cfg/camera_track.ini")).filter(|f| rustyac_physics::data::exists(f)).map(|f| IniReader::load(&f)).transpose()?;
+    TrackCameras::load(&data, &line, ini.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

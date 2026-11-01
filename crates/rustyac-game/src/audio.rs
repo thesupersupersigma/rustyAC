@@ -595,6 +595,7 @@ impl GameAudio {
                 CameraMode::Cockpit => 0,
                 CameraMode::Car => 1,
                 CameraMode::Drivable => 2,
+                CameraMode::Track => 3,
             },
             car_camera_index: camera.car_index as i32,
             drivable_mode: camera.drivable as i32,

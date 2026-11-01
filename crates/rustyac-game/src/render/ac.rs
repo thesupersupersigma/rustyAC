@@ -511,6 +511,8 @@ fn splits_of(camera: &DrivingCamera) -> [f32; 4] {
         },
         // CameraCarManager::update 0x1400c47d0: its ranges were not read; the chase camera's
         CameraMode::Car => [10.0, 50.0, 150.0, 500.0],
+        // CameraTrack::update: the camera's SHADOW_SPLIT0-2, then 500 (`set_track_look`)
+        CameraMode::Track => [10.0, 50.0, 150.0, 500.0],
     }
 }
 
@@ -559,6 +561,10 @@ pub struct AcRenderer {
     cars_to_be_loaded: i32,
     /// `ACCameraManager::currentGlobalCameraIndex`: what `CarNodeSorter::sort` reads
     global_camera_index: i32,
+    /// `CameraTrack::update`'s far plane, exposures and shadow ranges (F3), and the camera's own
+    /// far plane and exposures the other modes keep
+    track_look: Option<(f32, f32, f32, [f32; 3])>,
+    plain_look: (f32, f32, f32),
     /// `Sim::mirrorTextureRenderer` and `Sim::virtualMirrorRenderer`: only with mirrors on
     mirror: Option<rustyac_render::mirror::MirrorTextureRenderer>,
     virtual_mirror: Option<rustyac_render::mirror::VirtualMirrorRenderer>,
@@ -811,7 +817,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -984,6 +990,18 @@ impl AcRenderer {
     }
 
     /// How many cars are loaded.
+    /// What the track's camera of the frame sets on the scene camera besides its place (F3;
+    /// `None`: the track has no cameras). The depth of field is not drawn by the port.
+    pub fn set_track_look(&mut self, frame: Option<&super::track_camera::TrackFrame>) {
+        self.track_look = frame.map(|f| (f.far, f.min_exposure, f.max_exposure, f.shadow_splits));
+    }
+
+    /// The steering wheel's place in the car (`orgSteerMatrix`, the `STEER_HR` node as the car
+    /// was loaded), which the track's cameras look at.
+    pub fn steer_place(&self, car: usize) -> [f32; 3] {
+        self.cars.get(car).map_or([0.0; 3], |c| [c.org_steer_matrix.m[3][0], c.org_steer_matrix.m[3][1], c.org_steer_matrix.m[3][2]])
+    }
+
     pub fn car_count(&self) -> usize {
         self.cars.len()
     }
@@ -1219,7 +1237,12 @@ impl AcRenderer {
         cam.fov = frame.fov;
         cam.matrix = Mat44f { m: frame.matrix };
         cam.near_plane = frame.near;
-        let s = splits_of(driving);
+        let (far, min_exposure, max_exposure) = self.track_look.filter(|_| driving.mode == CameraMode::Track).map_or(self.plain_look, |l| (l.0, l.1, l.2));
+        (cam.far_plane, cam.min_exposure, cam.max_exposure) = (far, min_exposure, max_exposure);
+        let s = match self.track_look {
+            Some(l) if driving.mode == CameraMode::Track => [l.3[0], l.3[1], l.3[2], 500.0],
+            _ => splits_of(driving),
+        };
         self.camera.base.set_shadow_maps_splits(&mut self.graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         // GameTime::update 0x14044c250: a frame is never longer than a fifth of a second
@@ -1339,12 +1362,14 @@ impl AcRenderer {
             ),
             // (eCar is 1: ACCameraManager::update's jump table)
             CameraMode::Car => (1, 0),
+            CameraMode::Track => (3, 0),
         };
         // ACCameraManager::setMode 0x1400340d0 / setDrivableCarIndex: currentGlobalCameraIndex
         // is 0 in the cockpit and the drivable view's number + 1; the car cameras leave it
         match modes {
             (0, _) => self.global_camera_index = 0,
             (2, drivable) => self.global_camera_index = drivable + 1,
+            (3, _) => self.global_camera_index = 6 + driving.track_set as i32,
             _ => {}
         }
         // Sim::update 0x14019ef90: CarNodeSorter::sort, before the cars update
@@ -1626,6 +1651,7 @@ impl AcRenderer {
                     super::scene::CameraMode::Cockpit => 0,
                     super::scene::CameraMode::Car => 1,
                     super::scene::CameraMode::Drivable => 2,
+                    super::scene::CameraMode::Track => 3,
                 };
                 gui.gui.sim.sun_angle = self.options.sun_angle;
                 gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);

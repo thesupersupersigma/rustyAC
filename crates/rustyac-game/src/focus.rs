@@ -38,12 +38,14 @@ pub fn neighbour_car(world: &[CarView], current: usize, ahead: bool) -> usize {
 }
 
 /// The three commands of `Sim::onKeyDown` 0x14019a940 that move the focus (Ctrl + numpad 3, 1
-/// and 2 unless `controls.ini` says otherwise).
+/// and 2 unless `controls.ini` says otherwise), and F3, which goes through the same fade to the
+/// track's cameras.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FocusCommand {
     Next,
     Previous,
     Player,
+    TrackCamera,
 }
 
 /// The focused car (`Sim::focusedCarIndex`) and the fade a change of it goes through
@@ -56,6 +58,8 @@ pub struct Focus {
     /// seconds since the fade began
     pub fade: Option<f32>,
     pub pending: Option<FocusCommand>,
+    /// F3 reached its black frame: the caller switches to the track's cameras
+    pub camera_change: bool,
 }
 
 impl Focus {
@@ -69,14 +73,18 @@ impl Focus {
                 }
             }
         }
-        Focus { index, fade_time, fade: None, pending: None }
+        Focus { index, fade_time, fade: None, pending: None, camera_change: false }
     }
 
     fn apply(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
+        if command == FocusCommand::TrackCamera {
+            self.camera_change = true;
+            return;
+        }
         self.index = match command {
             FocusCommand::Next => neighbour_car(world, self.index.min(world.len() - 1), true),
             FocusCommand::Previous => neighbour_car(world, self.index.min(world.len() - 1), false),
-            FocusCommand::Player => 0,
+            FocusCommand::Player | FocusCommand::TrackCamera => 0,
         };
         // (SystemMessage::addCarMessage: the game names the car on the screen)
         println!("FOCUSED CAR: {} ({})", self.index, names.get(self.index).map_or("", String::as_str));
@@ -85,7 +93,7 @@ impl Focus {
     /// A command: `ACCameraManager::registerToFadeInEvent` (a change that still waits for its
     /// black frame happens at once), then the fade begins.
     pub fn command(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
-        if world.len() <= 1 {
+        if world.len() <= 1 && command != FocusCommand::TrackCamera {
             return;
         }
         if let Some(waiting) = self.pending.take() {
@@ -156,7 +164,7 @@ mod tests {
     fn the_focus_changes_at_the_black_frame_of_the_fade() {
         let w = world(&[0.50, 0.48, 0.52]);
         let names = vec![String::new(); 3];
-        let mut focus = Focus { index: 0, fade_time: 0.1, fade: None, pending: None };
+        let mut focus = Focus { index: 0, fade_time: 0.1, fade: None, pending: None, camera_change: false };
         focus.command(FocusCommand::Next, &w, &names);
         let dt = 1.0 / 60.0;
         let mut changed_at = None;
@@ -179,7 +187,7 @@ mod tests {
         focus.command(FocusCommand::Player, &w, &names);
         assert_eq!(focus.index, 0, "from car 2 the car behind is car 0");
         // no fade time (fades.ini unreadable): the change happens in the frame of the key
-        let mut focus = Focus { index: 0, fade_time: 0.0, fade: None, pending: None };
+        let mut focus = Focus { index: 0, fade_time: 0.0, fade: None, pending: None, camera_change: false };
         focus.command(FocusCommand::Next, &w, &names);
         focus.post_gui(dt, &w, &names);
         assert_eq!((focus.index, focus.fade), (2, None));

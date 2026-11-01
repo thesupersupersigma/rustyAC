@@ -434,6 +434,9 @@ pub enum CameraMode {
     Drivable,
     /// `eCar`: one of the cameras of the car's own `cameras.ini` (F6).
     Car,
+    /// `eTrack`: the track's TV cameras (F3), drawn by
+    /// [`TrackCameras`](super::track_camera::TrackCameras).
+    Track,
 }
 
 /// The views of AC's `CameraDrivableManager` (`currentMode`), in its order.
@@ -581,6 +584,8 @@ pub struct DrivingCamera {
     /// `CameraDrivableManager::chaseCamData`: distance, height, pitch (radians) of the two chase
     /// cameras (the ChaseCam Editor changes the first one live)
     pub chase: [(f32, f32, f32); 2],
+    /// `CameraTrack::currentSet`, as the track's cameras left it (for `currentGlobalCameraIndex`)
+    pub track_set: usize,
 }
 
 /// `system/cfg/chase_cam.ini` as shipped: distance, height, pitch (radians) of the two chase cameras.
@@ -606,6 +611,7 @@ impl DrivingCamera {
             rotation_animation: 0.0,
             rotation_chase: 0.0,
             chase: CHASE,
+            track_set: 0,
         }
     }
 
@@ -633,6 +639,7 @@ impl DrivingCamera {
             "bonnet" => camera.drivable = Drivable::Bonnet,
             "bumper" => camera.drivable = Drivable::Bumper,
             "dash" => camera.drivable = Drivable::Dash,
+            "track" => camera.mode = CameraMode::Track,
             _ => {
                 let index: usize = name.strip_prefix("car").and_then(|n| n.parse().ok()).ok_or_else(|| camera_name_error(name))?;
                 let count = shape.car_cameras.len();
@@ -667,9 +674,17 @@ impl DrivingCamera {
                     CameraMode::Drivable
                 }
             }
-            CameraMode::Car => self.last_driving,
+            CameraMode::Car | CameraMode::Track => self.last_driving,
         };
         self.last_driving = self.mode;
+    }
+
+    /// F3 (`setMode(eTrack)`): to the track's cameras; true when they show already (the caller
+    /// moves to the next set, `CameraTrack::nextSet`). The driving view is kept for F1.
+    pub fn f3(&mut self) -> bool {
+        let already = self.mode == CameraMode::Track;
+        self.mode = CameraMode::Track;
+        already
     }
 
     /// `CameraDrivableManager::setCurrentCamera` 0x1400c6960: one of the five views (another
@@ -681,14 +696,17 @@ impl DrivingCamera {
     }
 
     /// `ACCameraManager::setMode(mode, true, false)` as the replay's bar asks for it: 0 the
-    /// cockpit, 2 the views that drive with the car (the track's cameras are not ported).
+    /// cockpit, 2 the views that drive with the car, 3 the track's cameras.
     pub fn set_mode_kept(&mut self, mode: i32) {
         self.mode = match mode {
             0 => CameraMode::Cockpit,
             2 => CameraMode::Drivable,
+            3 => CameraMode::Track,
             _ => return,
         };
-        self.last_driving = self.mode;
+        if self.mode != CameraMode::Track {
+            self.last_driving = self.mode;
+        }
     }
 
     /// `setMode(eCar)` then `CameraCarManager::setCurrentCamera(index)`, as `ac.setCameraCar`
@@ -701,18 +719,20 @@ impl DrivingCamera {
     /// F1 (or F6) from the free camera or the start camera: `setMode(eCockpit)` from a mode
     /// that is not a driving one is `lastDrivingMode`, without moving on.
     pub fn back_to_driving(&mut self) {
-        if self.mode == CameraMode::Car {
+        if matches!(self.mode, CameraMode::Car | CameraMode::Track) {
             self.mode = self.last_driving;
         }
     }
 
     /// `ACCameraManager::currentGlobalCameraIndex` as `setMode` leaves it: 0 the cockpit, 1 to
-    /// 5 the views that drive with the car; a camera of the car's own leaves it as it was.
+    /// 5 the views that drive with the car, 6 on the track's camera sets; a camera of the car's
+    /// own leaves it as it was.
     pub fn global_index(&self) -> Option<i32> {
         match self.mode {
             CameraMode::Cockpit => Some(0),
             CameraMode::Drivable => Some(1 + Drivable::ALL.iter().position(|d| *d == self.drivable).unwrap_or(0) as i32),
             CameraMode::Car => None,
+            CameraMode::Track => Some(6 + self.track_set as i32),
         }
     }
 
@@ -736,6 +756,7 @@ impl DrivingCamera {
             CameraMode::Cockpit => "cockpit".to_string(),
             CameraMode::Drivable => self.drivable.name().to_string(),
             CameraMode::Car => format!("car {}", self.car_index),
+            CameraMode::Track => format!("track {}", self.track_set),
         }
     }
 
@@ -829,6 +850,15 @@ impl DrivingCamera {
                 CameraFrame { matrix, fov: camera.fov, near: self.near }
             }
             CameraMode::Drivable => self.drivable_view(view, shape, &model, acc_g, dt),
+            // the caller draws the track's cameras; without them (a track that has none), the
+            // view driven with before
+            CameraMode::Track => {
+                let mut driving = *self;
+                driving.mode = self.last_driving;
+                let frame = driving.update(view, shape, acc_g, dt);
+                *self = DrivingCamera { mode: CameraMode::Track, ..driving };
+                frame
+            }
         };
         self.near = frame.near;
         frame
@@ -1264,7 +1294,7 @@ impl MouseCamera {
 
 /// What `--camera` accepts.
 pub fn camera_name_error(name: &str) -> String {
-    format!("--camera: {name:?} is not one of cockpit, chase, chase2, bonnet, bumper, dash, car0, car1 ... (the cameras of the car's cameras.ini)")
+    format!("--camera: {name:?} is not one of cockpit, chase, chase2, bonnet, bumper, dash, track, car0, car1 ... (the cameras of the car's cameras.ini)")
 }
 
 /// A camera of a car's `data/cameras.ini` (`CameraCarDefinition`): its matrix in the frame of

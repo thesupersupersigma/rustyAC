@@ -85,6 +85,21 @@ impl Picture {
         }
     }
 
+    /// F3: see [`AcRenderer::set_track_look`].
+    pub fn set_track_look(&mut self, frame: Option<&super::track_camera::TrackFrame>) {
+        if let Picture::Ac(r) = self {
+            r.set_track_look(frame);
+        }
+    }
+
+    /// See [`AcRenderer::steer_place`] (the debug picture has no car models: the car's origin).
+    pub fn steer_place(&self, car: usize) -> [f32; 3] {
+        match self {
+            Picture::Ac(r) => r.steer_place(car),
+            Picture::Debug(_) => [0.0; 3],
+        }
+    }
+
     pub fn gui(&mut self) -> Option<&mut super::gui::GameGui> {
         match self {
             Picture::Ac(r) => r.gui.as_deref_mut(),
