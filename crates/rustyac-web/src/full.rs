@@ -279,7 +279,10 @@ impl GuiLoop {
                 }
                 SimAction::LoadPreviousSessionUserCamera => {
                     self.start_camera = None;
-                    session.camera.back_to_driving();
+                    // (the page writes no files: the last camera is the one its Documents give)
+                    if let Some(mode) = session.camera.load_previous() {
+                        self.set_mode(session, mode);
+                    }
                 }
                 SimAction::SetDrivableCamera(view) => session.camera.set_drivable(view),
                 SimAction::SetCameraModeKept(mode) => session.camera.set_mode_kept(mode),

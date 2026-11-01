@@ -1367,7 +1367,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `replay` (the replay's bar, for pictures), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden), `console` (Home), `type:<text>` (typed into the console, then Enter).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `drive` (its Drive button), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `replay` (the replay's bar, for pictures), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden), `console` (Home), `type:<text>` (typed into the console, then Enter).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         let commands: Vec<&str> = commands.split(';').map(str::trim).filter(|c| !c.is_empty()).collect();
         for (k, &command) in commands.iter().enumerate() {
@@ -1417,6 +1417,12 @@ impl GameGui {
                 "car" => self.message.add_car_message(need(1)?[0] as u32, MESSAGE_DEFAULT),
                 "notify" => self.notification.show_notification(&mut self.gui, need(1)?[0]),
                 "esc" => self.esc_key(false),
+                // the ESC menu's Drive button (Sim::startGame: the fade, then the car let go)
+                "drive" => {
+                    if let Some(menu) = self.gui.sim.esc_menu {
+                        self.gui.sim_start_game(menu);
+                    }
+                }
                 "screenshot" => self.take_screen(),
                 "tab" => self.tab_down(),
                 "replay" => {

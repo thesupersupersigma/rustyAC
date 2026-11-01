@@ -540,6 +540,7 @@ impl RandomCamera {
                 CameraMode::Track
             }
         };
+        camera.remember();
         match camera.mode {
             CameraMode::Cockpit | CameraMode::Drivable => camera.set_last_driving(camera.mode),
             // the scene camera's near plane

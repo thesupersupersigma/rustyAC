@@ -2025,7 +2025,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                     SimAction::LoadPreviousSessionUserCamera => {
                         start_camera = None;
                         mouse_camera = None;
-                        camera.back_to_driving();
+                        if let Some(mode) = camera.load_previous() {
+                            let count = shapes[focus.index].car_cameras.len();
+                            rustyac_game::render::onboard_free::set_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), count, cinematic.is_some(), &mut track_cameras);
+                        }
                     }
                     // (online the chat's lines and the votes went to the client already)
                     SimAction::AddMessage { .. } | SimAction::SendChat(_) => {}
@@ -2590,6 +2593,14 @@ fn run_window(options: &Options) -> Result<(), String> {
     // Sim::shutdown: the apps' last files
     if let Some(gui) = renderer.gui() {
         gui.shutdown_apps();
+    }
+    // ACCameraManager's destructor: the last camera, on rustyAC's copy of camera_manager.ini
+    // (made from Documents' the first time)
+    let file = cfg_dir(options).join("camera_manager.ini");
+    let old = rustyac_content::vfs::read(&file).ok().or_else(|| rustyac_content::install::documents().and_then(|d| rustyac_content::vfs::read(&d.join("cfg/camera_manager.ini")).ok()));
+    match rustyac_content::guard::create_dir_all(cfg_dir(options)).and_then(|()| rustyac_content::guard::write(&file, camera.last_camera_ini(old.as_deref()))) {
+        Ok(()) => println!("CAMERA: {} at the end; wrote {} (last camera {} {})", camera.name(), file.display(), camera.last_camera.0, camera.last_camera.1),
+        Err(e) => eprintln!("WARNING: {} was not written ({e})", file.display()),
     }
     shared.quit.store(true, Ordering::Relaxed);
     let outcome = thread.join().map_err(|_| "the physics thread panicked".to_string())?;

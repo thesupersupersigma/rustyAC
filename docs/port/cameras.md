@@ -24,7 +24,16 @@
   pause): the desktop times `dt` by the rig's `timeMult` in replay mode as `CameraTrack::update`
   does (the tape's `in replay` / `replay speed` columns already covered the sum). The page has no
   AC replay.
-- Next: steps 4-7.
+- Step 4: the last camera remembered as `ACCameraManager` does: `[LAST_CAMERA] MODE` and
+  `DRIVABLE_MODE` read with `camera_manager.ini` (rustyAC's own copy, else Documents'), kept by
+  every switch as `setMode`'s end keeps them (the cockpit unless the random camera chose it, the
+  drivable views), taken back at the ESC menu's first Drive (`loadPreviousSessionUserCamera`)
+  and written at the end into rustyAC's own cfg folder through the write guard (the game's
+  destructor writes Documents'). `tools/web_checks/task46b/last_camera.sh` (new `--gui-do drive`,
+  the ESC menu's Drive button): Documents 2 3 → bumper, written 2 3; the next run with
+  Documents 0 0 → bumper again (the own copy wins); Documents 0 3 → cockpit, written 0 3.
+  The page writes no files: it takes the launcher's Documents' last camera.
+- Next: steps 5-7.
 
 ## Resume here
 

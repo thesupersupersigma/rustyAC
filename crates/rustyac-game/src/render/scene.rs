@@ -564,6 +564,10 @@ pub struct DrivingCamera {
     last_driving: CameraMode,
     /// `CameraCarManager::currentCameraIndex`: kept too.
     pub car_index: usize,
+    /// `ACCameraManager::persistanceCameraMode`: the last camera driven with (0 the cockpit, 2
+    /// the drivable views) and the drivable view, `camera_manager.ini [LAST_CAMERA] MODE` and
+    /// `DRIVABLE_MODE`.
+    pub last_camera: (i32, i32),
     /// The chase camera's place relative to the rear axle, lagging behind the g forces.
     current_offset: [f32; 3],
     /// `actionsState` of the focused car: bit 0 look left, bit 1 look right, bit 9 look back.
@@ -607,6 +611,7 @@ impl DrivingCamera {
             drivable: Drivable::Chase,
             last_driving: CameraMode::Drivable,
             car_index: 0,
+            last_camera: (0, 0),
             current_offset: [0.0; 3],
             actions: 0,
             near: 0.05,
@@ -691,6 +696,45 @@ impl DrivingCamera {
             CameraMode::Car | CameraMode::Track => self.last_driving,
         };
         self.last_driving = self.mode;
+        self.remember();
+    }
+
+    /// The end of `setMode` 0x1400340d0 (and of `loadPreviousSessionUserCamera`): the cockpit
+    /// (not the random camera's) and the drivable views are remembered for the next session.
+    pub fn remember(&mut self) {
+        let drivable = Drivable::ALL.iter().position(|d| *d == self.drivable).unwrap_or(0) as i32;
+        match (self.shown, self.mode) {
+            (None, CameraMode::Cockpit) if !self.random => self.last_camera = (0, drivable),
+            (None, CameraMode::Drivable) => self.last_camera = (2, drivable),
+            _ => {}
+        }
+    }
+
+    /// `loadPreviousSessionUserCamera` 0x1400337e0 (the first Drive): the drivable view and the
+    /// camera remembered. A mode that is not a driving camera's (4 the helicopter, 5 F5, 6 the
+    /// free camera) is the caller's: `Some(mode)`.
+    pub fn load_previous(&mut self) -> Option<i32> {
+        self.set_drivable(self.last_camera.1);
+        self.random = false;
+        self.shown = None;
+        match self.last_camera.0 {
+            0 => (self.mode, self.last_driving) = (CameraMode::Cockpit, CameraMode::Cockpit),
+            1 => self.mode = CameraMode::Car,
+            2 => (self.mode, self.last_driving) = (CameraMode::Drivable, CameraMode::Drivable),
+            3 => self.mode = CameraMode::Track,
+            mode @ 4..=6 => return Some(mode),
+            // (another number: ACCameraManager::update's default, the cockpit's camera)
+            _ => self.mode = CameraMode::Cockpit,
+        }
+        self.remember();
+        None
+    }
+
+    /// `ACCameraManager`'s destructor: `WritePrivateProfileStringW` of `[LAST_CAMERA] MODE` and
+    /// `DRIVABLE_MODE` on the file's text `old` (`None`: there is none).
+    pub fn last_camera_ini(&self, old: Option<&[u8]>) -> Vec<u8> {
+        let text = rustyac_gui::apps::write_profile_string(old, "LAST_CAMERA", "MODE", &self.last_camera.0.to_string());
+        rustyac_gui::apps::write_profile_string(Some(&text), "LAST_CAMERA", "DRIVABLE_MODE", &self.last_camera.1.to_string())
     }
 
     /// F3 (`setMode(eTrack)`): to the track's cameras; true when they show already (the caller
@@ -741,6 +785,7 @@ impl DrivingCamera {
         if self.mode != CameraMode::Track {
             self.last_driving = self.mode;
         }
+        self.remember();
     }
 
     /// `setMode(eCar)` then `CameraCarManager::setCurrentCamera(index)`, as `ac.setCameraCar`
@@ -759,6 +804,7 @@ impl DrivingCamera {
         if matches!(self.mode, CameraMode::Car | CameraMode::Track) {
             self.mode = self.last_driving;
         }
+        self.remember();
     }
 
     /// `ACCameraManager::currentGlobalCameraIndex` as `setMode` leaves it: 0 the cockpit, 1 to
@@ -882,6 +928,8 @@ impl DrivingCamera {
             }
             gx_mul *= g[0];
             gz_mul *= g[2];
+            // (ACCameraManager's ctor)
+            self.last_camera = (ini.get_int("LAST_CAMERA", "MODE"), ini.get_int("LAST_CAMERA", "DRIVABLE_MODE"));
         }
         // (the drivable views take the cockpit file's head speed over their own)
         if let Some(ini) = onboard {
@@ -1712,5 +1760,41 @@ mod tests {
         // meshes
         assert_eq!(cube().len(), 36);
         assert_eq!(cylinder(24).len(), 24 * 12);
+    }
+
+    /// Task 46b: the last camera as setMode remembers it and the next session takes it back.
+    #[test]
+    fn last_camera() {
+        let mut c = DrivingCamera::chase();
+        c.f1(); // chase to chase 2
+        assert_eq!(c.last_camera, (2, 1));
+        c.set_car_camera(0);
+        assert_eq!(c.last_camera, (2, 1));
+        c.set_mode_kept(0);
+        assert_eq!(c.last_camera, (0, 1));
+        c.random = true;
+        c.mode = CameraMode::Cockpit;
+        c.remember();
+        assert_eq!(c.last_camera, (0, 1));
+        let text = c.last_camera_ini(Some(b"[LAST_CAMERA]
+MODE=2
+DRIVABLE_MODE=4
+
+[FADE]
+COLOR=0,0,0
+"));
+        assert_eq!(String::from_utf8(text).unwrap(), "[LAST_CAMERA]
+MODE=0
+DRIVABLE_MODE=1
+
+[FADE]
+COLOR=0,0,0
+");
+        let mut next = DrivingCamera::chase();
+        next.last_camera = (2, 3);
+        assert_eq!(next.load_previous(), None);
+        assert_eq!((next.mode, next.drivable), (CameraMode::Drivable, Drivable::ALL[3]));
+        next.last_camera = (5, 0);
+        assert_eq!(next.load_previous(), Some(5));
     }
 }
