@@ -764,3 +764,128 @@ pub unsafe fn track_micro(acs: &Acs, ac: &std::path::Path, seed: u32, steps: usi
     }
     Ok(tape)
 }
+
+const VA_MANAGER_SET_MODE: usize = 0x1_4003_40d0;
+const VA_MANAGER_UPDATE: usize = 0x1_4003_45e0;
+const VA_AUDIO_DISTANCE_SCALE: usize = 0x1_4003_3e20;
+
+/// Task 46: F2, the game's random camera (`ACCameraManager::update` 0x1400345e0 with
+/// `stepCameraRandom` 0x140034300 and `setMode` 0x1400340d0) on a manager made by hand, with
+/// made-up numbers of car cameras and track camera sets, made-up times and probabilities, and
+/// F1 / F2 / F3 / F6 pressed at made-up frames. `rand()` from `seed`. Tape: `group <sets>
+/// <car cameras> <mode> <last driving> <view> <car camera> <set> <times 3> <probabilities 4>`,
+/// then per event `key <F>` or `dt <bits>`, each `-> <mode> <last driving> <view> <car camera>
+/// <set> <random> <last random> <time> <old time> <near> <global index>`.
+pub unsafe fn random_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, String> {
+    acs.patch(acs.va(VA_AUDIO_DISTANCE_SCALE), &[0xc3]);
+    let set_mode: extern "C" fn(*mut u8, i32, bool, bool) = std::mem::transmute(acs.va(VA_MANAGER_SET_MODE));
+    let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_MANAGER_UPDATE));
+    let next_camera: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_CAMERAS_NEXT));
+    // (the game's rand() is the oracle's own, see `rand`)
+    SEED.store(seed, Ordering::Relaxed);
+    let mut rng = Rng(seed as u64 ^ 0x2f2);
+    let mut tape = String::new();
+    let groups = (steps / 500).max(4);
+    for _ in 0..groups {
+        let sim = acs.alloc(0x400);
+        let car = acs.alloc(0x1200);
+        let car_list = acs.alloc(8);
+        wr(car_list, 0, car as usize);
+        wr(sim, 0x208, car_list as usize);
+        wr(sim, 0x210, car_list as usize + 8);
+        let (sets, cameras) = (1 + rng.next() as usize % 6, rng.next() as usize % 5);
+        vector(acs, car.add(0xfc8), 0x4c, cameras);
+        let manager = acs.alloc(0x400);
+        // every mode's object (update marks the shown one), the scene camera
+        for at in [0x88, 0xa0, 0xa8, 0xb0, 0xb8, 0xc0, 0xc8] {
+            wr(manager, at, acs.alloc(0x200) as usize);
+        }
+        let camera = acs.alloc(0x200);
+        wr(manager, 0x110, sim as usize);
+        wr(manager, 0x118, camera as usize);
+        let track: *mut u8 = rd::<usize>(manager, 0xa0) as *mut u8;
+        let list = vector(acs, track.add(0x78), 8, sets);
+        for i in 0..sets {
+            // (nextSet reads only the set's name at +0x20: an empty one)
+            wr(list, 8 * i, acs.alloc(0x48) as usize);
+        }
+        let cars: *mut u8 = rd::<usize>(manager, 0xb8) as *mut u8;
+        wr(cars, 0x58, sim as usize);
+        let drivable: *mut u8 = rd::<usize>(manager, 0xc0) as *mut u8;
+        let mode = [0, 1, 2, 3][rng.next() as usize % 4];
+        let last = if rng.next().is_multiple_of(2) { 0 } else { 2 };
+        let view = (rng.next() % 5) as i32;
+        let index = if cameras == 0 { 0 } else { rng.next() as usize % cameras };
+        let set = rng.next() as usize % sets;
+        wr(manager, 0x120, mode);
+        wr(manager, 0x124, last);
+        wr(drivable, 0x58, view);
+        wr(cars, 0x68, index as u32);
+        wr(track, 0xa4, set as u32);
+        wr(camera, 0x70, 0.1f32);
+        let (lo, hi) = if rng.next().is_multiple_of(2) { (5.0, 10.0) } else { (rng.float(0.0, 3.0), rng.float(0.0, 6.0)) };
+        let times = [lo, hi, rng.float(0.0, 3.0)];
+        wr(manager, 0xe8, times[0]);
+        wr(manager, 0xec, times[1]);
+        wr(manager, 0xe0, times[2]);
+        let probabilities: [i32; 4] = if rng.next().is_multiple_of(2) {
+            [10, 25, 30, 100]
+        } else {
+            let mut sum = 0;
+            [0; 4].map(|_| {
+                sum += (rng.next() % 40) as i32;
+                sum
+            })
+        };
+        let p = vector(acs, manager.add(0xf0), 4, 4);
+        for (i, v) in probabilities.iter().enumerate() {
+            wr(p, 4 * i, *v);
+        }
+        wr(manager, 0x10c, 3i32);
+        write!(tape, "group {sets} {cameras} {mode} {last} {view} {index} {set}").unwrap();
+        bits(&mut tape, &times);
+        for v in probabilities {
+            write!(tape, " {v}").unwrap();
+        }
+        tape.push('\n');
+        for _ in 0..500 {
+            let r = rng.next() % 40;
+            // (F6 on a car without cameras of its own: the port shows the view driven with)
+            let r = if cameras == 0 && r == 3 { 39 } else { r };
+            if r < 4 {
+                let key = [1, 2, 3, 6][r as usize];
+                write!(tape, "key {key}").unwrap();
+                match key {
+                    1 => set_mode(manager, 0, false, false),
+                    2 => {
+                        set_mode(manager, 3, false, false);
+                        wr(manager, 0x108, 1u8);
+                    }
+                    3 => set_mode(manager, 3, false, false),
+                    _ if rd::<i32>(manager, 0x120) == 1 => next_camera(cars),
+                    _ => set_mode(manager, 1, false, false),
+                }
+            } else {
+                let dt = [0.0, 1.0 / 60.0, 0.1, rng.float(0.0, 0.5)][(rng.next() % 4) as usize];
+                tape.push_str("dt");
+                bits(&mut tape, &[dt]);
+                update(manager, dt);
+            }
+            write!(
+                tape,
+                " -> {} {} {} {} {} {} {}",
+                rd::<i32>(manager, 0x120),
+                rd::<i32>(manager, 0x124),
+                rd::<i32>(drivable, 0x58),
+                rd::<u32>(cars, 0x68),
+                rd::<u32>(track, 0xa4),
+                rd::<u8>(manager, 0x108),
+                rd::<i32>(manager, 0x10c)
+            )
+            .unwrap();
+            bits(&mut tape, &[rd(manager, 0xe0), rd(manager, 0xe4), rd(camera, 0x70)]);
+            writeln!(tape, " {}", rd::<i32>(manager, 0xdc)).unwrap();
+        }
+    }
+    Ok(tape)
+}

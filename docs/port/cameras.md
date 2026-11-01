@@ -17,7 +17,9 @@
 - Step 2d done: F3, the track's TV cameras and their sets: every track's sets as the game loads
   them and `CameraTrack::update` frame by frame IDENTICAL (`track_camera.tape`); F3 through the
   fade on the desktop and in the page.
-- Next: F2 (the random camera).
+- Step 2e done: F2, the random camera: `ACCameraManager::update` / `stepCameraRandom` and the
+  keys around it IDENTICAL against the game (`random_camera.tape`); desktop and page.
+- Next: quick proofs, report, v0.46.0.
 
 ## Step 0: housekeeping
 
@@ -92,13 +94,13 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | FOV (`setPlayerFov`), seat position | Numpad +/-, seat keys | missing | |
 | Fade-in (`fadeIn`) | F4, menus, race rules | done | F4's fade proven (`focus.rs`, sequence 18); the menus' fades were already drawn (`GameGui::post_gui`, Task 30; the audit's "does nothing" was the desktop's action loop, which leaves them to the GUI); the race rules' fades now too (Step 2c) |
 | F3 track cameras and sets (`CameraTrack`) | F3 | done + proven (2d) | desktop and page |
-| F2 random camera (`stepCameraRandom`) | F2 | missing | |
+| F2 random camera (`stepCameraRandom`) | F2 | done + proven (2e) | desktop and page |
 | F5 onboard free (`CameraOnBoardFree`) | F5 | missing → 46b | |
 | Helicopter (`CameraHelicopter`) | | missing → 46b | |
 | Cinematic free camera (`video_editing.ini`) | replay | missing → 46b | |
 | Last camera (`loadPreviousSessionUserCamera`) | | missing → 46b | |
 | TrackIR | | missing → 47 | |
-| Page (Full mode) | F1, C, F3, F4, F6, F7 | as desktop | F2, F5, other cars' views missing |
+| Page (Full mode) | F1, C, F2, F3, F4, F6, F7 | as desktop | F5, other cars' views missing |
 
 ## Step 2a: the cameras that drive with the car, frame by frame
 
@@ -266,6 +268,43 @@ Not proven end to end against the game: the inputs the desktop hands the camera 
 matrix is 2a's proven one; the steering wheel's place, the place along the lap and the speed are
 the port's own, proven elsewhere). shortcut: in a replay the track camera does not slow with
 slow motion (the game times `dt` by the replay's speed); fix when replays get F3 (Task 46b).
+
+## Step 2e: F2, the random camera
+
+F2 (`Sim::onKeyDown` 0x71) fades like F3, at the black frame `setMode(eTrack)` then
+`randomMode` on. From then `ACCameraManager::update` 0x1400345e0 counts the frame times; past
+`randomCameraTime` `stepCameraRandom` 0x140034300 draws a mode by `system/cfg/random_camera.ini`'s
+probabilities (AC: cockpit 10, car 15, drivable 5, track 70; 5 to 10 s), one of that mode's
+cameras other than the one showing (the same again: the next), `setMode(mode, false, true)`, and
+the next time. Every draw is the game's `rand()`; the port draws them from the cockpit shake's
+generator (the game has one). F1, F3, F6 from another mode and F7 end it (`setMode`); F6 in car
+mode keeps it.
+
+Proof: `car_oracle start-camera-micro` now also writes `random_camera.tape`: a hand-made
+`ACCameraManager` (its ctor's random part, `setMode` 0x1400340d0, `update`), groups of 500
+events of random keys (F1, F2, F3, F6 when the car has cameras) and frame times; the port's
+`start_camera_check` plays the same events and compares mode, cameras, times and `rand()` after
+each one.
+
+| seed | random camera |
+|---|---|
+| 1 | IDENTICAL (120 groups, 60120 lines of the game) |
+| 2 | IDENTICAL (120 groups, 60120 lines of the game) |
+| 3 | IDENTICAL (120 groups, 60120 lines of the game) |
+
+(First tries: the oracle seeded the CRT's `srand`, but the oracle answers `rand()` itself;
+and a drivable view drawn as a wider number than the game's `setCurrentCamera` takes.)
+
+Desktop: `rustyac.exe --car bmw_m3_e30 --track magione --autodrive --no-race-ini --duration 45
+--focus-script random@3`: `RANDOM CAMERA`, then `car 4`, `track 1`, `track 3`, `track 1`.
+`random@<s>` in `--focus-script` is F2.
+
+Page (Full mode), `tools/web_checks/task46/cams.sh`: after F2, six HUD reads 5 s apart:
+`track 1|1`, `track 3|1b`, `track 2|T1`, `track 0|T1`; no console errors. No new page files.
+
+shortcut: a track without camera sets draws nothing when the track mode is drawn (the game would
+index its empty list); fix if such a track ever shows F2. Not proven end to end: which draws a
+real session sees (the desktop's frame times are its own).
 
 ## Not done
 

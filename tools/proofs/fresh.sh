@@ -177,8 +177,8 @@ if part cameras; then  # Tasks 34 and 46: the game's start, free (F7), cockpit, 
         d=$root/cameras/$seed
         mkdir -p "$d"
         "$CO" start-camera-micro --seed "$seed" --steps 60000 --root "$d" > "$out/cameras_$seed.txt" 2>&1
-        cargo run --release --locked --quiet -p rustyac-game --example start_camera_check -- "$d/start_camera.tape" "$d/free_camera.tape" "$d/driving_camera.tape" "$d/track_camera.tape" "$ac" >> "$out/cameras_$seed.txt" 2>&1
-        for what in "start camera" "free camera" "driving cameras" "track cameras"; do
+        cargo run --release --locked --quiet -p rustyac-game --example start_camera_check -- "$d/start_camera.tape" "$d/free_camera.tape" "$d/driving_camera.tape" "$d/track_camera.tape" "$ac" "$d/random_camera.tape" "$seed" >> "$out/cameras_$seed.txt" 2>&1
+        for what in "start camera" "free camera" "driving cameras" "track cameras" "random camera"; do
             r=$(grep "^$what: " "$out/cameras_$seed.txt")
             case "$r" in *IDENTICAL*) verdict "cameras $seed $what" IDENTICAL ;; *) verdict "cameras $seed $what" DIFFERENT "${r:-no result}" ;; esac
         done

@@ -21,7 +21,7 @@
 //!
 //! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder>]]]`
 
-use rustyac_game::render::track_camera::{TrackCamera, TrackCameras};
+use rustyac_game::render::track_camera::{CameraSet, RandomCamera, TrackCamera, TrackCameras};
 use rustyac_game::render::scene::{CameraFrame, CameraMode, CarCamera, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::view::CarView;
 
@@ -114,9 +114,96 @@ fn main() {
     if let (Some(path), Some(ac)) = (std::env::args().nth(4), std::env::args().nth(5)) {
         failed |= !track(&std::fs::read_to_string(&path).expect("the track cameras' tape"), std::path::Path::new(&ac));
     }
+    if let (Some(path), Some(seed)) = (std::env::args().nth(6), std::env::args().nth(7)) {
+        failed |= !random(&std::fs::read_to_string(&path).expect("the random camera's tape"), seed.parse().expect("the seed"));
+    }
     if failed {
         std::process::exit(1);
     }
+}
+
+/// Task 46: F2's random camera (`random_camera.tape`): the game's `ACCameraManager::update`,
+/// `stepCameraRandom` and `setMode` with F1, F2, F3 and F6 against the port's `RandomCamera`
+/// and `DrivingCamera`, `rand()` from the tape's seed.
+fn random(tape: &str, seed: u32) -> bool {
+    let mut rand = rustyac_physics::session::MsvcRand(seed);
+    let (mut lines, mut wrong, mut groups) = (0usize, 0usize, 0usize);
+    let mut camera = DrivingCamera::chase();
+    let mut track = TrackCameras::default();
+    let mut random = RandomCamera::new(None, &mut rustyac_physics::session::MsvcRand(0));
+    let (mut cameras, mut global) = (0usize, 0i32);
+    for line in tape.lines() {
+        lines += 1;
+        if let Some(group) = line.strip_prefix("group ") {
+            groups += 1;
+            let w: Vec<&str> = group.split(' ').collect();
+            let n: Vec<i64> = w[..7].iter().map(|x| x.parse().unwrap()).collect();
+            cameras = n[1] as usize;
+            camera = DrivingCamera::chase();
+            camera.near = 0.1;
+            camera.set_drivable(n[4] as i32);
+            camera.mode = [CameraMode::Cockpit, CameraMode::Car, CameraMode::Drivable, CameraMode::Track][n[2] as usize];
+            camera.set_last_driving(if n[3] == 0 { CameraMode::Cockpit } else { CameraMode::Drivable });
+            camera.car_index = n[5] as usize;
+            track = TrackCameras { sets: vec![CameraSet::default(); n[0] as usize], current_set: n[6] as usize, ..TrackCameras::default() };
+            camera.track_set = track.current_set;
+            let t: Vec<f32> = w[7..10].iter().map(|x| float(x)).collect();
+            random = RandomCamera { min_time: t[0], max_time: t[1], time: t[2], old_time: 0.0, probabilities: [0, 1, 2, 3].map(|i| w[10 + i].parse().unwrap()), last: 3 };
+            global = 0;
+            continue;
+        }
+        let (input, output) = line.split_once(" -> ").expect("a line of the tape");
+        // (the game's currentGlobalCameraIndex changes in setMode only: on a key or a draw)
+        let set_mode = input.starts_with("key") || (camera.random && random.old_time >= random.time);
+        match input.split_once(' ').expect("an event") {
+            ("key", "1") => camera.f1(),
+            ("key", "2") => {
+                if camera.f3() {
+                    track.next_set();
+                }
+                camera.random = true;
+            }
+            ("key", "3") => {
+                if camera.f3() {
+                    track.next_set();
+                }
+            }
+            ("key", _) => camera.f6(cameras),
+            (_, dt) => random.update(float(dt), &mut camera, cameras, &mut track, &mut rand),
+        }
+        camera.track_set = track.current_set;
+        if let Some(g) = camera.global_index().filter(|_| set_mode) {
+            global = g;
+        }
+        let mode = match camera.mode {
+            CameraMode::Cockpit => 0,
+            CameraMode::Car => 1,
+            CameraMode::Drivable => 2,
+            CameraMode::Track => 3,
+        };
+        let last = if camera.last_driving() == CameraMode::Cockpit { 0 } else { 2 };
+        let mut drivable = camera;
+        drivable.mode = CameraMode::Drivable;
+        let view = drivable.global_index().expect("a drivable view") - 1;
+        let port = format!(
+            "{mode} {last} {view} {} {} {} {} {:08x} {:08x} {:08x} {global}",
+            camera.car_index, track.current_set, camera.random as u8, random.last, random.time.to_bits(), random.old_time.to_bits(), camera.near.to_bits()
+        );
+        if port != output {
+            wrong += 1;
+            if wrong <= 5 {
+                println!("DIFFERENT line {lines} ({input}):
+  game {output}
+  port {port}");
+            }
+        }
+    }
+    if wrong == 0 {
+        println!("random camera: IDENTICAL ({groups} groups, {lines} lines of the game)");
+    } else {
+        println!("random camera: DIFFERENT in {wrong} of {lines} lines");
+    }
+    wrong == 0
 }
 
 /// Task 46: the cockpit, drivable and car cameras (`driving_camera.tape`): the game's

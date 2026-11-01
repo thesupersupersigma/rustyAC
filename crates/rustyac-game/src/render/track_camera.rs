@@ -17,7 +17,9 @@ use rustyac_physics::track::ai_line::spline_from_csv;
 use rustyac_physics::track::spline::InterpolatingSpline;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 
-use super::scene::{create_target_exact, point};
+use rustyac_physics::session::MsvcRand;
+
+use super::scene::{create_target_exact, point, CameraMode, DrivingCamera};
 use crate::view::Mat;
 
 /// `ACCamera` (ctor 0x1401f4240): one camera of a set.
@@ -86,7 +88,7 @@ impl Default for TrackCamera {
 }
 
 /// `CameraManager`: one camera set (one `cameras*.ini`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct CameraSet {
     pub name: String,
     pub cameras: Vec<TrackCamera>,
@@ -420,6 +422,132 @@ impl TrackCameras {
             shadow_splits: c.shadow_splits,
             name: c.name.clone(),
         })
+    }
+}
+
+/// `rand()` to 0..1 as the game has it (0x38000100).
+const RAND_TO_UNIT: f32 = f32::from_bits(0x3800_0100);
+
+/// F2, `ACCameraManager`'s random camera (`randomMode`): every few seconds
+/// (`ACCameraManager::update` 0x1400345e0) `stepCameraRandom` 0x140034300 draws a mode by the
+/// probabilities of `system/cfg/random_camera.ini` (the cockpit, a car camera, a drivable view
+/// or a track camera set) and one of its cameras other than the one showing, then the time to
+/// the next draw. Every draw is the game's `rand()`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RandomCamera {
+    /// `randomCameraMinTime`, `randomCameraMaxTime`, `randomCameraTime`, `randomOldCameraTime`
+    pub min_time: f32,
+    pub max_time: f32,
+    pub time: f32,
+    pub old_time: f32,
+    /// `randomCameraProbabilities`: cockpit, car, drivable, track, each the sum of those before
+    pub probabilities: [i32; 4],
+    /// `lastRandomCamera`
+    pub last: i32,
+}
+
+impl RandomCamera {
+    /// The ctor 0x140031270's part: 5 to 10 s and 25 each, then the file when there is one.
+    pub fn new(ini: Option<&IniReader>, rand: &mut MsvcRand) -> RandomCamera {
+        let mut r = RandomCamera { min_time: 5.0, max_time: 10.0, time: 0.0, old_time: 0.0, probabilities: [25, 50, 75, 100], last: 3 };
+        r.time = rand.next() as f32 * RAND_TO_UNIT * 5.0 + r.min_time;
+        if let Some(ini) = ini {
+            r.min_time = ini.get_float("SETTINGS", "MINIMUM_TIME").unwrap_or(0.0);
+            r.max_time = ini.get_float("SETTINGS", "MAXIMUM_TIME").unwrap_or(0.0);
+            r.time = rand.next() as f32 * RAND_TO_UNIT * (r.max_time - r.min_time) + r.min_time;
+            let mut sum = 0i32;
+            for (i, section) in ["CAMERA_COCKPIT", "CAMERA_CAR", "CAMERA_DRIVABLE", "CAMERA_TRACK"].iter().enumerate() {
+                sum = sum.wrapping_add(ini.get_int(section, "PROBABILITY").unwrap_or(0));
+                r.probabilities[i] = sum;
+            }
+        }
+        r
+    }
+
+    /// The install's `system/cfg/random_camera.ini` (none: the ctor's own numbers).
+    pub fn of_install(rand: &mut MsvcRand) -> RandomCamera {
+        let ini = rustyac_content::install::ac_root().map(|ac| ac.join("system/cfg/random_camera.ini")).filter(|f| rustyac_physics::data::exists(f)).and_then(|f| IniReader::load(&f).ok());
+        RandomCamera::new(ini.as_ref(), rand)
+    }
+
+    /// `ACCameraManager::update`'s part, a frame of `dt` seconds: with the random camera on, the
+    /// next draw once its time has passed. `car_cameras`: how many the focused car has.
+    pub fn update(&mut self, dt: f32, camera: &mut DrivingCamera, car_cameras: usize, track: &mut TrackCameras, rand: &mut MsvcRand) {
+        if !camera.random {
+            return;
+        }
+        if self.old_time >= self.time {
+            self.step(camera, car_cameras, track, rand);
+            self.old_time = 0.0;
+        } else {
+            self.old_time += dt;
+        }
+    }
+
+    /// `stepCameraRandom` and the `setMode(mode, false, true)` it ends with.
+    fn step(&mut self, camera: &mut DrivingCamera, car_cameras: usize, track: &mut TrackCameras, rand: &mut MsvcRand) {
+        let r = rand.next() as f32 * RAND_TO_UNIT * self.probabilities[3] as f32;
+        // `comiss; jb`: the first mode the draw is below; none: the cockpit
+        let chosen = (0..4).find(|i| !(r >= self.probabilities[*i] as f32)).unwrap_or(0);
+        // one of the mode's cameras: rand() * (count - 1), truncated; the same one again: the next
+        let pick = |count: f32, rand: &mut MsvcRand| (rand.next() as f32 * RAND_TO_UNIT * count) as i32 as u32 as usize;
+        match chosen {
+            3 if !track.sets.is_empty() => {
+                let (before, index) = (track.current_set, pick(track.sets.len() as f32 - 1.0, rand));
+                if index < track.sets.len() {
+                    track.current_set = index;
+                }
+                if track.current_set == before {
+                    track.next_set();
+                }
+            }
+            // shortcut: a track without camera sets draws nothing here (the game would read past its empty list), fine while such tracks cannot show F2's track cameras anyway
+            3 => {}
+            1 => {
+                let (before, index) = (camera.car_index, pick(car_cameras as f32 - 1.0, rand));
+                if index < car_cameras {
+                    camera.car_index = index;
+                }
+                if camera.car_index == before {
+                    camera.car_index = if camera.car_index + 1 >= car_cameras { 0 } else { camera.car_index + 1 };
+                }
+            }
+            2 => {
+                let before = camera.drivable;
+                camera.set_drivable(pick(4.0, rand) as i32);
+                if camera.drivable == before {
+                    camera.next_drivable();
+                }
+            }
+            _ => {}
+        }
+        // setMode(chosen, false, true)
+        let before = camera.mode;
+        camera.random = true;
+        camera.mode = match chosen {
+            0 => match before {
+                CameraMode::Cockpit => CameraMode::Drivable,
+                CameraMode::Drivable if camera.next_drivable() => CameraMode::Cockpit,
+                CameraMode::Drivable => CameraMode::Drivable,
+                _ => camera.last_driving(),
+            },
+            1 => CameraMode::Car,
+            2 => CameraMode::Drivable,
+            _ => {
+                if before == CameraMode::Track {
+                    track.next_set();
+                }
+                CameraMode::Track
+            }
+        };
+        match camera.mode {
+            CameraMode::Cockpit | CameraMode::Drivable => camera.set_last_driving(camera.mode),
+            // the scene camera's near plane
+            CameraMode::Car => camera.near = 0.05,
+            CameraMode::Track => camera.track_set = track.current_set,
+        }
+        self.last = chosen as i32;
+        self.time = rand.next() as f32 * RAND_TO_UNIT * (self.max_time - self.min_time) + self.min_time;
     }
 }
 

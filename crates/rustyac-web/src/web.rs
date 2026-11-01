@@ -563,6 +563,7 @@ impl Game {
         if full.is_some() {
             let setup = &session.sim.setup;
             gui.track_cameras = rustyac_game::render::track_camera::of_track(&Path::new(ROOT).join("content/tracks").join(&setup.track), &setup.layout).unwrap_or_default();
+            gui.random_camera = Some(rustyac_game::render::track_camera::RandomCamera::of_install(&mut session.camera.cockpit.rand));
         }
         if session.sim.setup.esc_start {
             if full.as_ref().and_then(|full| full.gui.as_ref()).is_some_and(|gui| gui.has_esc_menu()) {
@@ -936,6 +937,8 @@ impl Game {
             return false;
         }
         self.gui.start_camera = None;
+        // (setMode(eFree): the random camera ends)
+        self.session.camera.random = false;
         if self.gui.free_camera.is_none() {
             self.gui.free_camera = self.gui.last_frame.as_ref().map(rustyac_game::render::scene::MouseCamera::new);
         }
@@ -950,6 +953,16 @@ impl Game {
         }
         let world: Vec<CarView> = std::iter::once(self.view).chain(self.session.remote_views()).collect();
         self.gui.focus.get_or_insert_with(|| rustyac_game::focus::Focus::new(0)).command(rustyac_game::focus::FocusCommand::TrackCamera, &world, &[]);
+    }
+
+    /// Task 46, Full mode: F2, the random camera (from the track's cameras, through the same
+    /// fade), as rustyac.exe.
+    pub fn random_camera(&mut self) {
+        if self.full.is_none() {
+            return;
+        }
+        let world: Vec<CarView> = std::iter::once(self.view).chain(self.session.remote_views()).collect();
+        self.gui.focus.get_or_insert_with(|| rustyac_game::focus::Focus::new(0)).command(rustyac_game::focus::FocusCommand::RandomCamera, &world, &[]);
     }
 
     /// Task 42c, Full mode: F4, back to the player's car (`Sim::onKeyDown`: only with two cars

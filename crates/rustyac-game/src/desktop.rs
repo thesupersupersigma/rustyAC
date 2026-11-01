@@ -1509,6 +1509,9 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
         None => Default::default(),
     };
+    // F2: the random camera (ACCameraManager's, system/cfg/random_camera.ini), on the cockpit
+    // shake's rand() (the game's one generator)
+    let mut random_camera = rustyac_game::render::track_camera::RandomCamera::of_install(&mut camera.cockpit.rand);
     start_camera_editor(renderer.gui(), options, &car_names[0], &car_info.data_path, &shapes[0]);
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
     // replay shows from its first frame (the physics stands still for good)
@@ -1660,6 +1663,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                         if !ac_replay_key(rig, &shared, &bindings, key, ctrl, alt, is_online) && !ctrl && !alt {
                             match key {
                                 0x70 | 0x43 => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
+                                0x71 => focus.command(FocusCommand::RandomCamera, &world, &car_names),
                                 0x72 => focus.command(FocusCommand::TrackCamera, &world, &car_names),
                                 0x73 => focus.command(FocusCommand::Player, &world, &car_names),
                                 0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
@@ -1811,9 +1815,12 @@ fn run_window(options: &Options) -> Result<(), String> {
                             0x72 => focus.command(FocusCommand::TrackCamera, &world, &car_names),
                             0x73 => focus.command(FocusCommand::Player, &world, &car_names),
                             0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
+                            // F2: the random camera, from the track's cameras (through the fade)
+                            0x71 => focus.command(FocusCommand::RandomCamera, &world, &car_names),
                             // F7: the free camera (`setMode(eFree)`; again: the same, kept)
                             0x76 if allow_free_camera => {
                                 start_camera = None;
+                                camera.random = false;
                                 if mouse_camera.is_none() {
                                     mouse_camera = last_frame.as_ref().map(MouseCamera::new);
                                 }
@@ -2168,6 +2175,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 "next" => FocusCommand::Next,
                 "previous" => FocusCommand::Previous,
                 "track" => FocusCommand::TrackCamera,
+                "random" => FocusCommand::RandomCamera,
                 _ => FocusCommand::Player,
             };
             println!("focus script at {at:.2} s: {name}");
@@ -2261,6 +2269,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             gui.apps.suspension_keys = [0x08, 0x11, 0x61, 0x62, 0x63, 0x64].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
         }
         let mut track_look = None;
+        // ACCameraManager::update: the random camera's next draw
+        let mut rand = camera.cockpit.rand;
+        let shown = camera.random.then(|| camera.name());
+        random_camera.update(dt.as_secs_f32(), &mut camera, shapes[focus.index].car_cameras.len(), &mut track_cameras, &mut rand);
+        camera.cockpit.rand = rand;
+        if shown.is_some_and(|shown| shown != camera.name()) {
+            println!("RANDOM CAMERA: {}", camera.name());
+        }
         let frame = if let Some(start) = start_camera.as_mut() {
             start.update(&world[0], shapes[0].eye_model[0], dt.as_secs_f32())
         } else if let Some(free) = mouse_camera.as_mut() {
@@ -2432,11 +2448,16 @@ fn run_window(options: &Options) -> Result<(), String> {
         // Game::evOnPostGui: the focus changes at the fade's black frame
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // F3 at its black frame: setMode(eTrack), from the track's cameras CameraTrack::nextSet
-        if std::mem::take(&mut focus.camera_change) {
+        // (F2: and randomMode on)
+        if let Some(change) = focus.camera_change.take() {
             let overlay = start_camera.take().is_some() | mouse_camera.take().is_some();
             if camera.f3() && !overlay {
                 let name = track_cameras.next_set();
                 println!("TRACK CAMERAS: set {} {name}", track_cameras.current_set);
+            }
+            if change == FocusCommand::RandomCamera {
+                camera.random = true;
+                println!("RANDOM CAMERA");
             }
         }
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown

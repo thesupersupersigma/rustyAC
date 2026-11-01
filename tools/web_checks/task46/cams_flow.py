@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Task 46: a Full-mode page drive (AC's launcher, Start) with AC's Default controls preset: Drive in the ESC menu, F1 to
 # the cockpit, Ctrl+Numpad + twice and - once (field of view), Q and W held (glance left, right), F3 twice
-# (the track's cameras, then their next set), F1 (back to the cockpit).
+# (the track's cameras, then their next set), F1 (back to the cockpit), F2 (the random camera, 30 s).
 # usage: python cams_flow.py <out.json> <Default.ini>
 import json, sys
 out, controls = sys.argv[1], open(sys.argv[2]).read()
@@ -31,6 +31,11 @@ for code, vk in (("KeyQ", 0x51), ("KeyW", 0x57)):
 flow += press("F3", 0x72) + [{"wait": 2}, {"js": hud}, {"shot": out.replace(".json", "_f3.png")}]
 flow += press("F3", 0x72) + [{"wait": 2}, {"js": hud}, {"shot": out.replace(".json", "_f3b.png")}]
 flow += press("F1", 0x70) + [{"wait": 1}, {"js": hud}]
+# F2: the random camera, its draws every 5 to 10 seconds
+flow += press("F2", 0x71) + [{"wait": 2}, {"js": hud}]
+for i in range(6):
+    flow += [{"wait": 5}, {"js": hud}]
+flow += [{"shot": out.replace(".json", "_f2.png")}]
 # the race.ini the launcher wrote (the desktop run takes the same)
 flow += [{"js": "window.rustyac.launch.race_ini"}]
 json.dump(flow, open(out, "w"), indent=1)

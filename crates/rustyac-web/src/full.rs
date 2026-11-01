@@ -207,6 +207,8 @@ pub struct GuiLoop {
     /// Task 46: F3's track cameras, and the name of the one the last frame showed
     pub track_cameras: rustyac_game::render::track_camera::TrackCameras,
     pub track_camera: String,
+    /// F2's random camera (Full mode)
+    pub random_camera: Option<rustyac_game::render::track_camera::RandomCamera>,
     /// (the setup editor's car: its jobs applied, and the 64-step slice it was taken in)
     published: Option<(usize, u64)>,
     generation: u64,
@@ -343,6 +345,12 @@ impl GuiLoop {
 pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo, gui: &mut GuiLoop) {
     let dt = seconds.clamp(0.0, crate::session::MAX_FRAME_SECONDS as f32);
     let mut track_look = None;
+    // ACCameraManager::update: the random camera's next draw (on the cockpit shake's rand())
+    if let Some(random) = gui.random_camera.as_mut() {
+        let mut rand = session.camera.cockpit.rand;
+        random.update(dt, &mut session.camera, session.shape.car_cameras.len(), &mut gui.track_cameras, &mut rand);
+        session.camera.cockpit.rand = rand;
+    }
     let camera = match (&mut gui.start_camera, &mut gui.free_camera) {
         (Some(start), _) => start.update(view, session.shape.eye_model[0], dt),
         (None, Some(free)) => {
@@ -377,11 +385,13 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
     if let Some(focus) = &mut gui.focus {
         focus.post_gui(dt, &world, &[]);
         // F3 at its black frame: setMode(eTrack), from the track's cameras CameraTrack::nextSet
-        if std::mem::take(&mut focus.camera_change) {
+        // (F2: and randomMode on)
+        if let Some(change) = focus.camera_change.take() {
             let overlay = gui.start_camera.take().is_some() | gui.free_camera.take().is_some();
             if session.camera.f3() && !overlay {
                 gui.track_cameras.next_set();
             }
+            session.camera.random |= change == rustyac_game::focus::FocusCommand::RandomCamera;
         }
     }
 }

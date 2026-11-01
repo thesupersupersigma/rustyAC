@@ -586,6 +586,9 @@ pub struct DrivingCamera {
     pub chase: [(f32, f32, f32); 2],
     /// `CameraTrack::currentSet`, as the track's cameras left it (for `currentGlobalCameraIndex`)
     pub track_set: usize,
+    /// `ACCameraManager::randomMode`: F2's random camera picks the cameras
+    /// ([`RandomCamera`](super::track_camera::RandomCamera)); a key that sets a mode ends it.
+    pub random: bool,
 }
 
 /// `system/cfg/chase_cam.ini` as shipped: distance, height, pitch (radians) of the two chase cameras.
@@ -612,6 +615,7 @@ impl DrivingCamera {
             rotation_chase: 0.0,
             chase: CHASE,
             track_set: 0,
+            random: false,
         }
     }
 
@@ -662,7 +666,10 @@ impl DrivingCamera {
     /// after the last (dash) to the cockpit; from a car camera back to the view driven with
     /// before, without moving on.
     pub fn f1(&mut self) {
-        self.mode = match self.mode {
+        // setMode leaving the random camera takes the mode before as eOnBoardFree: the view
+        // driven with before
+        let before = if std::mem::take(&mut self.random) { CameraMode::Car } else { self.mode };
+        self.mode = match before {
             CameraMode::Cockpit => CameraMode::Drivable,
             CameraMode::Drivable => {
                 // CameraDrivableManager::nextMode @ 0x1400c6790
@@ -682,9 +689,27 @@ impl DrivingCamera {
     /// F3 (`setMode(eTrack)`): to the track's cameras; true when they show already (the caller
     /// moves to the next set, `CameraTrack::nextSet`). The driving view is kept for F1.
     pub fn f3(&mut self) -> bool {
-        let already = self.mode == CameraMode::Track;
+        // (from the random camera: the mode before counts as eOnBoardFree, no next set)
+        let already = !std::mem::take(&mut self.random) && self.mode == CameraMode::Track;
         self.mode = CameraMode::Track;
         already
+    }
+
+    /// `CameraDrivableManager::nextMode` 0x1400c6790: the next of the five views; true when it
+    /// went round to the first.
+    pub fn next_drivable(&mut self) -> bool {
+        let next = Drivable::ALL.iter().position(|d| *d == self.drivable).unwrap_or(0) + 1;
+        self.drivable = Drivable::ALL[next % Drivable::ALL.len()];
+        next == Drivable::ALL.len()
+    }
+
+    /// `ACCameraManager::lastDrivingMode`, what F1 comes back to.
+    pub fn last_driving(&self) -> CameraMode {
+        self.last_driving
+    }
+
+    pub fn set_last_driving(&mut self, mode: CameraMode) {
+        self.last_driving = mode;
     }
 
     /// `CameraDrivableManager::setCurrentCamera` 0x1400c6960: one of the five views (another
@@ -698,6 +723,7 @@ impl DrivingCamera {
     /// `ACCameraManager::setMode(mode, true, false)` as the replay's bar asks for it: 0 the
     /// cockpit, 2 the views that drive with the car, 3 the track's cameras.
     pub fn set_mode_kept(&mut self, mode: i32) {
+        self.random = false;
         self.mode = match mode {
             0 => CameraMode::Cockpit,
             2 => CameraMode::Drivable,
@@ -712,6 +738,7 @@ impl DrivingCamera {
     /// `setMode(eCar)` then `CameraCarManager::setCurrentCamera(index)`, as `ac.setCameraCar`
     /// asks (the index was checked against the car's cameras).
     pub fn set_car_camera(&mut self, index: usize) {
+        self.random = false;
         self.mode = CameraMode::Car;
         self.car_index = index;
     }
@@ -739,13 +766,19 @@ impl DrivingCamera {
     /// F6: to the car's cameras, at the one last shown; pressed again, to the next one
     /// (`CameraCarManager::nextCamera` @ 0x1400c4710). `count`: how many the car has.
     pub fn f6(&mut self, count: usize) {
+        // (the next car camera keeps the random camera on; setMode(eCar) ends it)
+        if self.mode != CameraMode::Car {
+            self.random = false;
+        }
         if count == 0 {
             return;
         }
         if self.mode == CameraMode::Car {
             self.car_index = (self.car_index + 1) % count;
         } else {
+            // setMode(eCar): the scene camera's near plane
             self.mode = CameraMode::Car;
+            self.near = 0.05;
             self.car_index = self.car_index.min(count - 1);
         }
     }
