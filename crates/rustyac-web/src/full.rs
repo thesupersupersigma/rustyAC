@@ -429,6 +429,8 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
             let input = rustyac_game::render::scene::MouseCameraInput { shift: held(&[0x10, 0xa0, 0xa1]), ctrl: held(&[0x11, 0xa2, 0xa3]), up: held(&[0x26]), down: held(&[0x28]), left: held(&[0x25]), right: held(&[0x27]), look, cursor: (x, y) };
             free.update(&input, dt)
         }
+        // CameraTrack::update without sets does nothing: the scene camera stays where it was
+        (None, None) if session.camera.mode == rustyac_game::render::scene::CameraMode::Track && gui.track_cameras.sets.is_empty() && gui.last_frame.is_some() => gui.last_frame.unwrap(),
         (None, None) if session.camera.mode == rustyac_game::render::scene::CameraMode::Track && !gui.track_cameras.sets.is_empty() => {
             let t = &mut gui.track_cameras;
             session.camera.track_set = t.current_set;

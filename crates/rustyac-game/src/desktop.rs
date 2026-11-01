@@ -2334,6 +2334,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                 let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) };
             }
             shot.frame()
+        } else if let Some(still) = last_frame.filter(|_| camera.mode == rustyac_game::render::scene::CameraMode::Track && track_cameras.sets.is_empty()) {
+            // CameraTrack::update without sets does nothing: the scene camera stays where it was
+            still
         } else if camera.mode == rustyac_game::render::scene::CameraMode::Track && !track_cameras.sets.is_empty() {
             // CameraTrack::update: in a replay dt times the replay's speed (slow motion, fast
             // forward, rewind, pause)

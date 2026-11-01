@@ -572,7 +572,7 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         }
         // Game::evOnPostGui: the camera manager's fade
         if frame.fade_at.is_some() && !(fade_time >= fade_total * 2.0) {
-            rustyac_render::gl::fade_overlay(&mut graphics, fade_time, fade_total);
+            rustyac_render::gl::fade_overlay(&mut graphics, fade_time, fade_total, [0.0; 3]);
             fade_time += crate::frames::DT;
         }
         if index >= frame.capture {

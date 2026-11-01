@@ -1638,6 +1638,7 @@ impl AcRenderer {
                 let (matrix, view_matrix, perspective) = (camera.matrix, camera.get_view_matrix(), camera.get_perspective_matrix(&self.graphics));
                 let mode = driving.manager_mode();
                 gui.drivable_dash = driving.drivable == super::scene::Drivable::Dash;
+                gui.fade_color = driving.fade_color;
                 gui.gui.sim.sun_angle = self.options.sun_angle;
                 gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);
                 // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
@@ -1705,13 +1706,13 @@ impl AcRenderer {
         self.rules_fading = total > 0.0;
         // Game::evOnPostGui: the camera manager's fade, over everything of the game's 2D pass
         if let Some((time, total)) = info.focus_fade {
-            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total, driving.fade_color);
         } else if let Some((time, total)) = self.crew_fade {
             // the fade a pit stop's commit asked for (ACCameraManager::fadeIn with 0.25 s): at
             // its black frame the crew is put round the car (the lambda 0x140032770)
-            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total, driving.fade_color);
         } else if let Some((time, total)) = self.rules_fade {
-            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total, driving.fade_color);
         }
         if let Some((time, total)) = self.rules_fade {
             self.rules_fade = (time + dt < total * 2.0).then_some((time + dt, total));

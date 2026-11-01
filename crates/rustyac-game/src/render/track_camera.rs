@@ -509,7 +509,10 @@ impl RandomCamera {
                     track.next_set();
                 }
             }
-            // shortcut: a track without camera sets draws nothing here (the game would read past its empty list), fine while such tracks cannot show F2's track cameras anyway
+            // A track without camera sets (no shipped one): the game's setCurrentCameraSet refuses
+            // the index and nextSet 0x1400cbc90 reads its empty list's first set through a null
+            // pointer, a crash. rustyAC goes on to setMode(eTrack), whose camera then stays still
+            // (CameraTrack::update does nothing without sets).
             3 => {}
             1 => {
                 let (before, index) = (camera.car_index, pick(car_cameras as f32 - 1.0, rand));

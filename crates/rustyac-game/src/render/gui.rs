@@ -252,6 +252,8 @@ pub struct GameGui {
     pub python_cameras: Vec<rustyac_python::Action>,
     /// `CameraDrivableManager::currentMode == 4` (the dash view), for `ac.isCameraOnBoard`
     pub drivable_dash: bool,
+    /// `ACCameraManager::fadeColor` (`camera_manager.ini [FADE] COLOR`)
+    pub fade_color: [f32; 3],
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -513,7 +515,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new(), drivable_dash: false })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new(), drivable_dash: false, fade_color: [0.0; 3] })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -1334,7 +1336,7 @@ impl GameGui {
             if total <= time && !self.gui.sim.fade_listeners.is_empty() {
                 self.gui.sim_fade_in_finished();
             }
-            rustyac_render::gl::fade_overlay(graphics, time, total);
+            rustyac_render::gl::fade_overlay(graphics, time, total, self.fade_color);
             self.menu_fade = Some((dt + time, total));
         }
     }

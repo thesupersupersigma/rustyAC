@@ -60,7 +60,22 @@
   view (they kept the mode Python last asked for, and the dash flag never changed); the free
   camera counts as `eFree` (6) for them and the GUI. Shortcut kept: right after its own
   `setCameraMode` an app reads the mode it asked until the next frame. The page runs no Python.
-- Next: step 7.
+- Step 7a, F2 / F3 on a track without camera sets: the game has no fallback. `CameraTrack`'s
+  ctor adds a set only for each `cameras*.ini` it loads (no default set), `setCurrentCameraSet`
+  refuses any index of an empty list, and `nextSet` 0x1400cbc90 then reads the first set's name
+  through the empty vector's null pointer: acs.exe crashes on F3 a second time or on F2's first
+  track draw. `CameraTrack::update` itself does nothing without sets, so after the first F3 the
+  scene camera stays where it was. rustyAC does that last part (desktop and page now keep the
+  last frame instead of drawing the driving camera) and skips the crash; the `shortcut:` is gone.
+  No shipped track lacks `cameras.ini`.
+- Step 7b, the fade colour: `ACCameraManager`'s ctor reads `camera_manager.ini [FADE] COLOR`
+  (when the section is there) into `fadeColor`, and the fade lambda 0x140032770 draws its quad in
+  that colour; nothing else writes it. The port now reads it with the rest of the file (own cfg
+  else Documents) and every fade (F2-F6, the crew's, the race rules', the menus') draws it. Unit
+  test `last_camera`; desktop run with Documents `COLOR=1,0,0`, F3 at 3 s: the screen at 3.3 s is
+  red-tinted (pixels (171,51,30), (166,38,41), (191,40,34)). Black comes from the ctor's default
+  and every shipped `camera_manager.ini`'s `0,0,0`.
+- Next: proofs, report, release.
 
 ## Resume here
 
@@ -395,8 +410,7 @@ cameras, plus the collider boxes): 16 of 16 IDENTICAL.
 
 ## Not done
 
-- `camera_manager.ini [FADE] COLOR`: the fade is always black (the game's default and every
-  shipped file's `0,0,0`). shortcut: black only, read the colour when someone sets one.
+- `camera_manager.ini [FADE] COLOR`: done in Task 46b (step 7b).
 
 - Task 46b: F5 onboard free, helicopter, the cinematic replay camera (`video_editing.ini`),
   remembering the last camera, and comparing the camera the replay spinner, camera editor,

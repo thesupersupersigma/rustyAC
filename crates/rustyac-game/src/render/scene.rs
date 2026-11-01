@@ -568,6 +568,8 @@ pub struct DrivingCamera {
     /// the drivable views) and the drivable view, `camera_manager.ini [LAST_CAMERA] MODE` and
     /// `DRIVABLE_MODE`.
     pub last_camera: (i32, i32),
+    /// `ACCameraManager::fadeColor`: `camera_manager.ini [FADE] COLOR`, black without it
+    pub fade_color: [f32; 3],
     /// The chase camera's place relative to the rear axle, lagging behind the g forces.
     current_offset: [f32; 3],
     /// `actionsState` of the focused car: bit 0 look left, bit 1 look right, bit 9 look back.
@@ -612,6 +614,7 @@ impl DrivingCamera {
             last_driving: CameraMode::Drivable,
             car_index: 0,
             last_camera: (0, 0),
+            fade_color: [0.0; 3],
             current_offset: [0.0; 3],
             actions: 0,
             near: 0.05,
@@ -955,6 +958,9 @@ impl DrivingCamera {
             gz_mul *= g[2];
             // (ACCameraManager's ctor)
             self.last_camera = (ini.get_int("LAST_CAMERA", "MODE"), ini.get_int("LAST_CAMERA", "DRIVABLE_MODE"));
+            if ini.has_section("FADE") {
+                self.fade_color = three(ini.get_string("FADE", "COLOR")).unwrap_or([0.0; 3]);
+            }
         }
         // (the drivable views take the cockpit file's head speed over their own)
         if let Some(ini) = onboard {
@@ -1821,5 +1827,14 @@ COLOR=0,0,0
         assert_eq!((next.mode, next.drivable), (CameraMode::Drivable, Drivable::ALL[3]));
         next.last_camera = (5, 0);
         assert_eq!(next.load_previous(), Some(5));
+        // ACCameraManager's ctor: [LAST_CAMERA] and, when the section is there, [FADE] COLOR
+        let ini = ControlsIni::parse("[LAST_CAMERA]
+MODE=2
+DRIVABLE_MODE=3
+[FADE]
+COLOR=1,0.5,0
+");
+        next.read_settings(None, Some(&ini), None, 1.0);
+        assert_eq!((next.last_camera, next.fade_color), ((2, 3), [1.0, 0.5, 0.0]));
     }
 }
