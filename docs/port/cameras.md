@@ -20,7 +20,11 @@
   so. One mode-switch for both (`onboard_free::set_mode`, `f1`, `f6`). The helicopter is
   Python's only, and the page runs no Python. Shortcut: the page cannot move the mouse, so the
   cinematic look's wrap at the desktop's edges never happens there.
-- Next: steps 3b-7.
+- Step 3b: the track cameras in a replay follow its speed (slow motion, fast forward, rewind,
+  pause): the desktop times `dt` by the rig's `timeMult` in replay mode as `CameraTrack::update`
+  does (the tape's `in replay` / `replay speed` columns already covered the sum). The page has no
+  AC replay.
+- Next: steps 4-7.
 
 ## Resume here
 
@@ -289,8 +293,9 @@ name of the camera shown): F3 → `track 0`, camera `T1`; F3 again → `track 1`
 
 Not proven end to end against the game: the inputs the desktop hands the camera (the car's model
 matrix is 2a's proven one; the steering wheel's place, the place along the lap and the speed are
-the port's own, proven elsewhere). shortcut: in a replay the track camera does not slow with
-slow motion (the game times `dt` by the replay's speed); fix when replays get F3 (Task 46b).
+the port's own, proven elsewhere). In a replay the track camera follows the replay's speed
+(Task 46b: `CameraTrack::update` times `dt` by `ReplayManager::timeMult` in replay mode; the
+desktop's call does it, the same sum the checker does on the tape's speeds).
 
 ## Step 2e: F2, the random camera
 

@@ -2332,12 +2332,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             }
             shot.frame()
         } else if camera.mode == rustyac_game::render::scene::CameraMode::Track && !track_cameras.sets.is_empty() {
-            // shortcut: a replay's slow motion does not slow the camera (CameraTrack::update times dt by the replay's speed), when replays show F3
+            // CameraTrack::update: in a replay dt times the replay's speed (slow motion, fast
+            // forward, rewind, pause)
+            let speed = rig.as_ref().and_then(|rig| rig.lock().unwrap().manager.as_ref().filter(|m| m.replay_mode).map(|m| m.time_mult));
             camera.track_set = track_cameras.current_set;
             track_cameras.still = shared.paused.load(Ordering::Relaxed);
             let body = rustyac_game::render::scene::model_matrix(&view.body, &shapes[focus.index]);
             let previous = last_frame.as_ref().map_or(rustyac_game::view::IDENTITY, |f| f.matrix);
-            let look = track_cameras.update(&previous, &body, renderer.steer_place(focus.index), view.lap.position, view.speed_ms, dt.as_secs_f32()).expect("the track has cameras");
+            let look = track_cameras.update(&previous, &body, renderer.steer_place(focus.index), view.lap.position, view.speed_ms, speed.map_or(dt.as_secs_f32(), |speed| dt.as_secs_f32() * speed)).expect("the track has cameras");
             let frame = CameraFrame { matrix: look.matrix, fov: look.fov, near: look.near };
             track_look = Some(look);
             frame
