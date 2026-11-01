@@ -183,6 +183,12 @@ if part cameras; then  # Tasks 34 and 46: the game's start, free (F7), cockpit, 
             case "$r" in *IDENTICAL*) verdict "cameras $seed $what" IDENTICAL ;; *) verdict "cameras $seed $what" DIFFERENT "${r:-no result}" ;; esac
         done
     done
+    # every car's collider box (the look-back points), the game's ModelBoundaries against the port's
+    if keep "cameras boundaries"; then
+        tool render_oracle
+        r=$("$RO" boundaries --root "$(cygpath -am "$root/boundaries")" --out "$(cygpath -am "$root/boundaries")" 2>&1 < /dev/null | grep '^model boundaries:')
+        case "$r" in *IDENTICAL*) verdict "cameras boundaries" IDENTICAL "$r" ;; *) verdict "cameras boundaries" DIFFERENT "${r:-no result}" ;; esac
+    fi
 fi
 
 if part modes; then  # Task 45: special-event files and goals, hotlap, Time Attack, drift, drag and race events judged by the game's code, and their race_out.json extras

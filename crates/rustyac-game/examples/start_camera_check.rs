@@ -173,6 +173,7 @@ fn driving(tape: &str) -> bool {
             k.still_camera = c[34] != 0.0;
             k.world_aligned = c[35] != 0.0;
             k.yaw = c[37];
+            k.random_blend = c[60 + c[59] as usize * 18];
             camera.chase = [(c[41], c[42], c[43]), (c[44], c[45], c[46])];
             (camera.acc_gx_mul, camera.acc_gz_mul, camera.chase_filter) = (c[47], c[48], c[49]);
             (camera.rotation_degrees, camera.rotation_speed) = (c[50], c[51]);

@@ -160,6 +160,8 @@ pub struct DiCarControl {
     pub gear_dn: Button,
     pub hand_brake: Button,
     pub headlights: Button,
+    /// `glanceLeft`, `glanceRight`, `glanceBack`: the camera's look buttons.
+    pub glance: [Button; 3],
     pub brake_balance_up: Button,
     pub brake_balance_dn: Button,
     pub kers: Button,
@@ -221,6 +223,7 @@ impl DiCarControl {
             gear_dn: Button::load(ini, "GEARDN"),
             hand_brake: Button::load_optional(ini, "HANDBRAKE"),
             headlights: Button::load_optional(ini, "ACTION_HEADLIGHTS"),
+            glance: ["GLANCELEFT", "GLANCERIGHT", "GLANCEBACK"].map(|section| Button::load_optional(ini, section)),
             brake_balance_up: Button::load_optional(ini, "BALANCEUP"),
             brake_balance_dn: Button::load_optional(ini, "BALANCEDN"),
             kers: Button::load_optional(ini, "KERS"),
@@ -516,7 +519,14 @@ impl WheelDevice {
     }
 
     pub fn get_action(&self, action: i32, key_down: &dyn Fn(i32) -> bool) -> bool {
-        action == 4 && self.control.headlights.pressed(&|joy| self.di.state(joy).copied(), key_down)
+        let button = match action {
+            0 => &self.control.glance[0],
+            1 => &self.control.glance[1],
+            4 => &self.control.headlights,
+            9 => &self.control.glance[2],
+            _ => return false,
+        };
+        button.pressed(&|joy| self.di.state(joy).copied(), key_down)
     }
 
     pub fn set_vibrations(&mut self, def: &VibrationDef) {

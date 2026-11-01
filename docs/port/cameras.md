@@ -7,8 +7,10 @@
 - Step 1 done: the audit table below, sent to the user and the split agreed.
 - Step 2a done: the cockpit, the five drivable views and F6 against the game frame by frame
   (`driving_camera.tape`), with the g forces, shake and look keys in the same code; IDENTICAL.
-- Next: step 2b, the settings that drive them (`camera_onboard.ini`, `camera_drivable.ini`, the
-  car's look-back points) and the look keys, FOV and seat keys in the desktop and the page; then
+- Step 2b done on the desktop: the camera settings files, the look-back points (collider box
+  IDENTICAL on all 137 cars), the shake's random blend, the look keys and Ctrl+Numpad FOV keys.
+  The game has no seat keys.
+- Next: step 2b in the page (look keys, FOV keys, settings from the page's Documents); then
   fade-in, F3, F2.
 
 ## Step 0: housekeeping
@@ -126,6 +128,41 @@ What the port changed to get there (`crates/rustyac-game/src/render/scene.rs`):
 - the machine adds the shake up first and the g-force offset after (the pseudo-C said otherwise).
 
 Not compared: the far plane and the exposure the cameras set (the renderer has its own).
+
+## Step 2b: what the cameras read, and their keys (desktop)
+
+- **Settings** (`DrivingCamera::read_settings`, `crates/rustyac-game/src/render/scene.rs`): the
+  reads of `CameraOnBoard::CameraOnBoard` (0x1400c84e0) and `CameraDrivableManager::
+  CameraDrivableManager` (0x1400c4a80): `cfg/camera_onboard.ini` (`[GFORCES] LAG`, `[ROTATION]
+  HEAD_MAX_DEGREES / SPEED`, `[SHAKE] FREQ / RANDOM`, `[MODE] IS_WORLD_ALIGNED / FOV`),
+  `cfg/camera_manager.ini` (`[SHAKE] GFORCEX/Y/Z`, `SHAKEMULT`), the game's
+  `system/cfg/camera_drivable.ini` (`[ROTATION] MAX_DEGREES / SPEED`, the speed then overwritten
+  by the cockpit file's, as in the game), each car's `car.ini [GRAPHICS] SHAKE_MUL` (the last car
+  wins, 0 is 1). rustyac.exe takes the player's files from its own cfg, else AC's Documents.
+- **Look-back points**: the middle of the top of the back of the car's collider box plus
+  `ON_BOARD_LOOKBACK_OFFSET` / `DRIVABLE_LOOKBACK_OFFSET`. The box is
+  `ModelBoundaries::computeAAModelBoundaries` (0x140218d60) of `collider.kn5`, ported as
+  `rustyac_physics::car::colliders::model_boundaries`. At that point the game has no world
+  matrices yet (the draw makes them), so every mesh counts with the identity: the file's node
+  matrices do nothing. The first try used them and 32 of 137 cars differed. New
+  `render_oracle boundaries` runs the game's own `KN5IO::load` and the function on every car of
+  the install: **IDENTICAL, 137 of 137** (case `cameras boundaries` of the `cameras` part).
+- **Shake's random blend** (`SignalGenerator3D::randomBlend`, `RANDOM`): the oracle's tape now
+  draws it per segment (0, 0.5, 1 or any); `cameras` seeds 1-3 and 7: IDENTICAL.
+- **Look keys**: `KeyboardCarControl::getAction` (0x14010f820) and `DICarControl::getAction` with
+  `[GLANCELEFT]`, `[GLANCERIGHT]`, `[GLANCEBACK]` of `controls.ini` (the pad had them already).
+  The input thread asks for actions 0, 1, 9 in the step it asks for the headlights, as
+  `Car::getPhysicsState` does, and the camera takes them as `actionsState` bits 0, 1, 9 (the
+  player's car only). Test `glance_keys`.
+- **FOV keys**: `Sim::onKeyDown` Ctrl+Numpad + / - in the cockpit or the dash view: 0.5 a press,
+  not past 125 or under 1, message "FOV: %.1f" / "On Board Camera"; `CameraOnBoard` has one
+  field of view, so every car takes it. Plain Numpad +/- is force feedback gain, Shift+Ctrl is
+  saturation (not cameras).
+- **Seat keys**: acs.exe has none; the seat moves with the Onboard settings app
+  (`DriverEyesPositioner`), ported and proven in Task 32.
+- Not proven against the game: the ini reads themselves (by the game's names and order, not run
+  through the game's constructors, which want a whole `Sim`), and the keys' path from the
+  keyboard to the camera (the camera's answer to the bits is proven by the tape).
 
 ## Not done
 

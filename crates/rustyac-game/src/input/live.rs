@@ -323,11 +323,15 @@ impl DriverSource for LiveSource {
     fn headlights(&mut self) -> bool {
         let focused = self.focused();
         let key_down: &dyn Fn(i32) -> bool = &|key| focused && key_is_down(key);
-        match self.active {
-            DEVICE_PAD => self.pad.get_action(4, key_down),
-            DEVICE_WHEEL => self.wheel.as_ref().is_some_and(|w| w.get_action(4, key_down)),
-            _ => self.keyboard.get_action(4, key_down),
-        }
+        let action = |a: i32| match self.active {
+            DEVICE_PAD => self.pad.get_action(a, key_down),
+            DEVICE_WHEEL => self.wheel.as_ref().is_some_and(|w| w.get_action(a, key_down)),
+            _ => self.keyboard.get_action(a, key_down),
+        };
+        // `Car::getPhysicsState` asks for the glances in the same step (actions 0, 1, 9)
+        let look = action(0) as u32 | (action(1) as u32) << 1 | (action(9) as u32) << 9;
+        self.shared.look.store(look, Ordering::Relaxed);
+        action(4)
     }
 
     fn send_ff(&mut self, ff: f32, damper: f32, user_gain: f32) {

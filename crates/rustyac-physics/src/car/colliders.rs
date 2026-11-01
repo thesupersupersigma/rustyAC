@@ -184,3 +184,48 @@ pub fn load(data_folder: &Path, game_root: Option<&Path>, car_name: &str) -> Res
     }
     Ok(CarColliders { boxes, mesh })
 }
+
+/// `ModelBoundaries::computeAAModelBoundaries` @ 0x140218d60 of a car's `collider.kn5`, as
+/// `CarAvatar::initPhysics` keeps it in `modelBoundaries`: front, rear, left, right, top, bottom
+/// (the most and least z, x, y of every mesh's vertices through its parent's world matrix). At
+/// that point no world matrix has been worked out yet (the draw does that), so each is still the
+/// identity `Node::Node` gave it: the node matrices of the file count for nothing. A bound still
+/// at 0 takes the next vertex whatever it is, as in the game.
+pub fn model_boundaries(path: &Path) -> Result<[f32; 6], String> {
+    let kn5 = rustyac_content::Kn5::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut reader = kn5.reader().map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut b = [0.0f32; 6];
+    // depth first in file order
+    let mut stack: Vec<usize> = if kn5.nodes.is_empty() { Vec::new() } else { vec![0] };
+    let m = &rustyac_content::kn5::IDENTITY;
+    while let Some(index) = stack.pop() {
+        let node = &kn5.nodes[index];
+        if let Some(mesh) = &node.mesh {
+            for [x, y, z] in reader.positions(mesh).map_err(|e| format!("{}: {e}", path.display()))? {
+                let px = y * m[1][0] + x * m[0][0] + z * m[2][0] + m[3][0];
+                let pz = x * m[0][2] + y * m[1][2] + z * m[2][2] + m[3][2];
+                let py = y * m[1][1] + x * m[0][1] + z * m[2][1] + m[3][1];
+                if b[0] == 0.0 || b[0] < pz {
+                    b[0] = pz;
+                }
+                if b[1] == 0.0 || pz < b[1] {
+                    b[1] = pz;
+                }
+                if b[2] == 0.0 || px < b[2] {
+                    b[2] = px;
+                }
+                if b[3] == 0.0 || b[3] < px {
+                    b[3] = px;
+                }
+                if b[4] == 0.0 || b[4] < py {
+                    b[4] = py;
+                }
+                if b[5] == 0.0 || py < b[5] {
+                    b[5] = py;
+                }
+            }
+        }
+        stack.extend(node.children.iter().rev());
+    }
+    Ok(b)
+}

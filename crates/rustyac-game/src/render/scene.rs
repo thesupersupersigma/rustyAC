@@ -224,6 +224,8 @@ pub struct CarShape {
     pub look_back: [f32; 3],
     pub drivable_look_back: [f32; 3],
     pub drivable_yaw: f32,
+    /// `car.ini [GRAPHICS] SHAKE_MUL` (0: 1); the game keeps the last car's for every car.
+    pub shake_mul: f32,
 }
 
 fn three(text: &str) -> Option<[f32; 3]> {
@@ -252,6 +254,7 @@ impl CarShape {
             look_back: [0.0, 0.6, 0.0],
             drivable_look_back: [0.0, 0.6, 0.0],
             drivable_yaw: 0.0,
+            shake_mul: 1.0,
         }
     }
 
@@ -370,6 +373,16 @@ impl CarShape {
             shape.bonnet_pitch = ini.get_float("GRAPHICS", "BONNET_CAMERA_PITCH") * 0.017_453;
             shape.bumper_pitch = ini.get_float("GRAPHICS", "BUMPER_CAMERA_PITCH") * 0.017_453;
             shape.dash_pos = [0.0; 3];
+            let mul = ini.get_float("GRAPHICS", "SHAKE_MUL");
+            shape.shake_mul = if mul == 0.0 { 1.0 } else { mul };
+            // the look-back points (`CameraOnBoard` and `CameraDrivableManager` ctors): behind
+            // the middle of the top of the collider's box (`modelBoundaries`), moved by the
+            // car's offsets
+            let offset = |key| if ini.has_key("GRAPHICS", key) { three(ini.get_string("GRAPHICS", key)).unwrap_or([0.0; 3]) } else { [0.0; 3] };
+            let b = collider_boundaries(data_path);
+            let point = |o: [f32; 3]| [(b[3] + b[2]) * 0.5 + o[0], o[1] + b[4], o[2] + b[1]];
+            shape.look_back = point(offset("ON_BOARD_LOOKBACK_OFFSET"));
+            shape.drivable_look_back = point(offset("DRIVABLE_LOOKBACK_OFFSET"));
         }
         if let Ok(ini) = ControlsIni::load_car_data(&data_path.join("dash_cam.ini")) {
             shape.dash_pos = three(ini.get_string("DASH_CAM", "POS")).unwrap_or([0.0; 3]);
@@ -381,6 +394,17 @@ impl CarShape {
         shape.boxes.push(BoxShape { centre: [shape.eye[0], shape.eye[1] - 0.02, shape.eye[2] - 0.18], size: [0.24, 0.26, 0.28], color: [0.9, 0.8, 0.1] });
         shape
     }
+}
+
+/// `CarAvatar::modelBoundaries` of the car whose data folder this is (its `collider.kn5`
+/// beside it, else in the game's folder; none: all 0).
+fn collider_boundaries(data_path: &Path) -> [f32; 6] {
+    let folder = data_path.parent().unwrap_or(data_path);
+    let mut files = vec![folder.join("collider.kn5")];
+    if let (Some(root), Some(name)) = (rustyac_content::install::ac_root(), folder.file_name()) {
+        files.push(root.join("content/cars").join(name).join("collider.kn5"));
+    }
+    files.iter().find(|f| f.is_file()).and_then(|f| rustyac_physics::car::colliders::model_boundaries(f).ok()).unwrap_or([0.0; 6])
 }
 
 /// The whole matrix of a car's 3D model (`CarAvatar::bodyMatrix`): its origin is the centre of
@@ -459,6 +483,8 @@ pub struct CockpitCamera {
     pub shake_freq: [f32; 3],
     pub shake_scale: [f32; 3],
     pub still_camera: bool,
+    /// `SignalGenerator3D::randomBlend`: how much `rand()` scatters the shake's time steps.
+    pub random_blend: f32,
     /// `IS_WORLD_ALIGNED`: the view stays level.
     pub world_aligned: bool,
     /// `customCameraSettings[car].yaw` (the pitch is [`CarShape::eye_pitch`]).
@@ -472,6 +498,24 @@ pub struct CockpitCamera {
     pub rand: MsvcRand,
 }
 
+impl CockpitCamera {
+    /// `CameraOnBoard::CameraOnBoard`'s own values, before the files.
+    pub fn game() -> CockpitCamera {
+        CockpitCamera {
+            g_force_mix: [-0.002, -0.002, -0.0025],
+            g_force_lag_mix: 0.8,
+            head_rotation_degrees: 60.0,
+            head_rotation_speed: 5.0,
+            shake_mul: 1.0,
+            shake_freq: [100.05; 3],
+            shake_scale: [0.001, 0.0002, 0.00015],
+            random_blend: 0.5,
+            world_aligned: true,
+            ..CockpitCamera::default()
+        }
+    }
+}
+
 impl Default for CockpitCamera {
     fn default() -> CockpitCamera {
         CockpitCamera {
@@ -483,6 +527,7 @@ impl Default for CockpitCamera {
             shake_freq: [0.0; 3],
             shake_scale: [0.0; 3],
             still_camera: false,
+            random_blend: 0.0,
             world_aligned: false,
             yaw: 0.0,
             g_force_offset: [0.0; 3],
@@ -687,6 +732,52 @@ impl DrivingCamera {
         }
     }
 
+    /// The cockpit or the dash view: the views `CameraOnBoard`'s field of view is for.
+    pub fn on_board(&self) -> bool {
+        self.mode == CameraMode::Cockpit || (self.mode == CameraMode::Drivable && self.drivable == Drivable::Dash)
+    }
+
+    /// The settings the game's `CameraOnBoard` (0x1400c84e0) and `CameraDrivableManager`
+    /// (0x1400c4a80) constructors read: the player's `cfg/camera_onboard.ini` and
+    /// `cfg/camera_manager.ini`, the game's `system/cfg/camera_drivable.ini` (a file that is not
+    /// there leaves the values before it), and the last car's `SHAKE_MUL`.
+    pub fn read_settings(&mut self, onboard: Option<&ControlsIni>, manager: Option<&ControlsIni>, drivable: Option<&ControlsIni>, shake_mul: f32) {
+        let mut c = CockpitCamera::game();
+        let (mut gx_mul, mut gz_mul, mut degrees, mut speed) = (0.4f32, -0.2f32, 60.0, 1.0);
+        if let Some(ini) = drivable {
+            degrees = ini.get_float("ROTATION", "MAX_DEGREES");
+            speed = ini.get_float("ROTATION", "SPEED");
+        }
+        if let Some(ini) = onboard {
+            c.g_force_lag_mix = ini.get_float("GFORCES", "LAG");
+            c.head_rotation_degrees = ini.get_float("ROTATION", "HEAD_MAX_DEGREES");
+            c.head_rotation_speed = ini.get_float("ROTATION", "SPEED");
+            c.shake_freq = three(ini.get_string("SHAKE", "FREQ")).unwrap_or([0.0; 3]);
+            c.random_blend = ini.get_float("SHAKE", "RANDOM");
+            c.world_aligned = ini.get_int("MODE", "IS_WORLD_ALIGNED") != 0;
+        }
+        if let Some(ini) = manager {
+            let g = [ini.get_float("SHAKE", "GFORCEX"), ini.get_float("SHAKE", "GFORCEY"), ini.get_float("SHAKE", "GFORCEZ")];
+            for (mix, g) in c.g_force_mix.iter_mut().zip(g) {
+                *mix *= g;
+            }
+            let k = ini.get_float("SHAKE", "SHAKEMULT");
+            for scale in &mut c.shake_scale {
+                *scale *= k;
+            }
+            gx_mul *= g[0];
+            gz_mul *= g[2];
+        }
+        // (the drivable views take the cockpit file's head speed over their own)
+        if let Some(ini) = onboard {
+            speed = ini.get_float("ROTATION", "SPEED");
+        }
+        c.shake_mul = shake_mul;
+        c.rand = self.cockpit.rand;
+        self.cockpit = c;
+        (self.acc_gx_mul, self.acc_gz_mul, self.rotation_degrees, self.rotation_speed) = (gx_mul, gz_mul, degrees, speed);
+    }
+
     /// The camera for a car as it is drawn now; `dt` is the time since the last frame (the
     /// replay's time multiplier already in it), `acc_g` the car's acceleration in g (body axes).
     pub fn update(&mut self, view: &CarView, shape: &CarShape, acc_g: [f32; 3], dt: f32) -> CameraFrame {
@@ -738,7 +829,7 @@ impl DrivingCamera {
         // and shakes with the speed (`SignalGenerator3D<SinSignalGenerator>`)
         let k = if c.still_camera { 0.0 } else { clamp_to(view.speed_ms * 0.01, 0.0, 1.0) };
         for i in 0..3 {
-            let step = ((c.rand.next() as f32 * RAND_UNIT * dt - dt) * 0.0 + dt) * 1000.0 * c.shake_freq_now[i];
+            let step = ((c.rand.next() as f32 * RAND_UNIT * dt - dt) * c.random_blend + dt) * 1000.0 * c.shake_freq_now[i];
             c.shake[i] = c.shake[i].wrapping_add(if step > -2147483648.0 && step < 2147483648.0 { step as i32 } else { i32::MIN });
             c.shake_freq_now[i] = k * c.shake_freq[i];
         }

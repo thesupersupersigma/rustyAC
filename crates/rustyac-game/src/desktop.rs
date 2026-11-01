@@ -1482,6 +1482,16 @@ fn run_window(options: &Options) -> Result<(), String> {
             eprintln!("WARNING: {}: {e}", path.display());
         }
     }
+    // Task 46: the cockpit's g forces, shake and look keys, the drivable views' look keys: the
+    // player's camera_onboard.ini / camera_manager.ini (rustyAC's own cfg, else AC's Documents),
+    // the game's camera_drivable.ini
+    {
+        let own_or_documents = |name: &str| [Some(cfg_dir(options).join(name)), rustyac_game::conditions::documents_folder().map(|d| d.join("cfg").join(name))].into_iter().flatten().find(|p| p.is_file());
+        let ini = |path: Option<PathBuf>| path.and_then(|p| rustyac_game::input::ini::ControlsIni::load(&p).ok());
+        let drivable = [cfg_dir(options).join("system/cfg/camera_drivable.ini"), rustyac_content::install::ac_root().unwrap_or_default().join("system/cfg/camera_drivable.ini")].into_iter().find(|p| p.is_file());
+        let shake_mul = shapes.last().map_or(1.0, |s| s.shake_mul);
+        camera.read_settings(ini(own_or_documents("camera_onboard.ini")).as_ref(), ini(own_or_documents("camera_manager.ini")).as_ref(), ini(drivable).as_ref(), shake_mul);
+    }
     // Task 34: a session that begins in the ESC menu shows AC's start camera until "Drive"
     // (without AC's GUI "Drive" is pressed at once, so there is none)
     let mut start_camera = (setup_esc_start && renderer.gui().is_some_and(|gui| gui.has_esc_menu()))
@@ -1770,6 +1780,18 @@ fn run_window(options: &Options) -> Result<(), String> {
                             }
                             _ => {
                                 shared.bias_requests.fetch_sub(1, Ordering::Relaxed);
+                            }
+                        }
+                    } else if ctrl && !shift && (key == 0x6b || key == 0x6d) && start_camera.is_none() && mouse_camera.is_none() && camera.on_board() {
+                        // Sim::onKeyDown, Ctrl+Numpad +/-: the cockpit's (and the dash view's)
+                        // field of view, half a degree a press, up to 125 and down to 1
+                        let fov = shapes[focus.index].onboard_fov;
+                        let new = if key == 0x6b { (fov < 125.0).then_some(fov + 0.5) } else { (fov > 1.0).then_some(fov - 0.5) };
+                        if let Some(new) = new {
+                            // (CameraOnBoard keeps one field of view for every car)
+                            shapes.iter_mut().for_each(|shape| shape.onboard_fov = new);
+                            if let Some(gui) = renderer.gui() {
+                                gui.add_message(&format!("FOV: {new:.1}"), "On Board Camera");
                             }
                         }
                     } else if !ctrl || pause_up {
@@ -2247,6 +2269,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                 free.frame()
             }
         } else {
+            // the look keys are the focused car's (`actionsState`): the player's, or none
+            camera.actions = if focus.index == 0 { shared.look.load(Ordering::Relaxed) } else { 0 };
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
         // SAFETY: a plain call.

@@ -9,6 +9,7 @@
 mod acs;
 mod ac;
 mod ac_car;
+mod boundaries;
 mod compare;
 mod frames;
 mod gui_ac;
@@ -535,6 +536,8 @@ fn run() -> Result<(), String> {
         "gui" => gui_compare::compare(&args),
         // the text backend without DirectWrite against the game's text
         "text-fallback" => text_fallback::run(&args),
+        // every car's collider box, the game's against the port's
+        "boundaries" => boundaries::run(&args),
         "run" => run_side(&args),
         "compare" => compare::compare(&args),
         _ => Err(USAGE.into()),

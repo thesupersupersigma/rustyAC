@@ -61,6 +61,10 @@ pub struct Keys {
     pub tc_dn: i32,
     /// Not AC's: a clutch key (pedal to the floor while held).
     pub clutch: i32,
+    /// `keyGlanceLeft`, `keyGlanceRight`, `keyGlanceBack` (the camera's look keys).
+    pub glance_left: i32,
+    pub glance_right: i32,
+    pub glance_back: i32,
 }
 
 impl Keys {
@@ -83,6 +87,9 @@ impl Keys {
         tc_up: 0,
         tc_dn: 0,
         clutch: 0,
+        glance_left: 0,
+        glance_right: 0,
+        glance_back: 0,
     };
 
     /// The keys of `KeyboardCarControl`'s constructor: nothing but headlights on Backspace
@@ -113,6 +120,9 @@ impl Keys {
         };
         optional(&mut keys.kers, "KERS");
         optional(&mut keys.drs, "DRS");
+        optional(&mut keys.glance_left, "GLANCELEFT");
+        optional(&mut keys.glance_right, "GLANCERIGHT");
+        optional(&mut keys.glance_back, "GLANCEBACK");
         optional(&mut keys.headlights, "ACTION_HEADLIGHTS");
         optional(&mut keys.brake_balance_up, "BALANCEUP");
         optional(&mut keys.brake_balance_dn, "BALANCEDN");
@@ -145,6 +155,9 @@ impl Keys {
             tc_up: key("TCUP"),
             tc_dn: key("TCDN"),
             clutch: key("CLUTCH"),
+            glance_left: key("GLANCELEFT"),
+            glance_right: key("GLANCERIGHT"),
+            glance_back: key("GLANCEBACK"),
         }
     }
 
@@ -621,9 +634,18 @@ impl KeyboardCarControl {
         }
     }
 
-    /// `KeyboardCarControl::getAction` @ 0x14010f820, as far as the car asks (4: headlights).
+    /// `KeyboardCarControl::getAction` @ 0x14010f820, as far as the car asks (0 glance left,
+    /// 1 glance right, 4 headlights, 9 glance back).
     pub fn get_action(&self, action: i32, key_down: &dyn Fn(i32) -> bool) -> bool {
-        action == 4 && (key_down(self.keys.headlights) || key_down(self.keys2.headlights))
+        let key = |k: &Keys| match action {
+            0 => k.glance_left,
+            1 => k.glance_right,
+            4 => k.headlights,
+            9 => k.glance_back,
+            _ => 0,
+        };
+        // (no key bound: 0 or -1, never down)
+        [key(&self.keys), key(&self.keys2)].into_iter().any(|k| k > 0 && key_down(k))
     }
 
     /// Is a driving key held (for the choice of the driving device)? Shift, Ctrl and Alt do
@@ -717,6 +739,20 @@ MOUSE_ACCELERATOR_BRAKE=1
             "[KEYBOARD]\nSTEERING_SPEED=1.75\nSTEERING_OPPOSITE_DIRECTION_SPEED=2.5\nSTEER_GAIN=0.18\nSTEER_RESET_SPEED=1.8\nLOOKAHEAD_POINTS=6\n\
              GAS=0x26\nBRAKE=0x28\nLEFT=0x25\nRIGHT=0x27\n[GEARUP]\nKEY=0x20\n[GEARDN]\nKEY=0xA2\n[HANDBRAKE]\nKEY=-1\n[ACTION_HEADLIGHTS]\nKEY=0x4C\n[DRS]\nKEY=-1\n",
         ))
+    }
+
+    #[test]
+    fn glance_keys() {
+        // readFromIni: [GLANCELEFT] etc. KEY; -1 or none is never down
+        let k = KeyboardCarControl::from_ini(&ControlsIni::parse("[GLANCELEFT]
+KEY=0x51
+[GLANCERIGHT]
+KEY=-1
+[GLANCEBACK]
+KEY=0x56
+"));
+        let down: &dyn Fn(i32) -> bool = &|key| key == 0x51 || key == 0x56 || key == -1;
+        assert_eq!([0, 1, 9, 4].map(|a| k.get_action(a, down)), [true, false, true, false]);
     }
 
     fn input(speed: f32) -> CarControlsInput {

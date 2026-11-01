@@ -425,6 +425,8 @@ pub unsafe fn driving_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String
                 put(car_cameras, k * 0x4c, &m, &mut cfg);
                 put(car_cameras, k * 0x4c + 0x40, &[rng.float(10.0, 90.0), rng.float(10.0, 40.0)], &mut cfg);
             }
+            // the shake's randomBlend (SignalGenerator3D +0x20; the ctor's 0.5 from camera_onboard.ini [SHAKE] RANDOM), last on the line
+            put(onboard, 0x128, &[[0.0, 0.5, 1.0, rng.float(0.0, 1.0)][(rng.next() % 4) as usize]], &mut cfg);
             // CameraCarManager (an index past the last one goes back to 0)
             cars = acs.alloc(0x100);
             wr(cars, 8, game as usize);

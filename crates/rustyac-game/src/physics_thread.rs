@@ -159,6 +159,9 @@ pub struct Shared {
     pub driver_text: Mutex<String>,
     /// Presses of a device's camera button (the display counts them).
     pub camera_toggles: AtomicU32,
+    /// Task 46: the look keys held now, as `actionsState` keeps them (bit 0 glance left, bit 1
+    /// glance right, bit 9 glance back), for the camera.
+    pub look: AtomicU32,
     /// Task 34: Ctrl+M presses not yet given to the keyboard's mouse steering
     pub mouse_steering_toggles: AtomicU32,
     /// Task 34: the keyboard steers with the mouse (for the window, which leaves the cursor alone then)
@@ -250,6 +253,7 @@ impl Shared {
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
             camera_toggles: AtomicU32::new(0),
+            look: AtomicU32::new(0),
             mouse_steering_toggles: AtomicU32::new(0),
             mouse_steering: std::sync::atomic::AtomicBool::new(false),
             keyboard_drives: std::sync::atomic::AtomicBool::new(false),
