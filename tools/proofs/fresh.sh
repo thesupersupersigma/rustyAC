@@ -43,7 +43,7 @@ compare_dirs() {
             /^[a-z_0-9]+: [0-9]+ steps/ { s = $1; sub(":", "", s) }
             /bit-exact: 100 %/ && s != "" { print "IDENTICAL " d "/" s; s = "" }
             (/bit-exact: [0-9.]+ %/ && !/100 %/ || /first difference/) && s != "" { print "DIFFERENT " d "/" s; s = "" }
-        ' "$out/cmp_$name.txt" | tee -a "$log"
+        ' "$out/cmp_$name.txt" | while read -r v c; do verdict "$c" "$v"; done
     done
     rm -rf "$rec"
 }

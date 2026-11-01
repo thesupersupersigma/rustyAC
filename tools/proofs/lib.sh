@@ -19,7 +19,7 @@ log=$out/cases.log
 # times.tsv: the seconds each case took (from the end of the one before), for the table of README.md
 times=$out/times.tsv
 : > "$times"
-last_case=$(date +%s)
+date +%s > "$out/last_case"  # a file: verdicts in a pipe run in a subshell
 cd "$repo"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
 
@@ -128,12 +128,12 @@ build() {
 # verdict <case> <IDENTICAL|DIFFERENT> [detail]: one line in the tally
 verdict() {
     echo "$2 $1${3:+ | $3}" | tee -a "$log"
-    now=$(date +%s); printf '%s\t%s\n' $((now - last_case)) "$1" >> "$times"; last_case=$now
+    now=$(date +%s); printf '%s\t%s\n' $((now - $(cat "$out/last_case"))) "$1" >> "$times"; echo "$now" > "$out/last_case"
 }
 # skip <case> <reason>: a case that did not run, listed with its reason and counted in the tally
 skip() {
     echo "SKIPPED $1 | $2" | tee -a "$log"
-    last_case=$(date +%s)
+    date +%s > "$out/last_case"
 }
 
 # need <path> <what>: a recording the area cannot run without
