@@ -550,6 +550,10 @@ pub struct AcRenderer {
     crew_seen: (u32, u32),
     /// the camera fade a commit asked for: (`fadeTime`, `fadeTotalTime`)
     crew_fade: Option<(f32, f32)>,
+    /// Task 46: the fade the race rules asked for (restart, next session, the race's end, the
+    /// modes' ends): (`fadeTime`, `fadeTotalTime`), and whether the referee's fade still runs
+    rules_fade: Option<(f32, f32)>,
+    rules_fading: bool,
     crew_inputs: Option<rustyac_render::tyre_crew::CrewInputs>,
     /// `RaceManager::carsToBeLoaded`
     cars_to_be_loaded: i32,
@@ -807,7 +811,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1678,6 +1682,16 @@ impl AcRenderer {
             let cpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
             gui.frame_end(cpu_ms, cpu_ms - update_ms - render_ms);
         }
+        // Task 46: the fade the race rules asked for (RaceManager, TimeAttack, DriftMode,
+        // DragMode call ACCameraManager::fadeIn in their update, before this frame's post-GUI
+        // pass draws it at fadeTime 0); the referee counts it down to the black frame and runs
+        // its job there, the picture runs it on the drawn frames and back from black
+        let total = info.referee.as_ref().map_or(0.0, |referee| referee.fade_total);
+        if total > 0.0 && !self.rules_fading {
+            self.rules_fade = Some((0.0, total));
+            println!("camera fade: {total} s at frame {} (the race rules)", self.frames);
+        }
+        self.rules_fading = total > 0.0;
         // Game::evOnPostGui: the camera manager's fade, over everything of the game's 2D pass
         if let Some((time, total)) = info.focus_fade {
             rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
@@ -1685,6 +1699,14 @@ impl AcRenderer {
             // the fade a pit stop's commit asked for (ACCameraManager::fadeIn with 0.25 s): at
             // its black frame the crew is put round the car (the lambda 0x140032770)
             rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+        } else if let Some((time, total)) = self.rules_fade {
+            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+        }
+        if let Some((time, total)) = self.rules_fade {
+            self.rules_fade = (time + dt < total * 2.0).then_some((time + dt, total));
+            if self.rules_fade.is_none() {
+                println!("camera fade over at frame {}", self.frames);
+            }
         }
         if let Some((time, total)) = self.crew_fade {
             if time >= total * 2.0 {

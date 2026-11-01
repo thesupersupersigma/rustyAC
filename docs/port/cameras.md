@@ -12,7 +12,9 @@
   The game has no seat keys.
 - Step 2b done in the page too (Full mode): the player's camera files from the launcher's
   Documents, the look keys and Ctrl+Numpad FOV keys; settings line IDENTICAL to the desktop's.
-- Next: fade-in, then F3 (track cameras and sets), then F2.
+- Step 2c done: the race rules' fades (restart, next session, race end, Time Attack / Drift /
+  Drag) in AC's picture, desktop and page.
+- Next: F3 (track cameras and sets), then F2.
 
 ## Step 0: housekeeping
 
@@ -85,7 +87,7 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | G-force head movement, shake (`CameraOnBoard::update`) | | math proven (step 2a) | settings from `camera_onboard.ini` not read yet (zero g, no shake) |
 | Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`, chase look) | look keys | math proven (step 2a) | the keys and the look-back points not wired yet |
 | FOV (`setPlayerFov`), seat position | Numpad +/-, seat keys | missing | |
-| Fade-in (`fadeIn`) | F4, menus | half | the focus change's fade is ported and proven (`focus.rs`, sequence 18); the menus' `SimAction::FadeIn` (restart) does nothing on desktop |
+| Fade-in (`fadeIn`) | F4, menus, race rules | done | F4's fade proven (`focus.rs`, sequence 18); the menus' fades were already drawn (`GameGui::post_gui`, Task 30; the audit's "does nothing" was the desktop's action loop, which leaves them to the GUI); the race rules' fades now too (Step 2c) |
 | F3 track cameras and sets (`CameraTrack`) | F3 | missing | |
 | F2 random camera (`stepCameraRandom`) | F2 | missing | |
 | F5 onboard free (`CameraOnBoardFree`) | F5 | missing → 46b | |
@@ -186,7 +188,36 @@ Not compared: the far plane and the exposure the cameras set (the renderer has i
   **IDENTICAL** to the page's (`mix [-0.0028000001, ...] ... shake 2.8 freq [150.0, 150.0,
   100.0] ... rotation 90.0/20.0`).
 
+## Step 2c: the fades
+
+The game has one fade (`ACCameraManager::fadeMode`), started by `fadeIn` 0x140033690 from 16
+places and drawn by the camera manager's post-GUI handler (the lambda 0x140032770: black over
+`fadeTotalTime`, the jobs hung on it at the black frame, back over the same time, the quad in
+`camera_manager.ini [FADE] COLOR`). Before this step AC's picture in rustyAC drew three of its
+starters: F4 (`focus.rs`), the pit crew's commit and the menus' (`GameGui::post_gui`). The race
+rules' fades (`RaceManager` restart 1 s, skip / player to pit / race end 2.5 s, Time Attack and
+Drift ends 2.5 s, Drag's next match 1 s) were counted by the referee (its jobs run at the black
+frame, proven with the race rules in Task 28) but shown only by rustyAC's own HUD as a black
+rectangle.
+
+Now `RefereeHud::fade_total` carries the running fade's length and `AcRenderer` starts the
+proven overlay (`gl::fade_overlay`) on the frame the referee's fade appears, at `fadeTime` 0 as
+the game's post-GUI pass draws it on the frame of `fadeIn`, then runs it on the drawn frames.
+Desktop and page draw through the same code (Full mode's frame info carries the referee's).
+
+Run (`re/scratch/task46/fade/run.txt`: `--sessions p10,q5 --restart-session-at 4
+--next-session-at 12 --windowed`): `camera fade: 1 s at frame 146`, over at frame 266 (120
+frames at 60 FPS, 2 s: black and back); `camera fade: 2.5 s at frame 626`, over at frame 925
+(299 frames, 5 s).
+
+Not proven against the game frame by frame: which drawn frame a referee fade starts on (the
+referee runs on the physics thread; the game starts it inside its own update). The overlay
+itself is the proven one; the lengths are the referee's.
+
 ## Not done
+
+- `camera_manager.ini [FADE] COLOR`: the fade is always black (the game's default and every
+  shipped file's `0,0,0`). shortcut: black only, read the colour when someone sets one.
 
 - Task 46b: F5 onboard free, helicopter, the cinematic replay camera (`video_editing.ini`),
   remembering the last camera, and comparing the camera the replay spinner, camera editor,

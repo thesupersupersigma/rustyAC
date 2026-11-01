@@ -194,6 +194,9 @@ pub struct RefereeHud {
     pub lights_disqualified: bool,
     /// the picture is fading to black: 0 none .. 1 black
     pub fade: f32,
+    /// Task 46: the length of the camera fade the race rules asked for (`ACCameraManager::
+    /// fadeIn`'s `fadeTotalTime`) while it goes to black, 0 when none: AC's picture draws it
+    pub fade_total: f32,
     /// Task 28b: the pit menu while it is up, line by line (the cursor's line starts with `>`)
     pub pit: Vec<String>,
     /// Task 29: the same moment as AC's HUD objects read it
@@ -580,9 +583,15 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
             }
         }
     }
-    if let Some((left, job)) = manager.fade {
-        let length = if job == rustyac_physics::race::FadeJob::Restart { 1.0 } else { rustyac_physics::race::manager::FADE_SECONDS };
+    // (a restart and Drag's next match fade over 1 s, the rest over 2.5 s)
+    let fades = [
+        manager.fade.map(|(left, job)| (left, if job == rustyac_physics::race::FadeJob::Restart { 1.0 } else { rustyac_physics::race::manager::FADE_SECONDS })),
+        referee.mode_fade.map(|left| (left, rustyac_physics::race::manager::FADE_SECONDS)),
+        referee.drag_fade.map(|left| (left, 1.0)),
+    ];
+    if let Some((left, length)) = fades.into_iter().flatten().next() {
         out.fade = (1.0 - left / length).clamp(0.0, 1.0);
+        out.fade_total = length;
     }
     out
 }
