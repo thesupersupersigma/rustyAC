@@ -28,8 +28,18 @@ static CURSOR: [AtomicI32; 2] = [AtomicI32::new(0), AtomicI32::new(0)];
 /// the right mouse button, Page Up, Page Down.
 const FREE_KEYS: [i32; 9] = [0x10, 0x11, 0x26, 0x28, 0x25, 0x27, 0x02, 0x21, 0x22];
 
+/// Task 46b: the keys F5's, the cinematic and the helicopter cameras read, as bits of [`KEYS`]
+/// while [`KEY_TABLE`] is 1: Shift, Tab, the left, right and middle buttons, Caps Lock, the
+/// arrows (up, down, left, right), W S A D C Z F G B V X, numpad + and -.
+pub const ORBIT_KEYS: [i32; 23] = [0x10, 0x09, 0x01, 0x02, 0x04, 0x14, 0x26, 0x28, 0x25, 0x27, 0x57, 0x53, 0x41, 0x44, 0x43, 0x5a, 0x46, 0x47, 0x42, 0x56, 0x58, 0x6b, 0x6d];
+static KEY_TABLE: AtomicU32 = AtomicU32::new(0);
+/// The desktop's width and height, for `GetWindowRect(GetDesktopWindow())` and
+/// `GetSystemMetrics(SM_CYVIRTUALSCREEN)`.
+static SCREEN: [AtomicI32; 2] = [AtomicI32::new(1920), AtomicI32::new(1080)];
+
 pub extern "system" fn get_async_key_state(key: i32) -> i16 {
-    let held = FREE_KEYS.iter().position(|k| *k == key).is_some_and(|bit| KEYS.load(Ordering::Relaxed) & (1 << bit) != 0);
+    let table: &[i32] = if KEY_TABLE.load(Ordering::Relaxed) == 1 { &ORBIT_KEYS } else { &FREE_KEYS };
+    let held = table.iter().position(|k| *k == key).is_some_and(|bit| KEYS.load(Ordering::Relaxed) & (1 << bit) != 0);
     if held {
         -32768
     } else {
@@ -45,6 +55,34 @@ pub extern "system" fn get_cursor_pos(point: *mut i32) -> i32 {
     1
 }
 
+pub extern "system" fn set_cursor_pos(x: i32, y: i32) -> i32 {
+    CURSOR[0].store(x, Ordering::Relaxed);
+    CURSOR[1].store(y, Ordering::Relaxed);
+    1
+}
+
+pub extern "system" fn get_desktop_window() -> usize {
+    1
+}
+
+pub extern "system" fn get_window_rect(_window: usize, rect: *mut i32) -> i32 {
+    unsafe {
+        *rect = 0;
+        *rect.add(1) = 0;
+        *rect.add(2) = SCREEN[0].load(Ordering::Relaxed);
+        *rect.add(3) = SCREEN[1].load(Ordering::Relaxed);
+    }
+    1
+}
+
+pub extern "system" fn get_system_metrics(index: i32) -> i32 {
+    if index == 0x4f {
+        SCREEN[1].load(Ordering::Relaxed)
+    } else {
+        0
+    }
+}
+
 /// MSVCR120's `rand`
 pub extern "C" fn rand() -> i32 {
     let seed = SEED.load(Ordering::Relaxed).wrapping_mul(214013).wrapping_add(2531011);
@@ -58,6 +96,10 @@ pub fn overrides() -> Vec<(&'static str, &'static str, usize)> {
         ("msvcr120.dll", "rand", rand as *const () as usize),
         ("user32.dll", "GetAsyncKeyState", get_async_key_state as *const () as usize),
         ("user32.dll", "GetCursorPos", get_cursor_pos as *const () as usize),
+        ("user32.dll", "SetCursorPos", set_cursor_pos as *const () as usize),
+        ("user32.dll", "GetDesktopWindow", get_desktop_window as *const () as usize),
+        ("user32.dll", "GetWindowRect", get_window_rect as *const () as usize),
+        ("user32.dll", "GetSystemMetrics", get_system_metrics as *const () as usize),
     ]
 }
 
@@ -887,5 +929,204 @@ pub unsafe fn random_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String,
             writeln!(tape, " {}", rd::<i32>(manager, 0xdc)).unwrap();
         }
     }
+    Ok(tape)
+}
+
+const VA_ONBOARD_FREE_UPDATE: usize = 0x1_4011_5db0;
+const VA_ONBOARD_FREE_CAST: usize = 0x1_4011_5e77;
+const VA_CINEMATIC_MOVEMENT: usize = 0x1_4006_d750;
+const VA_CINEMATIC_PARAMETER: usize = 0x1_4006_d690;
+const VA_HELICOPTER_UPDATE: usize = 0x1_400c_80e0;
+
+/// Task 46b: F5 and the cameras like it. Each 300 frames one of: 0 F5, the game's own
+/// `CameraOnBoardFree::update` 0x140115db0 (the orbit on a sphere, the keys-and-orbit way when
+/// `SPHERICAL_COORDS` is 0, and the ESC menu's slow turn); 1 the cinematic free camera
+/// (`video_editing.ini [CINEMATIC_CAMERAS] ACTIVE`), its update's moving part:
+/// `setMatrixMovementFromUserInput` 0x14006d750 on the scene camera and
+/// `setCameraParameterFromUserInput` 0x14006d690, then the fov to the camera as the update
+/// does; 2 the helicopter, `CameraHelicopter::update` 0x1400c80e0. Made-up settings, keys
+/// ([`ORBIT_KEYS`]), cursors (with the desktop's edges the cinematic look wraps it at) and a
+/// made-up car 0 going about. `setShadowMapsSplits` and `setListener` return at once, F5's
+/// `__RTDynamicCast` of the camera gives the camera.
+///
+/// Lines: `seg <kind> <cinematic look> <spherical> <esc> <replay loaded> <replay +0x30>
+/// <width> <height> <cfg 22> <offset 3> <F5 matrix 16> <camera 16> <camera fov>` (cfg: fov
+/// exposure moveSpeed movementDelay mouseSpeed mouseDelay minMult maxMult dofFocus
+/// rotationSpeed escDOF radius minRadius maxRadius theta min max phi min max hdr 2), then per
+/// frame `f <keys hex> <x> <y> <dt> <body 16> -> <camera 16> <fov> <near> <far> <+0x19c>
+/// <+0x1a0> <+0x1a4> <+0x1b0> <+0x1b4> <+0x1b8> <this fov> <theta> <phi> <F5 matrix 16> <esc>
+/// <cursor x> <cursor y>`.
+pub unsafe fn orbit_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, String> {
+    acs.patch(acs.va(VA_SET_SHADOW_MAPS_SPLITS), &[0xc3]);
+    acs.patch(acs.va(VA_SET_LISTENER), &[0xc3]);
+    // `call __RTDynamicCast` -> `mov rax, rcx` and two nops
+    acs.patch(acs.va(VA_ONBOARD_FREE_CAST), &[0x48, 0x8b, 0xc1, 0x90, 0x90]);
+    let onboard_free: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_ONBOARD_FREE_UPDATE));
+    let movement: extern "C" fn(*mut u8, *mut u8, f32) = std::mem::transmute(acs.va(VA_CINEMATIC_MOVEMENT));
+    let parameter: extern "C" fn(*mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(acs.va(VA_CINEMATIC_PARAMETER));
+    let helicopter: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_HELICOPTER_UPDATE));
+    KEY_TABLE.store(1, Ordering::Relaxed);
+    let mut tape = String::new();
+    let mut rng = Rng(seed as u64 ^ 0x0f5c);
+    let node_vtable = acs.alloc(0x100);
+    wr(node_vtable, 0x40, world_matrix as *const () as usize);
+    let (mut x, mut y) = (500i32, 500i32);
+    let (mut object, mut camera, mut node, mut kind) = (std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), 0u64);
+    let (mut yaw, mut place) = (0.0f32, [0.0f32; 3]);
+    for step in 0..steps {
+        if step % 300 == 0 {
+            kind = [0, 0, 0, 0, 0, 1, 1, 1, 2, 2][(rng.next() % 10) as usize];
+            let pick = |rng: &mut Rng, usual: f32, lo: f32, hi: f32| if rng.next().is_multiple_of(3) { rng.float(lo, hi) } else { usual };
+            let mut cfg = vec![
+                [45.0, 60.0, rng.float(10.0, 120.0)][(rng.next() % 3) as usize],
+                pick(&mut rng, 35.0, 0.0, 60.0),
+                pick(&mut rng, 7.0, 0.5, 30.0),
+                [0.2, 0.2, 0.2, rng.float(0.01, 1.0), 0.0][(rng.next() % 5) as usize],
+                pick(&mut rng, 1.0, 0.1, 4.0),
+                pick(&mut rng, 0.07, 0.0, 0.5),
+                pick(&mut rng, 0.1, 0.01, 1.0),
+                pick(&mut rng, 3.0, 1.0, 10.0),
+                pick(&mut rng, 0.1, 0.0, 200.0),
+                pick(&mut rng, 0.1, 0.0, 2.0),
+                pick(&mut rng, 1.0, 0.0, 4.0),
+            ];
+            let (lo, hi) = (pick(&mut rng, 2.5, 0.5, 5.0), pick(&mut rng, 10.0, 5.0, 30.0));
+            cfg.extend([pick(&mut rng, 5.0, lo, hi), lo, hi]);
+            cfg.extend([pick(&mut rng, 75.0, -20.0, 120.0), 5.0, 85.0, pick(&mut rng, -45.0, -400.0, 400.0), 0.0, 360.0]);
+            cfg.extend([rng.float(0.0, 2.0), rng.float(0.0, 4.0)]);
+            let offset = if rng.next().is_multiple_of(4) { [rng.float(-50.0, 50.0), rng.float(0.0, 300.0), rng.float(-50.0, 50.0)] } else { [30.0, 180.0, 20.0] };
+            let flags = [rng.next().is_multiple_of(4) as u8 ^ 1, rng.next().is_multiple_of(3) as u8 ^ 1, rng.next().is_multiple_of(2) as u8, rng.next().is_multiple_of(6) as u8, rng.next().is_multiple_of(6) as u8];
+            let screen = [[1920, 1080], [2560, 1440], [3840, 1080], [1280, 720]][(rng.next() % 4) as usize];
+            SCREEN[0].store(screen[0], Ordering::Relaxed);
+            SCREEN[1].store(screen[1], Ordering::Relaxed);
+            // the F5 matrix as `Sim::Sim` leaves it (setPosition), or turned about by the keys
+            let a = axes(rng.float(-3.2, 3.2), rng.float(-0.6, 0.6), rng.float(-0.3, 0.3));
+            let own = if rng.next().is_multiple_of(2) {
+                [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.4, 3.2, 1.0]
+            } else {
+                [a[0], a[1], a[2], 0.0, a[3], a[4], a[5], 0.0, a[6], a[7], a[8], 0.0, rng.float(-6.0, 6.0), rng.float(-1.0, 4.0), rng.float(-6.0, 6.0), 1.0]
+            };
+            let b = axes(rng.float(-3.2, 3.2), rng.float(-0.6, 0.6), rng.float(-0.2, 0.2));
+            let scene = [b[0], b[1], b[2], 0.0, b[3], b[4], b[5], 0.0, b[6], b[7], b[8], 0.0, rng.float(-500.0, 500.0), rng.float(0.0, 50.0), rng.float(-500.0, 500.0), 1.0];
+            let scene_fov = [40.0, 56.0, rng.float(10.0, 120.0)][(rng.next() % 3) as usize];
+            camera = acs.alloc(0x800);
+            for (i, v) in scene.iter().enumerate() {
+                wr(camera, 0x0c + 4 * i, *v);
+            }
+            wr(camera, 0x08, scene_fov);
+            wr(camera, 0x74, 1000.0f32);
+            wr(camera, 0x50 + 0x18, 7usize);
+            let sim = acs.alloc(0x400);
+            let car = acs.alloc(0x1200);
+            let car_list = acs.alloc(8);
+            wr(car_list, 0, car as usize);
+            wr(sim, 0x208, car_list as usize);
+            wr(sim, 0x210, car_list as usize + 8);
+            wr(sim, 0xd8, cfg[20]);
+            wr(sim, 0xdc, cfg[21]);
+            let replay = acs.alloc(0x200);
+            wr(sim, 0x1b0, replay as usize);
+            wr(replay, 0xb8, flags[3]);
+            wr(replay, 0x30, flags[4]);
+            node = acs.alloc(0x100);
+            wr(node, 0, node_vtable as usize);
+            wr(car, 0x1b8, node as usize);
+            object = acs.alloc(0x200);
+            wr(object, 8, acs.alloc(0x400) as usize);
+            if kind == 2 {
+                wr(object, 0x58, offset);
+                wr(object, 0x68, sim as usize);
+                wr(object, 0x70, camera as usize);
+            } else {
+                // CinematicFreeCamera's ctor 0x14006c010 and CameraOnBoardFree's 0x140115100
+                for (o, v) in [(0x58, 0), (0x5c, 1), (0x70, 2), (0xf8, 3), (0x110, 4), (0x114, 5), (0x118, 6), (0x11c, 7), (0x124, 8), (0x1a8, 9), (0x1a4, 10), (0x148, 11), (0x14c, 12), (0x150, 13)] {
+                    wr(object, o, cfg[v]);
+                }
+                wr(object, 0x68, camera as usize);
+                wr(object, 0xfc, flags[0]);
+                let (theta, phi) = (acs.alloc(12), acs.alloc(12));
+                for i in 0..3 {
+                    wr(theta, 4 * i, cfg[14 + i]);
+                    wr(phi, 4 * i, cfg[17 + i]);
+                }
+                wr(object, 0x138, theta as usize);
+                wr(object, 0x140, phi as usize);
+                wr(object, 0x154, flags[1]);
+                for (i, v) in own.iter().enumerate() {
+                    wr(object, 0x158 + 4 * i, *v);
+                }
+                wr(object, 0x198, sim as usize);
+                wr(object, 0x1a0, flags[2]);
+            }
+            write!(tape, "seg {kind} {} {} {} {} {} {} {}", flags[0], flags[1], flags[2], flags[3], flags[4], screen[0], screen[1]).unwrap();
+            bits(&mut tape, &cfg);
+            bits(&mut tape, &offset);
+            bits(&mut tape, &own);
+            bits(&mut tape, &scene);
+            bits(&mut tape, &[scene_fov]);
+            tape.push('\n');
+            yaw = rng.float(-3.2, 3.2);
+            place = [rng.float(-2000.0, 2000.0), rng.float(-50.0, 300.0), rng.float(-2000.0, 2000.0)];
+        }
+        let mut keys = (rng.next() & rng.next() & rng.next()) as u32 & 0x7f_ffff;
+        if rng.next().is_multiple_of(2) {
+            keys |= 1 << 2;
+        }
+        if rng.next().is_multiple_of(4) {
+            keys |= 1 << 3;
+        }
+        KEYS.store(keys, Ordering::Relaxed);
+        match rng.next() % 40 {
+            0 => x = (rng.next() % 12) as i32,
+            1 => x = SCREEN[0].load(Ordering::Relaxed) - 12 + (rng.next() % 12) as i32,
+            2 => y = 0,
+            3 => y = SCREEN[1].load(Ordering::Relaxed) - 1,
+            4 => (x, y) = ((rng.next() % 4000) as i32 - 1000, (rng.next() % 3000) as i32 - 500),
+            _ if !rng.next().is_multiple_of(3) => {
+                x = x.wrapping_add((rng.next() % 61) as i32 - 30);
+                y = y.wrapping_add((rng.next() % 61) as i32 - 30);
+            }
+            _ => {}
+        }
+        CURSOR[0].store(x, Ordering::Relaxed);
+        CURSOR[1].store(y, Ordering::Relaxed);
+        yaw += rng.float(-0.05, 0.05);
+        let r = axes(yaw, rng.float(-0.1, 0.1), rng.float(-0.1, 0.1));
+        for p in place.iter_mut() {
+            *p += rng.float(-1.0, 1.0);
+        }
+        let body = [r[0], r[1], r[2], 0.0, r[3], r[4], r[5], 0.0, r[6], r[7], r[8], 0.0, place[0], place[1], place[2], 1.0];
+        for (i, v) in body.iter().enumerate() {
+            wr(node, 8 + 4 * i, *v);
+        }
+        let dt = match rng.next() % 20 {
+            0 => 0.0,
+            1 => rng.float(0.05, 0.5),
+            _ => rng.float(0.004, 0.034),
+        };
+        write!(tape, "f {keys:x} {x} {y}").unwrap();
+        bits(&mut tape, &[dt]);
+        bits(&mut tape, &body);
+        match kind {
+            0 => onboard_free(object, dt),
+            1 => {
+                movement(object, camera.add(0x0c), dt);
+                parameter(object, object.add(0x58), object.add(0x120), dt);
+                wr(camera, 0x08, rd::<f32>(object, 0x58));
+            }
+            _ => helicopter(object),
+        }
+        (x, y) = (CURSOR[0].load(Ordering::Relaxed), CURSOR[1].load(Ordering::Relaxed));
+        tape.push_str(" ->");
+        let matrix: Vec<f32> = (0..16).map(|i| rd(camera, 0x0c + 4 * i)).collect();
+        bits(&mut tape, &matrix);
+        bits(&mut tape, &[0x08, 0x70, 0x74, 0x19c, 0x1a0, 0x1a4, 0x1b0, 0x1b4, 0x1b8].map(|o| rd::<f32>(camera, o)));
+        let (theta, phi) = if kind == 2 { (0.0, 0.0) } else { (rd::<f32>(rd::<usize>(object, 0x138) as *const u8, 0), rd::<f32>(rd::<usize>(object, 0x140) as *const u8, 0)) };
+        bits(&mut tape, &[rd::<f32>(object, 0x58), theta, phi]);
+        let own: Vec<f32> = (0..16).map(|i| rd(object, 0x158 + 4 * i)).collect();
+        bits(&mut tape, &own);
+        writeln!(tape, " {} {x} {y}", rd::<u8>(object, 0x1a0)).unwrap();
+    }
+    KEY_TABLE.store(0, Ordering::Relaxed);
     Ok(tape)
 }

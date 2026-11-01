@@ -18,6 +18,7 @@ pub mod gui_apps;
 pub mod hud;
 pub mod models;
 pub mod picture;
+pub mod onboard_free;
 pub mod scene;
 pub mod track_camera;
 

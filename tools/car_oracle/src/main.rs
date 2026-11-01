@@ -545,7 +545,7 @@ fn steer_micro(args: &Args) -> Result<(), String> {
 
 /// Task 34: `car_oracle start-camera-micro [--seed <n>] [--steps <frames>] [--root <dir>]`
 /// (tapes: `<root>/start_camera.tape`, `<root>/free_camera.tape`, `<root>/driving_camera.tape`,
-/// `<root>/track_camera.tape`, `<root>/random_camera.tape`):
+/// `<root>/track_camera.tape`, `<root>/random_camera.tape`, `<root>/orbit_camera.tape`):
 /// the game's own session-start camera on made-up cars, F7's free camera on made-up keys and
 /// cursors and (Task 46) the cockpit, drivable and car cameras and F3's track cameras, for the port's
 /// `start_camera_check` example.
@@ -579,6 +579,10 @@ fn start_camera_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::camera::random_micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("random camera: {} lines of the game into {}", tape.lines().count(), out.display());
+    let out = root.join("orbit_camera.tape");
+    let tape = unsafe { game::camera::orbit_micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("orbit cameras: {} lines of the game into {}", tape.lines().count(), out.display());
     Ok(())
 }
 

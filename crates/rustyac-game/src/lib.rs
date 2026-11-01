@@ -66,6 +66,7 @@ pub mod render {
     pub mod gui_apps;
     #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
     pub mod hud;
+    pub mod onboard_free;
     pub mod scene;
     pub mod track_camera;
 }

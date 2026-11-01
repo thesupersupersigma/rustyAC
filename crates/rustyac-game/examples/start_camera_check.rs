@@ -19,8 +19,14 @@
 //! `CameraTrack::update` against the port's (matrix, field of view, planes, exposures, depth
 //! of field).
 //!
-//! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder>]]]`
+//! With a sixth (`orbit_camera.tape`, Task 46b), F5's `CameraOnBoardFree::update`, the
+//! cinematic free camera's moves and fov keys and `CameraHelicopter::update` against the
+//! port's `OnboardFreeCamera`, `CinematicCamera` and `HelicopterCamera` (the scene camera's
+//! fields, theta, phi, F5's own matrix and the cursor the look moves).
+//!
+//! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder> [<random_camera.tape> <seed> [<orbit_camera.tape>]]]]]`
 
+use rustyac_game::render::onboard_free::{CinematicCamera, HelicopterCamera, OnboardFreeCamera, OrbitInput, ShotCamera};
 use rustyac_game::render::track_camera::{CameraSet, RandomCamera, TrackCamera, TrackCameras};
 use rustyac_game::render::scene::{CameraFrame, CameraMode, CarCamera, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::view::CarView;
@@ -116,6 +122,9 @@ fn main() {
     }
     if let (Some(path), Some(seed)) = (std::env::args().nth(6), std::env::args().nth(7)) {
         failed |= !random(&std::fs::read_to_string(&path).expect("the random camera's tape"), seed.parse().expect("the seed"));
+    }
+    if let Some(path) = std::env::args().nth(8) {
+        failed |= !orbit(&std::fs::read_to_string(&path).expect("the orbit cameras' tape"));
     }
     if failed {
         std::process::exit(1);
@@ -425,6 +434,97 @@ fn track(tape: &str, ac: &std::path::Path) -> bool {
         println!("track cameras: IDENTICAL ({cameras} cameras of {} sets, {frames} frames)", tape.lines().filter(|l| l.starts_with("set ")).count());
     } else {
         println!("track cameras: DIFFERENT in {wrong} of {lines} lines");
+    }
+    wrong == 0
+}
+
+/// The keys of `orbit_camera.tape`'s bits (`car_oracle`'s `ORBIT_KEYS`).
+const ORBIT_KEYS: [i32; 23] = [0x10, 0x09, 0x01, 0x02, 0x04, 0x14, 0x26, 0x28, 0x25, 0x27, 0x57, 0x53, 0x41, 0x44, 0x43, 0x5a, 0x46, 0x47, 0x42, 0x56, 0x58, 0x6b, 0x6d];
+
+fn matrix(v: &[f32]) -> [[f32; 4]; 4] {
+    std::array::from_fn(|i| std::array::from_fn(|j| v[i * 4 + j]))
+}
+
+fn orbit(tape: &str) -> bool {
+    let (mut lines, mut wrong) = (0usize, 0usize);
+    let mut kind = 0;
+    let mut f5 = OnboardFreeCamera::new(CinematicCamera::new(0.0), None, None);
+    let mut helicopter = HelicopterCamera::default();
+    let mut camera = ShotCamera::new(&CameraFrame { matrix: [[0.0; 4]; 4], fov: 0.0, near: 0.0 });
+    let (mut replay, mut screen) = ([false; 2], (0, 0));
+    let mut hdr = [0.0; 2];
+    for line in tape.lines() {
+        lines += 1;
+        if let Some(seg) = line.strip_prefix("seg ") {
+            let w: Vec<&str> = seg.split(' ').collect();
+            let flag = |i: usize| w[i] != "0";
+            kind = w[0].parse::<u32>().expect("kind");
+            replay = [flag(4), flag(5)];
+            screen = (w[6].parse().expect("width"), w[7].parse().expect("height"));
+            let v: Vec<f32> = w[8..].iter().map(|x| float(x)).collect();
+            let (cfg, offset, own, scene) = (&v[..22], &v[22..25], &v[25..41], &v[41..57]);
+            let mut c = CinematicCamera::new(cfg[0]);
+            (c.exposure, c.move_speed, c.movement_delay, c.mouse_speed, c.mouse_delay, c.min_mult, c.max_mult, c.dof_focus) = (cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[6], cfg[7], cfg[8]);
+            (c.use_cinematic_features, c.dof_factor) = (flag(1), 0.0);
+            f5 = OnboardFreeCamera::new(c, None, None);
+            f5.cinematic = c;
+            (f5.rotation_speed, f5.esc_dof_factor, f5.radius, f5.min_radius, f5.max_radius) = (cfg[9], cfg[10], cfg[11], cfg[12], cfg[13]);
+            (f5.theta.value, f5.theta.min, f5.theta.max) = (cfg[14], cfg[15], cfg[16]);
+            (f5.phi.value, f5.phi.min, f5.phi.max) = (cfg[17], cfg[18], cfg[19]);
+            (f5.spherical, f5.esc_mode, f5.matrix) = (flag(2), flag(3), matrix(own));
+            hdr = [cfg[20], cfg[21]];
+            helicopter.offset = [offset[0], offset[1], offset[2]];
+            camera = ShotCamera::new(&CameraFrame { matrix: matrix(scene), fov: v[57], near: 0.0 });
+            camera.far = 1000.0;
+            continue;
+        }
+        let (input, output) = line.split_once(" -> ").expect("a line of the tape");
+        let w: Vec<&str> = input.split(' ').collect();
+        let bits = u32::from_str_radix(w[1], 16).expect("keys");
+        let mut keys = OrbitInput { cursor: (w[2].parse().expect("x"), w[3].parse().expect("y")), screen, ..OrbitInput::default() };
+        for (i, vk) in ORBIT_KEYS.iter().enumerate() {
+            keys.keys[*vk as usize] = bits & (1 << i) != 0;
+        }
+        let v: Vec<f32> = w[4..].iter().map(|x| float(x)).collect();
+        let (dt, body) = (v[0], matrix(&v[1..17]));
+        let moved = match kind {
+            0 => f5.update(&mut camera, &body, replay[0], replay[1], hdr, &keys, dt),
+            1 => {
+                let fov = camera.fov;
+                let c = &mut f5.cinematic;
+                let moved = c.movement(&mut camera.matrix, None, fov, &keys, dt);
+                let mut own = c.fov;
+                c.fov_keys(&mut own, &keys, dt);
+                c.fov = own;
+                camera.fov = own;
+                moved
+            }
+            _ => {
+                helicopter.update(&mut camera, &body);
+                None
+            }
+        };
+        let cursor = moved.unwrap_or(keys.cursor);
+        let mut port: Vec<String> = camera.matrix.iter().flatten().copied().chain([camera.fov, camera.near, camera.far, camera.exposure, camera.exposure_range[0], camera.exposure_range[1]]).chain(camera.dof).collect::<Vec<f32>>().iter().map(|x| format!("{:08x}", x.to_bits())).collect();
+        // (the helicopter's object has its offset at +0x58 and nothing at F5's places)
+        let (tail, own, esc) = if kind == 2 { ([helicopter.offset[0], 0.0, 0.0], [[0.0; 4]; 4], false) } else { ([f5.cinematic.fov, f5.theta.value, f5.phi.value], f5.matrix, f5.esc_mode) };
+        port.extend(tail.iter().chain(own.iter().flatten()).map(|x| format!("{:08x}", x.to_bits())));
+        port.extend([u8::from(esc).to_string(), cursor.0.to_string(), cursor.1.to_string()]);
+        let game: Vec<&str> = output.split(' ').collect();
+        if port != game {
+            wrong += 1;
+            if wrong <= 5 {
+                let at: Vec<usize> = (0..game.len()).filter(|i| port.get(*i).map(String::as_str) != Some(game[*i])).collect();
+                println!("DIFFERENT orbit line {lines} (kind {kind}) at fields {at:?}:
+  game {game:?}
+  port {port:?}");
+            }
+        }
+    }
+    if wrong == 0 {
+        println!("orbit cameras: IDENTICAL ({lines} lines of the game)");
+    } else {
+        println!("orbit cameras: DIFFERENT in {wrong} of {lines} lines");
     }
     wrong == 0
 }
