@@ -1,8 +1,103 @@
-# AC's cameras (Task 46)
+# AC's cameras (Tasks 46 and 46b)
 
 ## Task 46b: the rest of AC's cameras
 
-### Resume here
+Released as v0.46.1. Every camera of the game's `ACCameraManager` is now in rustyAC except
+TrackIR (Task 47): F5's camera that circles the car, the helicopter, the cinematic free camera,
+the last camera remembered between sessions, the windows' camera calls, Python's camera calls
+and the fade colour. Each one runs the game's own code and the port's on the same made-up inputs,
+frame by frame, through `car_oracle start-camera-micro` → `start_camera_check`: identical.
+
+### The audit, complete except TrackIR
+
+| Camera / feature | Keys | Status | Proof |
+|---|---|---|---|
+| Start camera (`CameraModeStart`) | session start | proven | `start_camera.tape` |
+| F7 free camera (`CameraMouseControl`) | F7 (`ALLOW_FREE_CAMERA`) | proven | `free_camera.tape` |
+| F7 cinematic camera (`CinematicFreeCamera`) | F7 with `video_editing.ini [CINEMATIC_CAMERAS] ACTIVE=1` | proven (46b) | `orbit_camera.tape` (kind 1) |
+| F1 cockpit, drivable views, F6 car cameras | F1, C, F6 | proven (46) | `driving_camera.tape` |
+| G forces, shake, look keys, FOV keys | look keys, Ctrl+Numpad +/- | proven (46) | the same, plus the settings line |
+| F3 track cameras and sets | F3 | proven (46) | `track_camera.tape` |
+| Track cameras in a replay's slow motion | replay speed | proven (46b) | the track tape's replay speed columns; desktop passes the rig's `timeMult` |
+| F2 random camera | F2 | proven (46) | `random_camera.tape` |
+| F2 / F3 on a track with no camera sets | F2, F3 | done (46b) | game crashes in `nextSet`; rustyAC keeps the camera still as `CameraTrack::update` does |
+| F5 onboard free (`CameraOnBoardFree`) | F5, left drag, right button, wheel | proven (46b) | `orbit_camera.tape` (kind 0: sphere, keys and orbit, ESC turn, replay flags) |
+| Helicopter (`CameraHelicopter`) | Python `ac.setCameraMode(4)` only | proven (46b) | `orbit_camera.tape` (kind 2) |
+| Last camera (`camera_manager.ini [LAST_CAMERA]`) | ESC menu's first Drive | proven (46b) | random tape `load` lines and `persistanceCameraMode` columns; `last_camera.sh` |
+| Replay camera spinner | replay bar | proven (46b) | random tape `spin` lines; GUI sequences (46) |
+| Camera editor F1 / F6 buttons | app window | proven (46b) | random tape `select` lines; GUI sequences (46) |
+| Chase-cam editor | app window | proven | its values feed the drivable chase view (`driving_camera.tape`) |
+| Photo mode Start / back | app window | proven (46b) | random tape `photo` / `photoback` lines |
+| Python `setCameraMode` 0-7, `freeCamera*` | apps | proven (46b) | random tape `py` lines, free tape `py` lines |
+| Python `getCameraMode`, `isCameraOnBoard` | apps | done (46b) | read the frame's manager mode and dash view |
+| Fade, its colour (`[FADE] COLOR`) | every fade | done (46b) | unit test; red-fade desktop run |
+| F4 / other cars, mirrors | F4, F11 | proven (46) | render oracle sequences |
+| Page (Full mode) | F1-F7, C | as desktop | no Python, no AC replay, no apps in the page |
+| TrackIR | | missing → 47 | |
+
+### Keys for the new cameras
+
+- F5: the onboard free camera through the fade (not again while it shows). The left button drags
+  it round the car (theta 5-85°, phi free), the right button turns it slowly, the wheel brings it
+  nearer or farther (2.5-10 m). With `camera_onboard_free.ini SPHERICAL_COORDS=0`: W A S D and
+  the arrows move it, C / Z up and down, F / G roll, B / V pitch, Shift slower, Tab faster,
+  Numpad + / - field of view, the right button orbits (Caps Lock the other way, the left button
+  looks away, the middle one keeps the tilt). The ESC menu and the results turn it slowly.
+- F7 with `cfg/video_editing.ini [CINEMATIC_CAMERAS] ACTIVE=1`: the cinematic camera, the same
+  keys as above plus a lagging mouse look (left button; X repeats the last move), Backspace the
+  look on / off, Insert reads the settings again.
+- Helicopter: Python's `ac.setCameraMode(4)` (no key in the game).
+- F1 back to the driving cameras from any of them.
+
+### Results
+
+| Proof | Result |
+|---|---|
+| `start_camera_check`, seeds 1 and 2 at 60,000 steps (start, free, driving, track, random, orbit tapes) | 6 of 6 IDENTICAL each |
+| `fresh.sh` cameras part in full (3 seeds, plus collider boxes) | 19 of 19 IDENTICAL |
+| `run_all.sh --quick` | 168 of 168 IDENTICAL, 0 skipped (table below) |
+| Desktop F5 (`--focus-script onboard@3`) | the car from theta 75, phi -45, radius 5 |
+| Page F5 (`tools/web_checks/task46/f5.sh`) | HUD camera chase → onboard free → (drag, wheel) → chase after F1 |
+| Last camera (`tools/web_checks/task46b/last_camera.sh`) | 2 3 → bumper, written 2 3; own copy wins next run; 0 3 → cockpit |
+| Red fade (`[FADE] COLOR=1,0,0`, F3 at 3 s) | the screen red-tinted at 3.3 s |
+
+`run_all.sh --quick` on this task's code:
+
+| area | cases | identical |
+|---|---|---|
+| physics | 9 | 9 |
+| fresh (with the `cameras` part) | 60 | 60 |
+| sound | 4 | 4 |
+| render | 14 | 14 |
+| gui | 29 | 29 |
+| python | 1 | 1 |
+| replays | 6 | 6 |
+| net | 16 | 16 |
+| browser | 9 | 9 |
+| ai_page | 9 | 9 |
+| shaders | 4 | 4 |
+| launcher | 1 | 1 |
+| dumps | 6 | 6 |
+
+### Not done (→ Task 46c)
+
+- The page cannot move the mouse: the cinematic look's wrap at the desktop's edges never happens
+  there (pointer lock would give it).
+- The page's keyboard reaches the game only through the key layout: F5's keys-and-orbit way and
+  the cinematic camera's keys work on the desktop only (the default F5, mouse only, works in both).
+- Python right after its own `setCameraMode` reads the mode it asked, until the next frame.
+- The free camera's clear colour (`ac.freeCameraSetClearColor`) is not ported.
+- Delete's blur switch on the cinematic camera (`CameraForwardYebis` +0x7a0) is not carried.
+
+### Open questions
+
+- Every desktop run now writes `camera_manager.ini` into rustyAC's own cfg folder (as the game
+  writes Documents'), so a later ESC-start run begins on the last camera used. Is that wanted for
+  proof runs, or should the proofs pass a fresh `--cfg-dir`?
+- The game crashes on F3 twice or F2 on a track without camera sets; rustyAC keeps the camera
+  still instead. Fine, or should it say something?
+
+### What each step did
 
 - Step 1 + 3 (game side) + 2 (helicopter) ported: `crates/rustyac-game/src/render/onboard_free.rs`
   (`OnboardFreeCamera` F5, `CinematicCamera`, `HelicopterCamera`); the game's
@@ -75,9 +170,8 @@
   test `last_camera`; desktop run with Documents `COLOR=1,0,0`, F3 at 3 s: the screen at 3.3 s is
   red-tinted (pixels (171,51,30), (166,38,41), (191,40,34)). Black comes from the ctor's default
   and every shipped `camera_manager.ini`'s `0,0,0`.
-- Next: proofs, report, release.
 
-## Resume here
+## Task 46: where it stood at v0.46.0
 
 - Step 0 done: pit_mouse crash fixed; the page's first start compared with a new desktop player;
   606 old kept results (36 GB) moved to the server, SHA-256 matched (below).
@@ -412,7 +506,5 @@ cameras, plus the collider boxes): 16 of 16 IDENTICAL.
 
 - `camera_manager.ini [FADE] COLOR`: done in Task 46b (step 7b).
 
-- Task 46b: F5 onboard free, helicopter, the cinematic replay camera (`video_editing.ini`),
-  remembering the last camera, and comparing the camera the replay spinner, camera editor,
-  chase-cam editor and photo mode move.
+- Task 46b: done (above).
 - Task 47: TrackIR, with VR, proven with a stand-in like VR's.
