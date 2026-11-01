@@ -199,3 +199,7 @@ Task 36: personal bests (`personalbest.ini`), special-event tiers (the theme's o
 - The page takes the picked AC folder's `cfg/` as the player's starting files, while the desktop
   launcher starts from an empty Documents folder; the theme then sets other camera and AI
   defaults (g-force 1.4 against 1.0, AI level 98 against 100). Which start should the page copy?
+  **Answered in Task 46** (`docs/port/cameras.md`, step 0): both start from an empty Documents
+  folder and both fill it from the AC folder's `cfg/` (1.4 and 98, what a new AC player gets). The
+  desktop's 1.0 and 100 came from `--player-cfg`, on by default, which copies this PC's own
+  `Documents\Assetto Corsa\cfg`; with `--player-cfg none` the desktop writes the page's values.

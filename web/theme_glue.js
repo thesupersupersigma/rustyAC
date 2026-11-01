@@ -82,6 +82,8 @@
   }
 
   function answer(where, method, url, body, sync) {
+    // after ac://home this document is going away: the desktop's WebView runs none of its code
+    if (T.leaving === window) return { status: 200, text: '', mime: 'text/html' };
     if (where.kind === 'bridge') return T.request(url, method, body);
     if (where.kind === 'online') return T.online(url, method, body);
     if (where.kind === 'file') {

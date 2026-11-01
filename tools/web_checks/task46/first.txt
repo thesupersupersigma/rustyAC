@@ -1,0 +1,5 @@
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=drive]').length>0
+wait 3000
+click div.flag[data-mode=en]
+wait 60000
+log END

@@ -456,6 +456,7 @@ export async function startLauncher(env) {
       const a = launcher.request(acUrl, post);
       const text = rewrite(dec.decode(a.body));
       save();
+      if (a.events.includes('Home')) api.leaving = frame.contentWindow;
       // the shell's part, after the answer (SchemeEvent, the bridge's events)
       setTimeout(() => {
         if (host === 'uiready' || host === 'forcetotheme') enterTheme('ACIntroEvent');
