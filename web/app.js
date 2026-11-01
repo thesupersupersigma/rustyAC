@@ -2231,7 +2231,7 @@ const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F4', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F3', 'F4', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 // The page's keys that give way to the layout: a key the player's controls.ini drives with
 // keeps that job (the desktop's rule for its own plain keys).
 const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
@@ -2310,6 +2310,10 @@ window.addEventListener('keydown', (event) => {
     // game's assetto_corsa.ini allows it: the arrows move it, the right mouse button turns it)
     case 'F4':
       state.game.player_car();
+      break;
+    // Full mode: the track's TV cameras (AC's fade; again: the next set)
+    case 'F3':
+      state.game.track_camera();
       break;
     case 'KeyR':
       state.game.request(event.shiftKey ? EVENT.TO_TRACK : EVENT.RESET);

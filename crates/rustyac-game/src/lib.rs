@@ -67,6 +67,7 @@ pub mod render {
     #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
     pub mod hud;
     pub mod scene;
+    pub mod track_camera;
 }
 #[cfg(windows)]
 pub mod shm;

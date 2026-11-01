@@ -204,6 +204,9 @@ pub struct GuiLoop {
     pub last_frame: Option<rustyac_game::render::scene::CameraFrame>,
     pub mouse: (i32, i32, bool),
     pub focus: Option<rustyac_game::focus::Focus>,
+    /// Task 46: F3's track cameras, and the name of the one the last frame showed
+    pub track_cameras: rustyac_game::render::track_camera::TrackCameras,
+    pub track_camera: String,
     /// (the setup editor's car: its jobs applied, and the 64-step slice it was taken in)
     published: Option<(usize, u64)>,
     generation: u64,
@@ -339,6 +342,7 @@ impl GuiLoop {
 /// One frame of the page's game: the player's car first, then the others.
 pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo, gui: &mut GuiLoop) {
     let dt = seconds.clamp(0.0, crate::session::MAX_FRAME_SECONDS as f32);
+    let mut track_look = None;
     let camera = match (&mut gui.start_camera, &mut gui.free_camera) {
         (Some(start), _) => start.update(view, session.shape.eye_model[0], dt),
         (None, Some(free)) => {
@@ -349,8 +353,21 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
             let input = rustyac_game::render::scene::MouseCameraInput { shift: held(&[0x10, 0xa0, 0xa1]), ctrl: held(&[0x11, 0xa2, 0xa3]), up: held(&[0x26]), down: held(&[0x28]), left: held(&[0x25]), right: held(&[0x27]), look, cursor: (x, y) };
             free.update(&input, dt)
         }
+        (None, None) if session.camera.mode == rustyac_game::render::scene::CameraMode::Track && !gui.track_cameras.sets.is_empty() => {
+            let t = &mut gui.track_cameras;
+            session.camera.track_set = t.current_set;
+            t.still = gui.paused;
+            let body = rustyac_game::render::scene::model_matrix(&view.body, &session.shape);
+            let previous = gui.last_frame.as_ref().map_or(rustyac_game::view::IDENTITY, |f| f.matrix);
+            let look = t.update(&previous, &body, renderer.steer_place(0), view.lap.position, view.speed_ms, dt).expect("the track has cameras");
+            let frame = rustyac_game::render::scene::CameraFrame { matrix: look.matrix, fov: look.fov, near: look.near };
+            track_look = Some(look);
+            frame
+        }
         (None, None) => session.camera_frame(view, seconds as f64),
     };
+    gui.track_camera = track_look.as_ref().map_or(String::new(), |look| look.name.clone());
+    renderer.set_track_look(track_look.as_ref());
     gui.last_frame = Some(camera);
     let world: Vec<CarView> = std::iter::once(*view).chain(session.remote_views()).collect();
     let mut hud = hud.clone();
@@ -359,6 +376,13 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
     // (the page's focus is always the player's car: F4's fade comes back to it)
     if let Some(focus) = &mut gui.focus {
         focus.post_gui(dt, &world, &[]);
+        // F3 at its black frame: setMode(eTrack), from the track's cameras CameraTrack::nextSet
+        if std::mem::take(&mut focus.camera_change) {
+            let overlay = gui.start_camera.take().is_some() | gui.free_camera.take().is_some();
+            if session.camera.f3() && !overlay {
+                gui.track_cameras.next_set();
+            }
+        }
     }
 }
 

@@ -14,7 +14,10 @@
   Documents, the look keys and Ctrl+Numpad FOV keys; settings line IDENTICAL to the desktop's.
 - Step 2c done: the race rules' fades (restart, next session, race end, Time Attack / Drift /
   Drag) in AC's picture, desktop and page.
-- Next: F3 (track cameras and sets), then F2.
+- Step 2d done: F3, the track's TV cameras and their sets: every track's sets as the game loads
+  them and `CameraTrack::update` frame by frame IDENTICAL (`track_camera.tape`); F3 through the
+  fade on the desktop and in the page.
+- Next: F2 (the random camera).
 
 ## Step 0: housekeeping
 
@@ -88,14 +91,14 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`, chase look) | look keys | math proven (step 2a) | the keys and the look-back points not wired yet |
 | FOV (`setPlayerFov`), seat position | Numpad +/-, seat keys | missing | |
 | Fade-in (`fadeIn`) | F4, menus, race rules | done | F4's fade proven (`focus.rs`, sequence 18); the menus' fades were already drawn (`GameGui::post_gui`, Task 30; the audit's "does nothing" was the desktop's action loop, which leaves them to the GUI); the race rules' fades now too (Step 2c) |
-| F3 track cameras and sets (`CameraTrack`) | F3 | missing | |
+| F3 track cameras and sets (`CameraTrack`) | F3 | done + proven (2d) | desktop and page |
 | F2 random camera (`stepCameraRandom`) | F2 | missing | |
 | F5 onboard free (`CameraOnBoardFree`) | F5 | missing → 46b | |
 | Helicopter (`CameraHelicopter`) | | missing → 46b | |
 | Cinematic free camera (`video_editing.ini`) | replay | missing → 46b | |
 | Last camera (`loadPreviousSessionUserCamera`) | | missing → 46b | |
 | TrackIR | | missing → 47 | |
-| Page (Full mode) | F1, C, F4, F6, F7 | as desktop | F2, F3, F5, other cars' views missing |
+| Page (Full mode) | F1, C, F3, F4, F6, F7 | as desktop | F2, F5, other cars' views missing |
 
 ## Step 2a: the cameras that drive with the car, frame by frame
 
@@ -213,6 +216,56 @@ frames at 60 FPS, 2 s: black and back); `camera fade: 2.5 s at frame 626`, over 
 Not proven against the game frame by frame: which drawn frame a referee fade starts on (the
 referee runs on the physics thread; the game starts it inside its own update). The overlay
 itself is the proven one; the lengths are the referee's.
+
+## Step 2d: F3, the track's cameras
+
+`crates/rustyac-game/src/render/track_camera.rs` ports `CameraTrack` (ctor 0x1400cab20,
+`loadSet` 0x1400cb670, `nextSet` 0x1400cbc90, `update` 0x1400cbe30) and `CameraManager`
+(`load` 0x1401f48e0, `initCamerasDistanceRanges` 0x1401f48b0, `getActiveCamera` 0x1401f4820):
+the sets `data/cameras.ini`, `cameras_1.ini` ... of the track (or layout), each camera's
+matrix, fields of view, in/out points, planes, exposures, depth of field, shadow ranges, path
+(`SPLINE` csv, turned by `SPLINE_ROTATION` as `loadSet` does) and its distances to the AI line;
+`system/cfg/camera_track.ini` (distance scale, upward offset, wobble). Per frame: the camera
+whose in/out range holds the focused car's place along the lap, aimed at the steering wheel's
+place in the car (`orgSteerMatrix`) plus the upward offset, zooming with the distance, wobbling
+with the car's speed, or riding its path for `SPLINE_ANIMATION_LENGTH` seconds.
+
+Proof: `car_oracle start-camera-micro` now also writes `track_camera.tape`: for every track and
+layout with a `data/cameras.ini` (58 of them), the game's own `CameraManager` reads every set
+(its cameras' fields and the paths' points after `loadSet`'s turn are on the tape), then the
+game's `CameraTrack::update` runs on a made-up car moving along a made-up line, with random
+pauses (still camera) and F3 presses (`nextSet`), with the speed and replay slow motion.
+`start_camera_check` reads the same sets with the port and runs the port's update on the same
+inputs. `FRESH_PARTS=cameras`, seeds 1 to 3:
+
+| seed | track cameras |
+|---|---|
+| 1 | IDENTICAL (3243 cameras of 183 sets, 59972 frames) |
+| 2 | IDENTICAL (3243 cameras of 183 sets, 59972 frames) |
+| 3 | IDENTICAL (3243 cameras of 183 sets, 59972 frames) |
+
+(First try: every camera with a `SPLINE_ROTATION` differed: the oracle had not turned the paths.
+`ucomiss; je` in `loadSet`: a rotation that is not a number is no turn; the port does the same.)
+
+Keys: F3 (`Sim::onKeyDown` 0x72) goes through the camera fade like F4 (`registerToFadeInEvent`):
+at the black frame `setMode(eTrack)`; F3 while the track's cameras show moves to the next set.
+F1 and F6 leave them (F1 to the view driven with before, `lastDrivingMode`). The renderer takes
+the camera's far plane, exposures and shadow ranges in track mode; the depth of field is not
+drawn by the port (no camera draws it). `currentGlobalCameraIndex` is 6 + the set, as the game's.
+
+Desktop: `rustyac.exe --car bmw_m3_e30 --track magione --camera track --autodrive --no-race-ini
+--duration 10 --focus-script track@5 --bench-shot f3.png`: `TRACK CAMERAS: set 1 TV 2`, a TV
+camera filming the car. `--camera track` starts on them, `track@<s>` in `--focus-script` is F3.
+
+Page (Full mode), `tools/web_checks/task46/cams.sh` (the HUD hook now gives `track_camera`, the
+name of the camera shown): F3 → `track 0`, camera `T1`; F3 again → `track 1`, camera `1`; F1 →
+`cockpit`. The page loads the same sets from its folder (the track's `data` and `ai` and
+`system/cfg` were already among its files: no new files).
+
+Not proven end to end against the game: the inputs the desktop hands the camera (the car's model
+matrix is 2a's proven one; the steering wheel's place, the place along the lap and the speed are
+the port's own, proven elsewhere). shortcut: in a replay the track camera does not slow with
+slow motion (the game times `dt` by the replay's speed); fix when replays get F3 (Task 46b).
 
 ## Not done
 

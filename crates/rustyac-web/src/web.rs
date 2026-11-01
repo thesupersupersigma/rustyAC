@@ -560,6 +560,10 @@ impl Game {
         // Task 42b: a session that begins in the ESC menu shows AC's start camera until "Drive";
         // without AC's GUI nobody could press "Drive", so it is pressed here (as rustyac.exe)
         let mut gui = crate::full::GuiLoop::default();
+        if full.is_some() {
+            let setup = &session.sim.setup;
+            gui.track_cameras = rustyac_game::render::track_camera::of_track(&Path::new(ROOT).join("content/tracks").join(&setup.track), &setup.layout).unwrap_or_default();
+        }
         if session.sim.setup.esc_start {
             if full.as_ref().and_then(|full| full.gui.as_ref()).is_some_and(|gui| gui.has_esc_menu()) {
                 use rustyac_game::render::scene::StartCamera;
@@ -938,6 +942,16 @@ impl Game {
         true
     }
 
+    /// Task 46, Full mode: F3, the track's TV cameras (through the camera's fade; again: their
+    /// next set), as rustyac.exe.
+    pub fn track_camera(&mut self) {
+        if self.full.is_none() {
+            return;
+        }
+        let world: Vec<CarView> = std::iter::once(self.view).chain(self.session.remote_views()).collect();
+        self.gui.focus.get_or_insert_with(|| rustyac_game::focus::Focus::new(0)).command(rustyac_game::focus::FocusCommand::TrackCamera, &world, &[]);
+    }
+
     /// Task 42c, Full mode: F4, back to the player's car (`Sim::onKeyDown`: only with two cars
     /// or more, through the camera's fade). The page's focus never leaves it, so only the fade
     /// shows.
@@ -982,7 +996,7 @@ impl Game {
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
              \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}, \
              \"tc_text\": {}, \"abs_text\": {}, \"bias_text\": {}, \"tc_level\": {}, \"tc_levels\": {}, \"tc_fitted\": {}, \
-             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}, \"camera_settings\": {}, \"look\": {}, \"onboard_fov\": {:?}, \"head\": {:?}}}",
+             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}, \"camera_settings\": {}, \"look\": {}, \"onboard_fov\": {:?}, \"head\": {:?}, \"track_camera\": {}}}",
             n(v.speed_kmh),
             v.gear,
             n(v.rpm),
@@ -1024,7 +1038,8 @@ impl Game {
             json_text(&self.session.camera.settings_line()),
             self.session.camera.actions,
             self.session.shape.onboard_fov,
-            self.session.camera.cockpit.head_animation
+            self.session.camera.cockpit.head_animation,
+            json_text(&self.gui.track_camera)
         )
     }
 
