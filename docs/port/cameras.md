@@ -1,5 +1,16 @@
 # AC's cameras (Task 46)
 
+## Task 46b: the rest of AC's cameras
+
+### Resume here
+
+- Step 1 + 3 (game side) + 2 (helicopter) ported: `crates/rustyac-game/src/render/onboard_free.rs`
+  (`OnboardFreeCamera` F5, `CinematicCamera`, `HelicopterCamera`); the game's
+  `CameraOnBoardFree::update`, `CinematicFreeCamera`'s moves and fov keys and
+  `CameraHelicopter::update` against them frame by frame (`orbit_camera.tape`, new in
+  `car_oracle start-camera-micro`): IDENTICAL on seeds 1 and 2 (60200 lines each).
+- Next: F5 and the helicopter on the desktop and in the page, then steps 3b-7.
+
 ## Resume here
 
 - Step 0 done: pit_mouse crash fixed; the page's first start compared with a new desktop player;
