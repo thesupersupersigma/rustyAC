@@ -4,9 +4,10 @@ Every proof the reports claim reruns from here, one area at a time or all at onc
 
     bash tools/proofs/run_all.sh --quick            # every area on a small sample (tools/proofs/quick/), ≈ 30 min
     bash tools/proofs/run_all.sh --changed v0.38.4  # the areas the files changed since a tag ask for, every case
-    bash tools/proofs/run_all.sh [--full]           # every area, every case, recordings made again (milestones)
+    bash tools/proofs/run_all.sh [--full]           # every area, every case, against the game's kept results (milestones), ≈ 4.5 h
+    bash tools/proofs/run_all.sh --rerecord         # the same, and the game's results made again and held against the kept ones
     bash tools/proofs/run_all.sh gui net            # only these areas (with any of the above)
-    bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different=)
+    bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different= skipped=)
 
 Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
 `--dry-run` only says which areas would run (and, with `--changed`, why: each changed file and
@@ -16,29 +17,42 @@ change asks for the areas of the crates it reaches, `lock_crates.py`, or every a
 can't tell). `bash tools/proofs/areas_test.sh` checks the rules on made-up lists of files.
 
 The game's recordings that `fresh` compares against are made once and kept (xz) in
-`re/gold/fresh/rec/<name>/<key>/` (the key covers the oracle's arguments, the files they name and
-the source of `tools/car_oracle`). `--quick` and `--changed` compare against those; `--full` and
-`--rerecord` record every one again and count it DIFFERENT if its bytes are not the kept ones,
+`re/gold/fresh/rec/<name>/<key>/` (the key covers the oracle's arguments, the files they name, the
+source of `tools/car_oracle` and the install: `acs.exe`'s bytes and the name, size and time of every
+file of `system/`, `content/cars/`, `content/tracks/`; a change to any of them records again).
+`--quick`, `--changed` and `--full` compare against those; `--rerecord` records every one again and
+counts it DIFFERENT if its bytes are not the kept ones,
 apart from the game's heap address (the `bounce_vel` the game never writes into its mesh contact
 joints: the header lines `mesh_bounce_vel` / `mesh_geom_high`, and in a several-car recording the
 words `world.contactHash` / `world.meshBounceVel` of a step where that word is each run's own
 address; `same_rec.py`) and the port's own `*.result.txt` (nothing kept is ever replaced; below 18 GB of free disk, `PROOF_KEEP_MIN_GB`, nothing new is
-kept and those cases are recorded on the spot as before). `dumps` builds the last release's rustyac.exe once per tag into
-`target/proofs/old_exe/<tag>/`. The shared oracles are built once per run. The areas that never
-load the game's code (net, browser, ai_page, shaders) run beside the others, which still run one at
-a time; each lane builds with 4 jobs.
+kept and those cases are recorded on the spot as before). The port's crates are not in the key: a
+port change can only turn a kept result's case DIFFERENT, never hide one. `dumps` builds the last
+release's rustyac.exe once per tag into `target/proofs/old_exe/<tag>/` and keeps its dump of each
+drive in `re/gold/dumps/` (keyed on that exe's bytes, the drive and the install; `--rerecord`
+dumps again and holds it against the kept one).
+
+Every program more than one area runs (the four oracles, rustyac.exe, replay_hash, track_survey,
+rustyac-launcher) is built once before any area starts, with 8 jobs, so no area relinks an exe
+another lane is running. Then four lanes run side by side, the areas of a lane one after the other:
+`render gui python` (the render oracle), `fresh sound replays launcher` (the car oracle and the
+other game-side tools), `physics dumps shaders` and `net browser ai_page` (never load the game's
+code); each lane builds with 2 jobs. Each area writes `times.tsv` (seconds per case). A case that
+cannot run is never dropped: the area counts it as skipped with its reason, and the run prints
+every skipped case after the table (in red when there is one) and in `target/proofs/skipped.txt`.
 
 What a run needs: this repository, the Assetto Corsa install (read only; `AC_ROOT` if it is not the
 Steam default), the ignored `oracle/` folder (the saved game recordings of Tasks 9 to 34) and the
 ignored `re/gold/` folder (what was re-made in Task 38c, see `re/gold/README.md`). Nothing in
 `re/scratch/` is read. Output goes to `target/proofs/<area>/` (`PROOF_OUT` to move it); each area
-deletes its own output before it starts. One game-loading area at a time: the oracles load the game
-into their own process, and two at once make the render oracle's game side flaky.
+deletes its own output before it starts. One render-oracle area at a time: two render compares at
+once make the render oracle's game side flaky (the render oracle and the car oracle side by side
+are fine: Task P1's full runs).
 
 | Area | Script | What is compared | Inputs |
 |---|---|---|---|
 | physics | `physics.sh` | the saved one-car recordings (`chassis_compare run --dir oracle/car*`) and several-car recordings (`car_oracle multi-check` at 0, 1, 8 threads) | `oracle/` |
-| fresh | `fresh.sh` | recorded again from the game and compared on the spot: the F2004's scenarios, conditions, 4WD, KERS/ERS, suspensions, contacts, the road under the wheels on every track, the referee's micro drives, race.ini, the several-car runs of `multi_fresh.txt` | AC, `re/gold/fresh/` |
+| fresh | `fresh.sh` | the game's recordings (kept, or made when their key is new) against the port: the F2004's scenarios, conditions, 4WD, KERS/ERS, suspensions, contacts, the road under the wheels on every track, the referee's micro drives, race.ini, the several-car runs of `multi_fresh.txt` | AC, `re/gold/fresh/` |
 | sound | `sound.sh` | the audio oracle's 18 tapes (game's FMOD calls against the port's), the DSP check, three drives end to end | `oracle/audio*`, `oracle/game` |
 | render | `render.sh` | the 107 frames and sequences of `render_list.txt` (Tasks 20 to 23), call log and pixels | `oracle/audio`, `oracle/render_tapes` |
 | gui | `gui.sh` | the 122 GUI sequences of `gui_list.txt` (Tasks 29 to 34) | `cardata/`, `oracle/t32` |
@@ -49,7 +63,7 @@ into their own process, and two at once make the render oracle's game side flaky
 | ai_page | `ai_page.sh` | Task 37c's Quick Race: desktop replay, native `race_proof`, the page in headless Chrome | `re/gold/ai_page/`, `re/gold/web/pack/` |
 | shaders | `shaders.sh` | `dxbc_reflect`, `shader_table`, `shader_proof` on SwiftShader and WARP against Task 38b's tables | `re/gold/shaders/` |
 | launcher | `launcher.sh` | the 12 request lists of `re/gold/launcher` (8 recorded from the click scripts of `launcher/` by `launcher_record.sh`, 4 written by hand), the game's own handlers (`tools/launcher_oracle`) against the port, answers and the player folder left behind | `re/gold/launcher/`, the .NET SDK |
-| dumps | `dumps.sh` | every drive's state dump, the last release's rustyac.exe against this one | `oracle/game` |
+| dumps | `dumps.sh` | every drive's state dump, the last release's rustyac.exe (kept dumps) against this one | `oracle/game`, `re/gold/dumps/` |
 
 Not an area (no same-or-different verdict, a GPU and SwiftShader differ by rounding):
 `render_wgpu.sh` (Task 38h) draws the cases of `render_list.txt` once more with the port on kgl's

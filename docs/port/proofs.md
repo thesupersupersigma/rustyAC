@@ -8,12 +8,147 @@ the ignored `oracle/` (saved game recordings of Tasks 9 to 34, as they always we
 
     bash tools/proofs/run_all.sh --quick            # every area on a sample, ≈ 25 min (Task 38f)
     bash tools/proofs/run_all.sh --changed v0.38.4  # what the files changed since a tag touch
-    bash tools/proofs/run_all.sh                    # (= --full) every area, every case; table in target/proofs/table.md
+    bash tools/proofs/run_all.sh                    # (= --full) every area, every case, ≈ 4.5 h; table in target/proofs/table.md
+    bash tools/proofs/run_all.sh --rerecord         # the same, the game's results made again and held against the kept ones
     bash tools/proofs/run_all.sh gui                # one area
     RENDER_ONLY='r21_.*' bash tools/proofs/render.sh    # part of one area
 
 `tools/proofs/README.md` says what each area compares and needs; `re/gold/README.md` how each
 file under `re/gold/` was made and how to make it again.
+
+## Task P1: a faster full run (v0.45.3)
+
+**In plain words.** The full run took 10 h 33 min at M1 (6 h 58 min, then 3 h 35 min again for
+the two areas a build race had broken). It now takes **4 h 26 min**, with the same cases (1,678;
+M1's 1,687 counted 9 extra "recorded again" lines, see below) and all of them IDENTICAL. Nothing
+was skipped, sampled or loosened: the run does less work twice and more work at once.
+
+- **The game's results are kept, not made again every full run.** `fresh` already kept its
+  recordings (Task 38f) but `--full` recorded every one again; now `--full` compares the port
+  against the kept ones and only `--rerecord` makes the game's side again (and holds it against
+  what is kept). The key now also covers the install (`acs.exe`'s bytes and the name, size and
+  time of every file of `system/`, `content/cars/`, `content/tracks/`). `dumps` keeps the last
+  release's dump of each drive in `re/gold/dumps/` (keyed on the old exe's bytes, the drive, the
+  install), so each drive runs once instead of twice.
+- **Four lanes.** The render oracle's areas (render, gui, python), the car oracle's and other
+  game-side areas (fresh, sound, replays, launcher), the port-only physics/dumps/shaders, and the
+  browser-side net/browser/ai_page run side by side. A render or GUI compare keeps about 1.5 of 16
+  threads busy (WARP draws on one core; measured at 8-11 % CPU), so lanes cost each other little.
+  Only two lanes load game code (the one exception: fresh's `drift_drive` GUI sequence runs the
+  render oracle beside the render lane; IDENTICAL in every run).
+- **Every shared program built once before the first area** (the four oracles, rustyac.exe,
+  replay_hash, track_survey, rustyac-launcher), so no area relinks an exe another lane is running
+  (M1's "Access is denied") and a source change during the run changes nothing in it.
+- **Nothing drops out silently.** `skip <case> <reason>` replaces every `left_out.txt` /
+  `refused.txt` / stderr note; each area's tally has `skipped=`, the run's table a skipped column,
+  and the run prints every skipped case with its reason after the table (red when any). physics
+  no longer leaves out a recording because its `.result.txt` says DIFFERENT (`multi-check` writes
+  that file itself, so one bad run hid a recording for good): the nine it leaves out are named in
+  `physics.sh` with their reason. Each area writes `times.tsv` (seconds per case).
+- **Step 0's leftovers of M1.** The game's own variance was the car oracle's, not the game's:
+  (1) the 250 GTO's solid axle tail-jumps into the body's force functions, so the "call site" the
+  oracle wrote was an address inside its own thunk, a new one every session; such calls now get
+  one fixed site (`OUTSIDE_ACS`), the force values never differed. (2) The multilink's
+  `packerRange` is never written by the game (heap garbage, `suspension_ml.rs`); the oracle
+  zeroed it after the setup screen had already copied the garbage into its `PACKER_RANGE_*` item,
+  hence a random `setup_changes` line. The oracle now gives that item what 0 gives. No seed exists
+  to record: two sessions now give the same bytes for both cars (pt_autoshift, wc_stops,
+  wc_spirited), and the port is bit-exact on them. The six stale `oracle/t34` pit-mouse recordings
+  (mp_1, mp_m1 to mp_m5) were recorded again with today's oracle: IDENTICAL at 0, 1, 8 threads.
+
+| area | M1 | P1 first run (every key new) | P1 full run |
+|---|---|---|---|
+| physics | 39m39s | 94m08s | 85m20s |
+| fresh | 211m51s (alone) | 380m40s | 205m02s |
+| sound | 3m20s (alone) | 3m40s | 3m49s |
+| render | 78m53s | 83m17s | 75m27s |
+| gui | 93m07s | 184m35s | 111m19s |
+| python | 0m18s | 3m12s | 0m25s |
+| replays | 52m37s | 51m36s | 50m16s |
+| net | 21m52s | 60m23s | 46m14s |
+| browser | 72m10s | 118m01s | 84m12s |
+| ai_page | 32m16s | 54m06s | 31m26s |
+| shaders | 10m37s | 6m00s | 6m00s |
+| launcher | 6m16s | 5m31s | 5m06s |
+| dumps | 72m36s | 177m06s | 82m25s |
+| **wall clock** | **10h33m** (6h58m + 3h35m) | 7h22m | **4h26m** |
+
+An area's own time can be longer than at M1 (physics, net, browser): it now shares the machine
+with three other lanes; the wall clock is what counts. The first run made every kept result anew
+(the oracle's source changed, so every key did) and ran while the game itself was running for a
+while; it is not a measurement. Lanes in the full run: car oracle 4h24m (fresh 205m, replays
+50m), render oracle 3h07m, physics/dumps/shaders 2h54m, net/browser/ai_page 2h42m.
+
+Where the time still goes (the full run's `times.tsv`): fresh's referee micro drives, 200 of them
+run on the game each time (62 min, not kept: see Not done), survey's 76 rustyac.exe drives
+against kept recordings (30 min), multi (20 min), rays (13 min); gui's `setup_tabs@<car>` (eight
+of them 467-572 s each); physics's several-car checks (up to 390 s each); dumps's Nordschleife
+drives (up to 416 s each); net's whole `check.sh` (46 min, booked on its first case).
+
+Same cases: every case name of the full run is the first run's, and physics's and browser's are
+M1's too (M1's lists of the other areas were not kept). fresh has 681 cases against M1's 690: M1's
+`--full` re-recorded and added one DIFFERENT line per recording whose new bytes were not the kept
+ones (10, all from before the step-0 fixes: the 250 GTO and multilink recordings); these are
+checks of the game against itself, now made by `--rerecord`; the port's cases are 681 against
+M1's 680. Skipped: 26, each listed with its reason (9 physics recordings, 10 layouts the
+game refuses, 1 game-replay, 5 user replays the game's loader crashes on, 1 drive the old exe
+dumps nothing for).
+
+Planted differences: one small wrong change per area, all 13 on a throwaway branch (deleted, never
+merged), one full run with the same scripts (`re/scratch/taskP1/plants.py`, results in
+`re/scratch/taskP1/plants_out/`, 5h04m). Every area caught its own:
+
+| area | planted change | the area's verdict |
+|---|---|---|
+| physics | one-body aero `* 0.5` → `* 0.51` (`aero.rs`) | 1 DIFFERENT: `oracle/car_wc_oldaero/wc_spirited`, the one recording on that code |
+| fresh | drift level `+ 1` → `+ 2` (`drift.rs`) | `mode extras 6 7` and `6 12` DIFFERENT (and 76 game-replays, from the dumps plant) |
+| sound | engine `rpms` parameter `+ 1.0` (`audio/car.rs`) | 21 of 22 DIFFERENT (the DSP check does not use it) |
+| render | sky dome radius 10 → 10.5 (`sky.rs`) | 129 of 129 DIFFERENT (static cube map first) |
+| gui | `app_wings` header `YAW` → `YAV` | `app_wings` DIFFERENT (225 frames); `pit_mouse` too, see Open questions |
+| python | `ac.getCarLeaderboardPosition` + 1 (`python/ac.rs`) | 2 of 2 DIFFERENT (`calls.txt` line 138) |
+| replays | recorded gear + 1 (`recorder.rs`) | 14 DIFFERENT (`multi ... --replay`) |
+| net | car update steer `+ 127` → `+ 126` (`car_update.rs`) | 80 of 80 DIFFERENT |
+| browser | one value dropped from the dump on wasm only (`dump.rs`) | 223 of 226 DIFFERENT (the 3 page cases do not dump) |
+| ai_page | race_out key `DRIVER_NAME` → `DRIVER_NAMES` (`web/race.rs`) | 2 DIFFERENT (native `race_proof`) |
+| shaders | sampler binding kind read as 5 (`dxbc/lib.rs`) | `dxbc_reflect` DIFFERENT |
+| launcher | `updreplay`'s error `No such file` → `No such file.` | `launcher replays` DIFFERENT |
+| dumps | dumped word `^ 1` (`dump.rs`) | 222 of 222 DIFFERENT |
+
+Keyed results: with the car oracle's source changed by one comment line, `fresh` (conditions part,
+7 recordings) recorded all 7 again and kept them under new keys; changed back, it read the kept
+ones again (0 recorded); with `--rerecord` it recorded the 7 again and found them the same bytes as
+the kept ones (`re/scratch/taskP1/keyed.sh`, `keyed.txt`).
+
+Kept results on disk: `re/gold/fresh/rec/` 50 GB (every key of every task since 38f; never pruned,
+per the rules; the newest key of each label is about 12 GB), `re/gold/dumps/` 0.4 MB, all on C: (23 GB free at the end, 46 GB at the start).
+The external D: drive was not connected during the task.
+
+### Not done
+
+- **Keeping the game's side of render and GUI compares.** Both sides already run at once, so the
+  win is at most the gap between the two (about 17 % per case; more in `setup_tabs`), and the
+  game's side writes files into the shared scratch root (`py_log.txt`, the documents' cfg files,
+  car ini files) that the comparison reads; a port-only run would read files the game did not write
+  in that run. Not worth the risk of a false IDENTICAL.
+- **Keeping replays, race-micro, mode-micro, collide, rays.** These oracle commands run the game and
+  the port in one process and compare live objects (e.g. `ReplayProof` from the game's own
+  recorder); keeping the game's side means splitting the oracle first.
+- **A fifth lane / two render-oracle lanes.** Two render compares at once still make the game's side
+  load-flaky (Task 21); the car-oracle lane is now the critical path (4h24m).
+- **D: drive.** Not connected; not measured.
+
+### Open questions
+
+- The launcher's `GET ac://utility/get` once answered 66 display modes on the game's side (the
+  22-mode list three times) against the port's 22, in the first run only: Windows enumerated the
+  modes differently for a moment (EnumDisplaySettings). The full run and every earlier one: 22 = 22.
+- In the planted run, GUI `pit_mouse` failed on the game's side, not on a plant: the game crashed
+  in `SetupScreen::isFixedFuel` (access violation, `this` = garbage) from a pit-menu fuel button.
+  `gui_ac_pit.rs` puts in its own setup screen only when `escMenu+0x1a8` reads 0; if that word is
+  uninitialised heap, the game follows garbage. IDENTICAL in the two other full runs. Likely the
+  same kind of uninitialised read as step 0's; not fixed here.
+- `re/gold/fresh/rec/` grows by ~12 GB each time the car oracle's source changes; the rules forbid
+  deleting under `re/gold/`, so old keys stay until the user prunes them.
 
 ## Task 38f: fast proofs (v0.38.5)
 

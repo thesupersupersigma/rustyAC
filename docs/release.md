@@ -32,7 +32,7 @@
    ```
    bash tools/proofs/run_all.sh --quick                 # every release: a sample of every area (≈ 30 min)
    bash tools/proofs/run_all.sh --changed <last tag>    # every release: all of what the changed files touch
-   bash tools/proofs/run_all.sh --full                  # milestones only: everything, recordings made again
+   bash tools/proofs/run_all.sh --full                  # milestones only: everything, against the game's kept results (≈ 4.5 h)
    ```
 
    Anything a new proof needs goes into `tools/proofs/` (scripts, lists; committed) or
