@@ -2,14 +2,20 @@
 
 ## Resume here
 
-- Done: step 1 (audit), step 2 (triple screen camera, HUD switch, render oracle `--triple`),
-  step 3 (TrackIR: `crates/rustyac-game/src/trackir.rs`, the cockpit camera's `head`, proven in
-  the `cameras` part of `tools/proofs/fresh.sh`), step 4 (Steam's start: `crates/rustyac-game/src/steam.rs`,
-  DLC keys in the content readers, proven in the same part).
-- Next: proofs (`run_all.sh --quick`, render + cameras), versioning. Achievements, stats and
-  leaderboards are Task 47c.
+- Task 47 is done and tagged v0.47.0: triple screens (desktop and the page's Full mode),
+  TrackIR head tracking, Steam's start (name, id, DLC keys). Everything proven against the
+  game's code with stand-ins; nothing tried on real triple screens, a real TrackIR or a real
+  Steam session.
+- Task 47c (left over): Steam achievements, stats, leaderboards, Friends Leaderboard rows and
+  avatar (`SteamInterface`, with `--steam-achievements on` off by default); the Triple screen
+  app (`TripleScreenManager`, its spinners writing triple_screen.ini, desktop and page); the
+  triple paths of SessionLeaderboard, FuelLight, DriveThroughPenaltyAvatar,
+  EndSessionDisplayer, SystemNotification and the name tags (`DriverNameDisplayer`).
+- Proofs at the end: `run_all.sh --quick` 156 cases, 0 different (47 min); `render` with
+  `RENDER_ONLY='r47_0[1-3]'` 18/18 and `fresh` with `FRESH_PARTS=cameras` 25/25.
 - Scratch: `re/scratch/task47/` (disassembly of the triple camera: `bvsp.txt`, `rp.txt`,
-  `rccp.txt`, `cts_ctor.txt`; edit scripts; render oracle runs in `ro/`).
+  `rccp.txt`, `cts_ctor.txt`; TrackIR: `onboard_update.txt`, `getoffsets.txt`; edit scripts;
+  render oracle runs in `ro/`, Steam tapes in `steam/`, the page's triple frames in `page/`).
 
 ## 1. Audit
 
