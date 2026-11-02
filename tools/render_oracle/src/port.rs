@@ -383,6 +383,18 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         }
     }
 
+    // Task 47b, Sim::Sim with a VR camera: GUI::init3DMode and the 3D_GUI_NODE
+    let gui3d = match (profile.vr, &car) {
+        (true, Some(car)) => {
+            let (w, h) = (graphics.video.width, graphics.video.height);
+            let g = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::gui3d::Gui3d::new(&mut graphics, w, h, car.body_transform, car.driver_eyes_position)));
+            let node = scene.node_event("3D_GUI_NODE");
+            scene.add_child(unblurred, node);
+            scene.add_event_handler(node, g.clone());
+            Some((g, node))
+        }
+        _ => None,
+    };
     let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new(), vr: String::new() };
     let (mut last_pause, mut last_status) = (false, -1);
     let (mut lights_pause, mut lights_status) = (false, -1);
@@ -558,6 +570,40 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         }
         let started = std::time::Instant::now();
         graphics.begin_scene();
+        macro_rules! hud {
+            () => {
+        // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
+        if let Some(gates) = &gates {
+            let mut gates = gates.borrow_mut();
+            let count = gates.overlays.len();
+            gates.set_active(step.extra.gate >= 0, step.extra.gate.max(0) as usize, count);
+        }
+        // Game::renderHUD: PitStop::renderHUD, the marker's part
+        if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {
+            let b = scene.nodes[car.body_transform].matrix.m[3];
+            marker.render_hud(&mut scene, &crate::frames::pit_inputs(step, [b[0], b[1], b[2]]));
+        }
+        // Game::renderHUD, after the scene: StartingLights::renderHUD
+        if let Some((lights, _)) = &mut start_lights {
+            if lights.is_active && lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts) {
+                lights.render_lamps(&mut graphics);
+            }
+        }
+            };
+        }
+        // Sim::renderScene with the 3D GUI: GUI::preRender3D (an active GUI without forms:
+        // doRender2D's states and its mark), Game::renderHUDOnDemand, GUI::renderVPointer
+        if let Some((g, _)) = &gui3d {
+            let mut g = g.borrow_mut();
+            g.mouse_pos = crate::ac::vr_mouse(index);
+            g.pre_render(&mut graphics, crate::frames::DT);
+            graphics.reset_render_states();
+            graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
+            graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
+            graphics.trigger_query("GUI");
+            hud!();
+            g.render_pointer(&mut graphics);
+        }
         scene.traverse(root);
         // Sim::renderScene: the mirror before the picture
         // (MirrorTextureRenderer::render: the focused car's rear view)
@@ -570,7 +616,13 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             if mirror.wants_render(step.camera.mode, step.camera.drivable_mode, active) {
                 let nodes = car.visibility_nodes();
                 let s = rustyac_render::mirror::MirrorScene { root, particles, before_cars, ideal_line, body_transform: car.body_transform, car_nodes: &nodes, mirror_position: car.mirror_position };
+                if let Some((_, node)) = &gui3d {
+                    scene.nodes[*node].is_active = false;
+                }
                 mirror.render(&mut graphics, &mut scene, camera.base.sky_box.as_mut(), &s);
+                if let Some((_, node)) = &gui3d {
+                    scene.nodes[*node].is_active = true;
+                }
             }
         }
         camera.render(&mut graphics, &mut scene, Some(blurred), unblurred, root, 1.0 / 60.0)?;
@@ -599,22 +651,9 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
             graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
         }
-        // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
-        if let Some(gates) = &gates {
-            let mut gates = gates.borrow_mut();
-            let count = gates.overlays.len();
-            gates.set_active(step.extra.gate >= 0, step.extra.gate.max(0) as usize, count);
-        }
-        // Game::renderHUD: PitStop::renderHUD, the marker's part
-        if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {
-            let b = scene.nodes[car.body_transform].matrix.m[3];
-            marker.render_hud(&mut scene, &crate::frames::pit_inputs(step, [b[0], b[1], b[2]]));
-        }
-        // Game::renderHUD, after the scene: StartingLights::renderHUD
-        if let Some((lights, _)) = &mut start_lights {
-            if lights.is_active && lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts) {
-                lights.render_lamps(&mut graphics);
-            }
+        // (VR: in the GUI's target before the scene)
+        if gui3d.is_none() {
+            hud!();
         }
         // Game::evOnPostGui: the camera manager's fade
         if frame.fade_at.is_some() && !(fade_time >= fade_total * 2.0) {

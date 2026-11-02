@@ -7,7 +7,8 @@
 - Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
 - Step 1 done: the audit table below.
 - Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Step 3 next.
-- Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). `rustyac.exe` uses it with video.ini `MODE=OCULUS`. Next: step 4 (the HUD in the headset).
+- Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). `rustyac.exe` uses it with video.ini `MODE=OCULUS`.
+- Step 4 done: `gui3d.rs` is the game's GUI in the headset, proven with both runtimes (render cases `r47b_07..08`, and every VR case with a car). Next: step 5 (the page: no VR).
 
 ### Step 0: the case count
 
@@ -129,6 +130,39 @@ Not tried live: this PC has no Oculus runtime and no headset.
 
 Not done here: post-processing in VR (`renderYebis`; refused as for OpenVR), OculusManager's
 Rift audio device choice (oculus.ini `AUTOSELECT_RIFT_AUDIO_DEVICE`).
+
+### Step 4: the HUD and apps in the headset
+
+`crates/rustyac-render/src/gui3d.rs` is `ksgui::GUI`'s 3D mode: `init3DMode` (a colour target
+the size of the window, content/gui/oculus_pointer.png), `preRender3D` (the pointer's speed,
+the target bound and cleared), `renderVPointer` (the pointer, orange, larger while the mouse
+moves fast) and `render3D`, the handler of the `3D_GUI_NODE` in the unblurred part of the scene:
+in each eye's transparent pass the target goes on 24 quads, 140 degrees of a cylinder of 0.4 m
+around the driver's eyes (car.ini `[GRAPHICS] DRIVEREYES`), 0.45 m high, turning with the car
+body, not with the head. The flat GUI and HUD are not drawn (`isRenderingGui` off), so all the
+apps and HUD the game would show flat (forms, the app bar, the HUD objects, the start lights)
+are drawn into that target instead, with the window's size and the ordinary mouse. The node is
+hidden while the rear-view mirror is drawn. Nothing places it differently: there is no setting.
+
+The proof: in a VR run with a car the render oracle gives the game a GUI with what these
+functions read (active, no forms, the app bar hidden, the pointer showing; the mouse moving by a
+script), calls the game's `init3DMode`, adds the node with the game's own handler (the lambda of
+`Sim::Sim`, `_Do_call` 0x140196a30), and per frame calls `preRender3D`, the oracle's HUD pass
+(the gates, the pit marker, the start lights) and `renderVPointer` before the scene, as
+`Sim::renderScene` does; the port does the same with `gui3d.rs`.
+
+| case | what | result |
+|---|---|---|
+| `r47b_07` | OpenVR, Spa, the F2004's dash on its lap, start lights in the GUI, 29 frames | IDENTICAL in all 29 frames (log and pixels, both eyes) |
+| `r47b_08` | the same on Oculus | IDENTICAL in all 29 frames |
+| `r47b_02/03/05/06` | the earlier VR cases with a car, now with the GUI on its cylinder | all IDENTICAL again |
+| `r22c_09`, `r22c_13`, `r22c_17` | flat cases with start lights, pit marker, gates (the HUD pass moved into a shared block) | IDENTICAL |
+
+In `rustyac.exe` the headset GUI is made with the first car; its GUI (forms, app bar, apps) and
+HUD go into the target, one frame late (docs/port/differences.md). Not done: `FormOpenVR` (the
+OpenVR app with the supersampling and eye-distance spinners: openvr.ini can be edited by hand),
+the apps and forms drawn in the oracle's VR runs (the GUI oracle's own sequences are flat; the
+drawing code is the flat code, proven there).
 
 ## Task 47: where it stood at v0.47.0
 

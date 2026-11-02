@@ -65,6 +65,15 @@ does something else on purpose, each with its reason and the report that has the
   (`CAMERA: the track has no camera sets …`, once a run), no message on screen. No shipped track
   lacks `cameras.ini`. (cameras.md)
 
+- **VR: the GUI in the headset is a frame late in rustyac.exe.** The game draws its GUI and HUD
+  into the headset's GUI target at the start of the scene (`Sim::renderScene`'s `preRender3D`,
+  `renderHUDOnDemand`, `renderVPointer`); rustyac.exe updates its GUI after the scene, so it draws
+  them there and the eyes show them in the next frame. The pieces themselves are the game's
+  (proven in the render oracle, which keeps the game's order). (screens_steam.md, Task 47b)
+- **VR: Oculus only with a signed runtime, OpenVR only with the game's own openvr_api.dll.** As
+  the game: LibOVRRT64_1.dll must carry Oculus' Authenticode signature, else the plain camera.
+  (screens_steam.md, Task 47b)
+
 ## Crashes and stops the game has that rustyAC avoids
 
 - **Triple screens without a full `cfg/triple_screen.ini`** (video.ini `[CAMERA] MODE=TRIPLE`): the

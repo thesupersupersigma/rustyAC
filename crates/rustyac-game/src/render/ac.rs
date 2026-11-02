@@ -616,6 +616,9 @@ pub struct AcRenderer {
     options: AcOptions,
     #[cfg(all(windows, not(feature = "wgpu")))]
     hud: HudPass,
+    /// Task 47b: the GUI in the headset (`GUI::init3DMode`) and its `3D_GUI_NODE`
+    #[cfg(all(windows, not(feature = "wgpu")))]
+    gui3d: Option<(std::rc::Rc<std::cell::RefCell<rustyac_render::gui3d::Gui3d>>, NodeId)>,
     /// AC's GUI and HUD (none: only the 2D pass's states are set, as with no form on the screen)
     pub gui: Option<Box<super::gui::GameGui>>,
     /// Task 43c: FormWings' handler of the render-finished node (made with the GUI)
@@ -860,7 +863,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1584,6 +1587,17 @@ impl AcRenderer {
             semaphore.update(&mut self.scene, tts);
         }
         let update_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if self.gui3d.is_none() && self.vr() {
+            if let Some(car) = self.cars.first() {
+                let (w, h) = (self.graphics.video.width, self.graphics.video.height);
+                let g = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::gui3d::Gui3d::new(&mut self.graphics, w, h, car.body_transform, car.driver_eyes_position)));
+                let node = self.scene.node_event("3D_GUI_NODE");
+                self.scene.add_child(self.unblurred, node);
+                self.scene.add_event_handler(node, g.clone());
+                self.gui3d = Some((g, node));
+            }
+        }
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
         // Sim::renderScene: the mirror before the picture (MirrorTextureRenderer::render
@@ -1601,7 +1615,15 @@ impl AcRenderer {
                     car_nodes: &nodes,
                     mirror_position: car.mirror_position,
                 };
+                #[cfg(all(windows, not(feature = "wgpu")))]
+                if let Some((_, node)) = &self.gui3d {
+                    self.scene.nodes[*node].is_active = false;
+                }
                 mirror.render(&mut self.graphics, &mut self.scene, self.camera.base.sky_box.as_mut(), &s);
+                #[cfg(all(windows, not(feature = "wgpu")))]
+                if let Some((_, node)) = &self.gui3d {
+                    self.scene.nodes[*node].is_active = true;
+                }
             }
         }
         // FormWings::onRenderNode: the player's wings while the app shows
@@ -1675,8 +1697,10 @@ impl AcRenderer {
                 self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
             }
         }
-        // (VR: no virtual mirror, and isRenderingGui is off: no GUI::render, no renderHUD)
+        // (VR: no virtual mirror, and isRenderingGui is off: no GUI::render, no renderHUD; the
+        // GUI and HUD go into the headset's GUI target instead, GUI::preRender3D)
         let vr = self.vr();
+        let drawn = !vr || self.gui3d_pre_render(dt);
         if let (Some(mirror), Some(v), false) = (&self.mirror, &mut self.virtual_mirror, vr) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
         }
@@ -1695,7 +1719,7 @@ impl AcRenderer {
                 // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
                 let rows = self.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
                 gui.gui.apps.gpu_profile = rows.collect();
-                if !vr {
+                if drawn {
                     gui.render(&mut self.graphics, dt);
                 }
                 self.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
@@ -1713,7 +1737,7 @@ impl AcRenderer {
                     }
                 }
             }
-            None if vr => {}
+            None if !drawn => {}
             None => {
                 self.graphics.reset_render_states();
                 self.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
@@ -1743,13 +1767,15 @@ impl AcRenderer {
         // Game::renderHUD: the HUD objects of Sim (messages, banners, arrows, name tags, damage,
         // fuel light)
         if let Some(gui) = &mut self.gui {
-            if !vr {
+            if drawn {
                 gui.render_hud(&mut self.graphics, dt);
             }
             // Game::stats.cpuTime and renderHUDTime: the frame up to here
             let cpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
             gui.frame_end(cpu_ms, cpu_ms - update_ms - render_ms);
         }
+        // GUI::renderVPointer, then the window again for the post-GUI pass
+        self.gui3d_pointer();
         // Task 46: the fade the race rules asked for (RaceManager, TimeAttack, DriftMode,
         // DragMode call ACCameraManager::fadeIn in their update, before this frame's post-GUI
         // pass draws it at fadeTime 0); the referee counts it down to the black frame and runs
@@ -1910,6 +1936,32 @@ impl AcRenderer {
         let Some(gui) = &mut self.gui else { return };
         for (name, value) in std::mem::take(&mut gui.apps.console_sets) {
             rustyac_render::console::console_set(&mut self.graphics, &mut self.camera, self.cars.first_mut(), &name, value);
+        }
+    }
+
+    /// Task 47b, `GUI::preRender3D`: the headset's GUI target bound and cleared, the pointer's
+    /// speed. False without one.
+    fn gui3d_pre_render(&mut self, dt: f32) -> bool {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some((g, _)) = &self.gui3d {
+            let mut g = g.borrow_mut();
+            if let Some(gui) = &self.gui {
+                g.mouse_pos = gui.gui.mouse_pos;
+                g.is_pointer_visible = gui.gui.is_pointer_visible;
+            }
+            g.pre_render(&mut self.graphics, dt);
+            return true;
+        }
+        let _ = dt;
+        false
+    }
+
+    /// Task 47b, `GUI::renderVPointer`, then the window again for the post-GUI pass.
+    fn gui3d_pointer(&mut self) {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some((g, _)) = &self.gui3d {
+            g.borrow_mut().render_pointer(&mut self.graphics);
+            self.graphics.set_screen_render_targets();
         }
     }
 

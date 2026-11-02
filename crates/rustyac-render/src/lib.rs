@@ -39,6 +39,8 @@ pub mod fw1;
 pub mod flames;
 pub mod ghost_car;
 pub mod gl;
+#[cfg(not(feature = "backend-wgpu"))]
+pub mod gui3d;
 #[cfg(windows)]
 pub mod gpulog;
 pub mod gui_paint;

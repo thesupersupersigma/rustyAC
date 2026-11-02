@@ -367,6 +367,11 @@ const VA_STEREO_CAMERA_VIVE_RESET_HEAD_POSITION: usize = 0x1_4022_4300;
 const VA_STEREO_CAMERA_VIVE_FINISH_RENDERING: usize = 0x1_4022_3210;
 const VA_STEREO_CAMERA_VIVE_SHUTDOWN: usize = 0x1_4022_4580;
 const SIZE_STEREO_CAMERA_FORWARD: usize = 0xa48;
+const VA_GUI_INIT_3D_MODE: usize = 0x1_4025_3f10;
+const VA_GUI_PRE_RENDER_3D: usize = 0x1_4025_47c0;
+const VA_GUI_RENDER_V_POINTER: usize = 0x1_4025_4c30;
+/// `Sim::Sim`'s lambda on the 3D GUI node (`std::_Func_impl` vftable; `_Do_call` 0x140196a30)
+const VA_GUI_3D_HANDLER_VTABLE: usize = 0x1_404d_9140;
 const VA_STEREO_CAMERA_FORWARD_CTOR: usize = 0x1_4021_1370;
 const VA_INIT_OCULUS: usize = 0x1_4021_2fd0;
 const VA_STEREO_CAMERA_FORWARD_RESET_HEAD_POSITION: usize = 0x1_4021_3f40;
@@ -432,6 +437,11 @@ pub fn triple_lines(view_proj: &[[f32; 16]; 3], camera: &[[f32; 16]; 3]) -> Stri
         }
     }
     out
+}
+
+/// Task 47b: where the mouse is in frame `index` of a VR run (moving, so the pointer swells).
+pub fn vr_mouse(index: usize) -> [f32; 2] {
+    [300.0 + 23.0 * index as f32, 260.0 + 9.0 * (index % 7) as f32]
 }
 
 impl Game {
@@ -1183,6 +1193,39 @@ impl Game {
             }
         }
 
+        // Task 47b, Sim::Sim with a VR camera: GUI::init3DMode and the 3D_GUI_NODE in the
+        // unblurred part, whose handler calls GUI::render3D in the transparent pass. The GUI is a
+        // stand-in with what those read: active, no forms, an app bar that is not shown, the
+        // pointer showing.
+        let mut gui3d: Option<(*mut u8, *mut u8)> = None;
+        if let (true, Some(car)) = (profile.vr, &car) {
+            let gui = acs.alloc(0x190);
+            wr(gui, 0x8, 1u8);
+            wr(gui, 0x10, self.graphics);
+            wr(gui, 0x98, acs.alloc(0x268));
+            wr(gui, 0xb8, 1u8);
+            // (txPointer's file name: an empty string)
+            wr(gui, 0x150, 7u64);
+            wr(gui, 0x164, [-100.0f32, -100.0]);
+            // (the pointer's picture where the game's working folder has it)
+            copy_into_root(&self.game_folder, "content/gui/oculus_pointer.png")?;
+            let init: extern "C" fn(*mut u8, i32, i32, *mut u8, *mut u8, *const u8) = std::mem::transmute(acs.va(VA_GUI_INIT_3D_MODE));
+            init(gui, rd::<i32>(self.graphics, 0x14), rd::<i32>(self.graphics, 0x18), car.body_node(), camera, car.avatar().add(0x218));
+            let node = self.node_event("3D_GUI_NODE");
+            self.add_child(unblurred, node);
+            // the lambda's Sim: its Game (+8), whose GUI is at +0x180
+            let game = acs.alloc(0x188);
+            wr(game, 0x180, gui);
+            let sim = acs.alloc(0x10);
+            wr(sim, 8, game);
+            let function = acs.alloc(0x40);
+            wr(function, 0, acs.va(VA_GUI_3D_HANDLER_VTABLE));
+            wr(function, 8, sim);
+            wr(function, 0x18, function);
+            let add: extern "C" fn(*mut u8, *mut u8, *mut u8) = std::mem::transmute(acs.va(crate::ac_car::VA_EVENT_NODE_RENDER_ADD_HANDLER));
+            add(node.add(0xe0), function, sim);
+            gui3d = Some((gui, node));
+        }
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
@@ -1338,9 +1381,46 @@ impl Game {
             begin(self.graphics);
             self.hdr_flag(false);
             // Sim::renderScene 0x14019e570
+            macro_rules! hud {
+                () => {
+            // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
+            for (i, gate) in gates.iter().enumerate() {
+                let active = step.extra.gate >= 0 && i == (step.extra.gate as usize + 1) % gates.len();
+                wr(*gate, 0, active as u8);
+            }
+            // Game::renderHUD: PitStop::renderHUD, the marker's part
+            if let (Some((marker, rules_scene, rules)), Some(car)) = (&mut pit_marker, &car) {
+                let inputs = crate::frames::pit_inputs(step, car.body_position());
+                rules.render_hud(rules_scene, &inputs);
+                wr(*marker, 0xd8, rules_scene.nodes[rules.node].is_active as u8);
+            }
+            // Game::renderHUD 0x140242e30, after the scene: StartingLights::renderHUD (an object
+            // that is not active is left out)
+            if !start_lights.is_null() && rd::<u8>(start_lights, 0x30) != 0 {
+                let render_hud: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_STARTING_LIGHTS_RENDER_HUD));
+                render_hud(start_lights, crate::frames::DT);
+            }
+                };
+            }
+            // (VR: GUI::preRender3D, Game::renderHUDOnDemand, GUI::renderVPointer)
+            if let Some((gui, _)) = gui3d {
+                wr(gui, 0x158, vr_mouse(index));
+                let pre: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_GUI_PRE_RENDER_3D));
+                pre(gui, crate::frames::DT);
+                hud!();
+                let pointer: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GUI_RENDER_V_POINTER));
+                pointer(gui);
+            }
             traverse(traverser, root);
             if let Some(car) = &car {
+                // (the 3D GUI is not in the rear view)
+                if let Some((_, node)) = gui3d {
+                    wr(node, 0xd8, 0u8);
+                }
                 self.render_mirror(car, &step.camera, 1.0 / 60.0);
+                if let Some((_, node)) = gui3d {
+                    wr(node, 0xd8, 1u8);
+                }
             }
             let vtable = rd::<*const usize>(camera, 0);
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
@@ -1379,22 +1459,9 @@ impl Game {
                 let set_mode: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_BLEND_MODE));
                 set_mode(self.graphics, 1);
             }
-            // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
-            for (i, gate) in gates.iter().enumerate() {
-                let active = step.extra.gate >= 0 && i == (step.extra.gate as usize + 1) % gates.len();
-                wr(*gate, 0, active as u8);
-            }
-            // Game::renderHUD: PitStop::renderHUD, the marker's part
-            if let (Some((marker, rules_scene, rules)), Some(car)) = (&mut pit_marker, &car) {
-                let inputs = crate::frames::pit_inputs(step, car.body_position());
-                rules.render_hud(rules_scene, &inputs);
-                wr(*marker, 0xd8, rules_scene.nodes[rules.node].is_active as u8);
-            }
-            // Game::renderHUD 0x140242e30, after the scene: StartingLights::renderHUD (an object
-            // that is not active is left out)
-            if !start_lights.is_null() && rd::<u8>(start_lights, 0x30) != 0 {
-                let render_hud: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_STARTING_LIGHTS_RENDER_HUD));
-                render_hud(start_lights, crate::frames::DT);
+            // (VR: in the GUI's target before the scene, Sim::renderScene's renderHUDOnDemand)
+            if gui3d.is_none() {
+                hud!();
             }
             // Game::evOnPostGui: the camera manager's fade (the game's own handler)
             if let (Some(car), Some(_)) = (&car, frame.fade_at) {

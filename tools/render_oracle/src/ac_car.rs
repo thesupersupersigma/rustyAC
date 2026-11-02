@@ -24,7 +24,7 @@ use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f};
 use crate::ac::{rd, wr, wstring, write_wstring, Game};
 use crate::frames::CarSpec;
 
-const VA_EVENT_NODE_RENDER_ADD_HANDLER: usize = 0x1_4007_ce00; // Event<OnNodeRenderEvent>::addHandler(std::function const&, void* owner)
+pub(crate) const VA_EVENT_NODE_RENDER_ADD_HANDLER: usize = 0x1_4007_ce00; // Event<OnNodeRenderEvent>::addHandler(std::function const&, void* owner)
 const VA_FONT_CTOR: usize = 0x1_4020_0bb0; // Font::Font(eFontType, float, bool, bool): DirectWrite, not part of the 3D frame
 const VA_CONSOLE_SINGLETON: usize = 0x1_4155_9c08; // static Console* Console::_singleton
 const VA_CONSTRAINED_CTOR: usize = 0x1_4007_6d10; // ConstrainedObjectsManager::ConstrainedObjectsManager(CarAvatar*)
@@ -395,6 +395,11 @@ pub struct Car {
 }
 
 impl Car {
+    /// `CarAvatar::bodyTransform`.
+    pub fn body_node(&self) -> *mut u8 {
+        self.body_transform
+    }
+
     /// The fake `CarAvatar`.
     pub fn avatar(&self) -> *mut u8 {
         self.car
