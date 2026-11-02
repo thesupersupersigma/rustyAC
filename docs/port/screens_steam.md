@@ -4,8 +4,10 @@
 
 - Done: step 1 (audit), step 2 (triple screen camera, HUD switch, render oracle `--triple`),
   step 3 (TrackIR: `crates/rustyac-game/src/trackir.rs`, the cockpit camera's `head`, proven in
-  the `cameras` part of `tools/proofs/fresh.sh`).
-- Next: step 4 (Steam stand-in).
+  the `cameras` part of `tools/proofs/fresh.sh`), step 4 (Steam's start: `crates/rustyac-game/src/steam.rs`,
+  DLC keys in the content readers, proven in the same part).
+- Next: proofs (`run_all.sh --quick`, render + cameras), versioning. Achievements, stats and
+  leaderboards are Task 47c.
 - Scratch: `re/scratch/task47/` (disassembly of the triple camera: `bvsp.txt`, `rp.txt`,
   `rccp.txt`, `cts_ctor.txt`; edit scripts; render oracle runs in `ro/`).
 
@@ -21,10 +23,10 @@
 | Triple: mirrors | no triple code: the mirror texture and the virtual mirror are the same | — | same (proven: r47_02 has the mirror) |
 | TrackIR | `CameraOnBoard` owns a `TrackIR`: NPClient64.dll from the registry, signature check, window, profile 1002, data 0x77; `getOffsets` each frame: angles ÷ VALUE (default 500) in degrees, x/y/z × 1e-5 clamped to ±0.1; look keys off while it works | Documents `cfg/trackir.ini` `[TRACK_IR] VALUE` | **done, proven with a stand-in** (step 3) |
 | FreeTrack / opentrack | only through the same NPClient64.dll | — | **done** with TrackIR (not tried with either) |
-| Steam login | `SteamInit` 0x1401a7950: `SteamAPI_Init` (no Steam: the game does not start), persona name (log only), Steam ID → `playerGUID`, minidump crash guard | — | partly (identity.rs) |
-| Steam DLC ownership | 11 `BIsDlcInstalled` checks, each adds a kn5 key; `KN5IO::load` refuses a version-6 kn5 whose key is not owned | — | step 4 |
-| Steam overlay / screenshots | no calls: Steam injects the overlay at `SteamAPI_Init`; no screenshots | — | step 4 |
-| Steam achievements / stats / leaderboards / avatar | `SteamInterface` (66 functions) | — | step 4 |
+| Steam login | `SteamInit` 0x1401a7950: `SteamAPI_Init` (no Steam: the game does not start), persona name (log only), Steam ID → `playerGUID`, minidump crash guard | — | **done** (`steam.rs`; the minidump filter left out on purpose) |
+| Steam DLC ownership | 11 `BIsDlcInstalled` checks, each adds a kn5 key; `KN5IO::load` refuses a version-6 kn5 whose key is not owned, `FolderEncrypter` a data.acd | — | **done** |
+| Steam overlay / screenshots | no calls: Steam injects the overlay at `SteamAPI_Init`; no screenshots | — | Steam stays on while rustyAC runs, `SteamAPI_RunCallbacks` each frame (overlay not tried) |
+| Steam achievements / stats / leaderboards / avatar | `SteamInterface` (66 functions) | — | missing (Task 47c) |
 
 ## 2. Triple screens
 
@@ -107,3 +109,55 @@ The registry and `LoadLibraryA` lines on the port's side come from its constants
 (`REGISTRY_KEY`, `dll_path`); the NPClient calls are the port's own code. Both run in the
 `cameras` part of `tools/proofs/fresh.sh`. Proven against the game's code with a stand-in
 device; nobody has tried it with a real TrackIR or opentrack.
+
+## 4. Steam
+
+Ported: `SteamInit` 0x1401a7950 and `SteamShutdown` 0x1401a8380 (`crates/rustyac-game/src/steam.rs`),
+`KN5IO::addDLCKey` 0x140214de0 with `KN5IO::load` 0x1402151a0's key check
+(`crates/rustyac-content/src/kn5.rs`), `FolderEncrypter::decryptFile` 0x14023bdd0's key check
+(`crates/rustyac-content/src/acd.rs`).
+
+- rustyac.exe loads the `steam_api64.dll` of the player's Assetto Corsa folder. When Steam runs
+  (`SteamAPI_IsSteamRunning`) and `SteamAPI_Init` works (logged in, owns the game), it does what
+  `SteamInit` does: persona name, Steam id twice, then the 11 DLC checks in the game's order
+  (app ids 347990, 404430, 423630, 467980, 493190, 509350, 526060, 540710, 540711, 619680,
+  675590). Steam stays on until the program ends (`SteamShutdown`), with
+  `SteamAPI_RunCallbacks` each frame as `SteamInterface::update` does.
+- The Steam id is the online GUID (as before) and the persona name the default driver name
+  when none is given.
+- With Steam on, a kn5 (version 6 and up) or data.acd whose DLC key is not owned is refused,
+  as the game refuses it. In this install 207 kn5 files and 37 data.acd carry a key (four
+  keys: 0x3b787, 0xa4691, 0xb5735, 0xdebda; mod cars reuse 0x3b787 and 0x905f2). The counts
+  include the Japanese Pack cars; the proof does not enumerate cars, so its case count did not
+  grow.
+- Without Steam (not running, `--no-steam`, or a proof run with `RUSTYAC_PROOF_RUN`) nothing
+  changes: no key is checked, everything loads, the id is rustyac_net.ini's.
+- Left out: `SetUnhandledExceptionFilter(MiniDumpFunction)` (crash dumps to the game's makers
+  through Steam), the game's refusal to start without Steam.
+- Not ported (Task 47c): `SteamInterface`: achievements, stats, leaderboards, the Friends
+  Leaderboard rows and the avatar. Their checks read the whole race (cars, laps, assists,
+  session, mode), so the game side of a proof needs a running `Sim`; there is no
+  `--steam-achievements` switch yet, because nothing would be behind it.
+
+### Proof
+
+`car_oracle steam-micro --seed n` runs the game's `SteamInit` and `SteamShutdown` on a stand-in
+`steam_api64.dll` (tools/car_oracle/src/game/steam.rs) that writes down every call and its
+arguments, then the GUID and both key vectors. `steam_check` (crates/rustyac-game/examples)
+runs the port on the same stand-in answers. 64 cases a seed: Steam missing, no DLC owned, all
+owned, made-up mixes; names with accents, empty, long; crash guard on and off.
+
+| Seed | Lines | Steam calls | Result |
+|---|---|---|---|
+| 1 | 2275 | 1891 | IDENTICAL |
+| 2 | 2275 | 1891 | IDENTICAL |
+| 3 | 2275 | 1891 | IDENTICAL |
+
+A tape with one app id changed is caught (DIFFERENT at line 19). The key refusal itself has a
+unit test (`dlc_keys_refuse_only_unowned`). Proven with stand-ins only: the real Steam client,
+its overlay inside rustyAC's window and a real account's DLC answers were not tried (Super's
+account must not be touched by a proof).
+
+### How to turn it on
+
+Start Steam and log in; run rustyac.exe as usual. `--no-steam` keeps Steam out.

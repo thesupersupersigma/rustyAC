@@ -42,6 +42,8 @@ does something else on purpose, each with its reason and the report that has the
 - The player id is Steam's when Steam runs (asked as the game asks), else rustyac_net.ini's;
   `--no-steam` forces the latter. race.ini's `GUID` is not read (it could be someone else's). rustyAC
   never prints or stores the Steam id. (multiplayer.md)
+- Steam on (Task 47): rustyAC starts without Steam (the game does not), never installs Steam's
+  crash-dump filter, and does not check DLC keys in proof runs (`RUSTYAC_PROOF_RUN`). (screens_steam.md)
 - The launcher without Steam: no `SteamAPI.Init` or overlay calls, `isowner` True, no achievements,
   the name from rustyAC's setting; `getguid` / `getid` answer the id rustyac.exe joins with (the
   original makes a new GUID per call without Steam). (launcher.md, launcher_online.md)

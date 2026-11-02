@@ -45,6 +45,21 @@ use std::path::{Path, PathBuf};
 
 use crate::vfs::File;
 
+/// The DLC keys the player's Steam account owns (`KN5IO::dlc_keys` and
+/// `FolderEncrypter::keys`, which `SteamInit` @ 0x1401a7950 fills); `None` without Steam, and
+/// then every kn5 and data.acd loads.
+static DLC_KEYS: std::sync::RwLock<Option<Vec<u32>>> = std::sync::RwLock::new(None);
+
+/// Sets the owned DLC keys (`None`: no check).
+pub fn set_dlc_keys(keys: Option<Vec<u32>>) {
+    *DLC_KEYS.write().unwrap() = keys;
+}
+
+/// Is a file with this key refused (Steam on and the key not owned)?
+pub fn dlc_refused(key: u32) -> bool {
+    DLC_KEYS.read().unwrap().as_ref().is_some_and(|keys| !keys.contains(&key))
+}
+
 /// Bytes of one vertex of a mesh (class 2).
 pub const VERTEX_STRIDE: u32 = 44;
 /// Bytes of one vertex of a skinned mesh (class 3).
@@ -345,8 +360,11 @@ impl Kn5 {
             return Err(bad(format!("{} is a version 1 kn5 (32-bit indices), which is not read", path.display())));
         }
         if version > 5 {
-            // a key: 0 in ordinary content
-            s.u32()?;
+            // a key: 0 in ordinary content, else a DLC's (KN5IO::load refuses one not owned)
+            let key = s.u32()?;
+            if key != 0 && dlc_refused(key) {
+                return Err(bad(format!("{} belongs to a DLC this Steam account does not own (key {key:#x}): Assetto Corsa does not load it either", path.display())));
+            }
         }
 
         let mut textures = Vec::new();
@@ -578,5 +596,17 @@ mod tests {
         assert!(a.starts_with("caf"));
         assert_eq!(Name::from("WHEEL_LF"), "WHEEL_LF");
         assert_eq!(format!("{:10}|", Name::from("AC_PIT_0")), "AC_PIT_0  |");
+    }
+}
+
+#[cfg(test)]
+mod dlc_tests {
+    #[test]
+    fn dlc_keys_refuse_only_unowned() {
+        assert!(!super::dlc_refused(0x3b787), "no Steam: nothing refused");
+        super::set_dlc_keys(Some(vec![0xa4691]));
+        let (owned, unowned) = (super::dlc_refused(0xa4691), super::dlc_refused(0x3b787));
+        super::set_dlc_keys(None);
+        assert!(!owned && unowned);
     }
 }

@@ -10,21 +10,8 @@
 //! That id is a 17-digit number starting with 8, which no Steam account has (a player's
 //! Steam id starts with 7656119...), so it can never be somebody else's.
 
-use std::ffi::{c_void, CString, OsStr};
 use std::hash::{BuildHasher, Hasher};
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-
-/// Assetto Corsa's Steam application id (the game's own `steam_appid.txt`).
-const AC_APP_ID: &str = "244210";
-
-#[link(name = "kernel32")]
-extern "system" {
-    fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
-}
-
-const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x8;
 
 /// Where the GUID came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,56 +32,16 @@ pub struct Identity {
 /// The player's Steam id, when Steam is running and logged in. `ac_root`: the Assetto Corsa
 /// folder (its `steam_api64.dll` is loaded, as the game loads it).
 ///
-/// Steam is asked the way the game asks: `SteamAPI_Init`, `SteamUser()->GetSteamID()`, and
-/// then `SteamAPI_Shutdown` at once, so rustyAC is no Steam client while it runs.
+/// Steam is asked the way the game asks (`crate::steam`). When the program's Steam session
+/// is on (`crate::steam::start`) its id is used; otherwise `SteamInit`, and `SteamShutdown` at
+/// once, so rustyAC is no Steam client while it runs.
 pub fn steam_id(ac_root: &Path) -> Option<u64> {
-    let path = ac_root.join("steam_api64.dll");
-    if !path.is_file() {
-        return None;
+    if let Some((id, _)) = crate::steam::session() {
+        return Some(id);
     }
-    let wide: Vec<u16> = OsStr::new(&path).encode_wide().chain(Some(0)).collect();
-    // SAFETY: a terminated path; the DLL's exports are called with the signatures of
-    // Steamworks' flat C API, which the game's own imports use.
-    unsafe {
-        let module = LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), LOAD_WITH_ALTERED_SEARCH_PATH);
-        if module.is_null() {
-            return None;
-        }
-        let symbol = |name: &str| -> Option<usize> {
-            let c = CString::new(name).ok()?;
-            let p = GetProcAddress(module, c.as_ptr().cast());
-            (!p.is_null()).then_some(p as usize)
-        };
-        let is_running = std::mem::transmute::<usize, unsafe extern "C" fn() -> bool>(symbol("SteamAPI_IsSteamRunning")?);
-        let init = std::mem::transmute::<usize, unsafe extern "C" fn() -> bool>(symbol("SteamAPI_Init")?);
-        let shutdown = std::mem::transmute::<usize, unsafe extern "C" fn()>(symbol("SteamAPI_Shutdown")?);
-        let user = std::mem::transmute::<usize, unsafe extern "C" fn() -> *mut *const usize>(symbol("SteamUser")?);
-        if !is_running() {
-            return None;
-        }
-        // the game is started by Steam with these set; outside Steam the API takes the
-        // application from them (as from the game folder's steam_appid.txt)
-        if std::env::var_os("SteamAppId").is_none() {
-            std::env::set_var("SteamAppId", AC_APP_ID);
-        }
-        if std::env::var_os("SteamGameId").is_none() {
-            std::env::set_var("SteamGameId", AC_APP_ID);
-        }
-        if !init() {
-            return None;
-        }
-        let mut id = 0u64;
-        let instance = user();
-        if !instance.is_null() {
-            // ISteamUser::GetSteamID, vtable slot 2 (the game: `call [r8 + 0x10]`); the
-            // CSteamID comes back through a hidden pointer
-            let vtable = *instance;
-            let get_steam_id = std::mem::transmute::<usize, unsafe extern "C" fn(*mut *const usize, *mut u64) -> *mut u64>(*vtable.add(2));
-            get_steam_id(instance, &mut id);
-        }
-        shutdown();
-        (id != 0).then_some(id)
-    }
+    // SAFETY: the DLL's own functions
+    let steam = crate::steam::load(ac_root).and_then(|api| unsafe { crate::steam::Steam::init(api) })?;
+    (steam.id != 0).then_some(steam.id)
 }
 
 /// `rustyac_net.ini` in rustyAC's own folder.
@@ -157,8 +104,12 @@ pub fn resolve(given: Option<&str>, use_steam: bool, ac_root: Option<&Path>, fil
     Ok(Identity { guid: own_guid(&file)?, source: GuidSource::Own(file) })
 }
 
-/// The driver's name when none is given: the Windows user name, else "rustyAC driver".
+/// The driver's name when none is given: the Steam persona name when Steam is on (the game's
+/// launcher fills the name in from Steam), else the Windows user name, else "rustyAC driver".
 pub fn default_name() -> String {
+    if let Some((_, name)) = crate::steam::session().filter(|(_, name)| !name.trim().is_empty()) {
+        return name.trim().to_string();
+    }
     match std::env::var("USERNAME") {
         Ok(name) if !name.trim().is_empty() => name.trim().to_string(),
         _ => "rustyAC driver".to_string(),

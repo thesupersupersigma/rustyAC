@@ -189,6 +189,16 @@ if part cameras; then  # Tasks 34, 46 and 46b: the game's start, free (F7), cock
         r=$("$RO" boundaries --root "$(cygpath -am "$root/boundaries")" --out "$(cygpath -am "$root/boundaries")" 2>&1 < /dev/null | grep '^model boundaries:')
         case "$r" in *IDENTICAL*) verdict "cameras boundaries" IDENTICAL "$r" ;; *) verdict "cameras boundaries" DIFFERENT "${r:-no result}" ;; esac
     fi
+    # Task 47: the game's SteamInit and SteamShutdown on a stand-in Steam, every call in order
+    for seed in 1 2 3; do
+        keep "steam $seed" || continue
+        d=$root/steam/$seed
+        mkdir -p "$d"
+        "$CO" steam-micro --seed "$seed" --root "$d" > "$out/steam_$seed.txt" 2>&1
+        cargo run --release --locked --quiet -p rustyac-game --example steam_check -- "$d/steam.tape" "$seed" >> "$out/steam_$seed.txt" 2>&1
+        r=$(grep '^steam start: ' "$out/steam_$seed.txt" | tail -1)
+        case "$r" in *IDENTICAL*) verdict "steam $seed" IDENTICAL "$r" ;; *) verdict "steam $seed" DIFFERENT "${r:-no result}" ;; esac
+    done
 fi
 
 if part modes; then  # Task 45: special-event files and goals, hotlap, Time Attack, drift, drag and race events judged by the game's code, and their race_out.json extras

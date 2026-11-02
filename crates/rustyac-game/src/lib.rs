@@ -36,6 +36,8 @@ pub mod focus;
 pub mod gateway;
 #[cfg(windows)]
 pub mod identity;
+#[cfg(windows)]
+pub mod steam;
 pub mod input;
 pub mod input_file;
 #[cfg(windows)]

@@ -318,6 +318,7 @@ fn main() {
         "steer-micro" => steer_micro(&args),
         "pad-micro" => pad_micro(&args),
         "start-camera-micro" => start_camera_micro(&args),
+        "steam-micro" => steam_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
                 println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
@@ -540,6 +541,25 @@ fn steer_micro(args: &Args) -> Result<(), String> {
         std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
         println!("steer-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
     }
+    Ok(())
+}
+
+/// Task 47: `car_oracle steam-micro [--seed <n>] [--steps <scenarios>] [--root <dir>]` (tape:
+/// `<root>/steam.tape`): the game's `SteamInit` and `SteamShutdown` on a stand-in Steam, for the
+/// port's `steam_check` example.
+fn steam_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let out = root.join("steam.tape");
+    acs::set_extra_overrides(game::steam::overrides());
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let tape = unsafe { game::steam::micro(&acs, args.seed as u32, args.steps.unwrap_or(64) as u32)? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("steam start: {} lines of the game into {}", tape.lines().count(), out.display());
     Ok(())
 }
 

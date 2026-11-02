@@ -2359,6 +2359,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else {
             // the look keys are the focused car's (`actionsState`): the player's, or none
             camera.actions = if focus.index == 0 { shared.look.load(Ordering::Relaxed) } else { 0 };
+            rustyac_game::steam::run_callbacks();
             camera.head = head_tracker.as_ref().filter(|_| camera.mode == CameraMode::Cockpit).map(|t| t.poll());
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
@@ -2948,7 +2949,15 @@ pub fn main() {
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(console_handler), true);
     }
+    // the game's SteamInit, when Steam runs and owns the game; never in a proof run, whose
+    // content must not hang on the player's DLCs
+    if !options.no_steam && std::env::var_os("RUSTYAC_PROOF_RUN").is_none() {
+        if let Some(root) = rustyac_content::install::ac_root() {
+            rustyac_game::steam::start(&root);
+        }
+    }
     let result = run(&options);
+    rustyac_game::steam::stop();
     DONE.store(true, Ordering::Relaxed);
     if let Err(message) = result {
         eprintln!("rustyac: {message}");

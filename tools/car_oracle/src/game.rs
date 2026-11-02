@@ -19,6 +19,7 @@ pub mod race;
 pub mod modes;
 pub mod race_ini;
 pub mod replay;
+pub mod steam;
 pub mod steer;
 pub mod sus_micro;
 

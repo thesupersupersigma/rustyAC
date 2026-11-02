@@ -99,6 +99,11 @@ impl Acd {
         let int = |pos: usize| -> Option<i32> { Some(i32::from_le_bytes(container.get(pos..pos + 4)?.try_into().ok()?)) };
         let mut pos = 0;
         if int(0) == Some(ACD_MAGIC) {
+            // a DLC's key follows: refused when not owned
+            let key = int(4).unwrap_or(0) as u32;
+            if crate::kn5::dlc_refused(key) {
+                return Err(format!("it belongs to a DLC this Steam account does not own (key {key:#x}): Assetto Corsa does not load it either"));
+            }
             pos = 8;
         }
         let mut files = Vec::new();
