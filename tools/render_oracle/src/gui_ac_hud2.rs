@@ -70,6 +70,7 @@ unsafe extern "C" fn get_session_time_left(_this: *mut u8) -> f64 {
 pub unsafe fn sync(h: &HudGame, state: &HudInput) {
     wr(h.sim, 0x220, state.focused_car_index);
     wr(h.sim, 0x201, state.triple_screen as u8);
+    wr(h.sim, 0x1e1, state.vr_connected as u8);
     wr(acs().va(VA_SPEED_USE_MPH) as *mut u8, 0, state.use_mph as u8);
     if !h.more.ended.is_null() {
         wr(h.more.ended, 0x30, state.end_session_active as u8);

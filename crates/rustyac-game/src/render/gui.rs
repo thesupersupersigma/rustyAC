@@ -86,6 +86,8 @@ pub struct GuiSetup {
     pub esc_start: bool,
     /// Task 47: `Sim::isInTripleScreenMode` (the camera is the triple screen one)
     pub triple_screen: bool,
+    /// Task 47c: `Sim::isVrConnected` (a headset camera)
+    pub vr: bool,
     /// Task 44c: the player's car is driven by an AI driver from the start (FormAI's
     /// constructor finds it)
     pub ai_drive: bool,
@@ -317,7 +319,7 @@ impl GameGui {
         let screen = gui.new_game_screen(&mut painter, "SIM_GAME_SCREEN");
         gui.add_root(&mut painter, screen);
 
-        let mut input = HudInput { triple_screen: setup.triple_screen, ..HudInput::default() };
+        let mut input = HudInput { triple_screen: setup.triple_screen, vr_connected: setup.vr, ..HudInput::default() };
         for (i, names) in setup.cars.iter().enumerate() {
             input.cars.push(HudCar {
                 driver_name: names[0].clone(),
@@ -359,6 +361,7 @@ impl GameGui {
             .collect();
         gui.sim.race.cars = race_static.clone();
         gui.sim.triple_screen = setup.triple_screen;
+        gui.sim.vr_connected = setup.vr;
         gui.sim.race.sessions = vec![RaceSession { session_type: setup.session_type, ..RaceSession::default() }; setup.session_count.max(1) as usize];
         let default_flag = {
             use rustyac_gui::painter::Painter;
@@ -503,11 +506,13 @@ impl GameGui {
         let use_mph = super::gui_apps::use_mph(&setup.cfg_dir, setup.documents_cfg.as_ref());
         let wrong = (setup.session_type != 6).then(|| WrongWayIndicator::new(&mut painter, setup.penalties));
         let lap = LapInvalidator::new(&mut painter);
-        let drive = DriveThroughPenalty::new(&mut painter);
+        let drive = DriveThroughPenalty::new(&mut gui, &mut painter, setup.vr);
         let lock = LockControlsTime::new(&mut painter, system("messages.ini").as_ref());
         let proximity = ProximityIndicator::new(system("proximity_indicator.ini").as_ref());
         let section = |name: &str| gameplay.as_ref().filter(|ini| ini.has_section(name)).map(|ini| ini.get_int(name, "IS_ACTIVE").unwrap_or(0));
-        let names = DriverNames::new(&mut gui, &mut painter, system("name_displayer.ini").as_ref(), section("DRIVER_NAME_DISPLAYER").map(|v| v != 0), setup.cars.len());
+        let mut names = DriverNames::new(&mut gui, &mut painter, system("name_displayer.ini").as_ref(), section("DRIVER_NAME_DISPLAYER").map(|v| v != 0), setup.cars.len());
+        // Sim::Sim: with a headset the names start off, and there is no ProximityIndicator
+        names.is_active &= !setup.vr;
         let damage = DamageDisplayer::new(&mut painter, system("damage_displayer.ini").as_ref(), section("DAMAGE_DISPLAYER"), 0);
         // EndSessionDisplayer (Sim::Sim 0x140194ed7)
         let end = EndSession::new(&mut gui, &mut painter, system("endSessionDisplayer.ini").as_ref());
@@ -934,9 +939,9 @@ impl GameGui {
             wrong.render_hud(gui, &mut painter, input);
         }
         self.lap.render_hud(gui, &mut painter, dt, input, &mut self.message);
-        self.drive.render_hud(gui, &mut painter, input, self.black_flagged);
+        self.drive.render_hud(gui, &mut painter, dt, input, self.black_flagged);
         self.lock.render_hud(gui, &mut painter, input, &mut self.message);
-        if self.proximity.is_active {
+        if self.proximity.is_active && !input.vr_connected {
             self.proximity.render_hud(gui, &mut painter, input);
         }
         // PitStop::renderHUD 0x1400aa300
@@ -1345,7 +1350,10 @@ impl GameGui {
             if total <= time && !self.gui.sim.fade_listeners.is_empty() {
                 self.gui.sim_fade_in_finished();
             }
-            rustyac_render::gl::fade_overlay(graphics, time, total, self.fade_color);
+            // (ACCameraManager's lambda draws no quad with a headset)
+            if !self.gui.sim.vr_connected {
+                rustyac_render::gl::fade_overlay(graphics, time, total, self.fade_color);
+            }
             self.menu_fade = Some((dt + time, total));
         }
     }

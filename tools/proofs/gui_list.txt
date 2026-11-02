@@ -1,6 +1,7 @@
 # GUI sequences of Tasks 29-34 (tools/render_oracle/src/gui_seq*.rs), one `render_oracle gui --gui <name>` each.
+# Task 47c: hud_flags_vr (the penalty banner with a headset)
 # Task 29: HUD and widgets
-base text widgets_a widgets_b widgets_c hud_messages hud_flags hud_flags_triple hud_cars hud_cars_simple hud_cars_noflag forms forms_layout forms_overlap
+base text widgets_a widgets_b widgets_c hud_messages hud_flags hud_flags_triple hud_flags_vr hud_cars hud_cars_simple hud_cars_noflag forms forms_layout forms_overlap
 # Task 30: menus
 lb_control_2 lb_control_12 lb_control_24 lb_app_12 lb_tab_2 lb_tab_24 lb_online_12 end_race_12 end_race_24 end_qualify_2 end_practice_12 end_online_12
 tab_2 tab_12 tab_24 tab_online_12 app_12 overlay_2 overlay_12 overlay_24 overlay_v_12 overlay_v_24 esc_menu esc_menu_race esc_menu_fixed

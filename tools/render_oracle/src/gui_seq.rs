@@ -194,6 +194,7 @@ pub fn hud_input2(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f3
         "raceOver" => input.race_over = on,
         "timeLeft" => input.session_time_left = number as f64,
         "triple" => input.triple_screen = on,
+        "vr" => input.vr_connected = on,
         "mph" => input.use_mph = on,
         "cameraMode" => input.camera_mode = number as i32,
         "ended" => input.end_session_active = on,
@@ -321,11 +322,11 @@ pub fn flags_line(flag: i32, timer: f32, invalid: f32, valid: bool, x_pos: f32, 
 }
 
 /// The flags, the three banners, the wrong-way picture and the fuel light.
-fn hud_flags(triple: bool) -> Vec<Op> {
+fn hud_flags(mode: &'static str) -> Vec<Op> {
     use Op::*;
     let mut o = vec![];
-    if triple {
-        o.push(Hud("triple", 1.0, ""));
+    if !mode.is_empty() {
+        o.push(Hud(mode, 1.0, ""));
     }
     o.extend([Hud("create", 2.0, ""), Hud("car.name", 0.0, "Tazio Nuvolari"), Hud("car.fuel", 50.0, "0"), Hud("session", 3.0, ""), Hud("raceText", 0.0, "Race  -  Lap 2/5"), Frame(DT)]);
     // every flag, one after the other; the yellow one runs out after five seconds
@@ -1041,8 +1042,9 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "widgets_b" => plain(widgets_b()),
         "widgets_c" => plain(widgets_c()),
         "hud_messages" => plain(hud_messages()),
-        "hud_flags" => plain(hud_flags(false)),
-        "hud_flags_triple" => plain(hud_flags(true)),
+        "hud_flags" => plain(hud_flags("")),
+        "hud_flags_triple" => plain(hud_flags("triple")),
+        "hud_flags_vr" => plain(hud_flags("vr")),
         "hud_cars" => plain(hud_cars()),
         // the plain tags, bigger, the focused car's too, a shorter sight; the damage in numbers
         "hud_cars_simple" => Sequence {
@@ -1166,7 +1168,7 @@ ITEM_BACKGROUND_SELECTED=0.74,0,0,1
         "pause_menu_online" => plain(crate::gui_seq_menu::pause_menu(1)),
         "pause_menu_race" => plain(crate::gui_seq_menu::pause_menu(2)),
         "pause_menu_plain" => plain(crate::gui_seq_menu::pause_menu(3)),
-        other => return Err(format!("no GUI sequence {other:?} (pause_menu, pause_menu_online, pause_menu_race, pause_menu_plain, lb_control_2, lb_control_12, lb_control_24, lb_app_12, lb_tab_2, lb_tab_24, lb_online_12, end_race_12, end_race_24, end_qualify_2, end_practice_12, end_online_12, tab_2, tab_12, tab_24, tab_online_12, app_12, overlay_2, overlay_12, overlay_24, overlay_v_12, overlay_v_24, esc_menu, esc_menu_race, esc_menu_fixed, replay_bar_2, replay_bar_12, online_overlays, pit_menu, pit_menu_small, pit_menu_lane, pit_menu_looks, pit_menu_bottom, pit_stop, base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_cars, hud_cars_simple, hud_cars_noflag)")),
+        other => return Err(format!("no GUI sequence {other:?} (pause_menu, pause_menu_online, pause_menu_race, pause_menu_plain, lb_control_2, lb_control_12, lb_control_24, lb_app_12, lb_tab_2, lb_tab_24, lb_online_12, end_race_12, end_race_24, end_qualify_2, end_practice_12, end_online_12, tab_2, tab_12, tab_24, tab_online_12, app_12, overlay_2, overlay_12, overlay_24, overlay_v_12, overlay_v_24, esc_menu, esc_menu_race, esc_menu_fixed, replay_bar_2, replay_bar_12, online_overlays, pit_menu, pit_menu_small, pit_menu_lane, pit_menu_looks, pit_menu_bottom, pit_stop, base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_flags_vr, hud_cars, hud_cars_simple, hud_cars_noflag)")),
     })
 }
 

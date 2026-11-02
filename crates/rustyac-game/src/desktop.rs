@@ -444,6 +444,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             track_layout: info.track_layout.clone(),
             esc_start: esc_start(options),
             triple_screen: renderer.triple_screen(),
+            vr: renderer.vr(),
             ai_drive: options.ai_drive,
             // Task 33: the ESC menu's page "Telemetry": the recorder's folder (none: no recorder)
             telemetry_folder: telemetry_folder(options, true).filter(|_| !options.online_session),
@@ -1469,7 +1470,8 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
     };
     println!("window {width} x {height}: {}", renderer.describe());
-    if options.virtual_mirror {
+    // (Sim::Sim keeps the virtual mirror off with a headset)
+    if options.virtual_mirror && !renderer.vr() {
         renderer.set_virtual_mirror(true);
     }
     let mut audio = start_audio(options, &feed, &car_info, &other_infos);
@@ -1856,7 +1858,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // F5: the on-board free camera (through the fade; not again while it shows)
                             0x74 if camera.shown != Some(5) => focus.command(FocusCommand::OnboardFreeCamera, &world, &car_names),
                             // F11: AC's virtual mirror
-                            0x7a => match renderer.toggle_virtual_mirror() {
+                            // (VirtualMirrorRenderer::update: not with a headset)
+                            0x7a if !renderer.vr() => match renderer.toggle_virtual_mirror() {
                                 Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
                                 None => println!("VIRTUAL MIRROR: video.ini has no mirrors ([MIRROR] SIZE=0)"),
                             },

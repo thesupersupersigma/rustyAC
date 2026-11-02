@@ -32,7 +32,7 @@ pub fn create(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_
     let messages = IniReader::load(&game_folder.join("system/cfg/messages.ini")).ok().filter(|ini| ini.ready);
     let wrong = WrongWayIndicator::new(painter, false);
     let lap = LapInvalidator::new(painter);
-    let drive = DriveThroughPenalty::new(painter);
+    let drive = DriveThroughPenalty::new(gui, painter, hud.input.vr_connected);
     let lock = LockControlsTime::new(painter, messages.as_ref());
     let flags = FlagDisplay::new(gui, painter, screen, hud.input.triple_screen);
     let fuel = FuelLight::new(painter, 0.0);
@@ -81,7 +81,7 @@ pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
             f.wrong.render_hud(gui, painter, &hud.input);
         }
         f.lap.render_hud(gui, painter, dt, &hud.input, message);
-        f.drive.render_hud(gui, painter, &hud.input, f.black_flagged);
+        f.drive.render_hud(gui, painter, dt, &hud.input, f.black_flagged);
         f.lock.render_hud(gui, painter, &hud.input, message);
     }
     crate::gui_port_hud3::render_hud(hud, gui, painter, dt);

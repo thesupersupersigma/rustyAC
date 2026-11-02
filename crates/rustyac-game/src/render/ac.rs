@@ -812,7 +812,14 @@ impl AcRenderer {
                 Err(e) => notes.push(format!("VR: {e}; the plain camera")),
             }
         }
-        camera.blur_quality = motion_blur * 2.0;
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        let vr = camera.forward.vr.is_some() || camera.forward.oculus.is_some();
+        #[cfg(not(all(windows, not(feature = "wgpu"))))]
+        let vr = false;
+        // Sim::Sim: the blur quality is doubled only without a headset
+        if !vr {
+            camera.blur_quality = motion_blur * 2.0;
+        }
         camera.base.camera.min_exposure = hdr_levels.min_exposure;
         camera.base.camera.max_exposure = hdr_levels.max_exposure;
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -861,9 +868,10 @@ impl AcRenderer {
                 Some(preset) => preset == GraphicsPreset::Max,
                 None => ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0),
             };
-            rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
+            // (Sim::Sim switches it off with a headset)
+            rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active && !vr)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink { vr, ..CrewLink::default() }, crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1799,7 +1807,9 @@ impl AcRenderer {
         }
         self.rules_fading = total > 0.0;
         // Game::evOnPostGui: the camera manager's fade, over everything of the game's 2D pass
-        if let Some((time, total)) = info.focus_fade {
+        // (none with a headset: the lambda only lets the time run)
+        if vr {
+        } else if let Some((time, total)) = info.focus_fade {
             rustyac_render::gl::fade_overlay(&mut self.graphics, time, total, driving.fade_color);
         } else if let Some((time, total)) = self.crew_fade {
             // the fade a pit stop's commit asked for (ACCameraManager::fadeIn with 0.25 s): at
@@ -2081,6 +2091,8 @@ pub struct CrewLink {
     pub camera_mode: i32,
     pub camera: Vec<CrewCamera>,
     fade: Option<f32>,
+    /// `Sim::isVrConnected`
+    vr: bool,
 }
 
 impl rustyac_render::tyre_crew::CrewHost for CrewLink {
@@ -2095,6 +2107,9 @@ impl rustyac_render::tyre_crew::CrewHost for CrewLink {
     }
     fn lock_camera(&mut self, locked: bool) {
         self.camera.push(CrewCamera::Lock(locked));
+    }
+    fn is_vr_connected(&mut self) -> bool {
+        self.vr
     }
     fn fade_in(&mut self, fade_total_time: f32) {
         self.fade = Some(fade_total_time);

@@ -150,6 +150,8 @@ pub struct HudInput {
     pub session_time_left: f64,
     /// `Sim::isInTripleScreenMode`
     pub triple_screen: bool,
+    /// `Sim::isVrConnected`
+    pub vr_connected: bool,
     /// `Speed::useMPH`
     pub use_mph: bool,
     /// `Sim::sceneCamera->matrix`: where the camera is

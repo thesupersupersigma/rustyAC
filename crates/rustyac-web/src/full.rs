@@ -168,6 +168,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         esc_start: sim.setup.esc_start,
         // (set from the renderer)
         triple_screen: false,
+        vr: false,
         ai_drive: false,
         fixed_setup: manager.is_some_and(|m| m.fixed_setup),
         data_paths: cars.iter().map(|car| car.data_path.clone()).collect(),

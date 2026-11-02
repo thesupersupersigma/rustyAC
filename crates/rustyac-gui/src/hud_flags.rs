@@ -329,26 +329,50 @@ impl LapInvalidator {
 pub struct DriveThroughPenalty {
     pub font: Font,
     pub text_pos: f32,
+    /// with a headset: the penalty flag of its own (`FLAG_DT`, in no parent)
+    pub flag: Option<Id>,
 }
 
 impl DriveThroughPenalty {
     /// `DriveThroughPenaltyAvatar::DriveThroughPenaltyAvatar` 0x1400907b0. (The game adds the
-    /// flag's height and 20 to a member it never set: here that member is 0. With a headset
-    /// it also makes a control of its own: see the report's "Not done".)
-    pub fn new(painter: &mut dyn Painter) -> DriveThroughPenalty {
+    /// flag's height and 20 to a member it never set: here that member is 0.) `vr` is
+    /// `Sim::isVrConnected`.
+    pub fn new(gui: &mut Gui, painter: &mut dyn Painter, vr: bool) -> DriveThroughPenalty {
         let mut font = Font::new(painter, "", FontType::Proportional, 15.0, false, false);
         font.shadowed = true;
         font.shadow_pixel_distance = 1.0;
         let texture = painter.get_texture("content/gui/flags/penalty.png");
-        let height = painter.texture_size(&texture).1;
+        let (width, height) = painter.texture_size(&texture);
+        let flag = vr.then(|| {
+            let flag = gui.new_control(painter, "FLAG_DT");
+            gui.controls[flag].back_texture = texture;
+            gui.set_size(flag, width as f32, height as f32);
+            gui.controls[flag].draw_background = false;
+            gui.controls[flag].draw_border = false;
+            gui.set_visible(flag, true);
+            let (w, h) = gui.screen;
+            gui.set_position(flag, (w / 2 - 160) as f32, (h / 2 - 245) as f32);
+            flag
+        });
         font.set_color(1.0, 0.0, 0.0, 1.0);
-        DriveThroughPenalty { font, text_pos: (height + 20) as f32 + 0.0 }
+        DriveThroughPenalty { font, text_pos: (height + 20) as f32 + 0.0, flag }
     }
 
     /// `DriveThroughPenaltyAvatar::renderHUD` 0x140090b50.
-    pub fn render_hud(&mut self, gui: &Gui, painter: &mut dyn Painter, input: &HudInput, black_flagged: bool) {
+    pub fn render_hud(&mut self, gui: &mut Gui, painter: &mut dyn Painter, dt: f32, input: &HudInput, black_flagged: bool) {
         let Some(car) = input.cars.first() else { return };
         if car.pit_penalty_laps <= 0 || input.in_replay || input.pause_menu_visible || input.esc_menu_visible || black_flagged {
+            return;
+        }
+        // with a headset: both lines centred above the middle of the screen, and the flag
+        if input.vr_connected {
+            let (w, h) = gui.screen;
+            self.font.blit_string(painter, (w / 2 + 40) as f32, (h / 2 - 250) as f32, &translate("DRIVE THROUGH PENALTY"), 1.0, ALIGN_CENTER);
+            let line = format!("{} {}", car.pit_penalty_laps as i32 - 1, translate("LAPS REMAINING"));
+            self.font.blit_string(painter, (w / 2 + 40) as f32, (h / 2 - 230) as f32, &line, 1.0, ALIGN_CENTER);
+            if let Some(flag) = self.flag {
+                gui.render(flag, dt, painter);
+            }
             return;
         }
         let x = if input.triple_screen { (gui.screen.0 / 3 + 0xf) as f32 } else { 15.0 };
