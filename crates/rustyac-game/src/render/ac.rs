@@ -2032,6 +2032,15 @@ impl AcRenderer {
         let _ = action;
     }
 
+    /// Task 47c: OculusManager's choice of the Rift's sound device (oculus.ini).
+    pub fn rift_audio_driver(&self) -> Option<u32> {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = self.camera.forward.oculus.as_deref() {
+            return rustyac_render::oculus::rift_audio_driver(&vr.ovr.api, &self.graphics.documents_folder);
+        }
+        None
+    }
+
     /// Task 47b: `StereoCameraVive::shutdown`, at the end.
     pub fn vr_shutdown(&mut self) {
         #[cfg(all(windows, not(feature = "wgpu")))]

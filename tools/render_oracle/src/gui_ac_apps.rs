@@ -161,6 +161,10 @@ fn vr_log(line: String) {
     let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
     crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), vec![line], "", &mut String::new());
 }
+unsafe extern "C" fn rift_set_driver(_this: *mut u8, id: i32) {
+    // (in the stand-in runtime's log, in its place among the runtime's calls)
+    crate::oculus_fake::log(format!("setDriver {id}"));
+}
 unsafe extern "C" fn vr_get_multiplier(_this: *mut u8) -> f32 {
     crate::gui_seq_apps::OPEN_VR.render_multiplier
 }
@@ -1334,6 +1338,32 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             // ~ACDriverPerformance's saveDriverRecords 0x140306df0 (the game's end)
             let save: extern "C" fn(*mut u8) -> bool = std::mem::transmute(a.va(0x1_4030_6df0));
             save(app("driverperf")?);
+        }
+        "app.riftaudio" => {
+            // Task 47c: OculusManager(Sim*, StereoCameraForward*) 0x1400a01c0 for its oculus.ini
+            // AUTOSELECT_RIFT_AUDIO_DEVICE: the shim's two audio pointers the stand-ins (none for
+            // number 0), Game::audioEngine's setDriver a logger
+            let docs = crate::root::documents().join("Assetto Corsa/cfg");
+            std::fs::create_dir_all(&docs).map_err(|e| e.to_string())?;
+            std::fs::write(docs.join("oculus.ini"), text).map_err(|e| e.to_string())?;
+            // (INIReaderDocuments::basePath: the stand-in Documents, as for "volumes")
+            let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+            crate::ac::write_wstring(a, a.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+            crate::oculus_fake::set_audio(number as i32);
+            let on = number != 0.0;
+            let (wave, guid) = if on { crate::oculus_fake::audio_shim() } else { (0, 0) };
+            wr(a.va(0x1_4155_9de0) as *mut u8, 0, wave);
+            wr(a.va(0x1_4155_9df0) as *mut u8, 0, guid);
+            crate::gui_ac_hud::jump(game, 0x1_401f_b7f0, rift_set_driver as *const () as usize);
+            let game_block: *mut u8 = rd(sim, 0x8);
+            if rd::<usize>(game_block, 0x148) == 0 {
+                wr(game_block, 0x148, a.alloc(0x400));
+            }
+            let manager = a.alloc(0xa0);
+            let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_400a_01c0));
+            ctor(manager, sim, std::ptr::null_mut());
+            vr_log(crate::oculus_fake::take_calls().join("
+"));
         }
         "app.visible" => {
             let set: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(0x1_4024_51a0));

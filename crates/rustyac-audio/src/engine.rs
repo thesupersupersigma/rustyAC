@@ -267,7 +267,10 @@ impl AudioEngine {
     }
 
     /// `AudioEngine::setDriver` @ 0x1401fb7f0
-    unsafe fn set_driver(&self, id: i32) {
+    ///
+    /// # Safety
+    /// FMOD calls on the engine's own system.
+    pub unsafe fn set_driver(&self, id: i32) {
         let mut low = std::ptr::null_mut();
         f::studio_get_low_level_system(Handle(self.system), OutHandle(&mut low));
         f::system_set_driver(Handle(low), id);

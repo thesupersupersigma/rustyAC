@@ -42,6 +42,13 @@ impl Picture {
         }
     }
 
+    pub fn rift_audio_driver(&self) -> Option<u32> {
+        match self {
+            Picture::Ac(renderer) => renderer.rift_audio_driver(),
+            Picture::Debug(_) => None,
+        }
+    }
+
     pub fn open_vr_action(&mut self, action: &rustyac_gui::apps::AppAction) {
         if let Picture::Ac(renderer) = self {
             renderer.open_vr_action(action);

@@ -1476,6 +1476,10 @@ fn run_window(options: &Options) -> Result<(), String> {
         renderer.set_virtual_mirror(true);
     }
     let mut audio = start_audio(options, &feed, &car_info, &other_infos);
+    // Task 47c: OculusManager (Sim::createCamera, MODE=OCULUS): the Rift's sound device
+    if let (Some(audio), Some(id)) = (audio.as_mut(), renderer.rift_audio_driver()) {
+        audio.set_driver(id as i32);
+    }
     // the cockpit camera's head tracker (CameraOnBoard's TrackIR), when NPClient64.dll is there
     let head_tracker = rustyac_game::trackir::open(window_handle, rustyac_content::install::documents().as_deref());
     let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {

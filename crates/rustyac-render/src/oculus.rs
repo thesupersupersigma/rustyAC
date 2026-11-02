@@ -13,8 +13,7 @@
 //! over the functions ([`OvrApi`]): from the Oculus runtime's `LibOVRRT64_1.dll` (only when it is
 //! signed by Oculus, as the shim checks), or a stand-in runtime in a proof.
 //!
-//! Not done: post-processing in VR (`renderYebis`; the constructor refuses it), and
-//! `OculusManager`'s choice of the Rift's sound device (oculus.ini `AUTOSELECT_RIFT_AUDIO_DEVICE`).
+//! Not done: post-processing in VR (`renderYebis`; the constructor refuses it).
 
 use std::ffi::c_void;
 
@@ -173,6 +172,10 @@ pub struct OvrApi {
     pub get_session_status: unsafe extern "C" fn(Session, *mut SessionStatus) -> i32,
     pub recenter_tracking_origin: unsafe extern "C" fn(Session) -> i32,
     pub report_client_info: Option<unsafe extern "C" fn(u32, i32, i32, i32, i32, i32) -> i32>,
+    /// `ovr_GetAudioDeviceOutWaveId` (none: the shim answers `ovrError_MissingDLL`)
+    pub get_audio_device_out_wave_id: Option<unsafe extern "C" fn(*mut u32) -> i32>,
+    /// `ovr_GetAudioDeviceOutGuidStr`: 128 wide characters
+    pub get_audio_device_out_guid_str: Option<unsafe extern "C" fn(*mut u16) -> i32>,
     pub get_async_key_state: unsafe extern "system" fn(i32) -> i16,
 }
 
@@ -255,6 +258,8 @@ pub fn load() -> Result<OvrApi, String> {
             get_session_status: f!("ovr_GetSessionStatus"),
             recenter_tracking_origin: f!("ovr_RecenterTrackingOrigin"),
             report_client_info: symbol("ovr_ReportClientInfo").ok().map(|p| std::mem::transmute::<usize, _>(p)),
+            get_audio_device_out_wave_id: symbol("ovr_GetAudioDeviceOutWaveId").ok().map(|p| std::mem::transmute::<usize, _>(p)),
+            get_audio_device_out_guid_str: symbol("ovr_GetAudioDeviceOutGuidStr").ok().map(|p| std::mem::transmute::<usize, _>(p)),
             get_async_key_state: GetAsyncKeyState,
         })
     }
@@ -354,6 +359,32 @@ unsafe fn chain_allowed(sgnr: *mut u8, name_string: unsafe extern "system" fn(*c
 
 /// The game's globals of `StereoCameraForward` (`initialized`, `session`, `luid`) and the
 /// runtime's functions.
+/// Task 47c: `OculusManager::OculusManager` 0x1400a01c0, its sound part: with oculus.ini
+/// `[SETTINGS] AUTOSELECT_RIFT_AUDIO_DEVICE` the Rift's waveOut number, which the game hands to
+/// `AudioEngine::setDriver` as FMOD's driver number.
+pub fn rift_audio_driver(api: &OvrApi, documents: &std::path::Path) -> Option<u32> {
+    let ini = IniReader::load(&documents.join("cfg/oculus.ini")).ok()?;
+    if !ini.ready || ini.get_int("SETTINGS", "AUTOSELECT_RIFT_AUDIO_DEVICE").unwrap_or(0) == 0 {
+        return None;
+    }
+    println!("Autoselecting Oculus Rift Audio Device");
+    let mut id = 0u32;
+    // (the shim's answer without the runtime's function: ovrError_MissingDLL)
+    let r = api.get_audio_device_out_wave_id.map_or(-1004, |f| unsafe { f(&mut id) });
+    if r != 0 {
+        println!("CANNOT FIND OCULUS AUDIO DEVICE");
+        return None;
+    }
+    println!("Selecting audio device: {id}");
+    let mut name = [0u16; 128];
+    if let Some(f) = api.get_audio_device_out_guid_str {
+        unsafe { f(name.as_mut_ptr()) };
+    }
+    let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    println!("Device name: {}", String::from_utf16_lossy(&name[..end]));
+    Some(id)
+}
+
 pub struct Ovr {
     pub api: OvrApi,
     pub initialized: bool,

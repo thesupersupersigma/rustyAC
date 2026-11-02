@@ -34,7 +34,7 @@ struct SwapChain {
 }
 static CHAINS: Mutex<Vec<SwapChain>> = Mutex::new(Vec::new());
 
-fn log(line: String) {
+pub(crate) fn log(line: String) {
     CALLS.lock().unwrap().push(line);
 }
 
@@ -249,6 +249,31 @@ extern "system" fn get_async_key_state(key: i32) -> i16 {
     if FRAME.load(Ordering::Relaxed) == 3 && (key == 0x11 || key == 0x20) { i16::MIN } else { 0 }
 }
 
+/// Task 47c: the Rift's sound device. 1: found (waveOut 3); 2: not found (an error).
+static AUDIO: AtomicU32 = AtomicU32::new(1);
+pub fn set_audio(mode: i32) {
+    AUDIO.store(mode as u32, Ordering::Relaxed);
+}
+extern "C" fn audio_wave_id(id: *mut u32) -> i32 {
+    log("ovr_GetAudioDeviceOutWaveId".into());
+    if AUDIO.load(Ordering::Relaxed) == 2 {
+        return -1005;
+    }
+    unsafe { *id = 3 };
+    0
+}
+extern "C" fn audio_guid_str(name: *mut u16) -> i32 {
+    log("ovr_GetAudioDeviceOutGuidStr".into());
+    for (i, c) in "{0.0.0.00000000}.{8e7f5a1c-rift}".encode_utf16().chain([0]).enumerate() {
+        unsafe { *name.add(i) = c };
+    }
+    0
+}
+/// The two at the shim's pointers (`ovr_GetAudioDeviceOutWaveIdPtr`, `...GuidStrPtr`).
+pub fn audio_shim() -> (usize, usize) {
+    (audio_wave_id as *const () as usize, audio_guid_str as *const () as usize)
+}
+
 /// The game's LibOVR shim (`OVR_LoadSharedLibrary` 0x1401dc710): its library handle and the
 /// pointers it fills from the runtime, at their places in acs.exe.
 const SHIM_LIBRARY: usize = 0x1_4155_9e90;
@@ -309,6 +334,8 @@ pub fn api() -> OvrApi {
         get_session_status,
         recenter_tracking_origin,
         report_client_info: None,
+        get_audio_device_out_wave_id: Some(audio_wave_id),
+        get_audio_device_out_guid_str: Some(audio_guid_str),
         get_async_key_state,
     }
 }

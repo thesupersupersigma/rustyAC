@@ -937,9 +937,13 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
-    if name.starts_with("app_ppfilter") || name == "app_openvr" {
+    if name.starts_with("app_ppfilter") || name == "app_openvr" || name == "app_riftaudio" {
         let mut same = true;
-        let ini = if name == "app_openvr" { "openvr.ini" } else { "video.ini" };
+        let ini = match name {
+            "app_openvr" => "openvr.ini",
+            "app_riftaudio" => "oculus.ini",
+            _ => "video.ini",
+        };
         for (what, a, b) in [
             ("the filters asked for (loadConfigurationFile) / the VR camera's calls", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
             (ini, args.root.join("documents/Assetto Corsa/cfg").join(ini), args.root.join("port_files/documents/Assetto Corsa/cfg").join(ini)),
@@ -1956,6 +1960,23 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             // hidden: the wheel does nothing
             o.extend([hud("app.visible", 0.0, "photomode"), Op::Frame(DT), Op::Wheel(x + 140, y + 300, 120.0), Op::Frame(DT), hud("app.visible", 1.0, "photomode"), Op::Frame(DT)]);
             play(&mut o, 100, 120, 10);
+            o.push(Op::Save);
+        }
+        "app_riftaudio" => {
+            // OculusManager's oculus.ini AUTOSELECT_RIFT_AUDIO_DEVICE: on with the Rift's device
+            // (1), with none found (2), without the runtime's functions (0); off; no such key
+            race(&mut o, 6);
+            let on = "[SETTINGS]
+AUTOSELECT_RIFT_AUDIO_DEVICE=1
+";
+            for (n, ini) in [(1.0, on), (2.0, on), (0.0, on), (1.0, "[SETTINGS]
+AUTOSELECT_RIFT_AUDIO_DEVICE=0
+"), (1.0, "[MIRROR_TEXTURE]
+ENABLED=1
+"), (1.0, on)] {
+                o.push(hud("app.riftaudio", n, ini));
+                o.push(Op::Frame(DT));
+            }
             o.push(Op::Save);
         }
         "app_openvr" => {

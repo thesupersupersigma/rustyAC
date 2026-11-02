@@ -673,6 +673,12 @@ impl GameAudio {
     }
 
     /// `AudioEvent::isPlaying` of a wheel gun of the pit crew (`screw` or unscrew).
+    /// Task 47c: OculusManager's choice of the Rift's sound device (`AudioEngine::setDriver`).
+    pub fn set_driver(&mut self, id: i32) {
+        // SAFETY: FMOD calls on the engine's own system.
+        unsafe { self.world.engine.set_driver(id) };
+    }
+
     pub fn crew_is_playing(&mut self, wheel: usize, screw: bool) -> bool {
         self.crew_guns();
         self.crew.as_ref().is_some_and(|guns| guns.is_playing(&self.world.engine, wheel, screw))

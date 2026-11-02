@@ -175,6 +175,23 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
             gui.shutdown_apps();
             write_files(gui, game_folder)?;
         }
+        "app.riftaudio" => {
+            let docs = game_folder.join("port_files/documents/Assetto Corsa");
+            std::fs::create_dir_all(docs.join("cfg")).map_err(|e| e.to_string())?;
+            std::fs::write(docs.join("cfg/oculus.ini"), text).map_err(|e| e.to_string())?;
+            crate::oculus_fake::set_audio(number as i32);
+            let mut api = crate::oculus_fake::api();
+            if number == 0.0 {
+                (api.get_audio_device_out_wave_id, api.get_audio_device_out_guid_str) = (None, None);
+            }
+            let id = rustyac_render::oculus::rift_audio_driver(&api, &docs);
+            let mut log = crate::oculus_fake::take_calls();
+            if let Some(id) = id {
+                log.push(format!("setDriver {id}"));
+            }
+            append_effects(&game_folder.join("effects_port.txt"), vec![log.join("
+")], "", &mut String::new());
+        }
         "app.visible" => {
             let form = app(apps, text)?;
             gui.set_visible(form, number != 0.0);
