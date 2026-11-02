@@ -1,6 +1,36 @@
-# Triple screens, TrackIR and Steam (Task 47, v0.47.0)
+# Triple screens, TrackIR, Steam and VR (Tasks 47 and 47b)
 
-## Resume here
+## Task 47b: VR
+
+### Resume here
+
+- Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
+- Next: step 1, the audit of the game's VR (briefs in `re/scratch/task47b/`: `openvr.md`,
+  `oculus.md`, `startup.md`).
+
+### Step 0: the case count
+
+The prompt's question: Tasks 46b and 46c's quick runs had 168 cases, Task 47's 156. Nothing
+vanished; two reports had the count wrong:
+
+| run | cases in its log | the report said |
+|---|---|---|
+| Task 46 (v0.46.0) | 167 (fresh 59: the cameras part had no orbit camera yet) | 167 |
+| Task 46b | 168 (fresh 60: + `cameras 1 orbit cameras`) | 168 |
+| Task 46c (twice: `re/scratch/task46c/quick1.txt`, `quick2.txt`) | 168 | 168 |
+| Task 47 (`re/scratch/task47/quick_table.md`) | 169 (fresh 61: + `cameras 1 trackir start`) | **156** (a miscount, now 169 below) |
+
+One case never ran in a quick run at all: the quick key `rays magione ?` matched `rays magione`
+but `track_survey --list` names the layout `-`, so the case is `rays magione -`. The key is now
+`rays magione -?`; quick runs have one more case (fresh 62).
+
+The new check: `run_all.sh` keeps each area's case names of the last run of the same mode in
+`target/proofs/cases/<mode>/<area>.txt` and prints in red, with the summary, every case that was
+there last time and is not now (also in `target/proofs/vanished.txt`). Cases retired on purpose
+go in `tools/proofs/retired.txt` (`<area> <case> | why`) and are not printed. The exit code does
+not change. A wiped `target/proofs` starts the lists again.
+
+## Task 47: where it stood at v0.47.0
 
 - Task 47 is done and tagged v0.47.0: triple screens (desktop and the page's Full mode),
   TrackIR head tracking, Steam's start (name, id, DLC keys). Everything proven against the
@@ -11,7 +41,7 @@
   app (`TripleScreenManager`, its spinners writing triple_screen.ini, desktop and page); the
   triple paths of SessionLeaderboard, FuelLight, DriveThroughPenaltyAvatar,
   EndSessionDisplayer, SystemNotification and the name tags (`DriverNameDisplayer`).
-- Proofs at the end: `run_all.sh --quick` 156 cases, 0 different (47 min); `render` with
+- Proofs at the end: `run_all.sh --quick` 169 cases (156 in the first version of this line: a miscount), 0 different (47 min); `render` with
   `RENDER_ONLY='r47_0[1-3]'` 18/18 and `fresh` with `FRESH_PARTS=cameras` 25/25.
 - Scratch: `re/scratch/task47/` (disassembly of the triple camera: `bvsp.txt`, `rp.txt`,
   `rccp.txt`, `cts_ctor.txt`; TrackIR: `onboard_update.txt`, `getoffsets.txt`; edit scripts;

@@ -53,6 +53,9 @@ other game-side tools), `physics dumps shaders` and `net browser ai_page` (never
 code); each lane builds with 2 jobs. Each area writes `times.tsv` (seconds per case). A case that
 cannot run is never dropped: the area counts it as skipped with its reason, and the run prints
 every skipped case after the table (in red when there is one) and in `target/proofs/skipped.txt`.
+A case the last run of the same mode had and this one has not is printed as vanished (red, and in
+`target/proofs/vanished.txt`; each area's list is kept in `target/proofs/cases/<mode>/`); a case
+retired on purpose goes in `tools/proofs/retired.txt` with its reason.
 
 What a run needs: this repository, the Assetto Corsa install (read only; `AC_ROOT` if it is not the
 Steam default), the ignored `oracle/` folder (the saved game recordings of Tasks 9 to 34) and the

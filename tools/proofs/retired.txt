@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Cases retired on purpose: run_all.sh does not print them as vanished. One a line:
+#   <area> <case> | why it was retired

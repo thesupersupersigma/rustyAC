@@ -8,7 +8,7 @@ awd ks_audi_r8_plus
 hybrid ks_ferrari_f138
 sus bmw_m3_e30
 collide-worlds
-rays magione ?
+rays magione -?
 survey ks_ferrari_f2004 magione ?
 crash bmw_m3_e30
 micro [0-7]/1

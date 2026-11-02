@@ -136,4 +136,17 @@ for a in $areas; do grep -h '^SKIPPED ' "$out/$a/cases.log" 2> /dev/null; done >
 n=$(grep -c '' "$out/skipped.txt")
 if [ "$n" -gt 0 ]; then printf '\n\033[31m%s cases skipped\033[0m (%s):\n' "$n" "$out/skipped.txt"; sed 's/^SKIPPED /  /' "$out/skipped.txt"
 else printf '\n0 cases skipped\n'; fi
+# every case the last run of this mode had and this one has not (red: nothing drops out silently);
+# a case retired on purpose goes in tools/proofs/retired.txt ("<area> <case> | reason")
+mkdir -p "$out/cases/$mode"
+for a in $areas; do
+    [ -f "$out/$a/cases.log" ] || continue
+    sed -nE 's/^(IDENTICAL|DIFFERENT|SKIPPED) ([^|]*[^ |]) *(\|.*)?$/\2/p' "$out/$a/cases.log" | sort -u > "$out/cases/$mode/$a.new"
+    [ -f "$out/cases/$mode/$a.txt" ] && sort -u -o "$out/cases/$mode/$a.txt" "$out/cases/$mode/$a.txt" && comm -23 "$out/cases/$mode/$a.txt" "$out/cases/$mode/$a.new" |
+        grep -vxF -f <(sed -nE "s/^$a ([^|]*[^ |]) *\|.*/\1/p" "$here/retired.txt") | sed "s/^/$a /"
+    mv "$out/cases/$mode/$a.new" "$out/cases/$mode/$a.txt"
+done > "$out/vanished.txt"
+n=$(grep -c '' "$out/vanished.txt")
+if [ "$n" -gt 0 ]; then printf '\n\033[31m%s cases vanished since the last %s run\033[0m (%s):\n' "$n" "$mode" "$out/vanished.txt"; sed 's/^/  /' "$out/vanished.txt"
+else printf '0 cases vanished since the last %s run\n' "$mode"; fi
 ! ls "$out"/rows/*.bad > /dev/null 2>&1
