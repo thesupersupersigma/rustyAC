@@ -140,3 +140,6 @@ r47b_05 | --track spa --view dash --mirror 512 --car ks_ferrari_f2004 --tape ora
 r47b_06 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --oculus --aa 4 --size 1280x720
 r47b_07 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 30 --set tts=3000 --vr --size 1280x720
 r47b_08 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 30 --set tts=3000 --oculus --size 1280x720
+# -- Task 47c: the camera keys in VR: the free camera (F7) and a camera beside the car seen through the headset
+r47c_01 | --track spa --view free --vr --size 1280x720
+r47c_02 | --track magione --view side --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --oculus --size 1280x720
