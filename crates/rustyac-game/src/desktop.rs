@@ -20,7 +20,7 @@ use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink,
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::onboard_free::{self, HelicopterCamera, OrbitInput, ShotCamera};
-use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
+use rustyac_game::render::scene::{free_camera, CameraFrame, CameraMode, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
 use rustyac_game::ghost::{GhostOptions, GhostRig};
@@ -1473,6 +1473,8 @@ fn run_window(options: &Options) -> Result<(), String> {
         renderer.set_virtual_mirror(true);
     }
     let mut audio = start_audio(options, &feed, &car_info, &other_infos);
+    // the cockpit camera's head tracker (CameraOnBoard's TrackIR), when NPClient64.dll is there
+    let head_tracker = rustyac_game::trackir::open(window_handle, rustyac_content::install::documents().as_deref());
     let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {
         Ok(camera) => camera,
         Err(message) => {
@@ -2357,6 +2359,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else {
             // the look keys are the focused car's (`actionsState`): the player's, or none
             camera.actions = if focus.index == 0 { shared.look.load(Ordering::Relaxed) } else { 0 };
+            camera.head = head_tracker.as_ref().filter(|_| camera.mode == CameraMode::Cockpit).map(|t| t.poll());
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
         renderer.set_track_look(track_look.take().as_ref());

@@ -300,6 +300,20 @@ pub unsafe fn free_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, S
 }
 
 const VA_ONBOARD_UPDATE: usize = 0x1_400c_9ea0;
+/// `gpfNP_GetData`: the head tracker DLL's `NP_GetData` (`NPClient_Init` sets it)
+const VA_GPF_NP_GET_DATA: usize = 0x1_4155_9ca0;
+
+/// Task 47: what the stand-in head tracker answers next: its result, then the first 32 bytes
+/// of `tagTrackIRData` (status, frame, io, roll, pitch, yaw, x, y, z).
+static HEAD: std::sync::Mutex<(i32, [u32; 8])> = std::sync::Mutex::new((0, [0; 8]));
+
+/// The stand-in `NP_GetData`.
+extern "C" fn np_get_data(out: *mut u8) -> i32 {
+    let (result, data) = *HEAD.lock().unwrap();
+    // SAFETY: the game's tagTrackIRData on its stack (68 bytes)
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), out, 32) };
+    result
+}
 const VA_DRIVABLE_UPDATE: usize = 0x1_400c_6a30;
 const VA_DRIVABLE_NEXT_MODE: usize = 0x1_400c_6790;
 const VA_CAR_CAMERAS_UPDATE: usize = 0x1_400c_47d0;
@@ -350,6 +364,11 @@ unsafe fn put(at: *mut u8, offset: usize, values: &[f32], cfg: &mut Vec<f32>) {
 /// <cfg ...>` (in the order `put` writes them), then per frame `f <switch 0|1> <actions hex>
 /// <body 16> <rear left hub 3> <rear right hub 3> <speed> <accG 3> <velocity 3> <dt> ->
 /// <matrix 16> <fov> <near> <far> <exposure>`. `rand()` runs from seed 1 at the tape's start.
+///
+/// Task 47: in half the segments the cockpit has a head tracker (`TrackIR::isValid`, its
+/// `divisionValue`, a stand-in `NP_GetData`); before each cockpit frame of those a line `tir
+/// <result> <division> <status> <roll> <pitch> <yaw> <x> <y> <z>` gives what it answered (its
+/// own random numbers: the rest of the tape is as without it).
 pub unsafe fn driving_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, String> {
     acs.patch(acs.va(VA_SET_SHADOW_MAPS_SPLITS), &[0xc3]);
     acs.patch(acs.va(VA_SET_LISTENER), &[0xc3]);
@@ -363,6 +382,9 @@ pub unsafe fn driving_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String
     SEED.store(1, Ordering::Relaxed);
     let mut tape = String::new();
     let mut rng = Rng(seed as u64 ^ 0xca3e);
+    let mut head_rng = Rng(seed as u64 ^ 0x7121);
+    let mut division = 0.0f32;
+    acs.set_global(VA_GPF_NP_GET_DATA, np_get_data as *const () as usize);
     // every slot of the scene camera's vtable returns at once (only its listener matrix is asked for)
     let vtable = acs.alloc(0x200);
     for slot in 0..64 {
@@ -424,6 +446,10 @@ pub unsafe fn driving_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String
             wr(onboard, 0x70, sim as usize);
             wr(onboard, 0x78, car as usize);
             signal_3d(onboard.add(0x108));
+            let tracked = head_rng.next().is_multiple_of(2);
+            division = [500.0, 100.0, 1.0, head_rng.float(20.0, 2000.0)][(head_rng.next() % 4) as usize];
+            wr(onboard, 0x164, tracked as u8);
+            wr(onboard, 0x168, division);
             let fov = [54.0, 56.0, rng.float(20.0, 120.0)][(rng.next() % 3) as usize];
             let far = [1000.0, 15000.0, rng.float(100.0, 20000.0)][(rng.next() % 3) as usize];
             put(onboard, 0x90, &[fov], &mut cfg);
@@ -552,6 +578,18 @@ pub unsafe fn driving_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String
             wr(car, 0x268 + 0x274 + 4 * i, velocity[i]);
         }
         wr(car, 0x268 + 0x7d4, actions);
+        if mode == 0 && rd::<u8>(onboard, 0x164) != 0 {
+            let result = if head_rng.next().is_multiple_of(25) { 1 } else { 0 };
+            let status = if head_rng.next().is_multiple_of(20) { 1u32 } else { 0 };
+            let mut angle = || if head_rng.next().is_multiple_of(30) { 0.0 } else { head_rng.float(-16383.0, 16383.0) };
+            let (roll, pitch, yaw) = (angle(), angle(), angle());
+            let mut place = || head_rng.float(-16383.0, 16383.0);
+            let (x, y, z) = (place(), place(), place());
+            *HEAD.lock().unwrap() = (result, [status, 0, roll.to_bits(), pitch.to_bits(), yaw.to_bits(), x.to_bits(), y.to_bits(), z.to_bits()]);
+            write!(tape, "tir {result} {status}").unwrap();
+            bits(&mut tape, &[division, roll, pitch, yaw, x, y, z]);
+            tape.push('\n');
+        }
         match mode {
             0 => onboard_update(onboard, dt),
             1 => drivable_update(drivable, dt),
@@ -1223,5 +1261,223 @@ pub unsafe fn orbit_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, 
         writeln!(tape, " {} {x} {y}", rd::<u8>(object, 0x1a0)).unwrap();
     }
     KEY_TABLE.store(0, Ordering::Relaxed);
+    Ok(tape)
+}
+
+// --- Task 47: the head tracker's start and stop ----------------------------------------------
+
+const VA_TRACKIR_CTOR: usize = 0x1_401c_dfe0;
+const VA_TRACKIR_DTOR: usize = 0x1_401c_e2a0;
+/// The stand-in DLL's handle.
+const FAKE_NPCLIENT: usize = 0x5150_0000;
+/// The registry's stand-in folder of `NPClient64.dll`.
+pub const STAND_IN_LOCATION: &str = "C:\\stand-in\\NPClient";
+
+static TIR_SCENARIO: AtomicU32 = AtomicU32::new(0);
+static TIR_CALLS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn tir_log(line: String) {
+    TIR_CALLS.lock().unwrap().push(line);
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    #[link_name = "LoadLibraryA"]
+    fn real_load_library_a(name: *const u8) -> usize;
+    #[link_name = "GetProcAddress"]
+    fn real_get_proc_address(module: usize, name: *const u8) -> usize;
+}
+
+unsafe fn c_text(at: *const u8) -> String {
+    std::ffi::CStr::from_ptr(at.cast()).to_string_lossy().into_owned()
+}
+
+extern "system" fn reg_open_key_ex_a(_key: isize, sub: *const u8, _options: u32, access: u32, out: *mut isize) -> i32 {
+    unsafe {
+        tir_log(format!("RegOpenKeyExA {} {access:x}", c_text(sub)));
+        *out = 0x77;
+    }
+    0
+}
+
+extern "system" fn reg_query_value_ex_a(_key: isize, name: *const u8, _r: *mut u32, _kind: *mut u32, data: *mut u8, size: *mut u32) -> i32 {
+    unsafe {
+        tir_log(format!("RegQueryValueExA {}", c_text(name)));
+        let text = STAND_IN_LOCATION.as_bytes();
+        if !data.is_null() {
+            std::ptr::copy_nonoverlapping(text.as_ptr(), data, text.len());
+            *data.add(text.len()) = 0;
+        }
+        *size = text.len() as u32 + 1;
+    }
+    0
+}
+
+extern "system" fn reg_close_key(_key: isize) -> i32 {
+    0
+}
+
+extern "system" fn load_library_a(name: *const u8) -> usize {
+    unsafe {
+        let text = c_text(name);
+        if text.ends_with("NPClient64.dll") {
+            tir_log(format!("LoadLibraryA {text}"));
+            return FAKE_NPCLIENT;
+        }
+        real_load_library_a(name)
+    }
+}
+
+extern "system" fn get_proc_address(module: usize, name: *const u8) -> usize {
+    unsafe {
+        if module != FAKE_NPCLIENT {
+            return real_get_proc_address(module, name);
+        }
+        let name = c_text(name);
+        tir_log(format!("GetProcAddress {name}"));
+        np_stand_in(&name, TIR_SCENARIO.load(Ordering::Relaxed))
+    }
+}
+
+/// The stand-in NPClient's functions; the same in `start_camera_check` (the port's side).
+/// Scenarios: 0 no `NP_GetSignature`, 1 a wrong signature, 2 the version query fails, 3 no
+/// trackir.ini, 4 trackir.ini VALUE=100, 5 the cursor and the data refuse and trackir.ini has no
+/// `[TRACK_IR]`, 6 VALUE=250.
+fn np_stand_in(name: &str, scenario: u32) -> usize {
+    extern "C" fn get_signature(out: *mut u8) -> i32 {
+        let app = if TIR_SCENARIO.load(Ordering::Relaxed) == 1 { "hardware camera" } else { rustyac_trackir_app() };
+        unsafe {
+            std::ptr::write_bytes(out, 0, 400);
+            let dll = rustyac_trackir_dll();
+            std::ptr::copy_nonoverlapping(dll.as_ptr(), out, dll.len());
+            std::ptr::copy_nonoverlapping(app.as_ptr(), out.add(200), app.len());
+        }
+        tir_log("NP_GetSignature".into());
+        0
+    }
+    extern "C" fn register_window_handle(window: isize) -> i32 {
+        tir_log(format!("NP_RegisterWindowHandle {window:x}"));
+        0
+    }
+    extern "C" fn unregister_window_handle() -> i32 {
+        tir_log("NP_UnregisterWindowHandle".into());
+        0
+    }
+    extern "C" fn register_program_profile_id(id: u16) -> i32 {
+        tir_log(format!("NP_RegisterProgramProfileID {id}"));
+        0
+    }
+    extern "C" fn query_version(version: *mut u16) -> i32 {
+        tir_log("NP_QueryVersion".into());
+        unsafe { *version = 0x0503 };
+        (TIR_SCENARIO.load(Ordering::Relaxed) == 2) as i32
+    }
+    extern "C" fn request_data(mask: u16) -> i32 {
+        tir_log(format!("NP_RequestData {mask:x}"));
+        0
+    }
+    extern "C" fn get_data(_data: *mut u8) -> i32 {
+        tir_log("NP_GetData".into());
+        0
+    }
+    extern "C" fn plain_ok() -> i32 {
+        tir_log("NP_other".into());
+        0
+    }
+    extern "C" fn stop_cursor() -> i32 {
+        tir_log("NP_StopCursor".into());
+        (TIR_SCENARIO.load(Ordering::Relaxed) == 5) as i32
+    }
+    extern "C" fn start_data() -> i32 {
+        tir_log("NP_StartDataTransmission".into());
+        (TIR_SCENARIO.load(Ordering::Relaxed) == 5) as i32
+    }
+    extern "C" fn stop_data() -> i32 {
+        tir_log("NP_StopDataTransmission".into());
+        0
+    }
+    match name {
+        "NP_GetSignature" if scenario == 0 => 0,
+        "NP_GetSignature" => get_signature as *const () as usize,
+        "NP_RegisterWindowHandle" => register_window_handle as *const () as usize,
+        "NP_UnregisterWindowHandle" => unregister_window_handle as *const () as usize,
+        "NP_RegisterProgramProfileID" => register_program_profile_id as *const () as usize,
+        "NP_QueryVersion" => query_version as *const () as usize,
+        "NP_RequestData" => request_data as *const () as usize,
+        "NP_GetData" => get_data as *const () as usize,
+        "NP_StopCursor" => stop_cursor as *const () as usize,
+        "NP_StartDataTransmission" => start_data as *const () as usize,
+        "NP_StopDataTransmission" => stop_data as *const () as usize,
+        _ => plain_ok as *const () as usize,
+    }
+}
+
+fn rustyac_trackir_dll() -> &'static str {
+    "precise head tracking\n put your head into the game\n now go look around\n\n Copyright EyeControl Technologies"
+}
+
+fn rustyac_trackir_app() -> &'static str {
+    "hardware camera\n software processing data\n track user movement\n\n Copyright EyeControl Technologies"
+}
+
+/// trackir.ini of each scenario (`None`: no file).
+pub fn trackir_ini(scenario: u32) -> Option<&'static str> {
+    match scenario {
+        3 => None,
+        4 => Some("[TRACK_IR]\nVALUE=100\n"),
+        5 => Some("[OTHER]\nVALUE=7\n"),
+        _ => Some("[TRACK_IR]\nVALUE=250\n"),
+    }
+}
+
+/// The stand-ins `trackir_micro` needs (with `overrides`).
+pub fn trackir_overrides() -> Vec<(&'static str, &'static str, usize)> {
+    vec![
+        ("advapi32.dll", "RegOpenKeyExA", reg_open_key_ex_a as *const () as usize),
+        ("advapi32.dll", "RegQueryValueExA", reg_query_value_ex_a as *const () as usize),
+        ("advapi32.dll", "RegCloseKey", reg_close_key as *const () as usize),
+        ("kernel32.dll", "LoadLibraryA", load_library_a as *const () as usize),
+        ("kernel32.dll", "GetProcAddress", get_proc_address as *const () as usize),
+    ]
+}
+
+/// Task 47: the game's `TrackIR::TrackIR` and `~TrackIR` on a stand-in registry and
+/// `NPClient64.dll`, once a scenario (`np_stand_in`), trackir.ini in `root/cfg`. Lines: `scenario
+/// <n>`, then each call the game made, `valid <0|1> <divisionValue>`, the destructor's calls,
+/// `end`.
+pub unsafe fn trackir_micro(acs: &Acs, root: &std::path::Path) -> Result<String, String> {
+    let ctor: extern "C" fn(*mut u8, isize) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACKIR_CTOR));
+    let dtor: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_TRACKIR_DTOR));
+    acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
+    super::race_ini::write_wstring(acs.va(0x1_4151_d100) as *mut u8, &format!("{}/", root.to_string_lossy().replace('\\', "/")));
+    std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
+    let mut tape = String::new();
+    for scenario in 0..7 {
+        let ini = root.join("cfg/trackir.ini");
+        match trackir_ini(scenario) {
+            Some(text) => std::fs::write(&ini, text).map_err(|e| e.to_string())?,
+            None => {
+                let _ = std::fs::remove_file(&ini);
+            }
+        }
+        TIR_SCENARIO.store(scenario, Ordering::Relaxed);
+        TIR_CALLS.lock().unwrap().clear();
+        let tracker = acs.alloc(0x10);
+        ctor(tracker, 0x1234);
+        let split = TIR_CALLS.lock().unwrap().len();
+        let valid: u8 = rd(tracker, 0);
+        let division: f32 = rd(tracker, 4);
+        dtor(tracker);
+        let calls = std::mem::take(&mut *TIR_CALLS.lock().unwrap());
+        writeln!(tape, "scenario {scenario}").unwrap();
+        for call in &calls[..split] {
+            writeln!(tape, "{call}").unwrap();
+        }
+        writeln!(tape, "valid {valid} {:08x}", division.to_bits()).unwrap();
+        for call in &calls[split..] {
+            writeln!(tape, "{call}").unwrap();
+        }
+        tape.push_str("end\n");
+    }
     Ok(tape)
 }

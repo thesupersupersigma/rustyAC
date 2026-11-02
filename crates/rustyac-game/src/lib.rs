@@ -23,6 +23,7 @@ pub mod ac_replay;
 pub mod ai_record;
 pub mod ghost;
 pub mod telemetry;
+pub mod trackir;
 pub mod autodrive;
 #[cfg(windows)]
 pub mod cli;

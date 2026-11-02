@@ -171,14 +171,14 @@ if part micro; then  # Task 28: the game's referee on made-up drives, 25 seeds o
     done
 fi
 
-if part cameras; then  # Tasks 34, 46 and 46b: the game's start, free (F7), cockpit, drivable, car, track (F3), random (F2), onboard free (F5), cinematic and helicopter cameras on made-up cars, keys and look keys
+if part cameras; then  # Tasks 34, 46 and 46b: the game's start, free (F7), cockpit, drivable, car, track (F3), random (F2), onboard free (F5), cinematic and helicopter cameras on made-up cars, keys and look keys; Task 47: the cockpit camera on a stand-in head tracker and TrackIR's start and stop
     for seed in 1 2 3; do
         keep "cameras $seed" || continue
         d=$root/cameras/$seed
         mkdir -p "$d"
         "$CO" start-camera-micro --seed "$seed" --steps 60000 --root "$d" > "$out/cameras_$seed.txt" 2>&1
-        cargo run --release --locked --quiet -p rustyac-game --example start_camera_check -- "$d/start_camera.tape" "$d/free_camera.tape" "$d/driving_camera.tape" "$d/track_camera.tape" "$ac" "$d/random_camera.tape" "$seed" "$d/orbit_camera.tape" >> "$out/cameras_$seed.txt" 2>&1
-        for what in "start camera" "free camera" "driving cameras" "track cameras" "random camera" "orbit cameras"; do
+        cargo run --release --locked --quiet -p rustyac-game --example start_camera_check -- "$d/start_camera.tape" "$d/free_camera.tape" "$d/driving_camera.tape" "$d/track_camera.tape" "$ac" "$d/random_camera.tape" "$seed" "$d/orbit_camera.tape" "$d/trackir_init.tape" >> "$out/cameras_$seed.txt" 2>&1
+        for what in "start camera" "free camera" "driving cameras" "track cameras" "random camera" "orbit cameras" "trackir start"; do
             r=$(grep "^$what: " "$out/cameras_$seed.txt")
             case "$r" in *IDENTICAL*) verdict "cameras $seed $what" IDENTICAL ;; *) verdict "cameras $seed $what" DIFFERENT "${r:-no result}" ;; esac
         done

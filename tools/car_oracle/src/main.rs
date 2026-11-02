@@ -556,7 +556,7 @@ fn start_camera_micro(args: &Args) -> Result<(), String> {
     }
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let out = root.join("start_camera.tape");
-    acs::set_extra_overrides(game::camera::overrides());
+    acs::set_extra_overrides(game::camera::overrides().into_iter().chain(game::camera::trackir_overrides()).collect());
     let acs = acs::Acs::load(&args.acs)?;
     acs.silence_game_stdout();
     let tape = unsafe { game::camera::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
@@ -583,6 +583,11 @@ fn start_camera_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::camera::orbit_micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("orbit cameras: {} lines of the game into {}", tape.lines().count(), out.display());
+    // (last: the game's NPClient_Init replaces the micro's stand-in NP_GetData)
+    let out = root.join("trackir_init.tape");
+    let tape = unsafe { game::camera::trackir_micro(&acs, &root.join("documents"))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("trackir start: {} lines of the game into {}", tape.lines().count(), out.display());
     Ok(())
 }
 

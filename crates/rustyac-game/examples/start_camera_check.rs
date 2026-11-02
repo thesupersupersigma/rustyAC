@@ -24,7 +24,10 @@
 //! port's `OnboardFreeCamera`, `CinematicCamera` and `HelicopterCamera` (the scene camera's
 //! fields, theta, phi, F5's own matrix and the cursor the look moves).
 //!
-//! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder> [<random_camera.tape> <seed> [<orbit_camera.tape>]]]]]`
+//! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder> [<random_camera.tape> <seed> [<orbit_camera.tape> [<trackir_init.tape>]]]]]]`
+//!
+//! With a seventh (`trackir_init.tape`, Task 47), `TrackIR::TrackIR` and `~TrackIR` against the
+//! port's `TrackIr` on a stand-in NPClient: every call and its arguments, in order.
 
 use rustyac_game::render::onboard_free::{self, CinematicCamera, HelicopterCamera, OnboardFreeCamera, OrbitInput, ShotCamera};
 use rustyac_game::render::track_camera::{CameraSet, RandomCamera, TrackCamera, TrackCameras};
@@ -141,6 +144,9 @@ fn main() {
     }
     if let Some(path) = std::env::args().nth(8) {
         failed |= !orbit(&std::fs::read_to_string(&path).expect("the orbit cameras' tape"));
+    }
+    if let Some(path) = std::env::args().nth(9) {
+        failed |= !trackir_init(&std::fs::read_to_string(&path).expect("the head tracker's tape"));
     }
     if failed {
         std::process::exit(1);
@@ -285,8 +291,17 @@ fn driving(tape: &str) -> bool {
     let mut car = CarView::default();
     let mut what = String::new();
     let mut wrong_by: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    let mut head = None;
     for line in tape.lines() {
         lines += 1;
+        if let Some(tir) = line.strip_prefix("tir ") {
+            // Task 47: the head tracker's answer before this cockpit frame
+            let w: Vec<&str> = tir.split(' ').collect();
+            let v: Vec<f32> = w[2..].iter().map(|x| float(x)).collect();
+            let data = rustyac_game::trackir::TrackIrData { status: w[1].parse().unwrap(), roll: v[1], pitch: v[2], yaw: v[3], x: v[4], y: v[5], z: v[6], ..Default::default() };
+            head = Some(rustyac_game::trackir::offsets(&data, v[0]));
+            continue;
+        }
         if let Some(seg) = line.strip_prefix("seg ") {
             let w: Vec<&str> = seg.split(' ').collect();
             let (mode, view, index, features): (u32, i32, usize, u32) = (w[0].parse().unwrap(), w[1].parse().unwrap(), w[2].parse().unwrap(), w[3].parse().unwrap());
@@ -364,6 +379,7 @@ fn driving(tape: &str) -> bool {
         car.hubs[3][3] = [v[19], v[20], v[21], 1.0];
         car.speed_ms = v[22];
         car.speed_kmh = v[22] * 3.6;
+        camera.head = head.take();
         let frame = camera.update(&car, &shape, [v[23], v[24], v[25]], v[29]);
         let mut port: Vec<u32> = frame.matrix.iter().flatten().map(|x| x.to_bits()).collect();
         port.extend([frame.fov.to_bits(), frame.near.to_bits()]);
@@ -586,6 +602,148 @@ fn orbit(tape: &str) -> bool {
         println!("orbit cameras: IDENTICAL ({lines} lines of the game)");
     } else {
         println!("orbit cameras: DIFFERENT in {wrong} of {lines} lines");
+    }
+    wrong == 0
+}
+
+/// Task 47: the port's `TrackIr` start and stop (`trackir_init.tape`) on the same stand-in
+/// NPClient as the oracle's (`np_stand_in`). The registry and `LoadLibraryA` lines are the
+/// port's constants (`REGISTRY_KEY`, `dll_path`); the NPClient calls are the port's own.
+mod tir {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    pub static SCENARIO: AtomicU32 = AtomicU32::new(0);
+    pub static CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn log(line: String) {
+        CALLS.lock().unwrap().push(line);
+    }
+
+    extern "C" fn get_signature(out: *mut u8) -> i32 {
+        let app = if SCENARIO.load(Ordering::Relaxed) == 1 { "hardware camera" } else { rustyac_game::trackir::APP_SIGNATURE };
+        let dll = rustyac_game::trackir::DLL_SIGNATURE;
+        // SAFETY: a tagTrackIRSignature of 400 bytes
+        unsafe {
+            std::ptr::write_bytes(out, 0, 400);
+            std::ptr::copy_nonoverlapping(dll.as_ptr(), out, dll.len());
+            std::ptr::copy_nonoverlapping(app.as_ptr(), out.add(200), app.len());
+        }
+        log("NP_GetSignature".into());
+        0
+    }
+    extern "C" fn register_window_handle(window: isize) -> i32 {
+        log(format!("NP_RegisterWindowHandle {window:x}"));
+        0
+    }
+    extern "C" fn unregister_window_handle() -> i32 {
+        log("NP_UnregisterWindowHandle".into());
+        0
+    }
+    extern "C" fn register_program_profile_id(id: u16) -> i32 {
+        log(format!("NP_RegisterProgramProfileID {id}"));
+        0
+    }
+    extern "C" fn query_version(version: *mut u16) -> i32 {
+        log("NP_QueryVersion".into());
+        // SAFETY: the port passes its u16
+        unsafe { *version = 0x0503 };
+        (SCENARIO.load(Ordering::Relaxed) == 2) as i32
+    }
+    extern "C" fn request_data(mask: u16) -> i32 {
+        log(format!("NP_RequestData {mask:x}"));
+        0
+    }
+    extern "C" fn get_data(_data: *mut u8) -> i32 {
+        log("NP_GetData".into());
+        0
+    }
+    extern "C" fn plain_ok() -> i32 {
+        log("NP_other".into());
+        0
+    }
+    extern "C" fn stop_cursor() -> i32 {
+        log("NP_StopCursor".into());
+        (SCENARIO.load(Ordering::Relaxed) == 5) as i32
+    }
+    extern "C" fn start_data() -> i32 {
+        log("NP_StartDataTransmission".into());
+        (SCENARIO.load(Ordering::Relaxed) == 5) as i32
+    }
+    extern "C" fn stop_data() -> i32 {
+        log("NP_StopDataTransmission".into());
+        0
+    }
+
+    pub fn symbol(name: &str) -> usize {
+        log(format!("GetProcAddress {name}"));
+        match name {
+            "NP_GetSignature" if SCENARIO.load(Ordering::Relaxed) == 0 => 0,
+            "NP_GetSignature" => get_signature as *const () as usize,
+            "NP_RegisterWindowHandle" => register_window_handle as *const () as usize,
+            "NP_UnregisterWindowHandle" => unregister_window_handle as *const () as usize,
+            "NP_RegisterProgramProfileID" => register_program_profile_id as *const () as usize,
+            "NP_QueryVersion" => query_version as *const () as usize,
+            "NP_RequestData" => request_data as *const () as usize,
+            "NP_GetData" => get_data as *const () as usize,
+            "NP_StopCursor" => stop_cursor as *const () as usize,
+            "NP_StartDataTransmission" => start_data as *const () as usize,
+            "NP_StopDataTransmission" => stop_data as *const () as usize,
+            _ => plain_ok as *const () as usize,
+        }
+    }
+
+    pub fn ini(scenario: u32) -> Option<&'static str> {
+        match scenario {
+            3 => None,
+            4 => Some("[TRACK_IR]\nVALUE=100\n"),
+            5 => Some("[OTHER]\nVALUE=7\n"),
+            _ => Some("[TRACK_IR]\nVALUE=250\n"),
+        }
+    }
+}
+
+fn trackir_init(tape: &str) -> bool {
+    use rustyac_game::trackir::{self, NpClient, TrackIr};
+    use std::sync::atomic::Ordering;
+    let mut port = String::new();
+    for scenario in 0..7u32 {
+        tir::SCENARIO.store(scenario, Ordering::Relaxed);
+        tir::CALLS.lock().unwrap().clear();
+        let location = "C:\\stand-in\\NPClient";
+        let mut calls = vec![
+            format!("RegOpenKeyExA {} {:x}", trackir::REGISTRY_KEY, trackir::REGISTRY_ACCESS),
+            "RegQueryValueExA Path".to_string(),
+            "RegQueryValueExA Path".to_string(),
+            format!("LoadLibraryA {}", trackir::dll_path(location)),
+        ];
+        let ini = tir::ini(scenario).map(|text| rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("trackir.ini"), text));
+        // SAFETY: the stand-in's functions have NPClient's signatures
+        let started = unsafe { NpClient::from_symbols(&mut tir::symbol).ok().and_then(|np| TrackIr::start(np, 0x1234, ini.as_ref())) };
+        calls.append(&mut tir::CALLS.lock().unwrap());
+        let (valid, division) = started.as_ref().map_or((0, 500.0f32), |t| (1, t.division));
+        drop(started);
+        let after = std::mem::take(&mut *tir::CALLS.lock().unwrap());
+        port += &format!("scenario {scenario}\n");
+        for call in calls {
+            port += &format!("{call}\n");
+        }
+        port += &format!("valid {valid} {:08x}\n", division.to_bits());
+        for call in after {
+            port += &format!("{call}\n");
+        }
+        port += "end\n";
+    }
+    let game: Vec<&str> = tape.lines().collect();
+    let ours: Vec<&str> = port.lines().collect();
+    let wrong = game.iter().zip(&ours).filter(|(a, b)| a != b).count() + game.len().abs_diff(ours.len());
+    if wrong == 0 {
+        println!("trackir start: IDENTICAL ({} lines of the game, 7 cases)", game.len());
+    } else {
+        println!("trackir start: DIFFERENT in {wrong} of {} lines", game.len());
+        for (a, b) in game.iter().zip(&ours).filter(|(a, b)| a != b).take(5) {
+            println!("  game {a}\n  port {b}");
+        }
     }
     wrong == 0
 }

@@ -574,6 +574,9 @@ pub struct DrivingCamera {
     current_offset: [f32; 3],
     /// `actionsState` of the focused car: bit 0 look left, bit 1 look right, bit 9 look back.
     pub actions: u32,
+    /// The head tracker's turn (degrees: pitch, heading, roll) and move (metres) this frame
+    /// (`TrackIR::getOffsets`), `None` without one: the cockpit view then has its look keys.
+    pub head: Option<([f32; 3], [f32; 3])>,
     /// The camera's near plane as the last mode left it (a car camera keeps it).
     pub near: f32,
     /// `CameraOnBoard`: the cockpit's settings and what it remembers.
@@ -617,6 +620,7 @@ impl DrivingCamera {
             fade_color: [0.0; 3],
             current_offset: [0.0; 3],
             actions: 0,
+            head: None,
             near: 0.05,
             cockpit: CockpitCamera::default(),
             acc_gx_mul: 0.4,
@@ -1007,7 +1011,7 @@ impl DrivingCamera {
         frame
     }
 
-    /// `CameraOnBoard::update` 0x1400c9ea0 (no TrackIR, no VR).
+    /// `CameraOnBoard::update` 0x1400c9ea0 (no VR).
     fn cockpit(&mut self, view: &CarView, shape: &CarShape, model: &Mat, acc_g: [f32; 3], dt: f32) -> CameraFrame {
         let c = &mut self.cockpit;
         let mut heading = normalized(row(model, 2));
@@ -1044,7 +1048,16 @@ impl DrivingCamera {
         let position = [(c.shake_mul * o[0] + shake[0]) * fade + eye[0], (c.shake_mul * o[1] + shake[1]) * fade + eye[1], (c.shake_mul * o[2] + shake[2]) * fade + eye[2]];
         let mut matrix = set_from_heading_up(heading, up, position);
         let a = self.actions;
-        if a >> 9 & 1 != 0 || (a & 1 != 0 && a >> 1 & 1 != 0) {
+        if let Some((turn, place)) = self.head {
+            // the head tracker: turned by its angles, then moved along the turned axes
+            const K: f32 = 0.017_453;
+            matrix = rotate_roll(&rotate_pitch(&rotate_heading(&matrix, turn[1] * K), turn[0] * K), turn[2] * K);
+            let (x, y, z) = (-place[0], place[1], place[2]);
+            let [r0, r1, r2, _] = matrix;
+            for (j, v) in matrix[3][..3].iter_mut().enumerate() {
+                *v += (r1[j] * y + r0[j] * x) + r2[j] * z;
+            }
+        } else if a >> 9 & 1 != 0 || (a & 1 != 0 && a >> 1 & 1 != 0) {
             // CameraOnBoard::lookBack 0x1400c9a60
             let p = point(model, shape.look_back);
             matrix[3] = [p[0], p[1], p[2], matrix[3][3]];
@@ -1203,7 +1216,13 @@ fn turn_head(animation: f32, direction: f32, degrees: f32, step: f32) -> f32 {
     }
 }
 
-/// `Camera::rotateHeading` 0x14020f9a0: a turn about the camera's own y axis.
+/// `Camera::rotateRoll` @ 0x14020fb30: a turn about the camera's own z axis.
+pub fn rotate_roll(camera: &Mat, angle: f32) -> Mat {
+    let turn = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 0.0, 1.0), angle);
+    xm_matrix_multiply(&turn, &Mat44f { m: *camera }).m
+}
+
+/// `Camera::rotateHeading` 0x14020f940: a turn about the camera's own y axis.
 pub fn rotate_heading(camera: &Mat, angle: f32) -> Mat {
     let turn = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), angle);
     xm_matrix_multiply(&turn, &Mat44f { m: *camera }).m
