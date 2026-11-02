@@ -1753,7 +1753,7 @@ fn has_jobs(recording: &Recording) -> bool {
 /// (`--replay --headless --dump-states -`) and its car is compared with the recording after
 /// every step exactly as `run` compares: the 2,009 chassis values, the values of the other
 /// systems with the telemetry page, and the force tape.
-fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>, verbose: bool) -> Result<(), String> {
+fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>, own: Option<&Path>, verbose: bool) -> Result<(), String> {
     use std::process::{Command, Stdio};
     let repo = repo_root();
     let folder = match dir {
@@ -1885,6 +1885,8 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
         let started = std::time::Instant::now();
         let mut child = Command::new(&exe)
             .args(["--replay", &input.to_string_lossy(), "--headless", "--no-shm", "--dump-states", "-"])
+            // `--own <folder>`: the game on a fresh own folder of its own per drive (the proofs)
+            .args(own.iter().flat_map(|own| { let own = own.join(name); [std::ffi::OsString::from("--cfg-dir"), own.join("cfg").into(), "--documents".into(), own.join("docs").into()] }))
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
@@ -3238,7 +3240,7 @@ fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
      chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare excerpt18\n       chassis_compare excerpt22b\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       chassis_compare faults16 <scenario> --dir <folder>\n       \
      chassis_compare test-car\n       \
-     chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
+     chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>] [--own <folder>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
         .to_string()
 }
@@ -3252,10 +3254,12 @@ fn main() {
     let mut dir: Option<PathBuf> = None;
     let mut systems = Systems::ALL;
     let mut exe: Option<PathBuf> = None;
+    let mut own: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verbose" => verbose = true,
             "--exe" => exe = args.next().map(PathBuf::from),
+            "--own" => own = args.next().map(PathBuf::from),
             "--dir" => dir = args.next().map(PathBuf::from),
             "--feed" => {
                 for name in args.next().unwrap_or_default().split(',') {
@@ -3297,7 +3301,7 @@ fn main() {
         "excerpt16" => excerpt16_command(),
         "excerpt17" => excerpt17_command(),
         "excerpt18" => excerpt18_command(),
-        "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref(), verbose),
+        "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref(), own.as_deref(), verbose),
         _ => Err(usage()),
     };
     if let Err(message) = result {

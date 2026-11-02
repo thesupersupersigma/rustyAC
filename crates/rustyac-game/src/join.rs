@@ -140,7 +140,7 @@ pub struct Joined {
 pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
     let root = rustyac_content::install::ac_root();
     let mut notes = Vec::new();
-    let identity = identity::resolve(options.guid.as_deref(), !options.no_steam, root.as_deref(), options.net_identity.as_deref())?;
+    let identity = identity::resolve(options.guid.as_deref(), !options.no_steam, root.as_deref(), options.net_identity.as_deref(), &crate::conditions::own_dir(options))?;
     notes.push(match &identity.source {
         GuidSource::Steam => "online: your player id is your Steam id (asked of Steam through the game's own steam_api64.dll)".to_string(),
         GuidSource::Own(file) => format!("online: Steam is not running (or was not asked): your player id is rustyAC's own, kept in {}", file.display()),

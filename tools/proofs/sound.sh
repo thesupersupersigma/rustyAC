@@ -53,7 +53,7 @@ while read -r scenario camera; do
     keep "e2e $scenario $camera" || continue
     "$AO" run --side ac --tape "oracle/audio_e2e/$scenario.audiotape" --camera "$camera" --out "$out/e2e" --root "$root" > "$out/e2e.txt" 2>&1
     game_log=$(ls "$out"/e2e/*_"${scenario}_${camera}"_ac.log 2>/dev/null | head -n 1)
-    target/release/rustyac.exe --replay "oracle/game/audio_e2e_$scenario.ryin" --headless --no-shm \
+    rustyac target/release/rustyac.exe --replay "oracle/game/audio_e2e_$scenario.ryin" --headless --no-shm \
         --audio-wav "$out/e2e/port.wav" --audio-log "$out/e2e/port.log" --audio-oracle-camera "$camera" \
         --audio-ini "$root/cfg/audio.ini" --audio-script "$game_log" >> "$out/e2e.txt" 2>&1
     r=$(python tools/proofs/logdiff.py "$game_log" "$out/e2e/port.log" | head -n 1)

@@ -63,6 +63,7 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
         fxaa: None,
         motion_blur: None,
         hdr_levels: false,
+        own_dir: None,
     };
     let mut renderer = Box::new(AcRenderer::new(width, height, options)?);
     notes.extend(renderer.notes.iter().cloned());

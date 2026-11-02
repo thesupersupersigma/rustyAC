@@ -16,6 +16,54 @@ the ignored `oracle/` (saved game recordings of Tasks 9 to 34, as they always we
 `tools/proofs/README.md` says what each area compares and needs; `re/gold/README.md` how each
 file under `re/gold/` was made and how to make it again.
 
+## Task 46c: proof runs start clean (v0.46.2)
+
+A proof's game run used to read and write the folders a player's rustyac.exe uses: `target/release/cfg`
+(camera_manager.ini, gameplay.ini, …), the folders beside the exe (setups, replay, …) and the player's
+`Documents\Assetto Corsa`. A camera left in camera_manager.ini by one run started the next on it.
+Now every game run of a proof gets fresh folders of its own and the kept copies in `re/gold/docs/`.
+
+What rustyac.exe writes and reads back (all now under `--cfg-dir`'s folder and its parent, the "own
+folder"; the defaults are unchanged: `<exe>/cfg` and the exe's folder):
+
+| file | written | read back |
+| --- | --- | --- |
+| cfg/camera_manager.ini | the last camera, the fade, at the end | the camera and fade at the start |
+| cfg/gameplay.ini, acos.ini, exposure.ini, audio.ini, python.ini, telemetry_user.ini | app and HUD settings at the end | at the start (Time Attack's budget, collisions, mph, …) |
+| cfg/camera_onboard.ini, cfg/cars/<car>/view.ini | the cockpit camera | at the start |
+| cfg/content/tracks/…/ai | the AI line cache | when the line is the same |
+| cfg/content/cars/<car>/data/car.ini | apps' saved car files | at load |
+| cfg/TempRuns | the temp runs | — |
+| savedData (beside cfg) | the apps' saved data | by the apps |
+| setups/<car>/generic/last.ini, .sp | the last setup | at the start |
+| replay/, GhostCar/, ctelemetry/ | replays, the ghost lap, saved laps | the ghost and the telemetry page |
+| out/ (race_out.json, laps.ini, mode_frames.txt) | session results | — |
+| screenshots/ | F8 | — |
+| rustyac_net.ini | the online id, once | online joins |
+| rustyac_controls.ini | the bindings, once (from AC's controls.ini) | at the start |
+| rustyac_cache/shadows | the generated car shadows | at load |
+
+From the player's Documents (or `--documents`): race.ini, cfg/*.ini, setups, logs/py_log.txt (Python).
+
+The rules now:
+
+- `--cfg-dir <folder>` also moves the rest: setups, replay, GhostCar, ctelemetry, out, screenshots,
+  rustyac_net.ini, rustyac_controls.ini, rustyac_cache sit beside it (unless their own options name
+  others). The page has no exe folder and writes none of them.
+- `tools/proofs/lib.sh` exports `RUSTYAC_PROOF_RUN=1`: rustyac.exe (and race_proof) refuse to start
+  (exit 2) without `--cfg-dir` and `--documents`. Every game run goes through `rustyac <exe> <args>`
+  (a fresh `$out/own/run.XXXXXX/{cfg,docs}`); chassis_compare's `game-replay --own <folder>` does the
+  same for the exe it spawns; race_proof takes `--documents`.
+- A drive naming a file of the player's Documents (conditions_spa_setup: its setup) is replayed as a
+  copy naming the kept one (`drive <file>`); the old exe of dumps.sh gets the same copy.
+- `summary()` fails the area when the default own folder beside `target/release/rustyac.exe` changed
+  during it (the default own folder: `target/release/cfg` and the rest).
+- Kept copies: `re/gold/docs/` (re/gold/README.md).
+
+The proof: different camera, Time Attack budget, collisions, mph, setups, bindings, online id, audio and
+a shadow file planted in `target/release`'s folders; the quick suite twice (results in
+docs/port/cameras.md's Task 46c section).
+
 ## Task P1: a faster full run (v0.45.3)
 
 **In plain words.** The full run took 10 h 33 min at M1 (6 h 58 min, then 3 h 35 min again for

@@ -27,6 +27,12 @@ pub fn cfg_dir(options: &Options) -> PathBuf {
     options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg"))
 }
 
+/// rustyAC's own folder: the one holding its `cfg` folder (beside the exe, or `--cfg-dir`'s
+/// parent): setups, replays, ghosts, telemetry, `out`, screenshots, ids, bindings and caches.
+pub fn own_dir(options: &Options) -> PathBuf {
+    cfg_dir(options).parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
 pub fn race_ini_path() -> Option<PathBuf> {
     Some(documents_folder()?.join("cfg").join("race.ini"))
 }

@@ -844,6 +844,9 @@ for checks, without anybody at the controls:
                         console (Home: AC's console)  type:<text> (typed into it, then Enter)
   --cfg-dir <folder>    where rustyAC keeps its own acos.ini (the apps' layout) and gameplay.ini
                         (default: cfg beside rustyac.exe; Assetto Corsa's files are only read)
+                        and its parent folder holds the rest of rustyAC's own files (setups, replay,
+                        GhostCar, ctelemetry, out, screenshots, rustyac_net.ini, rustyac_controls.ini,
+                        rustyac_cache) unless their own options name other folders
   --documents <folder>  that folder instead of Documents\\Assetto Corsa (its cfg, setups, replay):
                         the launcher names its own, so a drive reads the files it wrote
                         and without the virtual mirror

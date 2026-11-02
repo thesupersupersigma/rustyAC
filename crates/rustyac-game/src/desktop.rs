@@ -340,7 +340,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     }
     // --no-a2c (NOT Assetto Corsa): before the device makes its blend states
     rustyac_render::kgl::EXPERIMENT_NO_ALPHA_TO_COVERAGE.store(options.no_a2c, Ordering::Relaxed);
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, start_lights, session_type: session_type.unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }), video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()?, aa_samples: options.aa_samples, post: options.post, fxaa: options.fxaa, motion_blur: options.motion_blur, hdr_levels: options.hdr_levels })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, start_lights, session_type: session_type.unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }), video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()?, aa_samples: options.aa_samples, post: options.post, fxaa: options.fxaa, motion_blur: options.motion_blur, hdr_levels: options.hdr_levels, own_dir: Some(rustyac_game::conditions::own_dir(options)) })?;
     for note in &renderer.notes {
         println!("{note}");
     }
@@ -438,7 +438,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             engineer_masses: info.engineer_masses,
             wings: info.wings.clone(),
             suspension: info.suspension,
-            setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
+            setups_dir: options.setups_dir.clone().unwrap_or_else(|| rustyac_game::conditions::own_dir(options).join("setups")),
             documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             track_layout: info.track_layout.clone(),
@@ -537,7 +537,7 @@ fn replay_rig(options: &Options, window: bool) -> Option<Arc<Mutex<ReplayRig>>> 
     if options.no_ac_replay || !(window || options.save_replay.is_some()) {
         return None;
     }
-    let folder = options.replay_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("replay")))).unwrap_or_else(|| PathBuf::from("replay"));
+    let folder = options.replay_dir.clone().unwrap_or_else(|| rustyac_game::conditions::own_dir(options).join("replay"));
     // cfg/replay.ini: the player's (read only), else the game's own; none with --no-race-ini,
     // so that a check does not depend on the player's files (10 minutes at 33 frames a second)
     let mut ini = None;
@@ -595,7 +595,7 @@ fn ghost_rig(options: &Options) -> Option<Arc<Mutex<GhostRig>>> {
     if !ghost.wanted() {
         return None;
     }
-    let folder = options.ghost_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("GhostCar")))).unwrap_or_else(|| PathBuf::from("GhostCar"));
+    let folder = options.ghost_dir.clone().unwrap_or_else(|| rustyac_game::conditions::own_dir(options).join("GhostCar"));
     Some(Arc::new(Mutex::new(GhostRig::new(folder, ghost))))
 }
 
@@ -611,7 +611,7 @@ fn telemetry_folder(options: &Options, window: bool) -> Option<PathBuf> {
     if options.no_telemetry || options.join.is_some() || options.ac_replay.is_some() || ((options.replay.is_some() || !window) && !asked) {
         return None;
     }
-    Some(options.telemetry_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("ctelemetry")))).unwrap_or_else(|| PathBuf::from("ctelemetry")))
+    Some(options.telemetry_dir.clone().unwrap_or_else(|| rustyac_game::conditions::own_dir(options).join("ctelemetry")))
 }
 
 /// The physics thread's end of the telemetry: a sample after every step, the file at the end.
@@ -964,7 +964,7 @@ fn referee_out(options: &Options) -> Option<PathBuf> {
     if let Some(folder) = &options.out_dir {
         return Some(folder.clone());
     }
-    std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("out")))
+    Some(rustyac_game::conditions::own_dir(options).join("out"))
 }
 
 /// Task 28: the referee's buttons pressed at given seconds of the run.
@@ -1375,7 +1375,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     let plain_keys: Vec<i32> = [KEY_PLAIN_TC, KEY_PLAIN_ABS, KEY_PLAIN_BIAS_UP, KEY_PLAIN_BIAS_DN].into_iter().filter(|key| bindings.plain_key_free(*key)).collect();
     if replay.is_none() {
         print!("{}", bindings.describe());
-        match bindings.write_if_missing() {
+        match bindings.write_if_missing(&rustyac_game::conditions::own_dir(options)) {
             Ok(Some(path)) => println!("bindings written to {} (edit it to change them)", path.display()),
             Ok(None) => {}
             Err(message) => eprintln!("WARNING: {message}"),
@@ -2466,7 +2466,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         // ScreenCapturer::saveScreen 0x140163360: the picture of the scene, into the folder
         // `screenshots` beside rustyac.exe (the game writes into Documents\Assetto Corsa\screens)
         if let Some(shot) = renderer.take_pre_gui_shot() {
-            let folder = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("screenshots"))).unwrap_or_else(|| PathBuf::from("screenshots"));
+            let folder = rustyac_game::conditions::own_dir(options).join("screenshots");
             let written = shot.and_then(|(width, height, mut pixels)| {
                 rustyac_content::guard::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
                 for pixel in pixels.chunks_exact_mut(4) {
@@ -2924,6 +2924,11 @@ pub fn main() {
     };
     if options.documents.is_some() {
         rustyac_content::install::set_documents(options.documents.clone());
+    }
+    // the proofs (tools/proofs/lib.sh) set this: a run there never reads or writes the player's own files
+    if std::env::var_os("RUSTYAC_PROOF_RUN").is_some() && (options.cfg_dir.is_none() || options.documents.is_none()) {
+        eprintln!("RUSTYAC_PROOF_RUN is set: a proof run needs --cfg-dir and --documents (fresh folders of its own)");
+        std::process::exit(2);
     }
     // SAFETY: the handler only touches two atomics.
     unsafe {

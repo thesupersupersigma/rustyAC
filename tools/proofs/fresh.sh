@@ -57,8 +57,8 @@ if part conditions; then  # Task 15: weather, grip, wind and setups on Spa
     for s in spa_cold_green_wind spa_hot_optimum spa_user spa_wind_any spa_green_laps; do
         keep "conditions $s" && record conditions run --track spa --scenario "$s"
     done
-    # the user's own setup, read where the game keeps it; god_tc4.ini is it with TRACTION_CONTROL 4
-    god="$USERPROFILE/Documents/Assetto Corsa/setups/ks_ferrari_f2004/spa/god.ini"
+    # a player's own setup (the kept copy in re/gold/docs); god_tc4.ini is it with TRACTION_CONTROL 4
+    god=$(cygpath -w "$docs_gold/setups/ks_ferrari_f2004/spa/god.ini")
     [ -f "$god" ] && keep "conditions spa_setup" && record conditions run --track spa --scenario spa_setup --setup "$god"
     [ -f "$gold/fresh/god_tc4.ini" ] && keep "conditions spa_setup_launch" && record conditions run --track spa --scenario spa_setup_launch --setup "$gold/fresh/god_tc4.ini"
     compare_dirs
@@ -138,7 +138,7 @@ if part survey; then  # Task 18: a car on every track of survey_list.txt, then r
         label="t18_${t}_${l}_${car}"
         for s in $scenarios; do record "$label" run --track "$t" ${l:+--layout "$l"} --scenario "$s" --car "$car" --collide; done
         # the exe replays the game's inputs: the same states as the game's recording
-        "$CC" game-replay --dir "$rec/$label" --exe target/release/rustyac.exe > "$out/replay_$label.txt" 2>&1
+        "$CC" game-replay --dir "$rec/$label" --exe target/release/rustyac.exe --own "$(own)" > "$out/replay_$label.txt" 2>&1
         grep -E '^\| .(trk|spa)_[a-z_]*. \|' "$out/replay_$label.txt" | while IFS='|' read -r _ sc rest; do
             sc=$(echo "$sc" | tr -d ' `')
             case "$rest" in *"100 %"*) verdict "game-replay $label/$sc" IDENTICAL ;; *skipped*) skip "game-replay $label/$sc" "$rest" ;; *) verdict "game-replay $label/$sc" DIFFERENT "$rest" ;; esac
@@ -153,7 +153,7 @@ if part crash; then  # Task 22b: into the barrier at Spa with damage, five suspe
         keep "crash $car" || continue
         label="t22b_$car"
         record "$label" run --track spa --collide --scenario spa_crash --car "$car"
-        "$CC" game-replay spa_crash --dir "$rec/$label" --exe target/release/rustyac.exe > "$out/replay_$label.txt" 2>&1
+        "$CC" game-replay spa_crash --dir "$rec/$label" --exe target/release/rustyac.exe --own "$(own)" > "$out/replay_$label.txt" 2>&1
         grep -qE '^\| .spa_crash. \|.*100 %' "$out/replay_$label.txt" && verdict "game-replay $label/spa_crash" IDENTICAL \
             || verdict "game-replay $label/spa_crash" DIFFERENT "$(grep -m1 -E 'spa_crash|rror' "$out/replay_$label.txt")"
         compare_dirs
@@ -211,7 +211,7 @@ if part modes; then  # Task 45: special-event files and goals, hotlap, Time Atta
     for mode in ta drift drag; do
         keep "drive $mode" || continue
         build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
-        d=$root/drive_$mode; rm -rf "$d"; mkdir -p "$d/home"
+        d=$root/drive_$mode; rm -rf "$d"; mkdir -p "$d"
         layout=
         if [ $mode = ta ]; then
             car=ks_ferrari_f2004; track=spa; drive="--autodrive --duration 200"
@@ -243,7 +243,7 @@ SPAWN_SET=START
 EOF
         [ $mode = drag ] && sed -i 's/^CARS=1/CARS=2/' "$d/race.ini" && printf '%s\n' '[CAR_1]' MODEL=$car SKIN= '[SPECIAL_EVENT]' GUID=4545 '[CONDITION_0]' OBJECTIVE=1 '[CONDITION_1]' OBJECTIVE=2 '[CONDITION_2]' OBJECTIVE=3 >> "$d/race.ini"
         [ $mode = drift ] && printf '%s\n' '[SPECIAL_EVENT]' GUID=4545 '[CONDITION_0]' OBJECTIVE=3 '[CONDITION_1]' OBJECTIVE=50 '[CONDITION_2]' OBJECTIVE=70 '[CONDITION_3]' OBJECTIVE=1000 >> "$d/race.ini"
-        USERPROFILE=$(cygpath -w "$d/home") target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$d/race.ini" $drive --race-seed 28000 --drawn-frames 45 --out-dir "$d/out" --track $track ${layout:+--layout $layout} --car $car > "$out/drive_$mode.txt" 2>&1
+        rustyac target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$d/race.ini" $drive --race-seed 28000 --drawn-frames 45 --out-dir "$d/out" --track $track ${layout:+--layout $layout} --car $car > "$out/drive_$mode.txt" 2>&1
         frames=$(grep -cE "^(ta|dr|dg) " "$d/out/mode_frames.txt" 2>/dev/null)
         r=$("$CO" mode-micro --root "$root/modes" --mode-frames "$(cygpath -am "$d/out/mode_frames.txt")" 2>&1 | tail -n 1)
         if [ $mode = ta ]; then

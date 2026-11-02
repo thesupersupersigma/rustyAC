@@ -4,13 +4,11 @@
 //! ([`super::ini`]); a few sections that start with `RUSTYAC` hold what AC has no name for.
 //!
 //! Where the bindings come from, in this order: `--controls <file>`; `rustyac_controls.ini`
-//! next to the program (yours to edit); AC's own `Documents\Assetto Corsa\cfg\controls.ini`
+//! in rustyAC's own folder, beside the exe or `--cfg-dir`'s parent (yours to edit); AC's own `Documents\Assetto Corsa\cfg\controls.ini`
 //! (only ever read); the built-in layout. Whatever is in use is written to
 //! `rustyac_controls.ini` if that file does not exist yet.
 
-#[cfg(windows)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::ini::ControlsIni;
 use super::keyboard::Keys;
@@ -308,9 +306,9 @@ pub fn ac_controls_path() -> Option<PathBuf> {
     Some(rustyac_content::install::documents()?.join("cfg").join("controls.ini"))
 }
 
-/// `rustyac_controls.ini` next to the program.
-pub fn own_controls_path() -> Option<PathBuf> {
-    Some(std::env::current_exe().ok()?.parent()?.join("rustyac_controls.ini"))
+/// `rustyac_controls.ini` in rustyAC's own folder.
+pub fn own_controls_path(own: &Path) -> PathBuf {
+    own.join("rustyac_controls.ini")
 }
 
 impl Bindings {
@@ -382,7 +380,8 @@ impl Bindings {
         if options.default_controls {
             return Bindings { keep: false, ..Bindings::from_ini(&default_ini(), "the built-in layout (--default-controls)".to_string()) };
         }
-        if let Some(path) = own_controls_path().filter(|p| p.is_file()) {
+        let path = own_controls_path(&crate::conditions::own_dir(options));
+        if path.is_file() {
             if let Some(ini) = try_file(&path, notes) {
                 return Bindings::from_ini(&ini, format!("{} (yours to edit; delete it to read AC's bindings again)", path.display()));
             }
@@ -416,10 +415,10 @@ impl Bindings {
         )
     }
 
-    /// Writes `rustyac_controls.ini` next to the program unless it is there already (or the
+    /// Writes `rustyac_controls.ini` into `own` (rustyAC's own folder) unless it is there already (or the
     /// bindings were only asked for on the command line).
-    pub fn write_if_missing(&self) -> Result<Option<PathBuf>, String> {
-        let Some(path) = own_controls_path() else { return Ok(None) };
+    pub fn write_if_missing(&self, own: &Path) -> Result<Option<PathBuf>, String> {
+        let path = own_controls_path(own);
         if path.exists() || !self.keep {
             return Ok(None);
         }

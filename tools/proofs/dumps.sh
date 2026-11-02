@@ -36,13 +36,13 @@ ls oracle/game/*.ryin | awk -v n="${DUMPS_EVERY:-1}" 'NR % n == 1 || n == 1' | w
     keep "$f" || continue  # quick keys: oracle/game/<drive>.ryin
     k=$kept/$(cache_key "$f")
     if [ -n "$PROOF_RERECORD" ] || [ ! -f "$k" ]; then
-        a=$("$old/rustyac.exe" --replay "$f" --headless --no-shm --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
+        a=$(rustyac "$old/rustyac.exe" --replay "$(drive "$f")" --headless --no-shm --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
         if [ -f "$k" ] && [ "$(cat "$k")" != "$a" ]; then verdict "$f" DIFFERENT "the old exe's dump $a, kept $(cat "$k")"; continue; fi
         echo "$a" > "$k"
     else
         a=$(cat "$k")
     fi
-    b=$(target/release/rustyac.exe --replay "$f" --headless --no-shm --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
+    b=$(rustyac target/release/rustyac.exe --replay "$(drive "$f")" --headless --no-shm --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
     if [ "$a" = e3b0c44298fc1c14 ]; then skip "$f" "the old exe dumps nothing"
     elif [ "$a" = "$b" ]; then verdict "$f" IDENTICAL "$a"
     else verdict "$f" DIFFERENT "old $a new $b"; fi

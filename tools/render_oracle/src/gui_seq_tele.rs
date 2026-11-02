@@ -97,8 +97,9 @@ pub fn prepare_root(args: &crate::Args, name: &str) -> Result<(), String> {
     if !name.starts_with("esc_telemetry") {
         return Ok(());
     }
-    let documents = dirs_documents().ok_or("no Documents folder")?;
-    let player = documents.join("Assetto Corsa/ctelemetry/player");
+    // RENDER_ORACLE_DOCUMENTS: that folder instead of the player's Documents\Assetto Corsa (the proofs: a kept copy)
+    let documents = std::env::var_os("RENDER_ORACLE_DOCUMENTS").map(std::path::PathBuf::from).or_else(|| dirs_documents().map(|d| d.join("Assetto Corsa"))).ok_or("no Documents folder")?;
+    let player = documents.join("ctelemetry/player");
     let monza = std::fs::read(player.join("_monza__.tc")).map_err(|e| format!("_monza__.tc: {e}"))?;
     let spa = std::fs::read(player.join("_spa__.tc")).map_err(|e| format!("_spa__.tc: {e}"))?;
     let out = args.root.join("documents/Assetto Corsa/ctelemetry");

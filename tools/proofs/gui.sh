@@ -3,8 +3,8 @@
 #
 # The GUI sequences (Tasks 29-34): every name of tools/proofs/gui_list.txt played by the game's GUI
 # code and by the port, state, events, draw calls and pixels compared frame by frame.
-#   GUI_ONLY=<regex> runs only the matching names. esc_telemetry reads the user's saved laps
-#   (Documents\Assetto Corsa\ctelemetry, read-only) and is left out when they are not there.
+#   GUI_ONLY=<regex> runs only the matching names. esc_telemetry reads two saved laps from the
+#   kept copy re/gold/docs/ctelemetry/player (lib.sh's RENDER_ORACLE_DOCUMENTS), left out without it.
 area=gui
 . "$(dirname "$0")/lib.sh"
 tool render_oracle
@@ -13,8 +13,8 @@ root=$out/root
 for name in $(grep -vE '^\s*#' tools/proofs/gui_list.txt); do
     echo "$name" | grep -qE "^(${GUI_ONLY:-.*})$" || continue
     keep "$name" || continue  # quick keys: the sequence's name
-    if [ "$name" = esc_telemetry ] && ! ls "$USERPROFILE/Documents/Assetto Corsa/ctelemetry/player/"*.tc > /dev/null 2>&1; then
-        skip "$name" "no saved laps in Documents\Assetto Corsa\ctelemetry here"; continue
+    if [ "$name" = esc_telemetry ] && ! ls "$docs_gold/ctelemetry/player/"*.tc > /dev/null 2>&1; then
+        skip "$name" "no saved laps in re/gold/docs/ctelemetry here"; continue
     fi
     f=$out/$(echo "$name" | tr '@#' '__').txt
     for try in 1 2; do  # a second try only for a log that differs while the pictures agree (load-flaky)

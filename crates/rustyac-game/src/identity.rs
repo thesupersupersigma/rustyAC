@@ -97,9 +97,9 @@ pub fn steam_id(ac_root: &Path) -> Option<u64> {
     }
 }
 
-/// `rustyac_net.ini` next to the program.
-pub fn own_file() -> Option<PathBuf> {
-    Some(std::env::current_exe().ok()?.parent()?.join("rustyac_net.ini"))
+/// `rustyac_net.ini` in rustyAC's own folder.
+pub fn own_file(own: &Path) -> PathBuf {
+    own.join("rustyac_net.ini")
 }
 
 fn random_u64() -> u64 {
@@ -137,8 +137,8 @@ pub fn own_guid(file: &Path) -> Result<String, String> {
 }
 
 /// The player's identity: `given` (the command line), else Steam's when `use_steam` and
-/// Steam is running, else rustyAC's own from `file` (default: next to the program).
-pub fn resolve(given: Option<&str>, use_steam: bool, ac_root: Option<&Path>, file: Option<&Path>) -> Result<Identity, String> {
+/// Steam is running, else rustyAC's own from `file` (default: in `own`, rustyAC's own folder).
+pub fn resolve(given: Option<&str>, use_steam: bool, ac_root: Option<&Path>, file: Option<&Path>, own: &Path) -> Result<Identity, String> {
     if let Some(guid) = given {
         if guid.is_empty() || guid.len() > 64 || !guid.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err(format!("the player id {guid:?} is not letters and digits"));
@@ -152,7 +152,7 @@ pub fn resolve(given: Option<&str>, use_steam: bool, ac_root: Option<&Path>, fil
     }
     let file = match file {
         Some(file) => file.to_path_buf(),
-        None => own_file().ok_or("no place for rustyac_net.ini")?,
+        None => own_file(own),
     };
     Ok(Identity { guid: own_guid(&file)?, source: GuidSource::Own(file) })
 }
@@ -178,6 +178,6 @@ mod tests {
         assert!(is_own_guid(&first), "{first}");
         assert_eq!(own_guid(&file).unwrap(), first);
         let _ = rustyac_content::guard::remove_file(&file);
-        assert!(resolve(Some("not ok!"), false, None, None).is_err());
+        assert!(resolve(Some("not ok!"), false, None, None, Path::new("")).is_err());
     }
 }

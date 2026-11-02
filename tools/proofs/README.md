@@ -16,6 +16,12 @@ the rule of `areas.map` it matched; a file no rule matches runs every area; a `C
 change asks for the areas of the crates it reaches, `lock_crates.py`, or every area when it
 can't tell). `bash tools/proofs/areas_test.sh` checks the rules on made-up lists of files.
 
+No proof reads or writes a player's folders (Task 46c): every rustyac.exe run goes through lib.sh's
+`rustyac <exe> <args>` (fresh `--cfg-dir` and `--documents` under `$out/own/`), files a player keeps
+come from `re/gold/docs/`, rustyac.exe refuses to start under lib.sh's `RUSTYAC_PROOF_RUN=1` without
+both options, and an area whose run changed `target/release/cfg` (or the rest beside the exe) is
+DIFFERENT. docs/port/proofs.md lists the files.
+
 The game's recordings that `fresh` compares against are made once and kept (xz) in
 `re/gold/fresh/rec/<name>/<key>/` (the key covers the oracle's arguments, the files they name, the
 source of `tools/car_oracle` and the install: `acs.exe`'s bytes and the name, size and time of every
@@ -64,7 +70,7 @@ are fine: Task P1's full runs).
 | render | `render.sh` | the 107 frames and sequences of `render_list.txt` (Tasks 20 to 23), call log and pixels | `oracle/audio`, `oracle/render_tapes` |
 | gui | `gui.sh` | the 122 GUI sequences of `gui_list.txt` (Tasks 29 to 34) | `cardata/`, `oracle/t32` |
 | python | `python.sh` | AC's Python apps (Task 42): `py_quick`, `py_apps`, the game's PythonInterface and rustyac-python on the same apps | `oracle/t32`, the player's `system/x64/python33.dll` |
-| replays | `replays.sh` | the replay, ghost and telemetry sessions of `replay_list.txt`, the user's own replays (read in place), rustyac.exe's replay at 0, 1, 8 workers | AC, Documents (read only) |
+| replays | `replays.sh` | the replay, ghost and telemetry sessions of `replay_list.txt`, a player's replays (the kept copy re/gold/docs), rustyac.exe's replay at 0, 1, 8 workers | AC, re/gold/docs |
 | net | `net.sh` | the 20 multiplayer goldens, four ways (`tools/net_gold/check.sh`) | `re/gold/net/` |
 | browser | `browser.sh` | every drive of `oracle/game` desktop against wasm32-wasip1 (`replay_hash`); `BROWSER_DIGEST=1` adds `math_proof digest` | `oracle/game`, wasmtime |
 | ai_page | `ai_page.sh` | Task 37c's Quick Race: desktop replay, native `race_proof`, the page in headless Chrome | `re/gold/ai_page/`, `re/gold/web/pack/` |

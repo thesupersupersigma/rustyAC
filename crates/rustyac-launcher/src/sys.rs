@@ -110,7 +110,7 @@ impl Host for Windows {
 
     fn player_id(&self) -> String {
         // rustyac.exe's own rule (it sits beside the launcher, so rustyac_net.ini is the same file)
-        match rustyac_game::identity::resolve(None, true, rustyac_content::install::ac_root().as_deref(), None) {
+        match rustyac_game::identity::resolve(None, true, rustyac_content::install::ac_root().as_deref(), None, &std::env::current_exe().ok().and_then(|exe| exe.parent().map(|f| f.to_path_buf())).unwrap_or_default()) {
             Ok(id) => id.guid,
             // what the launcher answers without Steam
             Err(_) => {

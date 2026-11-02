@@ -11,9 +11,9 @@ q=$gold/ai_page
 need "$q/full.ryin" "Task 37c's Quick Race tape"
 need "$gold/web/pack/manifest.json" "the test pack"
 build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
-target/release/rustyac.exe --replay "$q/full.ryin" --headless --state-hash --physics-threads 8 > "$out/desktop.txt" 2>&1
+rustyac target/release/rustyac.exe --replay "$q/full.ryin" --headless --state-hash --physics-threads 8 > "$out/desktop.txt" 2>&1
 grep -q '^state hash 7aea29db0a574b43: 2 cars, 93774 steps' "$out/desktop.txt" && verdict "desktop replay" IDENTICAL "$(head -n 1 "$out/desktop.txt")" || verdict "desktop replay" DIFFERENT "$(tail -n 1 "$out/desktop.txt")"
-cargo run --release --locked --quiet -p rustyac-web --example race_proof -- --race "$q/race.ini" --assists "$q/assists.ini" --seed 28005 --tape "$q/full.ryin" --out "$out/native" > "$out/native.txt" 2>&1
+cargo run --release --locked --quiet -p rustyac-web --example race_proof -- --race "$q/race.ini" --assists "$q/assists.ini" --seed 28005 --tape "$q/full.ryin" --out "$out/native" --documents "$(own)/docs" > "$out/native.txt" 2>&1
 cmp -s "$out/native/race_out.json" "$q/race_out.json" && verdict "native race_proof race_out.json" IDENTICAL || verdict "native race_proof race_out.json" DIFFERENT
 
 python web/build.py > "$out/build.txt" 2>&1 || { verdict "page build" DIFFERENT "$(tail -n 1 "$out/build.txt")"; summary; exit; }
@@ -46,15 +46,13 @@ printf '[RACE]\nTRACK=spa\nCONFIG_TRACK=\nMODEL=ks_ferrari_f2004\nCARS=1\n[CAR_0
 sed -e 's/=Time Attack/=Drift/' -e 's/^TYPE=5/TYPE=6/' "$m/ta.ini" > "$m/drift.ini"
 printf '[RACE]\nTRACK=ks_drag\nCONFIG_TRACK=drag400\nMODEL=bmw_m3_e30\nCARS=2\nAI_LEVEL=100\n[CAR_0]\nMODEL=bmw_m3_e30\nSKIN=\n[CAR_1]\nMODEL=bmw_m3_e30\nSKIN=\nAI_LEVEL=100\n[SESSION_0]\nNAME=Drag Race\nTYPE=7\nSPAWN_SET=START\nMATCHES=3\n' > "$m/drag.ini"
 # (both read an empty Documents folder, as the page's own: the player's gameplay.ini changes Time Attack's budget)
-mkdir -p "$m/home"
-home=$(cygpath -w "$m/home")
 mode() { # mode() <name> <seed> <seconds> <rustyac.exe options>: the desktop's drive and race_proof's
     local name=$1 seed=$2 secs=$3; shift 3
     mkdir -p "$m/$name" && cp "$m/$name.ini" "$m/$name/race.ini"
     # (drift without traction or stability control: the autodriver slides now and then)
     case $name in drift) sed -e 's/^STABILITY_CONTROL=.*/STABILITY_CONTROL=0/' -e 's/^TRACTION_CONTROL=.*/TRACTION_CONTROL=0/' "$q/assists.ini" ;; *) cat "$q/assists.ini" ;; esac > "$m/$name/assists.ini"
-    USERPROFILE="$home" target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$m/$name/race.ini" --autodrive --duration "$secs" --race-seed "$seed" --record "$m/$name/drive.ryin" --out-dir "$m/$name/desktop" "$@" > "$m/$name/desktop.txt" 2>&1
-    USERPROFILE="$home" cargo run --release --locked --quiet -p rustyac-web --example race_proof -- --race "$m/$name/race.ini" --assists "$m/$name/assists.ini" --seed "$seed" --tape "$m/$name/drive.ryin" --out "$m/$name/native" > "$m/$name/native.txt" 2>&1
+    rustyac target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$m/$name/race.ini" --autodrive --duration "$secs" --race-seed "$seed" --record "$m/$name/drive.ryin" --out-dir "$m/$name/desktop" "$@" > "$m/$name/desktop.txt" 2>&1
+    cargo run --release --locked --quiet -p rustyac-web --example race_proof -- --race "$m/$name/race.ini" --assists "$m/$name/assists.ini" --seed "$seed" --tape "$m/$name/drive.ryin" --out "$m/$name/native" --documents "$(own)/docs" > "$m/$name/native.txt" 2>&1
     cmp -s "$m/$name/native/race_out.json" "$m/$name/desktop/race_out.json" && grep -q "^setup: the recorded drive's" "$m/$name/native.txt" \
         && verdict "$name: native race_proof race_out.json" IDENTICAL "$(node -e 'console.log(JSON.stringify(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).extras[0]))' "$m/$name/desktop/race_out.json")" \
         || verdict "$name: native race_proof race_out.json" DIFFERENT "$(tail -n 1 "$m/$name/native.txt")"

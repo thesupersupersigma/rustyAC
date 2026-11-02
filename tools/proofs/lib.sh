@@ -23,6 +23,40 @@ date +%s > "$out/last_case"  # a file: verdicts in a pipe run in a subshell
 cd "$repo"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
 
+# Task 46c: no proof run reads what an earlier run wrote, nor the player's own files. rustyac.exe
+# and race_proof refuse to start without folders of their own while this is set (a case that would
+# use the default cfg folder fails), and every run gets fresh ones from `own` / `rustyac`.
+export RUSTYAC_PROOF_RUN=1
+# the kept starting copy of a player's Documents\Assetto Corsa: the setup a drive names, the
+# replays of replays.sh, two saved laps (re/gold/README.md)
+docs_gold=$gold/docs
+export RENDER_ORACLE_DOCUMENTS=$(cygpath -w "$docs_gold")
+# own: a fresh folder for one run under $out/own (its cfg/ and an empty docs/ for its Documents),
+# printed in Windows form
+own() {
+    mkdir -p "$out/own"
+    _o=$(mktemp -d "$out/own/run.XXXXXX") && mkdir -p "$_o/cfg" "$_o/docs" && cygpath -m "$_o"
+}
+# rustyac <exe> <args...>: that rustyac.exe (this one or an older one) on a fresh own folder
+rustyac() {
+    _o=$(own) && _x=$1 && shift && "$_x" --cfg-dir "$_o/cfg" --documents "$_o/docs" "$@"
+}
+# drive <file.ryin>: the drive as the proofs replay it (a path from the repo): one naming a file under
+# the player's Documents (conditions_spa_setup: its setup) as a copy naming the kept one instead
+drive() {
+    grep -aqF '\Documents\Assetto Corsa\' "$1" || { echo "$1"; return; }
+    mkdir -p "$out/drives"
+    c=$out/drives/$(basename "$1")
+    [ -f "$c" ] || DOCS=$(cygpath -w "$docs_gold") perl -0777 -pe 's/[A-Za-z]:\\Users\\[^\\\n]+\\Documents\\Assetto Corsa/$ENV{DOCS}/g' "$1" > "$c"
+    echo "${c#"$repo"/}"
+}
+# own_print: what a run without --cfg-dir would read and write: the default own folder beside
+# target/release/rustyac.exe (summary() fails the area when it changed during the run)
+own_print() {
+    (cd "$repo/target/release" 2>/dev/null && find cfg setups replay GhostCar ctelemetry out screenshots rustyac_cache rustyac_net.ini rustyac_controls.ini -printf '%p %s %T@\n' 2>/dev/null | sort) | sha1sum
+}
+own_before=$(own_print)
+
 CO=tools/car_oracle/target/release/car_oracle.exe
 CC=tools/chassis_compare/target/release/chassis_compare.exe
 RO=tools/render_oracle/target/release/render_oracle.exe
@@ -146,6 +180,7 @@ need() {
 }
 
 summary() {
+    [ "$(own_print)" = "$own_before" ] || verdict "the default own folder (target/release/cfg and the rest)" DIFFERENT "a run wrote there: proof runs must have --cfg-dir and --documents"
     identical=$(grep -c '^IDENTICAL ' "$log")
     different=$(grep -c '^DIFFERENT ' "$log")
     skipped=$(grep -c '^SKIPPED ' "$log")

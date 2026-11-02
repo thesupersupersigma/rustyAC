@@ -17,7 +17,7 @@ for name in $names; do
     rm -rf "$out/$name"; mkdir -p "$docs" "$out/$name/out"
     extra=$(sed -n '1s/^# game args[^:]*: *//p' "tools/proofs/launcher/$name.txt")
     set --
-    for a in --headless --no-steam --autodrive --duration 160 $extra; do set -- "$@" --game-arg "$a"; done
+    for a in --headless --no-steam --autodrive --duration 160 --cfg-dir "$(own)/cfg" $extra; do set -- "$@" --game-arg "$a"; done
     # the script's shots land in out/ of the cwd
     (cd "$out/$name" && "$repo/target/release/rustyac-launcher.exe" --docs "$docs" "$@" \
         --script "$repo/tools/proofs/launcher/$name.txt" --log run.log --offscreen 1600x900) > "$out/$name/launcher.txt" 2>&1

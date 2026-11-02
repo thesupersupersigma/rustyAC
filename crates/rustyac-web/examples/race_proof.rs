@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `cargo run --release -p rustyac-web --example race_proof -- --race <race.ini> [--assists
-//! <assists.ini>] --seed <n> --tape <drive.ryin> [--out <folder>] [--drag-drive]`: a drive from the launcher's
+//! <assists.ini>] --seed <n> --tape <drive.ryin> [--out <folder>] [--drag-drive] [--documents <folder>]`: a drive from the launcher's
 //! files as the page makes it (`rustyac_web::race::setup_of`), driven with the inputs of a drive
 //! the desktop recorded, step for step (`rustyac_web::race::replay_race`). Builds for the
 //! desktop and for `wasm32-wasip1`; the page runs the same function (`Game::race_proof`).
@@ -18,6 +18,7 @@ fn fnv(bytes: &[u8]) -> u64 {
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut race, mut assists, mut seed, mut tape, mut out) = (None, None, None, None, None);
+    let mut documents = false;
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
@@ -28,8 +29,17 @@ fn run() -> Result<(), String> {
             "--out" => out = Some(value()?),
             // rustyac.exe --drag-drive's drive (the page's ?dragdrive=1)
             "--drag-drive" => rustyac_web::session::DRAG_DRIVE.with(|on| on.set(true)),
+            // that folder instead of the player's Documents\Assetto Corsa (its cfg/gameplay.ini)
+            "--documents" => {
+                rustyac_content::install::set_documents(Some(value()?.into()));
+                documents = true;
+            }
             other => return Err(format!("unknown option {other}")),
         }
+    }
+    // the proofs (tools/proofs/lib.sh) set this: a run there never reads the player's Documents
+    if std::env::var_os("RUSTYAC_PROOF_RUN").is_some() && !documents {
+        return Err("RUSTYAC_PROOF_RUN is set: a proof run needs --documents (a folder of its own)".into());
     }
     let read = |path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"));
     let text = |path: &str| read(path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
