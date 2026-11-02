@@ -106,7 +106,14 @@ pub(crate) struct State {
     pub offset: (f32, f32),
     /// the chat's listeners (`ACClient::evOnChatMessage`, online only)
     pub chat: Vec<Obj>,
+    /// the host's `ac.setCameraMode` on a copy of this frame's cameras (none: the mode asked)
+    pub camera_sim: Option<CameraSim>,
 }
+
+/// `ACCameraManager::setMode` as `ac.setCameraMode` 0x14012d7d0 runs it, at once, on a copy of the
+/// frame's cameras: the camera manager's mode and dash flag right after (`ac.getCameraMode` and
+/// `ac.isCameraOnBoard` read them in the same frame). The host still carries the call out.
+pub type CameraSim = Box<dyn FnMut(i32) -> (i32, bool)>;
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
@@ -202,7 +209,7 @@ pub fn start(ac_root: &Path, documents: &Path, python_ini: &Path, gui: &mut Gui,
     let logs = documents.join("logs");
     let _ = rustyac_content::guard::create_dir_all(&logs);
     let log = rustyac_content::guard::create(logs.join("py_log.txt")).ok();
-    STATE.with(|s| *s.borrow_mut() = Some(State { screen, documents: documents.to_path_buf(), controls: Vec::new(), forms: Vec::new(), textures: Vec::new(), log, world, console: Vec::new(), actions: Vec::new(), offset: (0.0, 0.0), chat: Vec::new() }));
+    STATE.with(|s| *s.borrow_mut() = Some(State { screen, documents: documents.to_path_buf(), controls: Vec::new(), forms: Vec::new(), textures: Vec::new(), log, world, console: Vec::new(), actions: Vec::new(), offset: (0.0, 0.0), chat: Vec::new(), camera_sim: None }));
     println!("Initialising Python Interface");
     clear_python_cache("apps/python/system/");
     with_host(gui, painter, |_, _| unsafe {
@@ -392,6 +399,11 @@ impl Python {
     /// The GUI control of one of `ac`'s handles (1-based).
     pub fn control(&self, handle: usize) -> Option<Id> {
         state(|s| s.controls.get(handle.wrapping_sub(1)).copied())
+    }
+
+    /// The frame's `ac.setCameraMode` (see [`CameraSim`]).
+    pub fn set_camera_sim(&mut self, sim: Option<CameraSim>) {
+        state(|s| s.camera_sim = sim);
     }
 
     /// The game's state the apps read (the GUI's `AppLink` is the rest).

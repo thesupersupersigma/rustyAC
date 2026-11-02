@@ -250,6 +250,11 @@ pub struct GameGui {
     /// the Python apps' asks of the cameras, for the window's loop (it owns the cameras)
     #[cfg(windows)]
     pub python_cameras: Vec<rustyac_python::Action>,
+    /// `ac.freeCameraSetClearColor`'s colour, for the renderer's next frame
+    pub clear_color: Option<[f32; 4]>,
+    /// the window's cameras as this frame left them, for `ac.setCameraMode`'s answer
+    #[cfg(windows)]
+    pub python_camera: Option<super::onboard_free::CameraCopy>,
     /// `CameraDrivableManager::currentMode == 4` (the dash view), for `ac.isCameraOnBoard`
     pub drivable_dash: bool,
     /// `ACCameraManager::fadeColor` (`camera_manager.ini [FADE] COLOR`)
@@ -515,7 +520,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new(), drivable_dash: false, fade_color: [0.0; 3] })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new(), #[cfg(windows)] python_camera: None, clear_color: None, drivable_dash: false, fade_color: [0.0; 3] })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -829,6 +834,7 @@ impl GameGui {
                 w.camera_mode = mode;
                 w.drivable_dash = dash;
             });
+            python.set_camera_sim(self.python_camera.map(|mut c| Box::new(move |mode| c.set_camera_mode(mode)) as rustyac_python::CameraSim));
             python.update(&mut self.gui, &mut painter, dt);
             for line in python.take_console() {
                 self.console.print(&line);

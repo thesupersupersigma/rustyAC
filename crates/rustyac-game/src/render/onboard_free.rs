@@ -695,6 +695,29 @@ pub fn set_mode(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartC
     }
 }
 
+/// The window's cameras, copied for Python's `ac.setCameraMode` (`rustyac_python::CameraSim`).
+#[derive(Clone, Copy, Debug)]
+pub struct CameraCopy {
+    pub camera: DrivingCamera,
+    pub start: Option<StartCamera>,
+    pub free: Option<MouseCamera>,
+    pub last: Option<CameraFrame>,
+    /// the focused car's cameras
+    pub count: usize,
+    pub cinematic: bool,
+}
+
+impl CameraCopy {
+    /// `ac_setCameraMode` 0x14012d7d0 as the window carries it out (randomMode off, 7 on after
+    /// setMode), on the copy: `ACCameraManager::mode` after it (the free camera: eFree) and the dash flag.
+    pub fn set_camera_mode(&mut self, mode: i32) -> (i32, bool) {
+        self.camera.random &= mode == 7;
+        // (the track's sets only pick the shot, not the mode)
+        set_mode(mode, &mut self.camera, &mut self.start, &mut self.free, &mut None, self.last.as_ref(), self.count, self.cinematic, &mut TrackCameras::default());
+        (if self.free.is_some() { 6 } else { self.camera.manager_mode() }, self.camera.drivable == super::scene::Drivable::Dash)
+    }
+}
+
 fn show_camera(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, shot: &mut Option<ShotCamera>) {
     (*start, *free) = (None, None);
     camera.random = false;

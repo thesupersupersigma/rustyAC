@@ -1948,6 +1948,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 let count = shapes[focus.index].car_cameras.len();
                 match asked {
                     // ac_setCameraMode 0x14012d7d0: randomMode off before setMode (7: on after it)
+                    // (CameraCopy::set_camera_mode answered the app the same way)
                     Action::SetCameraMode(mode) => {
                         camera.random &= mode == 7;
                         onboard_free::set_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), count, cinematic.is_some(), &mut track_cameras);
@@ -2462,6 +2463,9 @@ fn run_window(options: &Options) -> Result<(), String> {
         // (the free camera is ACCameraManager's eFree too: the GUI's and Python's camera mode)
         let mut shown = camera;
         shown.shown = if mouse_camera.is_some() { Some(6) } else { camera.shown };
+        if let Some(gui) = renderer.gui() {
+            gui.python_camera = Some(onboard_free::CameraCopy { camera, start: start_camera, free: mouse_camera, last: last_frame, count: shapes[focus.index].car_cameras.len(), cinematic: cinematic.is_some() });
+        }
         renderer.draw_world(&world, focus.index, &shapes[focus.index], &shown, &frame, &info, dt.as_secs_f32());
         // ScreenCapturer::saveScreen 0x140163360: the picture of the scene, into the folder
         // `screenshots` beside rustyac.exe (the game writes into Documents\Assetto Corsa\screens)

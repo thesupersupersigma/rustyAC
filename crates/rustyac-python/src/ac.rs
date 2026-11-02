@@ -1222,9 +1222,11 @@ unsafe extern "C" fn set_camera_mode(_: Obj, args: Obj) -> R {
         return long(-1);
     }
     state(|s| {
-        // shortcut: the mode asked, until the next frame gives the camera manager's (setMode's F1
-        // cycling can make 0 a drivable view's 2 at once in the game); upgrade if an app reads it back at once
-        s.world.camera_mode = if v == 7 { 3 } else { v };
+        // setMode runs at once in the game: getCameraMode reads what it left (F1's cycling can make 0 a 2)
+        match s.camera_sim.as_mut() {
+            Some(sim) => (s.world.camera_mode, s.world.drivable_dash) = sim(v as i32),
+            None => s.world.camera_mode = if v == 7 { 3 } else { v },
+        }
         s.actions.push(Action::SetCameraMode(v));
     });
     long(1)
