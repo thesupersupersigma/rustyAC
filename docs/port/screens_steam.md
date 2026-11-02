@@ -5,8 +5,8 @@
 ### Resume here
 
 - Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
-- Next: step 1, the audit of the game's VR (briefs in `re/scratch/task47b/`: `openvr.md`,
-  `oculus.md`, `startup.md`).
+- Step 1 done: the audit table below.
+- Next: step 2, OpenVR against a stand-in runtime.
 
 ### Step 0: the case count
 
@@ -29,6 +29,25 @@ The new check: `run_all.sh` keeps each area's case names of the last run of the 
 there last time and is not now (also in `target/proofs/vanished.txt`). Cases retired on purpose
 go in `tools/proofs/retired.txt` (`<area> <case> | why`) and are not printed. The exit code does
 not change. A wiped `target/proofs` starts the lists again.
+
+### Step 1: the audit
+
+Read from `re/decomp` and the disassembly (details, addresses and field offsets in
+`re/scratch/task47b/openvr.md`, `oculus.md`, `startup.md`). Port status at the start of 47b:
+
+| feature | the game | port at v0.47.0 |
+|---|---|---|
+| Start-up, runtime choice | `Sim::createCamera` 0x1401982e0 reads video.ini `[CAMERA] MODE`: `OCULUS` → `StereoCameraForward::initOculus`, `OPENVR` → `StereoCameraVive::initOpenVR`; a runtime that fails to start falls back to the flat camera, silently | reads `TRIPLE` only; OCULUS / OPENVR run flat |
+| OpenVR runtime | `openvr_api.dll` delay-loaded; `VR_InitInternal(&err, 1)`, `VR_IsInterfaceVersionValid("IVRSystem_015")`, `VR_GetGenericInterface` for IVRSystem_015, IVRCompositor_020, IVRSettings_002; `VR_GetInitToken` before each use | none |
+| Oculus runtime | its own LibOVR shim loads `LibOVRRT64_1.dll` only if Authenticode-signed by "Oculus VR, LLC" (`OVR_Win32_SignCheck` 0x1401dd320); 18 `ovr_*` calls; no headset name → fails | none |
+| Per-eye cameras and projections | OpenVR: `GetEyeToHeadTransform` and `GetProjectionMatrix` (near 0.5, far 5000) per eye, composed with the HMD pose in `computeCameraMatrix` 0x140222850; Oculus: `ovr_GetRenderDesc`, `ovr_GetEyePoses`, `ovrMatrix4f_Projection` (near 0.1, far 5000) | none |
+| Render targets | OpenVR: `GetRecommendedRenderTargetSize` × `steamvr/renderTargetMultiplier`, a multisampled temp target per eye resolved into two eye textures, `Submit` per eye after `kglSwapBuffers`; Oculus: one texture swap chain per eye, `ovr_SubmitFrame` with one `ovrLayerEyeFov` | none |
+| Mirror window | OpenVR: the window cleared to (0.5, 0.1, 0.1) and, if `openvr.ini [MIRROR_TEXTURE] ENABLED`, last frame's left eye drawn over it; Oculus: the left eye's swap-chain texture drawn to the window | none |
+| Head pose into the cockpit camera | `WaitGetPoses` / `ovr_GetEyePoses` every frame; HMD pose × eye pose × car cockpit frame; g-force, shake and glance off in `CameraOnBoard::update` unless `[VR] ENABLE_CAMERA_SHAKE` | none |
+| HUD and apps | `isRenderingGui` = 0 (no flat GUI pass, no flat swap); the whole desktop and HUD drawn into a window-sized target (`GUI::preRender3D`, `Game::renderHUDOnDemand`) and shown on a 140°, 24-quad cylinder 0.4 m around the driver's eyes, 0.45 m high (`GUI::render3D` 0x140254900), with a mouse pointer (`oculus_pointer.png`) | hook only (`Gui::render_target_3d`) |
+| Recentring | first manager update: cockpit camera + recentre; then glance left and right held together → `resetHeadPosition` (OpenVR `ResetSeatedZeroPose`, Oculus `ovr_RecenterTrackingOrigin`); OpenVR also Ctrl+Space | none |
+| VR-only settings and files | `openvr.ini` (`[SETTINGS] PUPILLARY_DISTANCE`, `[MIRROR_TEXTURE] ENABLED`, `MOTION_TRACKER`), `oculus.ini`, `[VR] ENABLE_CAMERA_SHAKE`; the in-game OpenVR form (supersampling 0.8–2.4, IPD; writes openvr.ini, `steamvr/ipdOffset` and the render multiplier) | none |
+| What VR switches off (`isVrConnected` Sim+0x1e1) | flat GUI (`isRenderingGui`, the Task 45c flag), vsync, proximity indicator, driver names, virtual mirror, fade quad, penalty banner, end-session results, mouse pit menu, pit-stop camera switch, motion-blur quality ×2 | flag exists, always false; pit crew and end session already gate on it |
 
 ## Task 47: where it stood at v0.47.0
 
