@@ -1963,8 +1963,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                     Action::FreeCameraRotatePitch(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(0, a)),
                     Action::FreeCameraRotateHeading(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(1, a)),
                     Action::FreeCameraRotateRoll(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(2, a)),
-                    // shortcut: the free camera's clear colour is not ported; port it with the
-                    // free camera's background
+                    Action::FreeCameraClearColor(color) => gui.clear_color = Some(color),
                     other => println!("Python: an app asked {other:?} (not carried out)"),
                 }
             }
@@ -2287,6 +2286,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         if shown.is_some_and(|shown| shown != camera.name()) {
             println!("RANDOM CAMERA: {}", camera.name());
         }
+        let mut blur_switched = false;
         let frame = if let Some(start) = start_camera.as_mut() {
             start.update(&world[0], shapes[0].eye_model[0], dt.as_secs_f32())
         } else if let Some(free) = mouse_camera.as_mut() {
@@ -2320,6 +2320,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                     if input.held(0x2d) {
                         let [video, track, _] = rustyac_game::render::onboard_free::settings(Some(&cfg_dir(options)));
                         cinematic.read_settings(video.as_ref(), track.as_ref());
+                    }
+                    if cinematic.blur_switch(&input) {
+                        blur_switched = true;
                     }
                     let (cursor, message) = cinematic.update(shot, &input, dt.as_secs_f32());
                     if let Some(message) = message {
@@ -2370,6 +2373,9 @@ fn run_window(options: &Options) -> Result<(), String> {
             photo_seen = *p;
         }
         renderer.set_custom_sun(photo_sun);
+        if let (true, Picture::Ac(r)) = (blur_switched, &mut renderer) {
+            r.switch_motion_blur();
+        }
         last_frame = Some(frame);
         let replay_over = replay.is_some() && shared.finished.load(Ordering::Relaxed);
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);

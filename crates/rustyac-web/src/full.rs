@@ -411,6 +411,14 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
                 (Some(4), _, _) => rustyac_game::render::onboard_free::HelicopterCamera::default().update(shot, &body),
                 (Some(6), Some(cinematic), _) => {
                     // (Backspace's system message is the GUI's; the page shows none)
+                    // Insert: loadSettingsFromINI again (the page's video_editing.ini)
+                    if input.held(0x2d) {
+                        let [video, track, _] = rustyac_game::render::onboard_free::settings(None);
+                        cinematic.read_settings(video.as_ref(), track.as_ref());
+                    }
+                    if cinematic.blur_switch(&input) {
+                        renderer.switch_motion_blur();
+                    }
                     cinematic.update(shot, &input, dt);
                 }
                 // (the page has no AC replay: none loaded, none playing)

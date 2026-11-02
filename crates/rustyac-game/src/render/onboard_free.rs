@@ -116,6 +116,8 @@ pub struct CinematicCamera {
     pub distance_scale: f32,
     /// Backspace's `Trigger` (+0xa0) as it last saw the key
     backspace: bool,
+    /// Delete's `blurSwitch` trigger as it last saw the key
+    delete: bool,
 }
 
 impl CinematicCamera {
@@ -144,6 +146,7 @@ impl CinematicCamera {
             dof_focus: 100.0,
             distance_scale: 1.0,
             backspace: false,
+            delete: false,
         }
     }
 
@@ -333,7 +336,17 @@ impl CinematicCamera {
 
     /// `CinematicFreeCamera::update` 0x14006d980 as F7's camera: Backspace switches the
     /// cinematic look on and off (the system message it shows: `Some`), then the moves and
-    /// the fov. Insert's reload of the settings and Delete's blur are the caller's.
+    /// the fov. Insert's reload of the settings is the caller's, and so is Delete's blur
+    /// (`blur_switch`).
+    /// `CinematicFreeCamera::update`'s Delete: `blurSwitch` fires on the key's press, and the
+    /// caller flips the scene camera's `debug_MotionBlurEnabled` (+0x7a0) when it is YEBIS's.
+    pub fn blur_switch(&mut self, input: &OrbitInput) -> bool {
+        let delete = input.held(0x2e);
+        let fired = delete && !self.delete;
+        self.delete = delete;
+        fired
+    }
+
     pub fn update(&mut self, camera: &mut ShotCamera, input: &OrbitInput, dt: f32) -> (Option<(i32, i32)>, Option<&'static str>) {
         let backspace = input.held(0x08);
         let mut message = None;

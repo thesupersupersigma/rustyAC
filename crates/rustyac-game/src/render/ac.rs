@@ -646,6 +646,15 @@ impl AcRenderer {
         self.scene.ray_picker_pick(self.root, w as f32, h as f32, w / 2, h / 2, fov, matrix)
     }
 
+    /// The cinematic camera's Delete: `debug_MotionBlurEnabled` of the scene camera flipped.
+    pub fn switch_motion_blur(&mut self) {
+        self.camera.debug_motion_blur_enabled = !self.camera.debug_motion_blur_enabled;
+    }
+
+    pub fn motion_blur_enabled(&self) -> bool {
+        self.camera.debug_motion_blur_enabled
+    }
+
     pub fn set_custom_sun(&mut self, direction: Option<rustyac_physics::vecmath::Vec3f>) {
         self.graphics.use_custom_sun_direction = direction.is_some();
         if let Some(d) = direction {
@@ -1236,6 +1245,11 @@ impl AcRenderer {
         // Game::onIdle's clock (ksGetQPTTime) for Game::stats (Task 33)
         let frame_start = Instant::now();
         self.console_sets();
+        // ac.freeCameraSetClearColor 0x1401292e0: Camera::setClearColor on the mouse control's
+        // camera, the scene camera (its clearBuffers / render clear with it)
+        if let Some(color) = self.gui.as_mut().and_then(|gui| gui.clear_color.take()) {
+            self.camera.forward.base.camera.clear_color = color;
+        }
         let view = &world[0];
         let focus = focus.min(world.len() - 1).min(self.cars.len().saturating_sub(1));
         // the game camera of the moment
