@@ -155,7 +155,7 @@ fn xm_quaternion_slerp(q0: &[f32; 4], q1: &[f32; 4], t: f32) -> [f32; 4] {
 /// `mat44f::setScale` 0x140209210.
 /// `DirectX::XMQuaternionRotationMatrix` 0x1400c4540: the rotation of a matrix whose rows are
 /// taken as they are.
-fn xm_quaternion_rotation_matrix(m: &Mat44f) -> [f32; 4] {
+pub(crate) fn xm_quaternion_rotation_matrix(m: &Mat44f) -> [f32; 4] {
     let r = &m.m;
     let (r00, r11, r22) = (r[0][0], r[1][1], r[2][2]);
     let x2 = ((r00 + (-r11)) + (-r22)) + 1.0;
@@ -194,7 +194,7 @@ fn xm_quaternion_normalize(q: &[f32; 4]) -> [f32; 4] {
 }
 
 /// `DirectX::XMMatrixRotationQuaternion` 0x140107260.
-fn xm_matrix_rotation_quaternion(q: &[f32; 4]) -> Mat44f {
+pub(crate) fn xm_matrix_rotation_quaternion(q: &[f32; 4]) -> Mat44f {
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let (x2, y2, z2) = (x + x, y + y, z + z);
     let (xx, yy, zz) = (x2 * x, y2 * y, z2 * z);

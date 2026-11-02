@@ -6,7 +6,7 @@
 
 - Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
 - Step 1 done: the audit table below.
-- Next: step 2, OpenVR against a stand-in runtime.
+- Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). Next: `rustyac.exe` with video.ini `MODE=OPENVR`, then step 3 (Oculus).
 
 ### Step 0: the case count
 
@@ -48,6 +48,36 @@ Read from `re/decomp` and the disassembly (details, addresses and field offsets 
 | Recentring | first manager update: cockpit camera + recentre; then glance left and right held together → `resetHeadPosition` (OpenVR `ResetSeatedZeroPose`, Oculus `ovr_RecenterTrackingOrigin`); OpenVR also Ctrl+Space | none |
 | VR-only settings and files | `openvr.ini` (`[SETTINGS] PUPILLARY_DISTANCE`, `[MIRROR_TEXTURE] ENABLED`, `MOTION_TRACKER`), `oculus.ini`, `[VR] ENABLE_CAMERA_SHAKE`; the in-game OpenVR form (supersampling 0.8–2.4, IPD; writes openvr.ini, `steamvr/ipdOffset` and the render multiplier) | none |
 | What VR switches off (`isVrConnected` Sim+0x1e1) | flat GUI (`isRenderingGui`, the Task 45c flag), vsync, proximity indicator, driver names, virtual mirror, fade quad, penalty banner, end-session results, mouse pit menu, pit-stop camera switch, motion-blur quality ×2 | flag exists, always false; pit crew and end session already gate on it |
+
+### Step 2: OpenVR
+
+`crates/rustyac-render/src/vr.rs` is the game's `StereoCameraVive` (constructor 0x140220b80,
+`initOpenVR`, `configureOpenVR`, `render`, `renderNoPP`, `normalRendering`,
+`renderMirrorTexture`, `finishRendering`, `resetHeadPosition`, `shutdown`), sitting on the
+`CameraForward` it draws with (`CameraForward::vr`). It reaches the runtime as the game does:
+the six flat functions of `openvr_api.dll` and three interfaces by vtable slot (`OpenVrApi`).
+
+The proof: `render_oracle --vr` (video.ini `[CAMERA] MODE=OPENVR`, Documents cfg/openvr.ini
+with the mirror on and `PUPILLARY_DISTANCE=66`) runs the game's own camera with the stand-in
+runtime `tools/render_oracle/src/openvr_fake.rs` bound into the game's delay-load table of
+`openvr_api.dll` (the shared loader now binds delay-loaded DLLs a tool brings stand-ins for),
+and the port's camera with the same functions. The stand-in turns and moves the head every
+frame, has canted eyes and an asymmetric projection per eye, holds Ctrl+Space in the third
+frame (recentring) and reads back what `Submit` gets. Compared: every runtime call with its
+arguments in order (`VR:` line), the head, eye and projection matrices of every frame as bits,
+the command log, and one picture holding the window (the left eye of the frame before) over
+both eyes.
+
+| case | what | result |
+|---|---|---|
+| `r47b_01` | Spa, still, 1 frame, 1280x720 window, 640x720 eyes | 64 calls and matrices, log and pixels IDENTICAL |
+| `r47b_02` | Spa, the F2004's dash on its lap tape, mirror, 29 frames | 570, IDENTICAL in all 29 frames |
+| `r47b_03` | Magione, chase, 4x MSAA (the eyes resolved, not copied), 7 frames | 174, IDENTICAL in all 7 frames |
+
+Not done here: post-processing in VR (`renderYebis`; the port refuses `MODE=OPENVR` with
+post-processing on), openvr.ini `MOTION_TRACKER`, room scale (`SetTrackingSpace(1)` and
+video.ini `[VR_ROOM] ROTATION`: ported, not proven, the game only asks for them with the
+virtual mirror forced).
 
 ## Task 47: where it stood at v0.47.0
 

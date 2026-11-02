@@ -119,6 +119,19 @@ pub fn compare(args: &Args) -> Result<(), String> {
         }
     }
 
+    // Task 47b: the stand-in OpenVR runtime's calls and the VR camera's matrices of each frame
+    if let (Ok(va), Ok(vp)) = (read("ac", "vr"), read("port", "vr")) {
+        let (va, vp) = (String::from_utf8_lossy(&va), String::from_utf8_lossy(&vp));
+        match va.lines().zip(vp.lines()).position(|(a, p)| a != p) {
+            None if va.lines().count() == vp.lines().count() => println!("VR: {} runtime calls and matrices, the same on both sides", va.lines().count()),
+            at => {
+                let at = at.unwrap_or(va.lines().count().min(vp.lines().count()));
+                println!("VR: DIFFERENT at line {}\n  ac:   {}\n  port: {}", at + 1, va.lines().nth(at).unwrap_or("(end)"), vp.lines().nth(at).unwrap_or("(end)"));
+                failed = true;
+            }
+        }
+    }
+
     // the start-up: state objects, samplers
     let (init_ac, init_port) = (read("ac", "init.gpulog")?, read("port", "init.gpulog")?);
     let (sa, sp) = (state_lines(&init_ac), state_lines(&init_port));

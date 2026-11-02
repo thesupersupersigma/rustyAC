@@ -359,6 +359,14 @@ pub struct Game {
 }
 
 /// One captured frame: its hashes, and the whole of it when it was asked for.
+/// Task 47b: `StereoCameraVive` and the game's OpenVR start.
+const SIZE_STEREO_CAMERA_VIVE: usize = 0x1418;
+const VA_STEREO_CAMERA_VIVE_CTOR: usize = 0x1_4022_0b80;
+const VA_INIT_OPENVR: usize = 0x1_4022_3440;
+const VA_STEREO_CAMERA_VIVE_RESET_HEAD_POSITION: usize = 0x1_4022_4300;
+const VA_STEREO_CAMERA_VIVE_FINISH_RENDERING: usize = 0x1_4022_3210;
+const VA_STEREO_CAMERA_VIVE_SHUTDOWN: usize = 0x1_4022_4580;
+
 pub struct Captured {
     pub index: usize,
     pub calls: usize,
@@ -394,6 +402,18 @@ pub struct Rendered {
     pub height: u32,
     /// Task 47: the triple camera's matrices of each screen after the last frame, as bits
     pub triple: String,
+    /// Task 47b: the stand-in OpenVR runtime's calls and the VR camera's matrices of each frame
+    pub vr: String,
+}
+
+/// The VR camera's matrices of a frame, one line each, as the bits of their numbers.
+pub fn vr_lines(frame: usize, list: &[(&str, &[f32; 16])]) -> String {
+    let mut out = String::new();
+    for (name, m) in list {
+        let bits: Vec<String> = m.iter().map(|v| format!("{:08x}", v.to_bits())).collect();
+        out.push_str(&format!("frame {frame} {name} {}\n", bits.join(" ")));
+    }
+    out
 }
 
 /// The matrices the triple camera keeps of each screen (`currentViewProj`,
@@ -426,6 +446,11 @@ impl Game {
         if gui {
             overrides.push(("msvcr120.dll", "??2@YAPEAX_K@Z", operator_new_zeroed as *const () as usize));
             overrides.push(("msvcr120.dll", "??_U@YAPEAX_K@Z", operator_new_zeroed as *const () as usize));
+        }
+        if crate::root::profile().vr {
+            // Task 47b: openvr_api.dll (delay-loaded) and GetAsyncKeyState are the stand-in runtime's
+            crate::openvr_fake::set_size(args.width / 2, args.height);
+            overrides.extend(crate::openvr_fake::overrides());
         }
         crate::acs::set_extra_overrides(overrides);
         let acs = Acs::load(&args.acs)?;
@@ -912,6 +937,22 @@ impl Game {
             self.hdr_flag(false);
             wr(camera, 0x2a0, profile.motion_blur as f32 * 2.0); // blurQuality (Sim::Sim)
             camera
+        } else if profile.vr {
+            // Sim::createCamera, MODE=OPENVR: initOpenVR, then StereoCameraVive seated (the
+            // virtual mirror is not forced); it reads Documents cfg/openvr.ini
+            let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+            write_wstring(acs, acs.va(crate::gui_ac_apps::VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+            let init: extern "C" fn() -> bool = std::mem::transmute(acs.va(VA_INIT_OPENVR));
+            if !init() {
+                return Err("the game's initOpenVR failed on the stand-in runtime".into());
+            }
+            let camera = acs.alloc(SIZE_STEREO_CAMERA_VIVE);
+            let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_CTOR));
+            ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false, false);
+            // ViveManager::update 0x1401d6380, its first call: the head recentred
+            let reset: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_RESET_HEAD_POSITION));
+            reset(camera);
+            camera
         } else {
             let camera = acs.alloc(SIZE_CAMERA_FORWARD);
             let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_CTOR));
@@ -1116,7 +1157,7 @@ impl Game {
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
-        let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new() };
+        let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new(), vr: String::new() };
         let (mut lights_pause, mut lights_status) = (false, -1);
         let mut told_new_session = 0;
         let mut last_console = [(0u8, 0.0f32); 4];
@@ -1283,11 +1324,19 @@ impl Game {
             }
             screen_space(self.graphics);
             self.hdr_flag(false);
-            if let Some(car) = &car {
+            if profile.vr {
+                // StereoCameraVive: the head's, the eyes' and the last eye's matrices
+                let m = |at: usize| rd::<[f32; 16]>(camera, at);
+                let list = [("hmd", m(0x910)), ("eye_pose0", m(0x7b8)), ("eye_pose1", m(0x868)), ("eye_projection0", m(0x7f8)), ("eye_projection1", m(0x8a8)), ("proj", m(0x990)), ("view", m(0x9d0))];
+                let list: Vec<(&str, &[f32; 16])> = list.iter().map(|(n, m)| (*n, m)).collect();
+                rendered.vr.push_str(&vr_lines(index, &list));
+            }
+            if let (Some(car), false) = (&car, profile.vr) {
                 self.render_virtual_mirror(car, 1.0 / 60.0);
             }
-            // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D pass
-            {
+            // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D
+            // pass (VR: isRenderingGui is off)
+            if !profile.vr {
                 let reset: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_RESET_RENDER_STATES));
                 reset(self.graphics);
                 let set_mode: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_DEPTH_MODE));
@@ -1336,13 +1385,32 @@ impl Game {
                         crate::pick_line("game", index, at, rd(picker, 0x1c));
                     }
                 }
-                let (width, height, pixels) = self.read_back()?;
+                let (width, mut height, mut pixels) = self.read_back()?;
+                if profile.vr {
+                    // Game::onIdle with isSwappingBuffer off: evOnRenderFinished, finishRendering
+                    // 0x140223210 (the swap, then both eyes to the compositor) in place of endScene
+                    let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_FINISH_RENDERING));
+                    finish(camera);
+                    pixels = crate::openvr_fake::stack(pixels, width, height, &crate::openvr_fake::take_eyes());
+                    height *= 2;
+                }
                 crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
                 rendered.width = width;
                 rendered.height = height;
                 rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+            } else if profile.vr {
+                let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_FINISH_RENDERING));
+                finish(camera);
+                crate::openvr_fake::take_eyes();
             }
-            end(self.graphics);
+            if !profile.vr {
+                end(self.graphics);
+            }
+        }
+        if profile.vr {
+            let shutdown: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_SHUTDOWN));
+            shutdown(camera);
+            rendered.vr = crate::openvr_fake::take_calls().join("\n") + "\n" + &rendered.vr;
         }
         Ok(rendered)
     }

@@ -225,6 +225,19 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::root::TRIPLE_SCREEN_INI);
         camera.base.triple = Some(Box::new(rustyac_render::triple::TripleScreen::new(&ini, graphics.video.width, graphics.video.height)?));
     }
+    if profile.vr {
+        // Task 47b: StereoCameraVive on the stand-in runtime, seated; ViveManager's first update
+        // recentres the head
+        crate::openvr_fake::set_size(args.width / 2, args.height);
+        graphics.documents_folder = crate::root::documents().join("Assetto Corsa");
+        let mut vr = rustyac_render::vr::OpenVr::new(crate::openvr_fake::api());
+        if !vr.init() {
+            return Err("initOpenVR failed on the stand-in runtime".into());
+        }
+        let mut stereo = rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, vr, false)?;
+        stereo.reset_head_position();
+        camera.forward.vr = Some(Box::new(stereo));
+    }
     // Sim::Sim 0x140192070 (no VR): the solve's quality is twice the setting
     camera.blur_quality = profile.motion_blur as f32 * 2.0;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -358,7 +371,7 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         }
     }
 
-    let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new() };
+    let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new(), vr: String::new() };
     let (mut last_pause, mut last_status) = (false, -1);
     let (mut lights_pause, mut lights_status) = (false, -1);
     let mut told_new_session = 0;
@@ -554,14 +567,21 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             rendered.triple = crate::ac::triple_lines(&flat(&triple.current_view_proj), &flat(&triple.current_camera_matrix));
         }
         graphics.set_screen_space_mode();
-        // Game::evOnPreGUI
-        if let (Some(mirror), Some(v)) = (&mirror, &mut virtual_mirror) {
-            v.render(&mut graphics, &mirror.texture, step.camera.mode);
+        if let Some(vr) = camera.forward.vr.as_deref() {
+            let flat = |m: &rustyac_physics::vecmath::Mat44f| std::array::from_fn(|k| m.m[k / 4][k % 4]);
+            let list = [("hmd", flat(&vr.hmd_matrix)), ("eye_pose0", flat(&vr.eye_pose[0])), ("eye_pose1", flat(&vr.eye_pose[1])), ("eye_projection0", flat(&vr.eye_projection[0])), ("eye_projection1", flat(&vr.eye_projection[1])), ("proj", flat(&vr.proj_matrix)), ("view", flat(&vr.view_matrix))];
+            let list: Vec<(&str, &[f32; 16])> = list.iter().map(|(n, m)| (*n, m)).collect();
+            rendered.vr.push_str(&crate::ac::vr_lines(index, &list));
+        } else {
+            // Game::evOnPreGUI
+            if let (Some(mirror), Some(v)) = (&mirror, &mut virtual_mirror) {
+                v.render(&mut graphics, &mirror.texture, step.camera.mode);
+            }
+            // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D pass
+            graphics.reset_render_states();
+            graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
+            graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
         }
-        // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D pass
-        graphics.reset_render_states();
-        graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
-        graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
         // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
         if let Some(gates) = &gates {
             let mut gates = gates.borrow_mut();
@@ -598,13 +618,28 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
                     crate::pick_line("port", index, at, d);
                 }
             }
-            let (width, height, pixels) = graphics.kgl.read_screen()?;
+            let (width, mut height, mut pixels) = graphics.kgl.read_screen()?;
+            if let Some(vr) = camera.forward.vr.as_deref_mut() {
+                vr.finish_rendering(&graphics);
+                pixels = crate::openvr_fake::stack(pixels, width, height, &crate::openvr_fake::take_eyes());
+                height *= 2;
+            }
             crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
             rendered.width = width;
             rendered.height = height;
             rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
+        } else if let Some(vr) = camera.forward.vr.as_deref_mut() {
+            vr.finish_rendering(&graphics);
+            crate::openvr_fake::take_eyes();
         }
-        graphics.end_scene();
+        // (VR: Game::onIdle's evOnRenderFinished in place of endScene)
+        if camera.forward.vr.is_none() {
+            graphics.end_scene();
+        }
+    }
+    if let Some(vr) = camera.forward.vr.as_deref_mut() {
+        vr.shutdown();
+        rendered.vr = crate::openvr_fake::take_calls().join("\n") + "\n" + &rendered.vr;
     }
     Ok((init.text, rendered))
 }

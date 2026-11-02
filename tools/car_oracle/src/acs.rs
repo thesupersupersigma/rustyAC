@@ -632,6 +632,17 @@ impl Acs {
         if bound != BOUND_DLLS.len() {
             return Err("acs.exe does not import the expected runtime DLLs".into());
         }
+        // delay-loaded DLLs (openvr_api.dll): bound only when a tool brings stand-ins for them,
+        // the others keep the game's own loading thunks
+        let mut desc = self.read::<u32>(opt + 112 + 13 * 8) as usize;
+        while desc != 0 && self.read::<u32>(desc + 4) != 0 {
+            let dll = self.cstr(self.read::<u32>(desc + 4) as usize).to_ascii_lowercase();
+            if overrides.iter().any(|(d, _, _)| *d == dll) {
+                let (iat, int) = (self.read::<u32>(desc + 12) as usize, self.read::<u32>(desc + 16) as usize);
+                self.bind_one(&dll, int, iat, false, &overrides, &mut unbound)?;
+            }
+            desc += 32;
+        }
         let _ = UNBOUND.set(unbound);
         Ok(())
     }

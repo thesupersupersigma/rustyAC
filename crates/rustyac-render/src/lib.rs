@@ -79,5 +79,7 @@ pub mod texture;
 pub mod time_attack;
 pub mod triple;
 pub mod tyre_crew;
+#[cfg(not(feature = "backend-wgpu"))]
+pub mod vr;
 pub mod wings;
 pub mod texture_fallback;

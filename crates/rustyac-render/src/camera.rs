@@ -211,23 +211,26 @@ impl Camera {
     /// `Camera::renderCamera` 0x14020f5d0.
     pub fn render_camera(&mut self, graphics: &mut Graphics) {
         let proj = self.get_perspective_matrix(graphics);
-        self.render_with_projection(graphics, proj);
+        let view = self.get_view_matrix();
+        self.render_with(graphics, proj, view);
     }
 
     /// `Camera::renderCameraCustomPerspective` 0x14020f720: `renderCamera` with an off-centre
     /// projection.
     pub fn render_camera_custom_perspective(&mut self, graphics: &mut Graphics, left: f32, right: f32, top: f32, bottom: f32) {
         let proj = perspective_off_center(left, right, bottom, top, self.near_plane, self.far_plane);
-        self.render_with_projection(graphics, proj);
+        let view = self.get_view_matrix();
+        self.render_with(graphics, proj, view);
     }
 
-    fn render_with_projection(&mut self, graphics: &mut Graphics, mut proj: Mat44f) {
+    /// `renderCamera` with the projection and view a camera's own `getPerspectiveMatrix` and
+    /// `getViewMatrix` give (the VR camera's are its eye's).
+    pub fn render_with(&mut self, graphics: &mut Graphics, mut proj: Mat44f, view: Mat44f) {
         if self.is_mirror {
             let mut flip = Mat44f::IDENTITY;
             flip.m[0][0] = -1.0;
             proj = xm_matrix_multiply(&flip, &proj);
         }
-        let view = self.get_view_matrix();
         graphics.set_projection_matrix(&proj);
         graphics.set_view_matrix(&view, Some(self));
         self.frustum.set_matrix(&xm_matrix_multiply(&view, &proj));

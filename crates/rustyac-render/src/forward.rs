@@ -88,6 +88,9 @@ pub struct CameraForward {
     /// `lastWorldMatrix`: the camera's matrix at the last solve (all zero before the first)
     pub last_world_matrix: Mat44f,
     pub current_blur_angle: f32,
+    /// Task 47b: video.ini `[CAMERA] MODE=OPENVR`, the camera is a `StereoCameraVive`
+    #[cfg(not(feature = "backend-wgpu"))]
+    pub vr: Option<Box<crate::vr::StereoCameraVive>>,
 }
 
 impl CameraForward {
@@ -109,6 +112,8 @@ impl CameraForward {
             blur_vars: BlurVars::default(),
             last_world_matrix: Mat44f::default(),
             current_blur_angle: 0.0,
+            #[cfg(not(feature = "backend-wgpu"))]
+            vr: None,
         };
         if use_blur && graphics.video.pp_hdr_enabled {
             camera.rt_blur = Some(blur_target(graphics)?);
@@ -146,6 +151,12 @@ impl CameraForward {
 
     /// `CameraForward::render` 0x14021fc40.
     pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, root: NodeId) -> Result<(), String> {
+        #[cfg(not(feature = "backend-wgpu"))]
+        if let Some(mut vr) = self.vr.take() {
+            let done = vr.render(self, graphics, scene, blurred, root);
+            self.vr = Some(vr);
+            return done;
+        }
         graphics.clear_texture_slot(5);
         self.base.shadow_map_pass(graphics, scene, root)?;
         graphics.trigger_query("SHADOW_MAP");
