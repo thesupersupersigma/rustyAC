@@ -479,6 +479,17 @@ impl Kgl {
         self.active_render_target_view = rtv;
     }
 
+    /// `kglSetRenderTargetNative` 0x140018e10: a view made elsewhere (a headset's swap chain) and
+    /// the depth of a target.
+    pub fn set_render_target_native(&mut self, view: &ID3D11RenderTargetView, depth: &KglRenderTarget) {
+        let rtv = Some(view.clone());
+        let dsv = depth.depth_view.clone();
+        kgl_log::line(format_args!("set_render_target_native {} {}", log_name(com(&rtv)), log_name(com(&dsv))));
+        self.active_depth_stencil_view = dsv.clone();
+        unsafe { self.context.OMSetRenderTargets(Some(std::slice::from_ref(&rtv)), dsv.as_ref()) };
+        self.active_render_target_view = rtv;
+    }
+
     /// `kglSetRenderTargets(kglGetScreenRenderTarget(), kglGetScreenDepthTarget())`, or with no
     /// depth target.
     pub fn set_screen_render_targets(&mut self, with_depth: bool) {

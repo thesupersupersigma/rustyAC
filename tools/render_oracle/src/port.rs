@@ -225,7 +225,19 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::root::TRIPLE_SCREEN_INI);
         camera.base.triple = Some(Box::new(rustyac_render::triple::TripleScreen::new(&ini, graphics.video.width, graphics.video.height)?));
     }
-    if profile.vr {
+    if profile.oculus {
+        // Task 47b: StereoCameraForward on the stand-in Oculus runtime; OculusManager's first
+        // update recentres the head
+        crate::oculus_fake::set_size(args.width / 2, args.height);
+        graphics.documents_folder = crate::root::documents().join("Assetto Corsa");
+        let mut ovr = rustyac_render::oculus::Ovr::new(crate::oculus_fake::api());
+        if !ovr.init() {
+            return Err("initOculus failed on the stand-in runtime".into());
+        }
+        let mut stereo = rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, ovr)?;
+        stereo.reset_head_position();
+        camera.forward.oculus = Some(Box::new(stereo));
+    } else if profile.vr {
         // Task 47b: StereoCameraVive on the stand-in runtime, seated; ViveManager's first update
         // recentres the head
         crate::openvr_fake::set_size(args.width / 2, args.height);
@@ -567,7 +579,12 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             rendered.triple = crate::ac::triple_lines(&flat(&triple.current_view_proj), &flat(&triple.current_camera_matrix));
         }
         graphics.set_screen_space_mode();
-        if let Some(vr) = camera.forward.vr.as_deref() {
+        if let Some(oculus) = camera.forward.oculus.as_deref() {
+            let flat = |m: &rustyac_physics::vecmath::Mat44f| std::array::from_fn(|k| m.m[k / 4][k % 4]);
+            let list = [("proj", flat(&oculus.proj_matrix)), ("view", flat(&oculus.view_matrix))];
+            let list: Vec<(&str, &[f32; 16])> = list.iter().map(|(n, m)| (*n, m)).collect();
+            rendered.vr.push_str(&crate::ac::vr_lines(index, &list));
+        } else if let Some(vr) = camera.forward.vr.as_deref() {
             let flat = |m: &rustyac_physics::vecmath::Mat44f| std::array::from_fn(|k| m.m[k / 4][k % 4]);
             let list = [("hmd", flat(&vr.hmd_matrix)), ("eye_pose0", flat(&vr.eye_pose[0])), ("eye_pose1", flat(&vr.eye_pose[1])), ("eye_projection0", flat(&vr.eye_projection[0])), ("eye_projection1", flat(&vr.eye_projection[1])), ("proj", flat(&vr.proj_matrix)), ("view", flat(&vr.view_matrix))];
             let list: Vec<(&str, &[f32; 16])> = list.iter().map(|(n, m)| (*n, m)).collect();
@@ -619,7 +636,11 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
                 }
             }
             let (width, mut height, mut pixels) = graphics.kgl.read_screen()?;
-            if let Some(vr) = camera.forward.vr.as_deref_mut() {
+            if let Some(oculus) = camera.forward.oculus.as_deref_mut() {
+                oculus.finish_rendering(&graphics);
+                pixels = crate::openvr_fake::stack(pixels, width, height, &crate::oculus_fake::take_eyes());
+                height *= 2;
+            } else if let Some(vr) = camera.forward.vr.as_deref_mut() {
                 vr.finish_rendering(&graphics);
                 pixels = crate::openvr_fake::stack(pixels, width, height, &crate::openvr_fake::take_eyes());
                 height *= 2;
@@ -628,14 +649,20 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             rendered.width = width;
             rendered.height = height;
             rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
+        } else if let Some(oculus) = camera.forward.oculus.as_deref_mut() {
+            oculus.finish_rendering(&graphics);
+            crate::oculus_fake::take_eyes();
         } else if let Some(vr) = camera.forward.vr.as_deref_mut() {
             vr.finish_rendering(&graphics);
             crate::openvr_fake::take_eyes();
         }
         // (VR: Game::onIdle's evOnRenderFinished in place of endScene)
-        if camera.forward.vr.is_none() {
+        if camera.forward.vr.is_none() && camera.forward.oculus.is_none() {
             graphics.end_scene();
         }
+    }
+    if camera.forward.oculus.is_some() {
+        rendered.vr = crate::oculus_fake::take_calls().join("\n") + "\n" + &rendered.vr;
     }
     if let Some(vr) = camera.forward.vr.as_deref_mut() {
         vr.shutdown();

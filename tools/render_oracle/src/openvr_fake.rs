@@ -161,7 +161,7 @@ extern "C" fn submit(_this: Interface, eye: i32, texture: *const Texture, bounds
 }
 
 /// A 2D texture's pixels through a staging copy on its own device.
-unsafe fn read_texture(handle: *mut std::ffi::c_void) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) unsafe fn read_texture(handle: *mut std::ffi::c_void) -> Result<(u32, u32, Vec<u8>), String> {
     use windows::core::Interface as _;
     use windows::Win32::Graphics::Direct3D11::*;
     let texture = ID3D11Texture2D::from_raw_borrowed(&handle).ok_or("no texture")?;

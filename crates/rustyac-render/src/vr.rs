@@ -227,15 +227,52 @@ fn matrix34(m: &[[f32; 4]; 3]) -> Mat44f {
 /// moved by the camera's.
 pub fn compute_camera_matrix(c: &Mat44f, matrix: &Mat44f) -> Mat44f {
     let r = crate::animator::xm_matrix_rotation_quaternion(&crate::animator::xm_quaternion_rotation_matrix(matrix));
+    let p = matrix.m[3];
+    place(c, &r, [p[0], p[1], p[2]])
+}
+
+/// The common tail of both VR cameras' `computeCameraMatrix`: the rotation `r` after the
+/// camera's, the place `p` moved into the camera's.
+pub(crate) fn place(c: &Mat44f, r: &Mat44f, p: [f32; 3]) -> Mat44f {
     let mut camera = *c;
     camera.m[3] = [0.0, 0.0, 0.0, c.m[3][3]];
-    let mut out = xm_matrix_multiply(&r, &camera);
-    let p = matrix.m[3];
+    let mut out = xm_matrix_multiply(r, &camera);
     let c = &c.m;
     for k in 0..3 {
         out.m[3][k] = (((p[1] * c[1][k]) + (p[0] * c[0][k])) + (p[2] * c[2][k])) + c[3][k];
     }
     out
+}
+
+/// `StereoCameraVive::normalRendering` 0x140223520 (`StereoCameraForward::normalRendering`
+/// 0x140213030 is the same): one eye, cleared magenta.
+pub(crate) fn normal_rendering(forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, root: NodeId, render_scene: bool, proj: Mat44f, view: Mat44f) {
+    let camera = &mut forward.base.camera;
+    graphics.clear_render_target(&[1.0, 0.0, 1.0, 1.0]);
+    graphics.clear_render_target_depth(1.0);
+    graphics.set_depth_mode(DEPTH_NORMAL);
+    let max_layer = camera.max_layer as i32;
+    let mut filter = MaterialFilter::plain();
+    graphics.set_cull_mode(CULL_FRONT);
+    camera.render_with(graphics, proj, view);
+    if !render_scene {
+        return;
+    }
+    if let Some(sky) = &mut forward.base.sky_box {
+        graphics.set_world_matrix(&Mat44f::IDENTITY);
+        let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: camera.cull_camera() };
+        sky.render(graphics, &mut rc, camera.is_cube_map_camera);
+        graphics.clear_render_target_depth(camera.clear_depth);
+    }
+    let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: camera.cull_camera() };
+    scene.render(graphics, root, &mut rc);
+    if camera.axis_rendering_mode != 0 {
+        camera.render_axis(graphics, camera.axis_rendering_mode == 1);
+    }
+    let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_TRANSPARENT, max_layer, camera: camera.cull_camera() };
+    graphics.set_depth_mode(DEPTH_NO_WRITE);
+    scene.render(graphics, root, &mut rc);
+    graphics.set_depth_mode(DEPTH_NORMAL);
 }
 
 /// What `StereoCameraVive` (0x1418 bytes) adds to its `CameraForward`.
@@ -497,7 +534,7 @@ impl StereoCameraVive {
             self.eye_projection[eye] = self.projection_eye(&forward.base.camera, eye as i32);
             self.proj_matrix = self.eye_projection[eye];
             graphics.set_viewport(0, 0, self.render_width as i32, self.render_height as i32);
-            self.normal_rendering(forward, graphics, scene, root);
+            normal_rendering(forward, graphics, scene, root, self.render_scene, self.proj_matrix, self.view_matrix);
             forward.base.camera.matrix = saved;
             let texture = |rt: &RenderTarget| rt.kid_color.as_ref().and_then(|c| c.texture.clone());
             if let (Some(to), Some(from)) = (texture(&self.render_eye[eye]), texture(&self.rt_temp)) {
@@ -510,36 +547,6 @@ impl StereoCameraVive {
                 }
             }
         }
-    }
-
-    /// `StereoCameraVive::normalRendering` 0x140223520: one eye, cleared magenta.
-    fn normal_rendering(&mut self, forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, root: NodeId) {
-        let camera = &mut forward.base.camera;
-        graphics.clear_render_target(&[1.0, 0.0, 1.0, 1.0]);
-        graphics.clear_render_target_depth(1.0);
-        graphics.set_depth_mode(DEPTH_NORMAL);
-        let max_layer = camera.max_layer as i32;
-        let mut filter = MaterialFilter::plain();
-        graphics.set_cull_mode(CULL_FRONT);
-        camera.render_with(graphics, self.proj_matrix, self.view_matrix);
-        if !self.render_scene {
-            return;
-        }
-        if let Some(sky) = &mut forward.base.sky_box {
-            graphics.set_world_matrix(&Mat44f::IDENTITY);
-            let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: camera.cull_camera() };
-            sky.render(graphics, &mut rc, camera.is_cube_map_camera);
-            graphics.clear_render_target_depth(camera.clear_depth);
-        }
-        let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: camera.cull_camera() };
-        scene.render(graphics, root, &mut rc);
-        if camera.axis_rendering_mode != 0 {
-            camera.render_axis(graphics, camera.axis_rendering_mode == 1);
-        }
-        let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_TRANSPARENT, max_layer, camera: camera.cull_camera() };
-        graphics.set_depth_mode(DEPTH_NO_WRITE);
-        scene.render(graphics, root, &mut rc);
-        graphics.set_depth_mode(DEPTH_NORMAL);
     }
 
     /// `StereoCameraVive::renderMirrorTexture` 0x140223910: the window, with the left eye of the

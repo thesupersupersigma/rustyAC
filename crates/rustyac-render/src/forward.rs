@@ -91,6 +91,9 @@ pub struct CameraForward {
     /// Task 47b: video.ini `[CAMERA] MODE=OPENVR`, the camera is a `StereoCameraVive`
     #[cfg(not(feature = "backend-wgpu"))]
     pub vr: Option<Box<crate::vr::StereoCameraVive>>,
+    /// Task 47b: video.ini `[CAMERA] MODE=OCULUS`, the camera is a `StereoCameraForward`
+    #[cfg(not(feature = "backend-wgpu"))]
+    pub oculus: Option<Box<crate::oculus::StereoCameraForward>>,
 }
 
 impl CameraForward {
@@ -114,6 +117,8 @@ impl CameraForward {
             current_blur_angle: 0.0,
             #[cfg(not(feature = "backend-wgpu"))]
             vr: None,
+            #[cfg(not(feature = "backend-wgpu"))]
+            oculus: None,
         };
         if use_blur && graphics.video.pp_hdr_enabled {
             camera.rt_blur = Some(blur_target(graphics)?);
@@ -155,6 +160,12 @@ impl CameraForward {
         if let Some(mut vr) = self.vr.take() {
             let done = vr.render(self, graphics, scene, blurred, root);
             self.vr = Some(vr);
+            return done;
+        }
+        #[cfg(not(feature = "backend-wgpu"))]
+        if let Some(mut oculus) = self.oculus.take() {
+            let done = oculus.render(self, graphics, scene, blurred, root);
+            self.oculus = Some(oculus);
             return done;
         }
         graphics.clear_texture_slot(5);

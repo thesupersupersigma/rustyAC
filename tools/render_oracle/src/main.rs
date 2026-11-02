@@ -12,6 +12,7 @@ mod ac_car;
 mod boundaries;
 mod compare;
 mod frames;
+mod oculus_fake;
 mod openvr_fake;
 mod gui_ac;
 mod gui_ac_modes;
@@ -399,6 +400,10 @@ fn parse() -> Result<Args, String> {
             }
             "--vr" => {
                 profile.vr = true;
+            }
+            "--oculus" => {
+                profile.vr = true;
+                profile.oculus = true;
             }
             "--serial" => {
                 a.serial = true;

@@ -6,7 +6,8 @@
 
 - Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
 - Step 1 done: the audit table below.
-- Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Next: step 3 (Oculus).
+- Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Step 3 next.
+- Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). Next: `rustyac.exe` with `MODE=OCULUS`, then step 4 (the HUD in the headset).
 
 ### Step 0: the case count
 
@@ -89,6 +90,38 @@ Not done here: post-processing in VR (`renderYebis`; the port refuses `MODE=OPEN
 post-processing on), openvr.ini `MOTION_TRACKER`, room scale (`SetTrackingSpace(1)` and
 video.ini `[VR_ROOM] ROTATION`: ported, not proven, the game only asks for them with the
 virtual mirror forced).
+
+### Step 3: Oculus
+
+`crates/rustyac-render/src/oculus.rs` is the game's `StereoCameraForward` (constructor
+0x140211370, `initOculus`, `OculusTexture::Init`, `render`, `renderNoPP`, `oculusRenderPass`,
+`normalRendering`, `renderMirrorTexture`, `computeEyePoses`, `finishRendering`,
+`resetHeadPosition`) on `CameraForward::oculus`, with LibOVR's own `ovr_CalcEyePoses` and
+`ovrMatrix4f_Projection`. It reaches the runtime through the 17 functions the game's LibOVR shim
+uses (`OvrApi`). The loader keeps the shim's check: `LibOVRRT64_1.dll` (from `LIBOVR_DLL_DIR`
+or the normal search) is used only when Windows trusts its Authenticode signature and the
+signer chain is Oculus VR, LLC / DigiCert SHA2 Assured ID Code Signing CA / DigiCert Assured ID
+Root CA (`OVR_Win32_SignCheck`, `ValidateCertificateContents`), the file held open until loaded.
+
+The proof: `render_oracle --oculus` (video.ini `MODE=OCULUS`, Documents cfg/oculus.ini as the
+game's settings write it) fills the game's shim pointers with the stand-in runtime
+`tools/render_oracle/src/oculus_fake.rs` and marks the shim's library loaded, so the game's
+signature check does not run there (the stand-in is not signed). The stand-in hands out swap
+chains of three textures, an asymmetric field of view per eye, eyes 32 mm to each side, a head
+turning and moving every frame, holds Ctrl+Space in one frame and asks for a recentring
+(`ShouldRecenter`) in another, and reads back the committed textures each `ovr_SubmitFrame`
+names. Compared as for OpenVR: every runtime call with its arguments in order (the submitted
+layer with its poses and sample time as bits), the projection and view matrices of every frame,
+the command log, the window over both eyes.
+
+| case | what | result |
+|---|---|---|
+| `r47b_04` | Spa, still, 1280x720 window, 640x720 eyes | 54 calls and matrices, log and pixels IDENTICAL |
+| `r47b_05` | Spa, the F2004's dash on its lap tape, mirror, 29 frames (all three recentrings) | 533, IDENTICAL in all 29 frames |
+| `r47b_06` | Magione, chase, 4x MSAA (resolved into the swap chain), 7 frames | 159, IDENTICAL in all 7 frames |
+
+Not done here: post-processing in VR (`renderYebis`; refused as for OpenVR), OculusManager's
+Rift audio device choice (oculus.ini `AUTOSELECT_RIFT_AUDIO_DEVICE`).
 
 ## Task 47: where it stood at v0.47.0
 

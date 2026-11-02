@@ -77,6 +77,8 @@ pub mod suspension_graphics;
 pub mod suspensions;
 pub mod texture;
 pub mod time_attack;
+#[cfg(not(feature = "backend-wgpu"))]
+pub mod oculus;
 pub mod triple;
 pub mod tyre_crew;
 #[cfg(not(feature = "backend-wgpu"))]

@@ -366,6 +366,11 @@ const VA_INIT_OPENVR: usize = 0x1_4022_3440;
 const VA_STEREO_CAMERA_VIVE_RESET_HEAD_POSITION: usize = 0x1_4022_4300;
 const VA_STEREO_CAMERA_VIVE_FINISH_RENDERING: usize = 0x1_4022_3210;
 const VA_STEREO_CAMERA_VIVE_SHUTDOWN: usize = 0x1_4022_4580;
+const SIZE_STEREO_CAMERA_FORWARD: usize = 0xa48;
+const VA_STEREO_CAMERA_FORWARD_CTOR: usize = 0x1_4021_1370;
+const VA_INIT_OCULUS: usize = 0x1_4021_2fd0;
+const VA_STEREO_CAMERA_FORWARD_RESET_HEAD_POSITION: usize = 0x1_4021_3f40;
+const VA_STEREO_CAMERA_FORWARD_FINISH_RENDERING: usize = 0x1_4021_2d10;
 
 pub struct Captured {
     pub index: usize,
@@ -447,7 +452,12 @@ impl Game {
             overrides.push(("msvcr120.dll", "??2@YAPEAX_K@Z", operator_new_zeroed as *const () as usize));
             overrides.push(("msvcr120.dll", "??_U@YAPEAX_K@Z", operator_new_zeroed as *const () as usize));
         }
-        if crate::root::profile().vr {
+        if crate::root::profile().oculus {
+            // Task 47b: GetAsyncKeyState is the stand-in Oculus runtime's (the shim's pointers
+            // are filled before the camera is made)
+            crate::oculus_fake::set_size(args.width / 2, args.height);
+            overrides.extend(crate::oculus_fake::overrides());
+        } else if crate::root::profile().vr {
             // Task 47b: openvr_api.dll (delay-loaded) and GetAsyncKeyState are the stand-in runtime's
             crate::openvr_fake::set_size(args.width / 2, args.height);
             overrides.extend(crate::openvr_fake::overrides());
@@ -937,6 +947,25 @@ impl Game {
             self.hdr_flag(false);
             wr(camera, 0x2a0, profile.motion_blur as f32 * 2.0); // blurQuality (Sim::Sim)
             camera
+        } else if profile.oculus {
+            // Sim::createCamera, MODE=OCULUS: initOculus, then StereoCameraForward; it reads
+            // Documents cfg/oculus.ini. The shim's library is the stand-in runtime.
+            for (at, value) in crate::oculus_fake::shim() {
+                *(acs.va(at) as *mut usize) = value;
+            }
+            let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+            write_wstring(acs, acs.va(crate::gui_ac_apps::VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+            let init: extern "C" fn() -> bool = std::mem::transmute(acs.va(VA_INIT_OCULUS));
+            if !init() {
+                return Err("the game's initOculus failed on the stand-in runtime".into());
+            }
+            let camera = acs.alloc(SIZE_STEREO_CAMERA_FORWARD);
+            let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_STEREO_CAMERA_FORWARD_CTOR));
+            ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false, true);
+            // OculusManager::update 0x1400a0520, its first call: the head recentred
+            let reset: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_FORWARD_RESET_HEAD_POSITION));
+            reset(camera);
+            camera
         } else if profile.vr {
             // Sim::createCamera, MODE=OPENVR: initOpenVR, then StereoCameraVive seated (the
             // virtual mirror is not forced); it reads Documents cfg/openvr.ini
@@ -1324,7 +1353,13 @@ impl Game {
             }
             screen_space(self.graphics);
             self.hdr_flag(false);
-            if profile.vr {
+            if profile.oculus {
+                // StereoCameraForward: the last eye's matrices (the poses are in ovr_SubmitFrame's line)
+                let m = |at: usize| rd::<[f32; 16]>(camera, at);
+                let list = [("proj", m(0x7e0)), ("view", m(0x820))];
+                let list: Vec<(&str, &[f32; 16])> = list.iter().map(|(n, m)| (*n, m)).collect();
+                rendered.vr.push_str(&vr_lines(index, &list));
+            } else if profile.vr {
                 // StereoCameraVive: the head's, the eyes' and the last eye's matrices
                 let m = |at: usize| rd::<[f32; 16]>(camera, at);
                 let list = [("hmd", m(0x910)), ("eye_pose0", m(0x7b8)), ("eye_pose1", m(0x868)), ("eye_projection0", m(0x7f8)), ("eye_projection1", m(0x8a8)), ("proj", m(0x990)), ("view", m(0x9d0))];
@@ -1386,7 +1421,13 @@ impl Game {
                     }
                 }
                 let (width, mut height, mut pixels) = self.read_back()?;
-                if profile.vr {
+                if profile.oculus {
+                    // finishRendering 0x140212d10: the frame to the runtime, the swap, its status
+                    let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_FORWARD_FINISH_RENDERING));
+                    finish(camera);
+                    pixels = crate::openvr_fake::stack(pixels, width, height, &crate::oculus_fake::take_eyes());
+                    height *= 2;
+                } else if profile.vr {
                     // Game::onIdle with isSwappingBuffer off: evOnRenderFinished, finishRendering
                     // 0x140223210 (the swap, then both eyes to the compositor) in place of endScene
                     let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_FINISH_RENDERING));
@@ -1398,6 +1439,10 @@ impl Game {
                 rendered.width = width;
                 rendered.height = height;
                 rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+            } else if profile.oculus {
+                let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_FORWARD_FINISH_RENDERING));
+                finish(camera);
+                crate::oculus_fake::take_eyes();
             } else if profile.vr {
                 let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_FINISH_RENDERING));
                 finish(camera);
@@ -1407,7 +1452,10 @@ impl Game {
                 end(self.graphics);
             }
         }
-        if profile.vr {
+        if profile.oculus {
+            // (the game never closes the Oculus runtime)
+            rendered.vr = crate::oculus_fake::take_calls().join("\n") + "\n" + &rendered.vr;
+        } else if profile.vr {
             let shutdown: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_SHUTDOWN));
             shutdown(camera);
             rendered.vr = crate::openvr_fake::take_calls().join("\n") + "\n" + &rendered.vr;

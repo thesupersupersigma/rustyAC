@@ -135,3 +135,6 @@ r47_03 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m
 r47b_01 | --track spa --view chase --vr --size 1280x720
 r47b_02 | --track spa --view dash --mirror 512 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 30 --vr --size 1280x720
 r47b_03 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --vr --aa 4 --size 1280x720
+r47b_04 | --track spa --view chase --oculus --size 1280x720
+r47b_05 | --track spa --view dash --mirror 512 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 30 --oculus --size 1280x720
+r47b_06 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --oculus --aa 4 --size 1280x720
