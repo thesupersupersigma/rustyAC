@@ -4,12 +4,52 @@
 
 ### Resume here
 
-- Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
-- Step 1 done: the audit table below.
-- Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Step 3 next.
-- Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). `rustyac.exe` uses it with video.ini `MODE=OCULUS`.
-- Step 4 done: `gui3d.rs` is the game's GUI in the headset, proven with both runtimes (render cases `r47b_07..08`, and every VR case with a car). 
-- Step 5 done: the page has no VR (note below). Next: the end quick run, then v0.47.1.
+Task 47b is done (v0.47.1). Nothing is left in flight; leftovers are listed under "Not done" and go
+to Task 47d.
+
+- Step 0: no proof case vanished (Task 47's 156 was a miscount of 169); the quick `rays` key now
+  matches its case; `run_all.sh` prints cases vanished since the last run of the same mode.
+- Step 1: the audit table below.
+- Step 2: `rustyac-render` `vr.rs` is the game's `StereoCameraVive` (OpenVR), proven on a stand-in
+  runtime (render cases `r47b_01..03`); `rustyac.exe` uses it with video.ini `MODE=OPENVR`.
+- Step 3: `oculus.rs` is the game's `StereoCameraForward` (Oculus), proven on a stand-in runtime
+  (`r47b_04..06`); `rustyac.exe` uses it with `MODE=OCULUS` and a signed LibOVR.
+- Step 4: `gui3d.rs` is the game's GUI in the headset, proven with both runtimes (`r47b_07..08`).
+- Step 5: the page has no VR (note below).
+- Not done (Task 47d), besides each step's own list: the rest of what VR switches off in the
+  game (proximity indicator, driver names, fade quad, penalty banner, end-session results, mouse
+  pit menu, pit-stop camera switch): `rustyac.exe` never sets `SimLink.vr_connected` or the crew's
+  `is_vr_connected`, so those still show in VR; vsync, the virtual mirror and the flat GUI are off.
+- Nothing was tried on a real headset or a real runtime: this PC has neither SteamVR nor the
+  Oculus software.
+
+### End proofs
+
+`sh tools/proofs/run_all.sh --quick` (1h09m): 170 cases, 170 identical, 0 different, 0 skipped,
+0 vanished (fresh 62: one more than Task 47's 61, the `rays magione -` case the fixed key now
+picks).
+
+| area | cases | identical | different | skipped |
+|---|---|---|---|---|
+| physics | 9 | 9 | 0 | 0 |
+| fresh | 62 | 62 | 0 | 0 |
+| sound | 4 | 4 | 0 | 0 |
+| render | 14 | 14 | 0 | 0 |
+| gui | 29 | 29 | 0 | 0 |
+| python | 1 | 1 | 0 | 0 |
+| replays | 6 | 6 | 0 | 0 |
+| net | 16 | 16 | 0 | 0 |
+| browser | 9 | 9 | 0 | 0 |
+| ai_page | 9 | 9 | 0 | 0 |
+| shaders | 4 | 4 | 0 | 0 |
+| launcher | 1 | 1 | 0 | 0 |
+| dumps | 6 | 6 | 0 | 0 |
+
+The area this task changed, render, also ran its new cases `r47b_01..08` (all 8 identical, with
+every runtime call and matrix the same) and the flat HUD cases `r22c_09`, `r22c_13`, `r22c_17`
+(identical: the oracle's HUD pass moved into a block the VR frame shares). Clippy clean natively
+(`--workspace --all-targets`) and on both wasm targets as CI runs them. Free space on C: 61 GB at
+the start, 56 GB at the end. No web zip files are new or renamed.
 
 ### Step 0: the case count
 
