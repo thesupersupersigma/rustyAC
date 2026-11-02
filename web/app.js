@@ -2076,6 +2076,7 @@ function startDriving() {
 }
 
 function stopDriving() {
+  unlockLook();
   // (after the drive has stopped, below)
   setTimeout(lockKeys, 0);
   if (state.launch) {
@@ -2254,6 +2255,8 @@ function pageUses(event) {
 window.addEventListener('keydown', (event) => {
   if (panelKey(event)) return;
   if (!(state.running || state.testing) || !state.game) return;
+  // (Esc lets the cinematic look's pointer go before AC's menu or the page's has the key)
+  if (event.code === 'Escape') unlockLook();
   // while the player drives every key is the game's, none the browser's (Alt+Left, Backspace,
   // F5, Ctrl+R ...); F12 stays the browser's. Keys the browser keeps for itself (Ctrl+W, Ctrl+T)
   // only reach the page in full screen, with navigator.keyboard.lock (lockKeys)
@@ -2387,13 +2390,39 @@ window.addEventListener('keyup', (event) => {
   if (hasGui() && code !== undefined) state.game.gui_key_up(code);
 });
 
+// Task 46c: the cinematic look (F7's cinematic camera, F5's keyboard way: the left button held)
+// on a locked pointer, so the mouse turns it on past the screen's edges (the desktop's cursor
+// wraps there). The button let go, Esc (the browser's own unlock) or leaving the drive ends it.
+let lookPos = null;
+function unlockLook() {
+  lookPos = null;
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+}
+// (refused, as a headless browser does: the look goes on with the cursor)
+document.addEventListener('pointerlockerror', () => (lookPos = null));
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === canvas || !lookPos) return;
+  // (unlocked by the browser: the look's button counts as let go)
+  const p = lookPos;
+  lookPos = null;
+  if (state.game) state.game.gui_mouse(Math.floor(p.x), Math.floor(p.y), 2, 0, 0);
+});
 // The mouse over the picture for AC's GUI, in the picture's pixels.
 function guiMouse(event, action, button, delta) {
   if (!state.running || !hasGui() || event.target !== canvas) return;
   const rect = canvas.getBoundingClientRect();
-  const x = Math.floor(((event.clientX - rect.left) * canvas.width) / rect.width);
-  const y = Math.floor(((event.clientY - rect.top) * canvas.height) / rect.height);
+  let x = Math.floor(((event.clientX - rect.left) * canvas.width) / rect.width);
+  let y = Math.floor(((event.clientY - rect.top) * canvas.height) / rect.height);
+  if (lookPos && document.pointerLockElement === canvas) {
+    lookPos.x += (event.movementX * canvas.width) / rect.width;
+    lookPos.y += (event.movementY * canvas.height) / rect.height;
+    [x, y] = [Math.floor(lookPos.x), Math.floor(lookPos.y)];
+  }
   state.game.gui_mouse(x, y, action, button, delta);
+  if (action === 1 && button === 0 && !lookPos && state.game.look_camera_on()) {
+    lookPos = { x, y };
+    Promise.resolve(canvas.requestPointerLock()).catch(() => {});
+  }
   if (action !== 0) event.preventDefault();
 }
 // (a mouse button: 0 left, 1 middle, 2 right in the browser; AC's 0 left, 1 right, 2 middle)
@@ -2408,6 +2437,8 @@ window.addEventListener('mousedown', (event) => {
 window.addEventListener('mouseup', (event) => {
   noBrowserButton(event);
   guiMouse(event, 2, acButton(event.button), 0);
+  // (wherever the look's button is let go)
+  if (event.button === 0) unlockLook();
 });
 window.addEventListener('auxclick', noBrowserButton);
 // a reload or a closed tab during a drive asks first

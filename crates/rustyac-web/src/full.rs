@@ -381,8 +381,9 @@ impl GuiLoop {
         input.keys[0x11] |= input.keys[0xa2] | input.keys[0xa3];
         let (x, y, right) = self.mouse;
         [input.keys[0x01], input.keys[0x02], input.keys[0x04]] = [self.buttons[0], right, self.buttons[1]];
-        // shortcut: a page cannot move the mouse, so the cinematic look's wrap at the desktop's
-        // edges is kept out of reach (far from them); pointer lock would give the game's wrap
+        // (a page cannot move the mouse: the cinematic look's wrap at the desktop's edges is kept
+        // out of reach, far from them; the page locks the pointer while the look's button is held,
+        // so the look goes on as past the desktop's wrap)
         input.cursor = (x + 1_000_000, y + 1_000_000);
         input.screen = (i32::MAX, i32::MAX);
         input
