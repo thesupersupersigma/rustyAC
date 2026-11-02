@@ -65,6 +65,10 @@ does something else on purpose, each with its reason and the report that has the
 
 ## Crashes and stops the game has that rustyAC avoids
 
+- **Triple screens without a full `cfg/triple_screen.ini`** (video.ini `[CAMERA] MODE=TRIPLE`): the
+  game crashes on a missing file or a point with fewer than two numbers (`INIReader::getVector2`
+  reads a null token); rustyAC stops with a message naming the file. The page has no triple mode
+  and draws one view. (screens_steam.md)
 - **No Python DLL**: the game exits ("Failed to load Python, exiting"); rustyAC says so and runs
   without apps. (python_apps.md)
 - **Python calls that crash the game** (`getCarMinHeight`, `getCarLeaderboardPosition`,

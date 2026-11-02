@@ -257,7 +257,7 @@ const TAKES_CAR: [&str; 18] = ["drivermodel", "keyboard", "drszones", "suspensio
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
 /// `static std::wstring INIReaderDocuments::basePath`
-const VA_INIREADERDOCUMENTS_BASE_PATH: usize = 0x1_4151_d100;
+pub const VA_INIREADERDOCUMENTS_BASE_PATH: usize = 0x1_4151_d100;
 
 /// The apps' tables for `gui_ac::class_of`: every app's form is a "Form" in the dumps.
 pub fn classes() -> Vec<(&'static str, usize, usize, usize)> {

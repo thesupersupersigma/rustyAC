@@ -219,7 +219,12 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     // Sim::createCamera 0x1401982e0: the plain camera, or the post-processing one (which is the
     // plain one when post-processing is off); blur only with post-processing
     let profile = crate::root::profile();
-    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur > 0)?;
+    // (CameraTripleScreen's constructor asks for no blur)
+    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur > 0 && !profile.triple)?;
+    if profile.triple {
+        let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::root::TRIPLE_SCREEN_INI);
+        camera.base.triple = Some(Box::new(rustyac_render::triple::TripleScreen::new(&ini, graphics.video.width, graphics.video.height)?));
+    }
     // Sim::Sim 0x140192070 (no VR): the solve's quality is twice the setting
     camera.blur_quality = profile.motion_blur as f32 * 2.0;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -353,7 +358,7 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         }
     }
 
-    let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
+    let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new() };
     let (mut last_pause, mut last_status) = (false, -1);
     let (mut lights_pause, mut lights_status) = (false, -1);
     let mut told_new_session = 0;
@@ -544,6 +549,10 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             }
         }
         camera.render(&mut graphics, &mut scene, Some(blurred), unblurred, root, 1.0 / 60.0)?;
+        if let Some(triple) = camera.base.triple.as_deref() {
+            let flat = |list: &[rustyac_physics::vecmath::Mat44f; 3]| std::array::from_fn(|i| std::array::from_fn(|k| list[i].m[k / 4][k % 4]));
+            rendered.triple = crate::ac::triple_lines(&flat(&triple.current_view_proj), &flat(&triple.current_camera_matrix));
+        }
         graphics.set_screen_space_mode();
         // Game::evOnPreGUI
         if let (Some(mirror), Some(v)) = (&mirror, &mut virtual_mirror) {

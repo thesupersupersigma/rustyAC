@@ -59,6 +59,20 @@ pub fn create_look_at(eye: &Vec3f, target: &Vec3f, up: &Vec3f) -> Mat44f {
     }
 }
 
+/// `XMMatrixPerspectiveOffCenterRH` 0x14020ed30.
+fn perspective_off_center(l: f32, r: f32, b: f32, t: f32, zn: f32, zf: f32) -> Mat44f {
+    let two_n = zn * 2.0;
+    let rw = 1.0 / (r - l);
+    let rh = 1.0 / (t - b);
+    let range = zf / (zn - zf);
+    let mut out = Mat44f::default();
+    out.m[0][0] = rw * two_n;
+    out.m[1][1] = rh * two_n;
+    out.m[2] = [(l + r) * rw, (b + t) * rh, range, -1.0];
+    out.m[3][2] = range * zn;
+    out
+}
+
 /// The projection of `Camera::getPerspectiveMatrix`: `D3DXMatrixPerspectiveFovRH`, the field
 /// of view in degrees.
 fn perspective(fov: f32, aspect: f32, zn: f32, zf: f32) -> Mat44f {
@@ -196,7 +210,18 @@ impl Camera {
 
     /// `Camera::renderCamera` 0x14020f5d0.
     pub fn render_camera(&mut self, graphics: &mut Graphics) {
-        let mut proj = self.get_perspective_matrix(graphics);
+        let proj = self.get_perspective_matrix(graphics);
+        self.render_with_projection(graphics, proj);
+    }
+
+    /// `Camera::renderCameraCustomPerspective` 0x14020f720: `renderCamera` with an off-centre
+    /// projection.
+    pub fn render_camera_custom_perspective(&mut self, graphics: &mut Graphics, left: f32, right: f32, top: f32, bottom: f32) {
+        let proj = perspective_off_center(left, right, bottom, top, self.near_plane, self.far_plane);
+        self.render_with_projection(graphics, proj);
+    }
+
+    fn render_with_projection(&mut self, graphics: &mut Graphics, mut proj: Mat44f) {
         if self.is_mirror {
             let mut flip = Mat44f::IDENTITY;
             flip.m[0][0] = -1.0;
@@ -249,6 +274,8 @@ pub struct CameraShadowMapped {
     pub shadow_rt: Vec<RenderTarget>,
     pub shadow_matrices: [Mat44f; 3],
     pub sky_box: Option<SkyBox>,
+    /// `CameraTripleScreen` (video.ini `[CAMERA] MODE=TRIPLE`): its `renderPass` replaces this one
+    pub triple: Option<Box<crate::triple::TripleScreen>>,
 }
 
 impl CameraShadowMapped {
@@ -276,7 +303,7 @@ impl CameraShadowMapped {
                 }
             }
         }
-        Ok(CameraShadowMapped { camera: Camera::new(), shadow_map_settings: settings, shadow_bias, shadow_rt, shadow_matrices: [Mat44f::default(); 3], sky_box: None })
+        Ok(CameraShadowMapped { camera: Camera::new(), shadow_map_settings: settings, shadow_bias, shadow_rt, shadow_matrices: [Mat44f::default(); 3], sky_box: None, triple: None })
     }
 
     /// `CameraShadowMapped::setShadowMapsSplits` 0x14020d5f0: what the game camera of the
@@ -409,6 +436,9 @@ impl CameraShadowMapped {
     /// The same with `Camera::renderTarget` set (the post-processing camera sets it to its
     /// scene target): the target is bound again, with its viewport.
     pub fn render_pass_into(&mut self, graphics: &mut Graphics, scene: &mut Scene, node: NodeId, render_target: Option<&RenderTarget>) {
+        if self.triple.as_ref().is_some_and(|t| t.enabled) {
+            return crate::triple::render_pass(self, graphics, scene, node, render_target);
+        }
         graphics.set_depth_mode(DEPTH_NORMAL);
         let max_layer = self.camera.max_layer as i32;
         let mut filter = MaterialFilter::plain();

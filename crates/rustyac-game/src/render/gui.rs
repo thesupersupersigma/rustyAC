@@ -84,6 +84,8 @@ pub struct GuiSetup {
     pub out_dir: PathBuf,
     /// the session begins in the ESC menu (and so does every session after it)
     pub esc_start: bool,
+    /// Task 47: `Sim::isInTripleScreenMode` (the camera is the triple screen one)
+    pub triple_screen: bool,
     /// Task 44c: the player's car is driven by an AI driver from the start (FormAI's
     /// constructor finds it)
     pub ai_drive: bool,
@@ -315,7 +317,7 @@ impl GameGui {
         let screen = gui.new_game_screen(&mut painter, "SIM_GAME_SCREEN");
         gui.add_root(&mut painter, screen);
 
-        let mut input = HudInput::default();
+        let mut input = HudInput { triple_screen: setup.triple_screen, ..HudInput::default() };
         for (i, names) in setup.cars.iter().enumerate() {
             input.cars.push(HudCar {
                 driver_name: names[0].clone(),
@@ -356,6 +358,7 @@ impl GameGui {
             })
             .collect();
         gui.sim.race.cars = race_static.clone();
+        gui.sim.triple_screen = setup.triple_screen;
         gui.sim.race.sessions = vec![RaceSession { session_type: setup.session_type, ..RaceSession::default() }; setup.session_count.max(1) as usize];
         let default_flag = {
             use rustyac_gui::painter::Painter;
@@ -512,7 +515,7 @@ impl GameGui {
         let overlay = (setup.cars.len() > 1 && setup.session_type != 7).then(|| OverlayLeaderboard::new(&mut gui, &mut painter, gameplay.as_ref()));
         // SessionLeaderboard (Sim::Sim 0x140195191)
         let tab = (setup.cars.len() > 1 || setup.online).then(|| SessionLeaderboard::new(&mut gui, &mut painter));
-        let flags = FlagDisplay::new(&mut gui, &mut painter, screen, false);
+        let flags = FlagDisplay::new(&mut gui, &mut painter, screen, setup.triple_screen);
         let fuel = FuelLight::new(&mut painter, setup.fuel_light_min_liters);
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());

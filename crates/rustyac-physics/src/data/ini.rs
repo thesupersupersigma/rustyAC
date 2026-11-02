@@ -311,6 +311,29 @@ impl IniReader {
         Ok(out)
     }
 
+    /// `INIReader::getFloat2` 0x140235760 (`getVector2` 0x140236300): two `wcstok_s` tokens
+    /// ended by commas, each parsed like [`IniReader::get_float`]. Fewer than two (a missing key
+    /// too) is the `Err`: the game reads through the null token and crashes.
+    pub fn get_float2(&self, section: &str, key: &str) -> Result<[f32; 2], String> {
+        let text = self.get_string(section, key);
+        let mut tokens = text.split(',').filter(|t| !t.is_empty());
+        let mut out = [0.0f32; 2];
+        for slot in &mut out {
+            let Some(token) = tokens.next() else {
+                return Err(self.error(section, key, &text, "fewer than two numbers (the game crashes)"));
+            };
+            let parsed = wcstod(token);
+            if parsed.consumed == 0 {
+                return Err(self.error(section, key, &text, "invalid stof argument"));
+            }
+            if parsed.out_of_range {
+                return Err(self.error(section, key, &text, "stof argument out of range"));
+            }
+            *slot = parsed.value as f32;
+        }
+        Ok(out)
+    }
+
     /// `INIReader::getInt` @ 0x140235c70: `wcstol(text, .., 10)`, 0 for an empty value.
     /// `INIReader::getFloat4` 0x140235860 (`getVector4` 0x140236ad0): up to four numbers
     /// between commas; a missing one stays 0.

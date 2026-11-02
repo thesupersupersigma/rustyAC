@@ -42,9 +42,16 @@ pub struct Profile {
     /// with `post`: the light levels of post-processing off (the game's flag is switched off
     /// around everything but the camera's frame; the port's `VideoSettings::ldr_levels`)
     pub ldr_levels: bool,
+    /// Task 47: `[CAMERA] MODE=TRIPLE` (the game's `CameraTripleScreen`) with [`TRIPLE_SCREEN_INI`]
+    pub triple: bool,
 }
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1, post: false, fxaa: false, motion_blur: 0, ldr_levels: false };
+/// Documents `cfg/triple_screen.ini` of a `--triple` proof: the file the game's "Triple screen"
+/// app writes at its start values (no bezel, 1000 mm screens 1000 mm away, side screens turned
+/// in a little), as it is on Super's PC.
+pub const TRIPLE_SCREEN_INI: &str = "[LEFT_SCREEN]\nLEFT_POINT=-1.49863,0.947665\nRIGHT_POINT=-0.5,1\n\n[CENTER_SCREEN]\nLEFT_POINT=-0.5,1\nRIGHT_POINT=0.5,1\n\n[RIGHT_SCREEN]\nLEFT_POINT=0.5,1\nRIGHT_POINT=1.49863,0.947665\n";
+
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1, post: false, fxaa: false, motion_blur: 0, ldr_levels: false, triple: false };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -70,7 +77,7 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _ } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple } = profile();
     let (POST, PP_FXAA) = (post as i32, fxaa as i32);
     let MIRROR_HQ = (mirror_hq > 0) as i32;
     let MIRROR_SMOKE = mirror_smoke as i32;
@@ -92,7 +99,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         "VALUE=60".into(),
         String::new(),
         "[CAMERA]".into(),
-        "MODE=DEFAULT".into(),
+        format!("MODE={}", if triple { "TRIPLE" } else { "DEFAULT" }),
         String::new(),
         "[ASSETTOCORSA]".into(),
         "HIDE_ARMS=0".into(),
@@ -193,6 +200,9 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     let video = video_ini(args.width, args.height);
     if !std::fs::read_to_string(documents_cfg.join("video.ini")).is_ok_and(|old| old == video) {
         std::fs::write(documents_cfg.join("video.ini"), video).map_err(|e| e.to_string())?;
+    }
+    if profile().triple && !std::fs::read_to_string(documents_cfg.join("triple_screen.ini")).is_ok_and(|old| old == TRIPLE_SCREEN_INI) {
+        std::fs::write(documents_cfg.join("triple_screen.ini"), TRIPLE_SCREEN_INI).map_err(|e| e.to_string())?;
     }
     let gameplay = format!("[VIRTUAL_MIRROR]\nACTIVE={}\n", profile().virtual_mirror as i32);
     if !std::fs::read_to_string(documents_cfg.join("gameplay.ini")).is_ok_and(|old| old == gameplay) {

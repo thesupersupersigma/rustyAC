@@ -786,7 +786,9 @@ impl AcRenderer {
         // solve's quality is twice the setting.
         // Sim::initHDRLevels 0x140199b00 (the camera managers hand the pair to the camera)
         let hdr_levels = rustyac_render::post::init_hdr_levels(&options.game);
-        let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled;
+        // (CameraTripleScreen's constructor asks for no blur)
+        let triple_mode = video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "TRIPLE");
+        let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled && !triple_mode;
         let mut camera = CameraForwardYebis::new(&mut graphics, use_blur)?;
         camera.blur_quality = motion_blur * 2.0;
         camera.base.camera.min_exposure = hdr_levels.min_exposure;
@@ -798,6 +800,13 @@ impl AcRenderer {
         camera.base.sky_box = Some(SkyBox::new(&mut graphics, weather.as_deref())?);
         camera.base.camera.near_plane = 0.05;
         camera.base.camera.far_plane = 40000.0;
+        // Sim::createCamera: video.ini [CAMERA] MODE=TRIPLE makes the CameraTripleScreen, whose
+        // screens are Documents cfg/triple_screen.ini (a missing file crashes the game)
+        if triple_mode {
+            let file = rustyac_content::install::documents().map(|p| p.join("cfg/triple_screen.ini")).ok_or("no Documents folder for cfg/triple_screen.ini")?;
+            let ini = IniReader::load(&file).map_err(|e| format!("triple screens: {e}"))?;
+            camera.base.triple = Some(Box::new(rustyac_render::triple::TripleScreen::new(&ini, graphics.video.width, graphics.video.height)?));
+        }
         camera.cube_map_renderer.faces_per_frame = cube_faces;
         if cube_far != 0.0 {
             camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), cube_far);
@@ -1139,6 +1148,11 @@ impl AcRenderer {
 
     /// What follows the loading in the game: the sun (`RaceManager::initLighting`), the weather
     /// (`Sim::applyCustomWeather`) and the reflection cube map (`Sim::initStaticCubemap`).
+    /// `Sim::isInTripleScreenMode` 0x14019a440
+    pub fn triple_screen(&self) -> bool {
+        self.camera.base.triple.is_some()
+    }
+
     pub fn finish_loading(&mut self) -> Result<(), String> {
         self.graphics.set_sun_angle(self.options.sun_angle);
         // RaceManager::initLighting 0x14013a3d0

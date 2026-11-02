@@ -393,6 +393,9 @@ fn parse() -> Result<Args, String> {
             "--ldr-levels" => {
                 profile.ldr_levels = true;
             }
+            "--triple" => {
+                profile.triple = true;
+            }
             "--serial" => {
                 a.serial = true;
                 frame_option = false;
@@ -494,6 +497,9 @@ fn run_side(args: &Args) -> Result<(), String> {
     let file = |kind: &str| args.out.join(format!("{}.{}.{kind}", frame.name, args.side));
     std::fs::write(file("init.gpulog"), &init).map_err(|e| e.to_string())?;
     std::fs::write(file("cube.gpulog"), &rendered.cube_log).map_err(|e| e.to_string())?;
+    if !rendered.triple.is_empty() {
+        std::fs::write(file("triple"), &rendered.triple).map_err(|e| e.to_string())?;
+    }
     if frame.sequence {
         // one line per frame, and the whole of the frames asked for
         let mut list = String::new();

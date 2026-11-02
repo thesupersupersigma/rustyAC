@@ -138,6 +138,8 @@ const SIZE_NODE: usize = 0xe0;
 const SIZE_KN5IO: usize = 0xc0;
 const SIZE_CAMERA_FORWARD: usize = 0x788;
 const SIZE_CAMERA_FORWARD_YEBIS: usize = 0xe80;
+const SIZE_CAMERA_TRIPLE_SCREEN: usize = 0x10c0;
+const VA_CAMERA_TRIPLE_SCREEN_CTOR: usize = 0x1_4022_48e0; // CameraTripleScreen::CameraTripleScreen(const std::wstring&, GraphicsManager*, int)
 const VA_CAMERA_FORWARD_YEBIS_CTOR: usize = 0x1_4002_5db0; // CameraForwardYebis::CameraForwardYebis(const std::wstring&, GraphicsManager*, bool, bool, int)
 const VA_YEBIS_INIT_POST_PROCESSING: usize = 0x1_4002_4ca0; // CameraForwardYebis::initPostProcessing()
 const VA_YEBIS_APPLY_POST_PROCESSING: usize = 0x1_4002_5c30; // CameraForwardYebis::applyPostProcessing()
@@ -390,6 +392,21 @@ pub struct Rendered {
     pub frames: Vec<Captured>,
     pub width: u32,
     pub height: u32,
+    /// Task 47: the triple camera's matrices of each screen after the last frame, as bits
+    pub triple: String,
+}
+
+/// The matrices the triple camera keeps of each screen (`currentViewProj`,
+/// `currentCameraMatrix`), one line each, as the bits of their numbers.
+pub fn triple_lines(view_proj: &[[f32; 16]; 3], camera: &[[f32; 16]; 3]) -> String {
+    let mut out = String::new();
+    for (name, list) in [("view_proj", view_proj), ("camera", camera)] {
+        for (i, m) in list.iter().enumerate() {
+            let bits: Vec<String> = m.iter().map(|v| format!("{:08x}", v.to_bits())).collect();
+            out.push_str(&format!("{name}[{i}] {}\n", bits.join(" ")));
+        }
+    }
+    out
 }
 
 impl Game {
@@ -856,7 +873,7 @@ impl Game {
         }
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
         let profile = crate::root::profile();
-        let camera = if profile.post {
+        let camera = if profile.post || profile.triple {
             // the game's own post-processing camera, without YEBIS: its start-up returns at once
             // (g_pPfxContext stays null, so every YEBIS call of the frame is skipped by the game's
             // own tests) and applyPostProcessing is the stand-in the port draws too
@@ -877,10 +894,21 @@ impl Game {
                 set_texture_rt: acs.va(VA_KGL_SET_TEXTURE_RT),
                 full_screen_quad: acs.va(VA_GL_FULL_SCREEN_QUAD),
             })), std::sync::atomic::Ordering::SeqCst);
-            let camera = acs.alloc(SIZE_CAMERA_FORWARD_YEBIS);
-            let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_CTOR));
             self.hdr_flag(true);
-            ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1);
+            let camera = if profile.triple {
+                // Sim::createCamera: CameraTripleScreen (its constructor asks for no blur); it reads
+                // Documents cfg/triple_screen.ini through INIReaderDocuments::basePath, which the
+                // oracle otherwise leaves empty
+                let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+                write_wstring(acs, acs.va(crate::gui_ac_apps::VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+                let camera = acs.alloc(SIZE_CAMERA_TRIPLE_SCREEN);
+                let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_TRIPLE_SCREEN_CTOR));
+                ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, 1)
+            } else {
+                let camera = acs.alloc(SIZE_CAMERA_FORWARD_YEBIS);
+                let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_CTOR));
+                ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1)
+            };
             self.hdr_flag(false);
             wr(camera, 0x2a0, profile.motion_blur as f32 * 2.0); // blurQuality (Sim::Sim)
             camera
@@ -1088,7 +1116,7 @@ impl Game {
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
-        let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
+        let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0, triple: String::new() };
         let (mut lights_pause, mut lights_status) = (false, -1);
         let mut told_new_session = 0;
         let mut last_console = [(0u8, 0.0f32); 4];
@@ -1248,6 +1276,11 @@ impl Game {
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
             self.hdr_flag(true);
             render(camera, blurred, unblurred, root, 1.0 / 60.0);
+            if profile.triple {
+                // TripleScreenData: currentViewProj at +0xf38, currentCameraMatrix at +0xff8
+                let read = |base: usize| std::array::from_fn(|i| rd::<[f32; 16]>(camera, base + i * 0x40));
+                rendered.triple = triple_lines(&read(0xf38), &read(0xff8));
+            }
             screen_space(self.graphics);
             self.hdr_flag(false);
             if let Some(car) = &car {

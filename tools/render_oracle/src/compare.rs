@@ -109,6 +109,16 @@ pub fn compare(args: &Args) -> Result<(), String> {
     };
     let mut failed = false;
 
+    // Task 47: the triple camera's matrices of each screen
+    if let (Ok(ta), Ok(tp)) = (read("ac", "triple"), read("port", "triple")) {
+        if ta == tp {
+            println!("triple screens: {} matrices, the same on both sides", ta.iter().filter(|b| **b == 10).count());
+        } else {
+            println!("triple screens: the matrices are DIFFERENT\n--- ac\n{}--- port\n{}", String::from_utf8_lossy(&ta), String::from_utf8_lossy(&tp));
+            failed = true;
+        }
+    }
+
     // the start-up: state objects, samplers
     let (init_ac, init_port) = (read("ac", "init.gpulog")?, read("port", "init.gpulog")?);
     let (sa, sp) = (state_lines(&init_ac), state_lines(&init_port));

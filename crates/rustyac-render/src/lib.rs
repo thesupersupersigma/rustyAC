@@ -77,6 +77,7 @@ pub mod suspension_graphics;
 pub mod suspensions;
 pub mod texture;
 pub mod time_attack;
+pub mod triple;
 pub mod tyre_crew;
 pub mod wings;
 pub mod texture_fallback;

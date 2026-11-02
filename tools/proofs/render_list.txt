@@ -127,3 +127,7 @@ r43c_04 | --track magione --view dash --car bmw_m3_e30 --tape oracle/audio/bmw_m
 r43c_05 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 12 --set accg=1.2:0:0.8,console=headRoll:-40+headPitch:-30+headYaw:40+headMaxG:0.5@3,console=headFilter:0@8
 r43c_06 | --track spa --view chase --cubemap-faces 2 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 12 --set laps=30,console=hideGroove:1@4,console=hideGroove:0@9
 r44c_01 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --set console=axisMode:1@2,console=axisMode:2@4,console=axisMode:0@6,console=axisMode:3@7
+# -- Task 47: triple screens (video.ini [CAMERA] MODE=TRIPLE, the triple_screen.ini of root.rs) in one 5760x1080 window
+r47_01 | --track spa --view chase --triple --size 5760x1080
+r47_02 | --track spa --view dash --mirror 512 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 59 --triple --size 5760x1080
+r47_03 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --triple --size 5760x1080 --set console=axisMode:1@2,console=axisMode:2@4,console=axisMode:0@6

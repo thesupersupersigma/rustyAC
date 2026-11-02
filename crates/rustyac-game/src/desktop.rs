@@ -443,6 +443,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             track_layout: info.track_layout.clone(),
             esc_start: esc_start(options),
+            triple_screen: renderer.triple_screen(),
             ai_drive: options.ai_drive,
             // Task 33: the ESC menu's page "Telemetry": the recorder's folder (none: no recorder)
             telemetry_folder: telemetry_folder(options, true).filter(|_| !options.online_session),
