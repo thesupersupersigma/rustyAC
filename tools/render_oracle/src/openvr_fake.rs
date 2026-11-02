@@ -121,6 +121,22 @@ extern "C" fn reset_seated_zero_pose(_this: Interface) {
     log("IVRSystem::ResetSeatedZeroPose".into());
 }
 
+/// Task 47c: `GetTrackedDeviceIndexForControllerRole`: the left hand device 3, no right hand.
+extern "C" fn controller_role_index(_this: Interface, role: i32) -> u32 {
+    log(format!("IVRSystem::GetTrackedDeviceIndexForControllerRole {role}"));
+    if role == 1 { 3 } else { u32::MAX }
+}
+/// Task 47c: `GetTrackedDeviceClass`: the head 1, controllers 2 (3, 4), generic trackers 3 (5, 6).
+extern "C" fn device_class(_this: Interface, index: u32) -> i32 {
+    log(format!("IVRSystem::GetTrackedDeviceClass {index}"));
+    match index {
+        0 => 1,
+        3 | 4 => 2,
+        5 | 6 => 3,
+        _ => 0,
+    }
+}
+
 // IVRCompositor_020
 extern "C" fn set_tracking_space(_this: Interface, space: i32) {
     log(format!("IVRCompositor::SetTrackingSpace {space}"));
@@ -133,14 +149,32 @@ extern "C" fn wait_get_poses(_this: Interface, poses: *mut TrackedDevicePose, co
     let (cy, sy, cp, sp) = (yaw.cos(), yaw.sin(), pitch.cos(), pitch.sin());
     let m = [[cy, sy * sp, sy * cp, 0.01 * n - 0.02], [0.0, cp, -sp, 0.03], [-sy, cy * sp, cy * cp, 0.04 - 0.015 * n]];
     for i in 0..count as usize {
-        let mut pose = TrackedDevicePose::default();
-        if i == 0 {
-            pose.device_to_absolute_tracking = m;
-            pose.tracking_result = 200;
-            pose.pose_is_valid = true;
-            pose.device_is_connected = true;
+        // (zeroed first: the padding too, which a missing hand's pose reads in the game)
+        let p = unsafe { poses.add(i) };
+        unsafe { std::ptr::write_bytes(p, 0, 1) };
+        let pose = |m: [[f32; 4]; 3]| unsafe {
+            (*p).device_to_absolute_tracking = m;
+            (*p).velocity = [0.1, -0.2, 0.3];
+            (*p).angular_velocity = [0.01, 0.02, -0.03];
+            (*p).tracking_result = 200;
+            (*p).pose_is_valid = true;
+            (*p).device_is_connected = true;
+        };
+        match i {
+            0 => pose(m),
+            // Task 47c: the left hand's controller (3) and two generic trackers (5, 6), each turned
+            // about another axis; no right hand (role 2 answers k_unTrackedDeviceIndexInvalid)
+            3 | 5 | 6 => {
+                let a = 0.2 * i as f32 + 0.03 * n;
+                let (c, s) = (a.cos(), a.sin());
+                pose(match i {
+                    3 => [[c, -s, 0.0, 0.2], [s, c, 0.0, -0.1], [0.0, 0.0, 1.0, 0.3]],
+                    5 => [[c, 0.0, s, -0.2], [0.0, 1.0, 0.0, 0.5], [-s, 0.0, c, 0.1]],
+                    _ => [[1.0, 0.0, 0.0, 0.0], [0.0, c, -s, 0.9], [0.0, s, c, -0.4]],
+                })
+            }
+            _ => {}
         }
-        unsafe { *poses.add(i) = pose };
     }
     0
 }
@@ -236,6 +270,8 @@ fn system() -> Interface {
             (1, get_projection_matrix as *const () as usize),
             (4, get_eye_to_head_transform as *const () as usize),
             (11, reset_seated_zero_pose as *const () as usize),
+            (17, controller_role_index as *const () as usize),
+            (19, device_class as *const () as usize),
         ])
     }) as Interface
 }

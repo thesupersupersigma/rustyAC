@@ -401,6 +401,11 @@ fn parse() -> Result<Args, String> {
             "--vr" => {
                 profile.vr = true;
             }
+            "--vr-tracker" => {
+                text = value()?;
+                profile.vr = true;
+                profile.vr_tracker = ["LEFT_HAND", "RIGHT_HAND", "TRACKER"].into_iter().find(|t| *t == text).ok_or("--vr-tracker LEFT_HAND|RIGHT_HAND|TRACKER")?;
+            }
             "--vr-room" => {
                 profile.vr = true;
                 profile.vr_room = true;

@@ -20,7 +20,7 @@ use std::ffi::{c_char, c_void, CStr};
 
 use rustyac_math::{cosf, sinf};
 use rustyac_physics::data::ini::IniReader;
-use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f};
+use rustyac_physics::vecmath::{xm_matrix_inverse, xm_matrix_multiply, Mat44f};
 use windows::core::Interface as _;
 use windows::Win32::Graphics::Direct3D::D3D_SRV_DIMENSION_TEXTURE2D;
 use windows::Win32::Graphics::Direct3D11::*;
@@ -327,6 +327,10 @@ pub struct StereoCameraVive {
     mirror_texture: Option<ID3D11ShaderResourceView>,
     /// video.ini `[VR_ROOM] ROTATION` (radians), room scale only
     pub rotation_offset: f32,
+    /// openvr.ini `[SETTINGS] MOTION_TRACKER`: 0 none, 1 `LEFT_HAND`, 2 `RIGHT_HAND`, 3 `TRACKER`
+    pub motion_tracker: i32,
+    /// `hmdMatrixTracker`: the motion tracker's pose, its place dropped
+    pub hmd_matrix_tracker: Mat44f,
 }
 
 impl StereoCameraVive {
@@ -364,6 +368,8 @@ impl StereoCameraVive {
             _fxaa_temp: Vec::new(),
             mirror_texture: None,
             rotation_offset: 0.0,
+            motion_tracker: 0,
+            hmd_matrix_tracker: Mat44f::default(),
         };
         camera.configure(graphics);
         let hmd = camera.vr.hmd;
@@ -413,12 +419,21 @@ impl StereoCameraVive {
     /// distance of the eyes.
     fn configure(&mut self, graphics: &Graphics) {
         self.eyes_distance = 0.0;
+        self.motion_tracker = 0;
         if let Ok(ini) = IniReader::load(&graphics.documents_folder.join("cfg/openvr.ini")) {
             if ini.has_section("MIRROR_TEXTURE") {
                 self.mirror_enabled = ini.get_int("MIRROR_TEXTURE", "ENABLED").unwrap_or(0) != 0;
             }
             if ini.has_section("SETTINGS") {
                 self.eyes_distance = ini.get_float("SETTINGS", "PUPILLARY_DISTANCE").unwrap_or(0.0) * 0.001;
+                if ini.has_key("SETTINGS", "MOTION_TRACKER") {
+                    match ini.get_string("SETTINGS", "MOTION_TRACKER").as_str() {
+                        "LEFT_HAND" => self.motion_tracker = 1,
+                        "RIGHT_HAND" => self.motion_tracker = 2,
+                        "TRACKER" => self.motion_tracker = 3,
+                        _ => {}
+                    }
+                }
             }
         }
         self.eyes_distance_ref = self.vr.get_float(c"steamvr", c"ipd");
@@ -538,8 +553,27 @@ impl StereoCameraVive {
                 *matrix = matrix34(&pose.device_to_absolute_tracking);
             }
         }
+        if self.motion_tracker != 0 {
+            // the hand's controller (IVRSystem::GetTrackedDeviceIndexForControllerRole) or the
+            // last generic tracker (GetTrackedDeviceClass 3), device 0 without one
+            let index = match self.motion_tracker {
+                role @ (1 | 2) => {
+                    let system = self.vr.system();
+                    unsafe { slot::<unsafe extern "C" fn(Interface, i32) -> u32>(system, 17)(system, role) as i32 }
+                }
+                3 => { let hmd = self.vr.hmd; (0..16u32).fold(0, |found, i| if unsafe { slot::<unsafe extern "C" fn(Interface, u32) -> i32>(hmd, 19)(hmd, i) } == 3 { i as i32 } else { found }) }
+                _ => 0,
+            };
+            self.hmd_matrix_tracker = self.device_matrix(index);
+        }
         if self.poses[0].pose_is_valid {
             self.hmd_matrix = self.device_pose[0];
+        }
+        if self.motion_tracker != 0 {
+            // the head seen from the tracker: its turn taken out, its place kept
+            self.hmd_matrix_tracker.m[3] = [0.0, 0.0, 0.0, self.hmd_matrix_tracker.m[3][3]];
+            let inverse = xm_matrix_inverse(&self.hmd_matrix_tracker);
+            self.hmd_matrix = xm_matrix_multiply(&self.hmd_matrix, &inverse);
         }
         let a = self.rotation_offset;
         if a != 0.0 {
@@ -547,6 +581,26 @@ impl StereoCameraVive {
             let (k, s0) = ((1.0 - c) * 0.0, s * 0.0);
             let r = Mat44f { m: [[k + c, s0 + k, k - s, 0.0], [k - s0, (1.0 - c) + c, s0 + k, 0.0], [s + k, k - s0, k + c, 0.0], [0.0, 0.0, 0.0, 1.0]] };
             self.hmd_matrix = xm_matrix_multiply(&self.hmd_matrix, &r);
+        }
+    }
+
+    /// `m_rmat4DevicePose[index]` as the game reads it: a hand with no controller
+    /// (`k_unTrackedDeviceIndexInvalid`, -1) reads the 64 bytes before the matrices, the end
+    /// of the last device's pose and the eyes' size.
+    fn device_matrix(&self, index: i32) -> Mat44f {
+        match usize::try_from(index) {
+            Ok(i) if i < 16 => self.device_pose[i],
+            _ => {
+                // shortcut: only -1 is laid out (SteamVR's one invalid index); any other index past the array reads that too
+                // (the pose's two padding bytes taken as zero)
+                let p = &self.poses[15];
+                let m = &p.device_to_absolute_tracking;
+                let (v, w) = (p.velocity, p.angular_velocity);
+                let flags = f32::from_bits(p.pose_is_valid as u32 | (p.device_is_connected as u32) << 8);
+                let size = (f32::from_bits(self.render_width), f32::from_bits(self.render_height));
+                let f = [m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], v[0], v[1], v[2], w[0], w[1], w[2], f32::from_bits(p.tracking_result as u32), flags, size.0, size.1];
+                Mat44f { m: [[f[0], f[1], f[2], f[3]], [f[4], f[5], f[6], f[7]], [f[8], f[9], f[10], f[11]], [f[12], f[13], f[14], f[15]]] }
+            }
         }
     }
 
