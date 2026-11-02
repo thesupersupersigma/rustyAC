@@ -28,7 +28,7 @@
 
 use rustyac_game::render::onboard_free::{self, CinematicCamera, HelicopterCamera, OnboardFreeCamera, OrbitInput, ShotCamera};
 use rustyac_game::render::track_camera::{CameraSet, RandomCamera, TrackCamera, TrackCameras};
-use rustyac_game::render::scene::{CameraFrame, CameraMode, CarCamera, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
+use rustyac_game::render::scene::{CameraFrame, CameraMode, CarCamera, CarShape, Drivable, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::view::CarView;
 
 fn float(s: &str) -> f32 {
@@ -152,7 +152,7 @@ fn main() {
 /// and `DrivingCamera`, `rand()` from the tape's seed.
 fn random(tape: &str, seed: u32) -> bool {
     let mut rand = rustyac_physics::session::MsvcRand(seed);
-    let (mut lines, mut wrong, mut groups) = (0usize, 0usize, 0usize);
+    let (mut lines, mut wrong, mut groups, mut answers) = (0usize, 0usize, 0usize, 0usize);
     let mut camera = DrivingCamera::chase();
     let mut track = TrackCameras::default();
     let mut random = RandomCamera::new(None, &mut rustyac_physics::session::MsvcRand(0));
@@ -185,8 +185,10 @@ fn random(tape: &str, seed: u32) -> bool {
         // (the game's currentGlobalCameraIndex changes in setMode only: on a key, a window's
         // call or a draw)
         let set_mode = !input.starts_with("dt") || (camera.random && random.old_time >= random.time);
+        let mut answer = None;
         // (the desktop's calls, the free camera an overlay on the driving ones)
         let last = CameraFrame { matrix: rustyac_game::view::IDENTITY, fov: 60.0, near: 0.1 };
+        let start_now = start;
         let mut mode_to = |mode: i32, camera: &mut DrivingCamera, track: &mut TrackCameras, free: &mut Option<MouseCamera>| {
             onboard_free::set_mode(mode, camera, &mut start, free, &mut shot, Some(&last), cameras, false, track)
         };
@@ -223,6 +225,10 @@ fn random(tape: &str, seed: u32) -> bool {
             // Python's ac.setCameraMode: randomMode off first (7: on after the track's cameras)
             ("py", v) => {
                 let mode = v.parse().unwrap();
+                // what the app reads back at once (ac.getCameraMode, isCameraOnBoard's dash), as the
+                // desktop answers it: CameraCopy on a copy of the cameras
+                let mut copy = onboard_free::CameraCopy { camera, start: start_now, free, last: Some(last), count: cameras, cinematic: false };
+                answer = Some(copy.set_camera_mode(mode));
                 camera.random &= mode == 7;
                 mode_to(mode, &mut camera, &mut track, &mut free);
             }
@@ -247,17 +253,22 @@ fn random(tape: &str, seed: u32) -> bool {
             "{mode} {last} {view} {} {} {} {} {:08x} {:08x} {:08x} {global} {} {}",
             camera.car_index, track.current_set, camera.random as u8, random.last, random.time.to_bits(), random.old_time.to_bits(), camera.near.to_bits(), camera.last_camera.0, camera.last_camera.1
         );
-        if port != output {
+        // the answer against the game's camera manager right after setMode (ac_getCameraMode
+        // 0x140129440 returns its mode; isCameraOnBoard reads it and the drivable view, the line's)
+        let game_mode: i32 = output.split(' ').next().unwrap().parse().unwrap();
+        let answered = answer.is_none_or(|(m, dash)| m == game_mode && dash == (camera.drivable == Drivable::Dash));
+        answers += answer.is_some() as usize;
+        if port != output || !answered {
             wrong += 1;
             if wrong <= 5 {
                 println!("DIFFERENT line {lines} ({input}):
   game {output}
-  port {port}");
+  port {port}, answered {answer:?}");
             }
         }
     }
     if wrong == 0 {
-        println!("random camera: IDENTICAL ({groups} groups, {lines} lines of the game)");
+        println!("random camera: IDENTICAL ({groups} groups, {lines} lines of the game, {answers} ac.setCameraMode answers)");
     } else {
         println!("random camera: DIFFERENT in {wrong} of {lines} lines");
     }
