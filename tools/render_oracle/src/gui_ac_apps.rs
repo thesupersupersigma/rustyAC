@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 47] = [
+pub const APPS: [(&str, usize, usize, usize); 48] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -70,6 +70,8 @@ pub const APPS: [(&str, usize, usize, usize); 47] = [
     ("drivermodel", 0x220, 0x1_4031_f0e0, 0x1_4050_c860),
     // Task 44c
     ("ai", 0x2b0, 0x1_402d_cf80, 0x1_4050_2aa0),
+    // Task 47c
+    ("openvr", 0x1e8, 0x1_402f_d030, 0x1_4050_6dc0),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -154,6 +156,21 @@ unsafe fn camera_editor_link(c: &CameraGame) -> rustyac_gui::app_camera_editor::
 
 /// `PostProcessEffectsUpdater::loadConfigurationFile` 0x1400abb70 for the filter picker: the
 /// name written down (the wstring by value is left to leak).
+/// FormOpenVR's calls on its stand-in StereoCameraVive (Task 47c).
+fn vr_log(line: String) {
+    let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), vec![line], "", &mut String::new());
+}
+unsafe extern "C" fn vr_get_multiplier(_this: *mut u8) -> f32 {
+    crate::gui_seq_apps::OPEN_VR.render_multiplier
+}
+unsafe extern "C" fn vr_set_multiplier(_this: *mut u8, value: f32) {
+    vr_log(format!("setRenderMultiplier {:08x}", value.to_bits()));
+}
+unsafe extern "C" fn vr_set_eyes(_this: *mut u8, offset: f32) {
+    vr_log(format!("setEyesDistance {:08x}", offset.to_bits()));
+}
+
 unsafe extern "C" fn ppf_load(_this: *mut u8, name: *mut u8) {
     let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
     crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), vec![format!("load {:?}", crate::gui_ac::read_wstring(name))], "", &mut String::new());
@@ -979,6 +996,25 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                     wr(sim, 0x170, a.alloc(0x200));
                 }
                 wings_car(a, first_car);
+            }
+            if text == "openvr" {
+                // FormOpenVR(Sim*): Sim::getSceneCamera (+0x238) a StereoCameraVive (its vftable for
+                // the dynamic cast; eyesDistanceRef +0x954, eyesDistance +0x95c, maxDistanceOffset
+                // +0x960); SteamVR's supersampling read and set, the distance set: written down
+                let v = crate::gui_seq_apps::OPEN_VR;
+                let camera = a.alloc(0x1418);
+                wr(camera, 0, a.va(0x1_404e_d4f8) as usize);
+                wr(camera, 0x954, v.eyes_distance_ref);
+                wr(camera, 0x95c, v.eyes_distance);
+                wr(camera, 0x960, v.max_distance_offset);
+                wr(sim, 0x238, camera);
+                for (va, to) in [
+                    (0x1_4022_33e0, vr_get_multiplier as *const () as usize),
+                    (0x1_4022_44d0, vr_set_multiplier as *const () as usize),
+                    (0x1_4022_4310, vr_set_eyes as *const () as usize),
+                ] {
+                    crate::gui_ac_hud::jump(game, va, to);
+                }
             }
             if text == "ppfilter" {
                 // PostProcessFilterSelector(Sim*): the game objects (Sim+0x40) one

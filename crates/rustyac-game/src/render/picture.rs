@@ -42,6 +42,12 @@ impl Picture {
         }
     }
 
+    pub fn open_vr_action(&mut self, action: &rustyac_gui::apps::AppAction) {
+        if let Picture::Ac(renderer) = self {
+            renderer.open_vr_action(action);
+        }
+    }
+
     pub fn vr_shutdown(&mut self) {
         if let Picture::Ac(renderer) = self {
             renderer.vr_shutdown();

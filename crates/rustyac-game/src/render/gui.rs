@@ -88,6 +88,8 @@ pub struct GuiSetup {
     pub triple_screen: bool,
     /// Task 47c: `Sim::isVrConnected` (a headset camera)
     pub vr: bool,
+    /// Task 47c: the HTC Vive camera's values for FormOpenVR (none: no form)
+    pub open_vr: Option<rustyac_gui::app_open_vr::OpenVrValues>,
     /// Task 44c: the player's car is driven by an AI driver from the start (FormAI's
     /// constructor finds it)
     pub ai_drive: bool,

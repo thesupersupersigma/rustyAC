@@ -2008,6 +2008,30 @@ impl AcRenderer {
         }
     }
 
+    /// Task 47c: what FormOpenVR reads (the HTC Vive camera only).
+    pub fn open_vr_values(&mut self) -> Option<rustyac_gui::app_open_vr::OpenVrValues> {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = self.camera.forward.vr.as_deref_mut() {
+            let (render_multiplier, eyes_distance_ref, eyes_distance, max_distance_offset) = vr.open_vr_values();
+            return Some(rustyac_gui::app_open_vr::OpenVrValues { render_multiplier, eyes_distance_ref, eyes_distance, max_distance_offset });
+        }
+        None
+    }
+
+    /// Task 47c: FormOpenVR's pupillary distance (live) and supersampling (Save).
+    pub fn open_vr_action(&mut self, action: &rustyac_gui::apps::AppAction) {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = self.camera.forward.vr.as_deref_mut() {
+            match *action {
+                rustyac_gui::apps::AppAction::SetVrEyesDistance(offset) => vr.set_eyes_distance(offset),
+                rustyac_gui::apps::AppAction::SetVrRenderMultiplier(value) => vr.set_render_multiplier(value),
+                _ => {}
+            }
+        }
+        #[cfg(not(all(windows, not(feature = "wgpu"))))]
+        let _ = action;
+    }
+
     /// Task 47b: `StereoCameraVive::shutdown`, at the end.
     pub fn vr_shutdown(&mut self) {
         #[cfg(all(windows, not(feature = "wgpu")))]

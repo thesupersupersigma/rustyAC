@@ -20,6 +20,7 @@ pub mod app_pad_debug;
 pub mod app_photo_mode;
 pub mod app_driver_model;
 pub mod app_hdr;
+pub mod app_open_vr;
 pub mod app_pp_filter;
 pub mod app_drs_zones;
 pub mod comparative_telemetry;

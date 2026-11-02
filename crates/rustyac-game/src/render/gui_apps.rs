@@ -61,6 +61,8 @@ pub struct GameApps {
     pub camera_selects: Vec<(i32, i32)>,
     /// the Photo mode's calls: `SetCameraMode`, `PausePhysics`, `TakeScreenshot`
     pub photo_actions: Vec<AppAction>,
+    /// FormOpenVR's calls on the HTC Vive camera
+    pub vr_actions: Vec<AppAction>,
     /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
     /// app's changes); the messages the apps asked for (title, text)
     ff_upgrades: Option<[f32; 4]>,
@@ -188,6 +190,11 @@ impl GameApps {
         gui.apps.ff_upgrades = self.ff_upgrades;
         let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
         let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
+        // FormOpenVR: only with the HTC Vive camera
+        if let Some(values) = setup.open_vr {
+            let id = gui.new_open_vr_app(painter, values);
+            add(gui, painter, "openvr", id);
+        }
         // PostProcessFilterSelector: only with YEBIS (post-processing on); its filters from
         // Documents' cfg\ppfilters (rustyAC's own first) and the game's system\cfg\ppfilters
         if gui.sim.replay.post_processing == Some(true) {
@@ -387,6 +394,10 @@ impl GameApps {
                 }
                 // applying a filter to the picture waits for YEBIS
                 AppAction::LoadPostProcessFilter(_) => continue,
+                AppAction::SetVrEyesDistance(_) | AppAction::SetVrRenderMultiplier(_) => {
+                    self.vr_actions.push(action);
+                    continue;
+                }
                 AppAction::SetCameraMode(_) | AppAction::PausePhysics(_) | AppAction::TakeScreenshot => {
                     self.photo_actions.push(action);
                     continue;

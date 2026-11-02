@@ -25,6 +25,9 @@ use crate::gui_seq_menu::{hud, leak};
 pub const DT: f32 = 1.0 / 60.0;
 /// Where the Audio app's form is on the screen (its top left).
 const VOLUMES_AT: (i32, i32) = (0, 80);
+/// Task 47c: FormOpenVR's stand-in StereoCameraVive (SteamVR's supersampling 1.3, the stand-in
+/// runtime's ipd 63.5 mm, the player's 65.5 mm, the game's ±15 mm)
+pub const OPEN_VR: rustyac_gui::app_open_vr::OpenVrValues = rustyac_gui::app_open_vr::OpenVrValues { render_multiplier: 1.3, eyes_distance_ref: 0.0635, eyes_distance: 0.0655, max_distance_offset: 0.015 };
 /// Where the force feedback app's form is.
 const FFB_AT: (i32, i32) = (0, 80);
 
@@ -934,11 +937,12 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
-    if name.starts_with("app_ppfilter") {
+    if name.starts_with("app_ppfilter") || name == "app_openvr" {
         let mut same = true;
+        let ini = if name == "app_openvr" { "openvr.ini" } else { "video.ini" };
         for (what, a, b) in [
-            ("the filters asked for (loadConfigurationFile)", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
-            ("cfg/video.ini", args.root.join("documents/Assetto Corsa/cfg/video.ini"), args.root.join("port_files/documents/Assetto Corsa/cfg/video.ini")),
+            ("the filters asked for (loadConfigurationFile) / the VR camera's calls", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
+            (ini, args.root.join("documents/Assetto Corsa/cfg").join(ini), args.root.join("port_files/documents/Assetto Corsa/cfg").join(ini)),
         ] {
             match (std::fs::read(&a), std::fs::read(&b)) {
                 (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
@@ -1952,6 +1956,24 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             // hidden: the wheel does nothing
             o.extend([hud("app.visible", 0.0, "photomode"), Op::Frame(DT), Op::Wheel(x + 140, y + 300, 120.0), Op::Frame(DT), hud("app.visible", 1.0, "photomode"), Op::Frame(DT)]);
             play(&mut o, 100, 120, 10);
+            o.push(Op::Save);
+        }
+        "app_openvr" => {
+            // the form at VOLUMES_AT: the spinners 310 x 23 at (30, 70) and (30, 140) ("-" at the
+            // left, "+" at the right), Save 60 x 23 at (275, 200)
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "openvr"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "openvr"));
+            play(&mut o, 0, 20, 10);
+            for (cx, cy, n) in [(330, 151, 3), (40, 151, 20), (330, 81, 4), (40, 81, 2), (305, 211, 1), (330, 151, 2), (305, 211, 1), (330, 81, 15)] {
+                for _ in 0..n {
+                    click(&mut o, cx, cy);
+                }
+            }
+            play(&mut o, 20, 40, 10);
             o.push(Op::Save);
         }
         "app_ppfilter" => {

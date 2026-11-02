@@ -184,6 +184,23 @@ impl OpenVr {
         unsafe { slot::<unsafe extern "C" fn(Interface, *const c_char, *const c_char, *mut i32) -> f32>(settings, 8)(settings, section.as_ptr(), key.as_ptr(), std::ptr::null_mut()) }
     }
 
+    /// `IVRSettings::GetFloat` with an error to read back.
+    fn get_float_error(&mut self, section: &CStr, key: &CStr) -> (f32, i32) {
+        let settings = self.settings();
+        let mut error = 0;
+        let value = unsafe { slot::<unsafe extern "C" fn(Interface, *const c_char, *const c_char, *mut i32) -> f32>(settings, 8)(settings, section.as_ptr(), key.as_ptr(), &mut error) };
+        (value, error)
+    }
+
+    /// `IVRSettings::SetFloat` with an error, then `Sync(false)`: whether it synced.
+    fn set_float_error_and_sync(&mut self, section: &CStr, key: &CStr, value: f32) -> bool {
+        let settings = self.settings();
+        let mut error = 0;
+        unsafe { slot::<unsafe extern "C" fn(Interface, *const c_char, *const c_char, f32, *mut i32)>(settings, 4)(settings, section.as_ptr(), key.as_ptr(), value, &mut error) };
+        let settings = self.settings();
+        unsafe { slot::<unsafe extern "C" fn(Interface, bool, *mut i32) -> bool>(settings, 1)(settings, false, std::ptr::null_mut()) }
+    }
+
     /// `IVRSettings::SetFloat` then `Sync(false)`.
     fn set_float_and_sync(&mut self, section: &CStr, key: &CStr, value: f32) {
         let settings = self.settings();
@@ -429,6 +446,48 @@ impl StereoCameraVive {
         };
         self.eyes_distance = offset + self.eyes_distance_ref;
         self.vr.set_float_and_sync(c"steamvr", c"ipdOffset", offset);
+    }
+
+    /// `StereoCameraVive::getRenderMultiplier` 0x1402233e0: SteamVR's supersampling.
+    pub fn render_multiplier(&mut self) -> f32 {
+        self.vr.get_float(c"steamvr", c"renderTargetMultiplier")
+    }
+
+    /// `StereoCameraVive::setRenderMultiplier(float)` 0x1402244d0: `steamvr`'s (with its
+    /// messages), then the compositor's; a setting SteamVR cannot read goes back to 1.
+    pub fn set_render_multiplier(&mut self, value: f32) {
+        self.set_section_render_multiplier(c"steamvr", value);
+        let (old, error) = self.vr.get_float_error(c"compositor", c"renderTargetMultiplier");
+        let value = if error != 0 {
+            1.0
+        } else if value == old {
+            return;
+        } else {
+            value
+        };
+        self.vr.set_float_error_and_sync(c"compositor", c"renderTargetMultiplier", value);
+    }
+
+    /// `StereoCameraVive::setRenderMultiplier(section, value, verbose)` 0x1402243a0 (verbose).
+    fn set_section_render_multiplier(&mut self, section: &CStr, value: f32) {
+        let (old, error) = self.vr.get_float_error(section, c"renderTargetMultiplier");
+        if error == 0 {
+            if value != old && self.vr.set_float_error_and_sync(section, c"renderTargetMultiplier", value) {
+                println!("Changed render multiplier value to {:.6}", value as f64);
+            }
+        } else {
+            let settings = self.vr.settings();
+            // IVRSettings::GetSettingsErrorNameFromEnum
+            let name = unsafe { slot::<unsafe extern "C" fn(Interface, i32) -> *const c_char>(settings, 0)(settings, error) };
+            let name = if name.is_null() { String::new() } else { unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned() };
+            println!("Error reading render multiplier default setting: {name}");
+            self.vr.set_float_error_and_sync(section, c"renderTargetMultiplier", 1.0);
+        }
+    }
+
+    /// What `FormOpenVR` reads when it is made.
+    pub fn open_vr_values(&mut self) -> (f32, f32, f32, f32) {
+        (self.render_multiplier(), self.eyes_distance_ref, self.eyes_distance, self.max_distance_offset)
     }
 
     /// `StereoCameraVive::GetHMDMatrixProjectionEye` 0x140221ac0.

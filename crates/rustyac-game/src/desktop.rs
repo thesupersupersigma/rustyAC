@@ -445,6 +445,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             esc_start: esc_start(options),
             triple_screen: renderer.triple_screen(),
             vr: renderer.vr(),
+        open_vr: renderer.open_vr_values(),
             ai_drive: options.ai_drive,
             // Task 33: the ESC menu's page "Telemetry": the recorder's folder (none: no recorder)
             telemetry_folder: telemetry_folder(options, true).filter(|_| !options.online_session),
@@ -2222,6 +2223,10 @@ fn run_window(options: &Options) -> Result<(), String> {
             focus.index = 0;
         }
         let view = world[focus.index];
+        // FormOpenVR: the pupillary distance and supersampling on the HTC Vive camera
+        for action in renderer.gui().map(|gui| std::mem::take(&mut gui.apps.vr_actions)).unwrap_or_default() {
+            renderer.open_vr_action(&action);
+        }
         // Onboard settings: the player's eye point, field of view and pitch as the app left them
         if let Some(gui) = renderer.gui() {
             if gui.apps.made.is_empty() {
