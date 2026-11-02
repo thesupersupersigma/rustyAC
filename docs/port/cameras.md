@@ -1,4 +1,60 @@
-# AC's cameras (Tasks 46 and 46b)
+# AC's cameras (Tasks 46, 46b and 46c)
+
+## Task 46c: proof runs start clean, the cameras' last bits
+
+Released as v0.46.2. Proof runs no longer read or write a player's settings, and the four camera
+leftovers of Task 46b are done.
+
+### What changed, in plain words
+
+- **Proofs start clean.** Every game run in `tools/proofs` gets fresh settings folders of its
+  own; nothing reads `target/release/cfg` or the player's Documents any more, and a run that tries
+  is stopped. `docs/port/proofs.md` (Task 46c) lists every file rustyac.exe writes and reads back.
+- **Where rustyAC differs on purpose** is now one page: [differences.md](differences.md) (linked
+  from the README).
+- **F2 / F3 on a track without camera sets**: still the camera kept still (acs.exe crashes), now
+  with one log line: `CAMERA: the track has no camera sets (data/cameras*.ini): F2 / F3 keep the
+  camera still (acs.exe crashes here)`.
+- **Page: the cameras' own keys.** While F5's keyboard way or F7's cinematic camera shows, its
+  keys (Up / Down, Z X C F G B V, Shift / Tab / Caps Lock, Numpad + / -, Backspace, Delete,
+  Insert) reach the game; before, only keys the key layout drives with did. The page also mounts
+  the player's `cfg/video_editing.ini` (F7's cinematic camera needs it).
+- **Page: the look on a locked pointer.** Holding the left button in those cameras locks the
+  pointer, so the look keeps turning past the screen's edge (the desktop's cursor wraps there).
+  Letting go, Esc or leaving the drive unlocks it.
+- **Python right after `ac.setCameraMode`** reads what the game's camera manager holds at that
+  moment (`getCameraMode`, `isCameraOnBoard`), not the mode it asked for: the window's cameras are
+  copied and the switch run on the copy (`onboard_free::CameraCopy`).
+- **`ac.freeCameraSetClearColor`** sets the scene camera's clear colour (`Camera::setClearColor`
+  0x14020fbe0 on the mouse control's camera; `clearBuffers` / `render` clear with it).
+- **Delete in the cinematic camera** switches the motion blur off and on
+  (`CinematicFreeCamera::update` 0x14006d980: `blurSwitch` flips `CameraForwardYebis`
+  `debug_MotionBlurEnabled` +0x7a0), desktop and page; Insert reloads `video_editing.ini` on the
+  page too.
+
+### Proofs
+
+| What | How | Result |
+|---|---|---|
+| Proof runs isolated | planted state in `target/release` (camera_manager.ini MODE=3 / DRIVABLE_MODE=4 / fade 255,0,255, gameplay.ini time ×2.7, collisions off, mph, two odd last.ini setups, another online id, a changed key, master volume 0.01, a shadow file), then `run_all.sh --quick` twice | 168 of 168 IDENTICAL both times (1 h 04 min, 0 h 42 min); the planted folder's fingerprint unchanged (6f6a4da0…) |
+| The guard | `RUSTYAC_PROOF_RUN=1` without `--cfg-dir` or `--documents` | exit 2 with the message; with both: the replay runs |
+| F2 / F3 without camera sets | `re/scratch/task46c/nocam.sh`: a junction copy of the install whose magione has no `cameras*.ini`; `--focus-script track@5,track@7,random@9,track@11` | exit 0, the camera still, one `CAMERA:` line |
+| Page camera keys | `tools/web_checks/task46c/look.sh` (F5 keyboard way: the copy's `camera_onboard_free.ini` SPHERICAL_COORDS=0) | Numpad + 1 s: fov 45 → 52.1; Z 1 s: 7 m lower. With v0.46.1's page script: fov stays 45, Z does nothing |
+| Page pointer lock | the same run | the lock is asked on the left press in the look cameras only and again after letting go; headless Chrome refuses it (`pointerlockerror`), so the locked look itself is not run (see Not done) |
+| Python setCameraMode answer, getCameraMode / isCameraOnBoard | `start_camera_check`'s random tape: each `py <mode>` line (the game's `ac_setCameraMode`) also asks `CameraCopy::set_camera_mode`, against the game's manager mode and drivable view of that line (`ac_getCameraMode` 0x140129440 returns `mode`; `isCameraOnBoard` is cockpit or drivable dash on the focused car) | IDENTICAL on seeds 1, 2 and 3 (1510, 1477 and 1519 answers; 60120 lines each); the cameras part 19 of 19 IDENTICAL |
+| Clear colour, Delete's blur | read against the game's code (above); compile and the page HUD's `cinematic.blur` | no tape: neither changes what the oracles record |
+
+### Not done (→ Task 46d)
+
+- The page's locked look itself is not run by any check (headless Chrome refuses pointer lock);
+  only that it is asked at the right moments.
+- No page check drives F7's cinematic camera: the page's player folder has no
+  `video_editing.ini` unless the player puts one there (the install has none to copy).
+- Delete's blur and the clear colour have no oracle tape.
+
+### Open questions
+
+- None.
 
 ## Task 46b: the rest of AC's cameras
 
