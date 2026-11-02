@@ -8,7 +8,8 @@
 - Step 1 done: the audit table below.
 - Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Step 3 next.
 - Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). `rustyac.exe` uses it with video.ini `MODE=OCULUS`.
-- Step 4 done: `gui3d.rs` is the game's GUI in the headset, proven with both runtimes (render cases `r47b_07..08`, and every VR case with a car). Next: step 5 (the page: no VR).
+- Step 4 done: `gui3d.rs` is the game's GUI in the headset, proven with both runtimes (render cases `r47b_07..08`, and every VR case with a car). 
+- Step 5 done: the page has no VR (note below). Next: the end quick run, then v0.47.1.
 
 ### Step 0: the case count
 
@@ -163,6 +164,22 @@ HUD go into the target, one frame late (docs/port/differences.md). Not done: `Fo
 OpenVR app with the supersampling and eye-distance spinners: openvr.ini can be edited by hand),
 the apps and forms drawn in the oracle's VR runs (the GUI oracle's own sequences are flat; the
 drawing code is the flat code, proven there).
+
+### Step 5: the page
+
+The page has no VR. Its graphics page keeps AC's Rendering Mode choice (Oculus Rift, OpenVR) for
+`rustyac.exe` and the game, marked as not drawn by Full mode; with `MODE=OCULUS` or `MODE=OPENVR`
+Full mode draws the plain camera, as before (both VR ports are left out of the wgpu build).
+
+Could WebXR do it later? Mostly yes, with differences the game's code would not cover:
+`navigator.xr.requestSession('immersive-vr')` gives per-eye views (a pose and a projection per
+eye, as `GetEyeToHeadTransform` and `GetProjectionMatrix` do) and an XR frame loop in place of
+`WaitGetPoses`; the eyes would be drawn with the same per-eye code (`render_no_pp`'s steps) into
+the session's WebGPU or WebGL layer, and `gui3d.rs` would carry over unchanged. What WebXR lacks:
+the game's own runtimes (so nothing there could be proven against acs.exe beyond the per-eye
+drawing), a WebGPU XR binding in browsers today (WebGL layers only, while Full mode is wgpu),
+seated recentring as `ResetSeatedZeroPose` (WebXR's `local` space resets on the browser's own
+gesture), and the mirror window as the game draws it. Not tried.
 
 ## Task 47: where it stood at v0.47.0
 
