@@ -238,6 +238,13 @@ pub fn point_smooth(spline: &InterpolatingSpline, t: f32) -> [f32; 3] {
     [(b[0] - a[0]) * k + a[0], (b[1] - a[1]) * k + a[1], (b[2] - a[2]) * k + a[2]]
 }
 
+/// The one log line of a run where acs.exe would crash (F3 again or F2's track camera on a track
+/// without camera sets, docs/port/differences.md); no message on screen.
+fn no_sets_note() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| println!("CAMERA: the track has no camera sets (data/cameras*.ini): F2 / F3 keep the camera still (acs.exe crashes here)"));
+}
+
 /// What a track camera sets on the scene camera in a frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackFrame {
@@ -330,6 +337,7 @@ impl TrackCameras {
     /// its name.
     pub fn next_set(&mut self) -> String {
         if self.sets.is_empty() {
+            no_sets_note();
             return String::new();
         }
         self.current_set += 1;
@@ -513,7 +521,7 @@ impl RandomCamera {
             // the index and nextSet 0x1400cbc90 reads its empty list's first set through a null
             // pointer, a crash. rustyAC goes on to setMode(eTrack), whose camera then stays still
             // (CameraTrack::update does nothing without sets).
-            3 => {}
+            3 => no_sets_note(),
             1 => {
                 let (before, index) = (camera.car_index, pick(car_cameras as f32 - 1.0, rand));
                 if index < car_cameras {

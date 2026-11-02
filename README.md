@@ -45,6 +45,8 @@ Not supported: Custom Shaders Patch (CSP) features. Cars that need CSP won't loa
 
 Not ported on purpose: AC's **showroom** (`acShowroom.exe`, the car viewer). Use the one in your Assetto Corsa install: rustyAC reads the same content files as the original game, so any car or track that works in vanilla Assetto Corsa works in rustyAC too, and the original showroom already shows them.
 
+Where rustyAC behaves differently from Assetto Corsa on purpose (it never writes into the game's folder or your Documents, it avoids crashes the game has, …) is listed in [docs/port/differences.md](docs/port/differences.md).
+
 ---
 
 ## How it's verified
