@@ -88,7 +88,9 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
         None => notes.push(format!("no 3D model of {}: no car is drawn", info.name)),
     }
     renderer.finish_loading()?;
-    if let Some(setup) = gui {
+    if let Some(mut setup) = gui {
+        // the graphics page's Rendering Mode: Triple Screen draws three views on the one canvas
+        setup.triple_screen = renderer.triple_screen();
         if let Err(why) = renderer.enable_gui(setup) {
             notes.push(format!("AC's GUI could not be made: {why}"));
         }
@@ -164,7 +166,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         track_layout: info.track_layout.clone(),
         out_dir: own.join("out"),
         esc_start: sim.setup.esc_start,
-        // (the page draws one view)
+        // (set from the renderer)
         triple_screen: false,
         ai_drive: false,
         fixed_setup: manager.is_some_and(|m| m.fixed_setup),

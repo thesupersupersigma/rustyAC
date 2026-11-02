@@ -50,7 +50,14 @@ Ported: `CameraTripleScreen::CameraTripleScreen` 0x1402248e0, `beginVirtualScree
 - A missing or short triple_screen.ini crashes the game (null token in `getVector2`); rustyAC
   stops with a message instead.
 - The HUD's triple switch (`Sim::isInTripleScreenMode`) is now set from the camera.
-- The page draws one view (no triple mode in the page yet: Task 47c).
+- The page: the graphics page's "Rendering Mode: Triple Screen" writes the same video.ini key;
+  Full mode then draws the three views on its one canvas, and the HUD switch follows. It needs
+  the page's Documents `cfg/triple_screen.ini` (the page has no Triple screen app to write it:
+  Task 47c). Proof: `full_frame` (Full mode's frame, natively) at 5760×1080 with MODE=TRIPLE:
+  the kgl call log of Direct3D 11 and of the page's wgpu backend are the same (36,748 lines,
+  three 1920-wide viewports per pass); pictures differ only as two devices do (mean 0.9/255,
+  WARP against the GPU). wgpu on Direct3D 12 WARP crashes on this PC with or without triple
+  (an old WARP fault, Task 38b). Not tried in a browser.
 
 ### Proof
 
