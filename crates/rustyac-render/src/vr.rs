@@ -49,6 +49,44 @@ pub struct OpenVrApi {
     pub get_async_key_state: unsafe extern "system" fn(i32) -> i16,
 }
 
+#[link(name = "kernel32")]
+extern "system" {
+    fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+}
+#[link(name = "user32")]
+extern "system" {
+    fn GetAsyncKeyState(key: i32) -> i16;
+}
+
+/// The game's own `system/x64/openvr_api.dll` of the Assetto Corsa folder (the game delay-loads
+/// it from there), or `None`.
+pub fn load(ac_root: &std::path::Path) -> Option<OpenVrApi> {
+    use std::os::windows::ffi::OsStrExt;
+    let path = ac_root.join("system/x64/openvr_api.dll");
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: a terminated path; the exports are OpenVR's flat functions, the game's imports
+    unsafe {
+        let module = LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), 0x8);
+        if module.is_null() {
+            return None;
+        }
+        let symbol = |name: &CStr| -> Option<usize> {
+            let p = GetProcAddress(module, name.as_ptr().cast());
+            (!p.is_null()).then_some(p as usize)
+        };
+        Some(OpenVrApi {
+            init_internal: std::mem::transmute::<usize, unsafe extern "C" fn(*mut i32, i32) -> u32>(symbol(c"VR_InitInternal")?),
+            is_interface_version_valid: std::mem::transmute::<usize, unsafe extern "C" fn(*const c_char) -> bool>(symbol(c"VR_IsInterfaceVersionValid")?),
+            get_generic_interface: std::mem::transmute::<usize, unsafe extern "C" fn(*const c_char, *mut i32) -> Interface>(symbol(c"VR_GetGenericInterface")?),
+            get_init_token: std::mem::transmute::<usize, unsafe extern "C" fn() -> u32>(symbol(c"VR_GetInitToken")?),
+            shutdown_internal: std::mem::transmute::<usize, unsafe extern "C" fn()>(symbol(c"VR_ShutdownInternal")?),
+            error_description: std::mem::transmute::<usize, unsafe extern "C" fn(i32) -> *const c_char>(symbol(c"VR_GetVRInitErrorAsEnglishDescription")?),
+            get_async_key_state: GetAsyncKeyState,
+        })
+    }
+}
+
 /// A vtable slot of an interface, as the function type it is called with.
 unsafe fn slot<F: Copy>(instance: Interface, index: usize) -> F {
     std::mem::transmute_copy(&*(*instance).add(index))
@@ -529,6 +567,11 @@ impl StereoCameraVive {
     /// `GraphicsManager::endScene`): the window's swap, then both eyes to the compositor.
     pub fn finish_rendering(&mut self, graphics: &Graphics) {
         graphics.kgl.swap_buffers();
+        self.submit();
+    }
+
+    /// `finishRendering`'s part after the swap (a window that swaps on its own calls only this).
+    pub fn submit(&mut self) {
         for eye in 0..2 {
             let handle = self.render_eye[eye].kid_color.as_ref().and_then(|c| c.texture.as_ref()).map_or(std::ptr::null_mut(), |t| t.as_raw());
             let texture = Texture { handle, kind: 0, color_space: 1 };

@@ -790,6 +790,16 @@ impl AcRenderer {
         let triple_mode = video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "TRIPLE");
         let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled && !triple_mode;
         let mut camera = CameraForwardYebis::new(&mut graphics, use_blur)?;
+        // Task 47b: MODE=OPENVR makes the StereoCameraVive (seated) when the game's
+        // openvr_api.dll starts a runtime, else the plain camera
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "OPENVR") {
+            let api = rustyac_render::vr::load(&options.game).ok_or_else(|| "no system/x64/openvr_api.dll".to_string());
+            match api.and_then(|api| rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, rustyac_render::vr::OpenVr::new(api), false)) {
+                Ok(vr) => camera.forward.vr = Some(Box::new(vr)),
+                Err(e) => notes.push(format!("VR: {e}; the plain camera")),
+            }
+        }
         camera.blur_quality = motion_blur * 2.0;
         camera.base.camera.min_exposure = hdr_levels.min_exposure;
         camera.base.camera.max_exposure = hdr_levels.max_exposure;
@@ -1656,7 +1666,9 @@ impl AcRenderer {
                 self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
             }
         }
-        if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
+        // (VR: no virtual mirror, and isRenderingGui is off: no GUI::render, no renderHUD)
+        let vr = self.vr();
+        if let (Some(mirror), Some(v), false) = (&self.mirror, &mut self.virtual_mirror, vr) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
         }
         // ksgui::GUI::render -> doRender2D 0x1402539d0: the states of the 2D pass, then the game
@@ -1674,7 +1686,9 @@ impl AcRenderer {
                 // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
                 let rows = self.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
                 gui.gui.apps.gpu_profile = rows.collect();
-                gui.render(&mut self.graphics, dt);
+                if !vr {
+                    gui.render(&mut self.graphics, dt);
+                }
                 self.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
                 // FormDriverModel: what it wrote into car 0's driverModel_HR, its updateHeadMovement calls
                 if let (Some(l), Some(d)) = (gui.gui.apps.driver_model.as_mut(), self.cars.first_mut().and_then(|c| c.driver_hr.as_mut())) {
@@ -1690,6 +1704,7 @@ impl AcRenderer {
                     }
                 }
             }
+            None if vr => {}
             None => {
                 self.graphics.reset_render_states();
                 self.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
@@ -1719,7 +1734,9 @@ impl AcRenderer {
         // Game::renderHUD: the HUD objects of Sim (messages, banners, arrows, name tags, damage,
         // fuel light)
         if let Some(gui) = &mut self.gui {
-            gui.render_hud(&mut self.graphics, dt);
+            if !vr {
+                gui.render_hud(&mut self.graphics, dt);
+            }
             // Game::stats.cpuTime and renderHUDTime: the frame up to here
             let cpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
             gui.frame_end(cpu_ms, cpu_ms - update_ms - render_ms);
@@ -1887,11 +1904,40 @@ impl AcRenderer {
         }
     }
 
+    /// Task 47b: the camera is the VR one (`Sim::isVrConnected`).
+    pub fn vr(&self) -> bool {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        return self.camera.forward.vr.is_some();
+        #[cfg(not(all(windows, not(feature = "wgpu"))))]
+        false
+    }
+
+    /// Task 47b: `StereoCameraVive::resetHeadPosition` (ViveManager's first update, and the two
+    /// look keys held together).
+    pub fn vr_recentre(&mut self) {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = self.camera.forward.vr.as_deref_mut() {
+            vr.reset_head_position();
+        }
+    }
+
+    /// Task 47b: `StereoCameraVive::shutdown`, at the end.
+    pub fn vr_shutdown(&mut self) {
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = self.camera.forward.vr.as_deref_mut() {
+            vr.shutdown();
+        }
+    }
+
     /// Shows the last picture in the window. `Ok(false)`: the window is covered or minimised.
     #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn present(&mut self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
-        // GraphicsManager::endScene: the GPU profiler's END_FRAME, the present, its endFrame
-        self.graphics.trigger_query("END_FRAME");
+        // GraphicsManager::endScene: the GPU profiler's END_FRAME, the present, its endFrame (VR:
+        // Game::evOnRenderFinished instead, finishRendering's swap and Submit)
+        let vr = self.vr();
+        if !vr {
+            self.graphics.trigger_query("END_FRAME");
+        }
         // SAFETY: the back buffer and the picture have the same size and format.
         let shown = unsafe {
             let back: ID3D11Texture2D = chain.GetBuffer(0).map_err(err("back buffer"))?;
@@ -1904,11 +1950,16 @@ impl AcRenderer {
                     self.graphics.kgl.context.CopyResource(&back, screen);
                 }
             }
-            let status = chain.Present(vsync as u32, DXGI_PRESENT(0));
+            // (the VR camera turns the swap's wait off)
+            let status = chain.Present((vsync && !vr) as u32, DXGI_PRESENT(0));
             status.ok().map_err(err("present"))?;
             status.0 != 0x087A_0001
         };
-        self.graphics.gpu_profiler.end_frame(&self.graphics.kgl);
+        if let Some(camera) = self.camera.forward.vr.as_deref_mut() {
+            camera.submit();
+        } else {
+            self.graphics.gpu_profiler.end_frame(&self.graphics.kgl);
+        }
         Ok(shown)
     }
 }

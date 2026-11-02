@@ -6,7 +6,7 @@
 
 - Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
 - Step 1 done: the audit table below.
-- Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). Next: `rustyac.exe` with video.ini `MODE=OPENVR`, then step 3 (Oculus).
+- Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Next: step 3 (Oculus).
 
 ### Step 0: the case count
 
@@ -73,6 +73,17 @@ both eyes.
 | `r47b_01` | Spa, still, 1 frame, 1280x720 window, 640x720 eyes | 64 calls and matrices, log and pixels IDENTICAL |
 | `r47b_02` | Spa, the F2004's dash on its lap tape, mirror, 29 frames | 570, IDENTICAL in all 29 frames |
 | `r47b_03` | Magione, chase, 4x MSAA (the eyes resolved, not copied), 7 frames | 174, IDENTICAL in all 7 frames |
+
+In `rustyac.exe`: video.ini `[CAMERA] MODE=OPENVR` loads the game's own
+`system/x64/openvr_api.dll` and makes the VR camera when a runtime starts (else the plain
+camera, with a note, as the game falls back). As `ViveManager` does, the first frame shows the
+cockpit and recentres the head, and look left plus look right held together recentre it again
+(Ctrl+Space too, inside the camera). The window shows the left eye of the frame before and does
+not wait for the display; the flat GUI and HUD are not drawn (`isRenderingGui` is off: the HUD
+in the headset is step 4), nor the virtual mirror. The cockpit camera keeps the head at the
+eyes (no g forces, no shake) unless the game's system/cfg/assetto_corsa.ini `[VR]
+ENABLE_CAMERA_SHAKE` is set, and has no glance (`CameraOnBoard::update`). Not tried live: this
+PC has no SteamVR and no headset.
 
 Not done here: post-processing in VR (`renderYebis`; the port refuses `MODE=OPENVR` with
 post-processing on), openvr.ini `MOTION_TRACKER`, room scale (`SetTrackingSpace(1)` and

@@ -1496,6 +1496,18 @@ fn run_window(options: &Options) -> Result<(), String> {
     // the game's camera_drivable.ini
     camera.load_settings(Some(&cfg_dir(options)), shapes.last().map_or(1.0, |s| s.shake_mul));
     println!("camera settings: {}", camera.settings_line());
+    // Task 47b: the VR camera (`Sim::isVrConnected`); ViveManager's first update shows the
+    // cockpit and recentres the head
+    camera.vr = renderer.vr();
+    if camera.vr {
+        camera.vr_camera_shake = rustyac_content::install::ac_root()
+            .and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/assetto_corsa.ini")).ok())
+            .is_some_and(|ini| ini.get_int("VR", "ENABLE_CAMERA_SHAKE").unwrap_or(0) != 0);
+        camera.mode = CameraMode::Cockpit;
+        camera.set_last_driving(CameraMode::Cockpit);
+        renderer.vr_recentre();
+        println!("VR: OpenVR, {}", if camera.vr_camera_shake { "with the cockpit's g forces and shake" } else { "the head where the headset puts it" });
+    }
     // Task 34: a session that begins in the ESC menu shows AC's start camera until "Drive"
     // (without AC's GUI "Drive" is pressed at once, so there is none)
     let mut start_camera = (setup_esc_start && renderer.gui().is_some_and(|gui| gui.has_esc_menu()))
@@ -2359,6 +2371,10 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else {
             // the look keys are the focused car's (`actionsState`): the player's, or none
             camera.actions = if focus.index == 0 { shared.look.load(Ordering::Relaxed) } else { 0 };
+            // ViveManager::update: car 0's look left and look right held together recentre
+            if camera.vr && shared.look.load(Ordering::Relaxed) & 3 == 3 {
+                renderer.vr_recentre();
+            }
             rustyac_game::steam::run_callbacks();
             camera.head = head_tracker.as_ref().filter(|_| camera.mode == CameraMode::Cockpit).map(|t| t.poll());
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
@@ -2617,6 +2633,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     // ACCameraManager's destructor: the last camera, on rustyAC's copy of camera_manager.ini
     // (made from Documents' the first time)
+    renderer.vr_shutdown();
     let file = cfg_dir(options).join("camera_manager.ini");
     let old = rustyac_content::vfs::read(&file).ok().or_else(|| rustyac_content::install::documents().and_then(|d| rustyac_content::vfs::read(&d.join("cfg/camera_manager.ini")).ok()));
     match rustyac_content::guard::create_dir_all(cfg_dir(options)).and_then(|()| rustyac_content::guard::write(&file, camera.last_camera_ini(old.as_deref()))) {

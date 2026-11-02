@@ -31,6 +31,23 @@ impl Picture {
         }
     }
 
+    /// Task 47b: the camera is the VR one.
+    pub fn vr(&self) -> bool {
+        matches!(self, Picture::Ac(r) if r.vr())
+    }
+
+    pub fn vr_recentre(&mut self) {
+        if let Picture::Ac(renderer) = self {
+            renderer.vr_recentre();
+        }
+    }
+
+    pub fn vr_shutdown(&mut self) {
+        if let Picture::Ac(renderer) = self {
+            renderer.vr_shutdown();
+        }
+    }
+
     /// Who draws, in words.
     pub fn describe(&self) -> String {
         match self {

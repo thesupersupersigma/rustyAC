@@ -574,6 +574,10 @@ pub struct DrivingCamera {
     current_offset: [f32; 3],
     /// `actionsState` of the focused car: bit 0 look left, bit 1 look right, bit 9 look back.
     pub actions: u32,
+    /// Task 47b: `Sim::isVrConnected`
+    pub vr: bool,
+    /// system/cfg/assetto_corsa.ini `[VR] ENABLE_CAMERA_SHAKE`
+    pub vr_camera_shake: bool,
     /// The head tracker's turn (degrees: pitch, heading, roll) and move (metres) this frame
     /// (`TrackIR::getOffsets`), `None` without one: the cockpit view then has its look keys.
     pub head: Option<([f32; 3], [f32; 3])>,
@@ -620,6 +624,8 @@ impl DrivingCamera {
             fade_color: [0.0; 3],
             current_offset: [0.0; 3],
             actions: 0,
+            vr: false,
+            vr_camera_shake: false,
             head: None,
             near: 0.05,
             cockpit: CockpitCamera::default(),
@@ -1011,7 +1017,7 @@ impl DrivingCamera {
         frame
     }
 
-    /// `CameraOnBoard::update` 0x1400c9ea0 (no VR).
+    /// `CameraOnBoard::update` 0x1400c9ea0.
     fn cockpit(&mut self, view: &CarView, shape: &CarShape, model: &Mat, acc_g: [f32; 3], dt: f32) -> CameraFrame {
         let c = &mut self.cockpit;
         let mut heading = normalized(row(model, 2));
@@ -1027,6 +1033,11 @@ impl DrivingCamera {
         }
         let eye = point(model, shape.eye_model);
         let m = model;
+        // in VR the head stays at the eyes unless system/cfg/assetto_corsa.ini [VR]
+        // ENABLE_CAMERA_SHAKE asks for the g forces and the shake (the headset moves it)
+        let position = if self.vr && !self.vr_camera_shake {
+            eye
+        } else {
         // the head moves with the g forces, lagging
         let g = [c.g_force_mix[0] * acc_g[0], c.g_force_mix[1] * acc_g[1], c.g_force_mix[2] * acc_g[2]];
         let target = [g[1] * m[1][0] + g[0] * m[0][0] + g[2] * m[2][0], g[1] * m[1][1] + g[0] * m[0][1] + g[2] * m[2][1], g[1] * m[1][2] + g[0] * m[0][2] + g[2] * m[2][2]];
@@ -1045,7 +1056,8 @@ impl DrivingCamera {
         let o = c.g_force_offset;
         // (the machine adds the shake up first, then the head's offset)
         let shake: Vec<f32> = (0..3).map(|j| s[0] * m[0][j] + s[1] * m[1][j] + s[2] * m[2][j]).collect();
-        let position = [(c.shake_mul * o[0] + shake[0]) * fade + eye[0], (c.shake_mul * o[1] + shake[1]) * fade + eye[1], (c.shake_mul * o[2] + shake[2]) * fade + eye[2]];
+        [(c.shake_mul * o[0] + shake[0]) * fade + eye[0], (c.shake_mul * o[1] + shake[1]) * fade + eye[1], (c.shake_mul * o[2] + shake[2]) * fade + eye[2]]
+        };
         let mut matrix = set_from_heading_up(heading, up, position);
         let a = self.actions;
         if let Some((turn, place)) = self.head {
@@ -1057,6 +1069,8 @@ impl DrivingCamera {
             for (j, v) in matrix[3][..3].iter_mut().enumerate() {
                 *v += (r1[j] * y + r0[j] * x) + r2[j] * z;
             }
+        } else if self.vr {
+            // (no glance in VR: the look keys recentre the headset instead)
         } else if a >> 9 & 1 != 0 || (a & 1 != 0 && a >> 1 & 1 != 0) {
             // CameraOnBoard::lookBack 0x1400c9a60
             let p = point(model, shape.look_back);
