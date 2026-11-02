@@ -956,6 +956,27 @@ impl Game {
         true
     }
 
+    /// Task 46c, Full mode: the F5 camera, F7's free or cinematic camera shows. Their keys (the
+    /// look, the moves, the fov, Backspace, Delete, Insert) are then the game's, as the desktop's
+    /// GetAsyncKeyState reads them.
+    pub fn camera_keys(&self) -> bool {
+        self.full.is_some() && (self.session.camera.shown == Some(5) || self.session.camera.shown == Some(6) || self.gui.free_camera.is_some())
+    }
+
+    /// Task 46c, Full mode: F5's keyboard way (`SPHERICAL_COORDS=0`) or F7's cinematic camera
+    /// shows: their left-button look takes the pointer.
+    pub fn look_camera_on(&self) -> bool {
+        self.look_camera().is_some()
+    }
+
+    fn look_camera(&self) -> Option<&rustyac_game::render::onboard_free::CinematicCamera> {
+        match (self.full.is_some(), self.session.camera.shown, &self.gui.onboard_free, &self.gui.cinematic) {
+            (true, Some(5), Some(f5), _) if !f5.spherical => Some(&f5.cinematic),
+            (true, Some(6), _, Some(c)) => Some(c),
+            _ => None,
+        }
+    }
+
     /// Task 46, Full mode: F3, the track's TV cameras (through the camera's fade; again: their
     /// next set), as rustyac.exe.
     pub fn track_camera(&mut self) {
@@ -1030,7 +1051,7 @@ impl Game {
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
              \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}, \
              \"tc_text\": {}, \"abs_text\": {}, \"bias_text\": {}, \"tc_level\": {}, \"tc_levels\": {}, \"tc_fitted\": {}, \
-             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}, \"camera_settings\": {}, \"look\": {}, \"onboard_fov\": {:?}, \"head\": {:?}, \"track_camera\": {}}}",
+             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}, \"camera_settings\": {}, \"look\": {}, \"onboard_fov\": {:?}, \"head\": {:?}, \"track_camera\": {}, \"cinematic\": {}}}",
             n(v.speed_kmh),
             v.gear,
             n(v.rpm),
@@ -1073,7 +1094,16 @@ impl Game {
             self.session.camera.actions,
             self.session.shape.onboard_fov,
             self.session.camera.cockpit.head_animation,
-            json_text(&self.gui.track_camera)
+            json_text(&self.gui.track_camera),
+            // Task 46c: F5's keyboard way or F7's cinematic camera (the fov, Backspace's look,
+            // Delete's blur, the scene camera's place and heading), else null
+            match (self.look_camera(), self.gui.shot.as_ref(), &self.full) {
+                (Some(c), Some(shot), Some(full)) => format!(
+                    "{{\"fov\": {:.3}, \"look\": {}, \"blur\": {}, \"place\": {:?}, \"heading\": {:?}}}",
+                    c.fov, c.use_cinematic_features, full.motion_blur_enabled(), &shot.matrix[3][..3], &shot.matrix[2][..3]
+                ),
+                _ => "null".to_string(),
+            }
         )
     }
 

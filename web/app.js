@@ -2236,6 +2236,11 @@ const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'Key
 // keeps that job (the desktop's rule for its own plain keys).
 const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 let drivingKeys = null;
+// Task 46c: the keys the F5 camera and F7's free and cinematic cameras read (the look, the
+// moves, Shift / Tab / Caps Lock speeds, the fov, Backspace's look, Delete's blur, Insert's
+// reload): the game's while one of them shows, ahead of the page's own (C).
+const CAMERA_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Tab', 'CapsLock', 'Backspace', 'Delete', 'Insert', 'KeyB', 'KeyC', 'KeyF', 'KeyG', 'KeyV', 'KeyX', 'KeyZ', 'NumpadAdd', 'NumpadSubtract'];
+const cameraKeys = (event) => CAMERA_KEYS.includes(event.code) && state.game.camera_keys();
 
 function layoutUses(event) {
   if (!drivingKeys) drivingKeys = new Set(state.game.keys_used());
@@ -2243,7 +2248,7 @@ function layoutUses(event) {
 }
 
 function pageUses(event) {
-  return PAGE_KEYS.includes(event.code) || layoutUses(event);
+  return PAGE_KEYS.includes(event.code) || layoutUses(event) || cameraKeys(event);
 }
 
 window.addEventListener('keydown', (event) => {
@@ -2272,7 +2277,7 @@ window.addEventListener('keydown', (event) => {
   const code = VK[event.code];
   event.preventDefault();
   if (event.repeat) return;
-  switch (GIVE_WAY.includes(event.code) && layoutUses(event) ? '' : event.code) {
+  switch ((GIVE_WAY.includes(event.code) && layoutUses(event)) || cameraKeys(event) ? '' : event.code) {
     case 'KeyO':
       if ($('controls').hidden) openControls();
       else closeControls();
@@ -2680,8 +2685,9 @@ async function driveFromLauncher(api) {
     await joinServer();
     return;
   }
-  // the player's camera files (the cockpit's g forces, shake and head), where the game reads them
-  for (const name of ['cfg/camera_onboard.ini', 'cfg/camera_manager.ini']) {
+  // the player's camera files (the cockpit's g forces, shake and head; video_editing.ini: F7's
+  // cinematic camera), where the game reads them
+  for (const name of ['cfg/camera_onboard.ini', 'cfg/camera_manager.ini', 'cfg/video_editing.ini']) {
     const bytes = api.launcher.read_doc(name.replace(/\//g, '\\'));
     if (bytes) rac.fs_put(`docs/${name}`, bytes);
   }
