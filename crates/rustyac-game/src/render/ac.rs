@@ -800,6 +800,15 @@ impl AcRenderer {
                 Err(e) => notes.push(format!("VR: {e}; the plain camera")),
             }
         }
+        // MODE=OCULUS: the StereoCameraForward when a signed LibOVRRT64_1.dll starts a session
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "OCULUS") {
+            let api = rustyac_render::oculus::load();
+            match api.and_then(|api| rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, rustyac_render::oculus::Ovr::new(api))) {
+                Ok(vr) => camera.forward.oculus = Some(Box::new(vr)),
+                Err(e) => notes.push(format!("VR: {e}; the plain camera")),
+            }
+        }
         camera.blur_quality = motion_blur * 2.0;
         camera.base.camera.min_exposure = hdr_levels.min_exposure;
         camera.base.camera.max_exposure = hdr_levels.max_exposure;
@@ -1907,7 +1916,7 @@ impl AcRenderer {
     /// Task 47b: the camera is the VR one (`Sim::isVrConnected`).
     pub fn vr(&self) -> bool {
         #[cfg(all(windows, not(feature = "wgpu")))]
-        return self.camera.forward.vr.is_some();
+        return self.camera.forward.vr.is_some() || self.camera.forward.oculus.is_some();
         #[cfg(not(all(windows, not(feature = "wgpu"))))]
         false
     }
@@ -1917,6 +1926,10 @@ impl AcRenderer {
     pub fn vr_recentre(&mut self) {
         #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(vr) = self.camera.forward.vr.as_deref_mut() {
+            vr.reset_head_position();
+        }
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = self.camera.forward.oculus.as_deref_mut() {
             vr.reset_head_position();
         }
     }
@@ -1938,6 +1951,10 @@ impl AcRenderer {
         if !vr {
             self.graphics.trigger_query("END_FRAME");
         }
+        // (Oculus: the frame to the runtime before the swap)
+        if let Some(camera) = self.camera.forward.oculus.as_deref_mut() {
+            camera.submit();
+        }
         // SAFETY: the back buffer and the picture have the same size and format.
         let shown = unsafe {
             let back: ID3D11Texture2D = chain.GetBuffer(0).map_err(err("back buffer"))?;
@@ -1957,6 +1974,9 @@ impl AcRenderer {
         };
         if let Some(camera) = self.camera.forward.vr.as_deref_mut() {
             camera.submit();
+        } else if let Some(camera) = self.camera.forward.oculus.as_deref_mut() {
+            // (its session status after the swap: a recentring the runtime asks for)
+            camera.after_swap();
         } else {
             self.graphics.gpu_profiler.end_frame(&self.graphics.kgl);
         }

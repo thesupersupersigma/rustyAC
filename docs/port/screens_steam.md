@@ -7,7 +7,7 @@
 - Step 0 done: no proof case vanished (below); `run_all.sh` now prints vanished cases.
 - Step 1 done: the audit table below.
 - Step 2 done (camera): `rustyac-render` `vr.rs` is the game's `StereoCameraVive`, proven on a stand-in OpenVR runtime (render cases `r47b_01..03`). `rustyac.exe` uses it with video.ini `MODE=OPENVR`. Step 3 next.
-- Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). Next: `rustyac.exe` with `MODE=OCULUS`, then step 4 (the HUD in the headset).
+- Step 3 camera done: `oculus.rs` is the game's `StereoCameraForward`, proven on a stand-in Oculus runtime (render cases `r47b_04..06`). `rustyac.exe` uses it with video.ini `MODE=OCULUS`. Next: step 4 (the HUD in the headset).
 
 ### Step 0: the case count
 
@@ -119,6 +119,13 @@ the command log, the window over both eyes.
 | `r47b_04` | Spa, still, 1280x720 window, 640x720 eyes | 54 calls and matrices, log and pixels IDENTICAL |
 | `r47b_05` | Spa, the F2004's dash on its lap tape, mirror, 29 frames (all three recentrings) | 533, IDENTICAL in all 29 frames |
 | `r47b_06` | Magione, chase, 4x MSAA (resolved into the swap chain), 7 frames | 159, IDENTICAL in all 7 frames |
+
+In `rustyac.exe`: video.ini `[CAMERA] MODE=OCULUS` makes this camera when a signed runtime
+starts a session with a headset (else the plain camera, with a note). The rest is as for OpenVR
+(`OculusManager::update` is `ViveManager`'s): the cockpit and a recentring at the start, look
+left plus look right or Ctrl+Space to recentre, and the runtime's own recentring request
+honoured after each swap. The game never closes the Oculus runtime and neither does the port.
+Not tried live: this PC has no Oculus runtime and no headset.
 
 Not done here: post-processing in VR (`renderYebis`; refused as for OpenVR), OculusManager's
 Rift audio device choice (oculus.ini `AUTOSELECT_RIFT_AUDIO_DEVICE`).

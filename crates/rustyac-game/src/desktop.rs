@@ -1496,8 +1496,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     // the game's camera_drivable.ini
     camera.load_settings(Some(&cfg_dir(options)), shapes.last().map_or(1.0, |s| s.shake_mul));
     println!("camera settings: {}", camera.settings_line());
-    // Task 47b: the VR camera (`Sim::isVrConnected`); ViveManager's first update shows the
-    // cockpit and recentres the head
+    // Task 47b: the VR camera (`Sim::isVrConnected`); ViveManager's and OculusManager's first update show the
+    // cockpit and recentre the head
     camera.vr = renderer.vr();
     if camera.vr {
         camera.vr_camera_shake = rustyac_content::install::ac_root()
@@ -1506,7 +1506,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         camera.mode = CameraMode::Cockpit;
         camera.set_last_driving(CameraMode::Cockpit);
         renderer.vr_recentre();
-        println!("VR: OpenVR, {}", if camera.vr_camera_shake { "with the cockpit's g forces and shake" } else { "the head where the headset puts it" });
+        println!("VR: {}", if camera.vr_camera_shake { "with the cockpit's g forces and shake" } else { "the head where the headset puts it" });
     }
     // Task 34: a session that begins in the ESC menu shows AC's start camera until "Drive"
     // (without AC's GUI "Drive" is pressed at once, so there is none)
