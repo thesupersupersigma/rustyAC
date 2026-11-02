@@ -28,6 +28,15 @@ const VOLUMES_AT: (i32, i32) = (0, 80);
 /// Task 47c: FormOpenVR's stand-in StereoCameraVive (SteamVR's supersampling 1.3, the stand-in
 /// runtime's ipd 63.5 mm, the player's 65.5 mm, the game's ±15 mm)
 pub const OPEN_VR: rustyac_gui::app_open_vr::OpenVrValues = rustyac_gui::app_open_vr::OpenVrValues { render_multiplier: 1.3, eyes_distance_ref: 0.0635, eyes_distance: 0.0655, max_distance_offset: 0.015 };
+/// Task 47c: the stand-in CameraTripleScreen's screens (left x, y, right x, y, height) and the
+/// player's triple_screen.ini spinners
+pub const TRIPLE: rustyac_gui::app_triple::Screens = [[-0.83, 0.42, -0.31, 0.7, 0.29], [-0.31, 0.7, 0.31, 0.7, 0.29], [0.31, 0.7, 0.83, 0.42, 0.29]];
+pub const TRIPLE_INI: &str = "[SPINNERS]
+SP_MARGINS=20
+SP_ROTATION=40
+SP_DISTANCE=650
+SP_WIDTH=600
+";
 /// Where the force feedback app's form is.
 const FFB_AT: (i32, i32) = (0, 80);
 
@@ -937,11 +946,12 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
-    if name.starts_with("app_ppfilter") || name == "app_openvr" || name == "app_riftaudio" {
+    if name.starts_with("app_ppfilter") || name == "app_openvr" || name == "app_riftaudio" || name == "app_triple" {
         let mut same = true;
         let ini = match name {
             "app_openvr" => "openvr.ini",
             "app_riftaudio" => "oculus.ini",
+            "app_triple" => "triple_screen.ini",
             _ => "video.ini",
         };
         for (what, a, b) in [
@@ -1978,6 +1988,25 @@ ENABLED=1
                 o.push(Op::Frame(DT));
             }
             o.push(Op::Save);
+        }
+        "app_triple" => {
+            // (triple-screen mode: see the "triple" app) the form, 700 high, kept inside the 720
+            // of the screen: at (0, 20); the spinners 200 x 30 at (30, 420), (30, 570), (370, 420),
+            // (370, 570) ("-" at the left, "+" at the right)
+            let (x, y) = (0, 20);
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "triple"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "triple"));
+            play(&mut o, 0, 20, 10);
+            for (cx, cy, n) in [(220, 435, 6), (40, 435, 2), (220, 585, 3), (380, 435, 4), (560, 585, 5), (380, 585, 12), (40, 585, 2)] {
+                for _ in 0..n {
+                    click(&mut o, cx, cy);
+                }
+            }
+            play(&mut o, 20, 40, 10);
+            o.extend([Op::Save, hud("app.shutdown", 0.0, "triple")]);
         }
         "app_openvr" => {
             // the form at VOLUMES_AT: the spinners 310 x 23 at (30, 70) and (30, 140) ("-" at the

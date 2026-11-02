@@ -830,9 +830,13 @@ impl AcRenderer {
         camera.base.camera.near_plane = 0.05;
         camera.base.camera.far_plane = 40000.0;
         // Sim::createCamera: video.ini [CAMERA] MODE=TRIPLE makes the CameraTripleScreen, whose
-        // screens are Documents cfg/triple_screen.ini (a missing file crashes the game)
+        // screens are Documents cfg/triple_screen.ini (a missing file crashes the game); rustyAC's
+        // own cfg first, where its Triple screen app writes
         if triple_mode {
-            let file = rustyac_content::install::documents().map(|p| p.join("cfg/triple_screen.ini")).ok_or("no Documents folder for cfg/triple_screen.ini")?;
+            // (the page: its own folder is `rustyac` in its file tree, where its apps write)
+            let own_dir = options.own_dir.clone().or_else(|| cfg!(target_arch = "wasm32").then(|| options.game.join("rustyac")));
+            let own = own_dir.map(|d| d.join("cfg/triple_screen.ini")).filter(|f| rustyac_content::vfs::is_file(f));
+            let file = own.or_else(|| rustyac_content::install::documents().map(|p| p.join("cfg/triple_screen.ini"))).ok_or("no Documents folder for cfg/triple_screen.ini")?;
             let ini = IniReader::load(&file).map_err(|e| format!("triple screens: {e}"))?;
             camera.base.triple = Some(Box::new(rustyac_render::triple::TripleScreen::new(&ini, graphics.video.width, graphics.video.height)?));
         }
@@ -1181,6 +1185,11 @@ impl AcRenderer {
     /// `Sim::isInTripleScreenMode` 0x14019a440
     pub fn triple_screen(&self) -> bool {
         self.camera.base.triple.is_some()
+    }
+
+    /// The triple camera's screens (TripleScreenManager reads and writes them).
+    pub fn triple_screens(&self) -> Option<rustyac_gui::app_triple::Screens> {
+        self.camera.base.triple.as_ref().map(|t| t.screens.map(|s| [s.left[0], s.left[1], s.right[0], s.right[1], s.height]))
     }
 
     pub fn finish_loading(&mut self) -> Result<(), String> {
@@ -2020,8 +2029,14 @@ impl AcRenderer {
         None
     }
 
-    /// Task 47c: FormOpenVR's pupillary distance (live) and supersampling (Save).
+    /// Task 47c: FormOpenVR's pupillary distance (live) and supersampling (Save); the Triple
+    /// screen app's screens.
     pub fn open_vr_action(&mut self, action: &rustyac_gui::apps::AppAction) {
+        if let (rustyac_gui::apps::AppAction::SetTripleScreens(screens), Some(triple)) = (action, self.camera.base.triple.as_deref_mut()) {
+            for (to, s) in triple.screens.iter_mut().zip(screens) {
+                *to = rustyac_render::triple::VirtualScreen { left: [s[0], s[1]], right: [s[2], s[3]], height: s[4] };
+            }
+        }
         #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(vr) = self.camera.forward.vr.as_deref_mut() {
             match *action {

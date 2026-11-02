@@ -443,7 +443,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             track_layout: info.track_layout.clone(),
             esc_start: esc_start(options),
-            triple_screen: renderer.triple_screen(),
+            triple_screens: renderer.triple_screens(),
             vr: renderer.vr(),
         open_vr: renderer.open_vr_values(),
             ai_drive: options.ai_drive,

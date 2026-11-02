@@ -90,7 +90,7 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
     renderer.finish_loading()?;
     if let Some(mut setup) = gui {
         // the graphics page's Rendering Mode: Triple Screen draws three views on the one canvas
-        setup.triple_screen = renderer.triple_screen();
+        setup.triple_screens = renderer.triple_screens();
         if let Err(why) = renderer.enable_gui(setup) {
             notes.push(format!("AC's GUI could not be made: {why}"));
         }
@@ -167,7 +167,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         out_dir: own.join("out"),
         esc_start: sim.setup.esc_start,
         // (set from the renderer)
-        triple_screen: false,
+        triple_screens: None,
         vr: false,
         open_vr: None,
         ai_drive: false,

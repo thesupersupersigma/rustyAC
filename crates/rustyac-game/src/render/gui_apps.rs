@@ -61,7 +61,7 @@ pub struct GameApps {
     pub camera_selects: Vec<(i32, i32)>,
     /// the Photo mode's calls: `SetCameraMode`, `PausePhysics`, `TakeScreenshot`
     pub photo_actions: Vec<AppAction>,
-    /// FormOpenVR's calls on the HTC Vive camera
+    /// FormOpenVR's calls on the HTC Vive camera, the Triple screen app's on the triple camera
     pub vr_actions: Vec<AppAction>,
     /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
     /// app's changes); the messages the apps asked for (title, text)
@@ -251,6 +251,12 @@ impl GameApps {
             let id = gui.new_ballast_app(painter);
             add(gui, painter, "ballast", id);
         }
+        // TripleScreenManager: triple-screen mode only (the player's triple_screen.ini spinners)
+        if let Some(screens) = setup.triple_screens {
+            let ini = own_or_documents("triple_screen.ini");
+            let id = gui.new_triple_screen_app(painter, screens, ini.as_ref());
+            add(gui, painter, "triple_screen", id);
+        }
         // FormAI (Sim::Sim makes it right before CarPhysicsForm)
         self.loose = loose;
         gui.apps.ai.driver = setup.ai_drive.then(rustyac_gui::app_ai::AiDriverValues::default);
@@ -394,7 +400,7 @@ impl GameApps {
                 }
                 // applying a filter to the picture waits for YEBIS
                 AppAction::LoadPostProcessFilter(_) => continue,
-                AppAction::SetVrEyesDistance(_) | AppAction::SetVrRenderMultiplier(_) => {
+                AppAction::SetVrEyesDistance(_) | AppAction::SetVrRenderMultiplier(_) | AppAction::SetTripleScreens(_) => {
                     self.vr_actions.push(action);
                     continue;
                 }

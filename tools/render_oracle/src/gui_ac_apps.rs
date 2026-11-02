@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 48] = [
+pub const APPS: [(&str, usize, usize, usize); 49] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -72,6 +72,7 @@ pub const APPS: [(&str, usize, usize, usize); 48] = [
     ("ai", 0x2b0, 0x1_402d_cf80, 0x1_4050_2aa0),
     // Task 47c
     ("openvr", 0x1e8, 0x1_402f_d030, 0x1_4050_6dc0),
+    ("triple", 0x3c8, 0x1_402f_f920, 0x1_4050_7338),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -173,6 +174,12 @@ unsafe extern "C" fn vr_set_multiplier(_this: *mut u8, value: f32) {
 }
 unsafe extern "C" fn vr_set_eyes(_this: *mut u8, offset: f32) {
     vr_log(format!("setEyesDistance {:08x}", offset.to_bits()));
+}
+
+/// The triple camera's screens, bit for bit.
+pub fn triple_line(screens: &[[f32; 5]; 3]) -> String {
+    let bits: Vec<String> = screens.iter().flatten().map(|v| format!("{:08x}", v.to_bits())).collect();
+    format!("screens {}", bits.join(" "))
 }
 
 unsafe extern "C" fn ppf_load(_this: *mut u8, name: *mut u8) {
@@ -1020,6 +1027,23 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                     crate::gui_ac_hud::jump(game, va, to);
                 }
             }
+            if text == "triple" {
+                // TripleScreenManager(Sim*): Sim::getSceneCamera (+0x238) a CameraTripleScreen (its
+                // vftable for the dynamic cast; TripleScreenData +0xe80, the screens 0x14 apart);
+                // the player's cfg/triple_screen.ini through INIReaderDocuments
+                let camera = a.alloc(0x10c0);
+                wr(camera, 0, a.va(0x1_404e_d800));
+                for (i, s) in crate::gui_seq_apps::TRIPLE.iter().enumerate() {
+                    wr(camera, 0xe80 + i * 0x14, *s);
+                }
+                wr(sim, 0x238, camera);
+                wr(sim, 0x201, 1u8);
+                let docs = crate::root::documents().join("Assetto Corsa/cfg");
+                std::fs::create_dir_all(&docs).map_err(|e| e.to_string())?;
+                std::fs::write(docs.join("triple_screen.ini"), crate::gui_seq_apps::TRIPLE_INI).map_err(|e| e.to_string())?;
+                let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+                crate::ac::write_wstring(a, a.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+            }
             if text == "ppfilter" {
                 // PostProcessFilterSelector(Sim*): the game objects (Sim+0x40) one
                 // PostProcessEffectsUpdater (its table for the dynamic cast, defaultFilter +0x58);
@@ -1327,6 +1351,16 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             let destroy: extern "C" fn(*mut u8) = std::mem::transmute(a.va(0x1_4032_99d0));
             crate::gui_ac::DESTROYING.store(true, std::sync::atomic::Ordering::SeqCst);
             destroy(app("ppfilter")?);
+        }
+        "app.shutdown" if text == "triple" => {
+            // ~TripleScreenManager 0x140300710: triple_screen.ini after a change (the game's
+            // end); the camera's screens written down
+            let destroy: extern "C" fn(*mut u8) = std::mem::transmute(a.va(0x1_4030_0710));
+            crate::gui_ac::DESTROYING.store(true, std::sync::atomic::Ordering::SeqCst);
+            destroy(app("triple")?);
+            let camera: *mut u8 = rd(sim, 0x238);
+            let screens: [[f32; 5]; 3] = rd(camera, 0xe80);
+            vr_log(triple_line(&screens));
         }
         "app.shutdown" if text == "chat" => {
             // ~FormChat 0x14030a2c0: its export (the game's end)

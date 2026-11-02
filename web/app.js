@@ -876,13 +876,17 @@ async function readVideoIni() {
 }
 
 async function writeVideoIni(text) {
-  const bytes = new TextEncoder().encode(text);
+  await writeDoc('cfg/video.ini', new TextEncoder().encode(text));
+}
+
+// A file of the page's Documents\Assetto Corsa (rel: 'cfg/x.ini').
+async function writeDoc(rel, bytes) {
   const theme = window.rustyacTheme;
   if (theme) {
-    theme.launcher.write_doc(VIDEO_INI, bytes);
+    theme.launcher.write_doc(rel.replace(/\//g, '\\'), bytes);
     await theme.saveNow();
   } else {
-    await saveDocuments(snapshotWith(await loadDocuments(), rac.Launcher.roots()[1], 'cfg/video.ini', bytes, Date.now()));
+    await saveDocuments(snapshotWith(await loadDocuments(), rac.Launcher.roots()[1], rel, bytes, Date.now()));
   }
 }
 
@@ -2077,6 +2081,12 @@ function startDriving() {
 
 function stopDriving() {
   unlockLook();
+  // Task 47c: the Triple screen app's file, as the game writes it when it closes
+  const triple = state.game && hasGui() ? state.game.triple_screen_ini() : null;
+  if (triple) {
+    rac.fs_put('docs/cfg/triple_screen.ini', triple);
+    writeDoc('cfg/triple_screen.ini', triple).catch(fail);
+  }
   // (after the drive has stopped, below)
   setTimeout(lockKeys, 0);
   if (state.launch) {

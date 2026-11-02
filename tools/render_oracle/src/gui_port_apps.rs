@@ -71,6 +71,12 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "keyboard" => gui.new_keyboard_debug_app(painter),
         "x360" => gui.new_pad_debug_app(painter),
         "openvr" => gui.new_open_vr_app(painter, crate::gui_seq_apps::OPEN_VR),
+        "triple" => {
+            gui.sim.triple_screen = true;
+            *TRIPLE.lock().unwrap() = Some(crate::gui_seq_apps::TRIPLE);
+            let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::gui_seq_apps::TRIPLE_INI);
+            gui.new_triple_screen_app(painter, crate::gui_seq_apps::TRIPLE, Some(&ini))
+        }
         "ppfilter" => {
             let names = |dir: &str| rustyac_gui::app_pp_filter::filter_names(&game_folder.join("port_files").join(dir));
             gui.new_pp_filter_app(painter, &names("documents/Assetto Corsa/cfg/ppfilters"), &names("system/cfg/ppfilters"), "default")
@@ -174,6 +180,9 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
         "app.shutdown" => {
             gui.shutdown_apps();
             write_files(gui, game_folder)?;
+            if let Some(screens) = TRIPLE.lock().unwrap().take() {
+                append_effects(&game_folder.join("effects_port.txt"), vec![crate::gui_ac_apps::triple_line(&screens)], "", &mut String::new());
+            }
         }
         "app.riftaudio" => {
             let docs = game_folder.join("port_files/documents/Assetto Corsa");
@@ -256,6 +265,7 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             AppAction::SetKeyboardTuning { .. } | AppAction::SetPadTuning { .. } => {}
             AppAction::LoadPostProcessFilter(name) => append_effects(&root.join("effects_port.txt"), vec![format!("load {name:?}")], "", &mut String::new()),
             AppAction::SetVrRenderMultiplier(v) => append_effects(&root.join("effects_port.txt"), vec![format!("setRenderMultiplier {:08x}", v.to_bits())], "", &mut String::new()),
+            AppAction::SetTripleScreens(s) => *TRIPLE.lock().unwrap() = Some(s),
             AppAction::SetVrEyesDistance(v) => append_effects(&root.join("effects_port.txt"), vec![format!("setEyesDistance {:08x}", v.to_bits())], "", &mut String::new()),
             AppAction::SetCameraMode(mode) => photo_log(format!("setMode {mode}")),
             AppAction::PausePhysics(paused) => photo_log(format!("pausePhysics {}", paused as u8)),
@@ -335,6 +345,8 @@ pub struct Sound {
     pub last: String,
 }
 
+/// Task 47c: the triple camera's screens as the Triple screen app last set them
+static TRIPLE: std::sync::Mutex<Option<rustyac_gui::app_triple::Screens>> = std::sync::Mutex::new(None);
 static SOUND: std::sync::Mutex<Option<Sound>> = std::sync::Mutex::new(None);
 
 fn sound<T>(f: impl FnOnce(&mut Sound) -> T) -> T {

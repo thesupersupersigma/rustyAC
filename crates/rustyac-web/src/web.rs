@@ -719,6 +719,10 @@ impl Game {
                     }
                     sound.set_picture_backfires(&full.backfires_triggered());
                 }
+                // the Triple screen app's screens, into the camera
+                for action in full.gui.as_mut().map(|gui| std::mem::take(&mut gui.apps.vr_actions)).unwrap_or_default() {
+                    full.open_vr_action(&action);
+                }
                 self.gui.exchange(full, &mut self.session);
             }
             None => self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?,
@@ -1025,6 +1029,14 @@ impl Game {
 
     pub fn set_autodrive(&mut self, on: bool) {
         self.session.input.lock().unwrap().autodrive = on;
+    }
+
+    /// Task 47c: the Triple screen app's triple_screen.ini as the game writes it when it closes
+    /// (none: no app, or nothing changed); the page keeps it in its Documents.
+    pub fn triple_screen_ini(&mut self) -> Option<Vec<u8>> {
+        let gui = self.full.as_mut()?.gui.as_mut()?;
+        let id = gui.apps.made.iter().find(|(name, _)| *name == "triple_screen")?.1;
+        gui.gui.with_app(id, |app, gui| app.as_any().downcast_mut::<rustyac_gui::app_triple::TripleScreenApp>()?.file(gui)).flatten()
     }
 
     /// Task 41b: the sound tape so far (`set_sound_tape`), for `rustyac.exe --sound-tape`.

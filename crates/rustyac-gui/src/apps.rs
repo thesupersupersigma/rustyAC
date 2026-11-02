@@ -38,6 +38,9 @@ pub enum AppAction {
     /// `StereoCameraVive::setRenderMultiplier` 0x1402244d0 (FormOpenVR's Save): SteamVR's
     /// `renderTargetMultiplier` of `steamvr` and `compositor`
     SetVrRenderMultiplier(f32),
+    /// TripleScreenManager::onSpinnerValueChanged 0x140301b90: the new screens of
+    /// `CameraTripleScreen` (left point x, y, right point x, y, height of each)
+    SetTripleScreens(crate::app_triple::Screens),
     /// `AudioEngine::setVolume` 0x1401fbdf0 (the master level, 0..1)
     SetMasterVolume(f32),
     /// one level of every car's `CarAudioFMOD::mixVolumes`; for the transmission -1 means
