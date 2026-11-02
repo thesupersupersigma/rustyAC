@@ -50,6 +50,9 @@ pub struct Profile {
     /// Task 47b: with `vr`, `[CAMERA] MODE=OCULUS` (the game's `StereoCameraForward`) on the
     /// stand-in Oculus runtime, with [`OCULUS_INI`]
     pub oculus: bool,
+    /// Task 47c: with `vr`, `Sim::isRoomVR` (Sim+0x1e2, which nothing in acs.exe sets) forced on: the
+    /// room-scale tracking space and video.ini `[VR_ROOM] ROTATION=2`
+    pub vr_room: bool,
 }
 
 /// Documents `cfg/openvr.ini` of a `--vr` proof: the window shows the left eye, and a distance
@@ -65,7 +68,7 @@ pub const OCULUS_INI: &str = "[SETTINGS]\nAUTOSELECT_RIFT_AUDIO_DEVICE=0\nPIXEL_
 /// in a little), as it is on Super's PC.
 pub const TRIPLE_SCREEN_INI: &str = "[LEFT_SCREEN]\nLEFT_POINT=-1.49863,0.947665\nRIGHT_POINT=-0.5,1\n\n[CENTER_SCREEN]\nLEFT_POINT=-0.5,1\nRIGHT_POINT=0.5,1\n\n[RIGHT_SCREEN]\nLEFT_POINT=0.5,1\nRIGHT_POINT=1.49863,0.947665\n";
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1, post: false, fxaa: false, motion_blur: 0, ldr_levels: false, triple: false, vr: false, oculus: false };
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1, post: false, fxaa: false, motion_blur: 0, ldr_levels: false, triple: false, vr: false, oculus: false, vr_room: false };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -91,7 +94,7 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple, vr, oculus } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple, vr, oculus, vr_room } = profile();
     let (POST, PP_FXAA) = (post as i32, fxaa as i32);
     let MIRROR_HQ = (mirror_hq > 0) as i32;
     let MIRROR_SMOKE = mirror_smoke as i32;
@@ -137,7 +140,10 @@ pub fn video_ini(width: u32, height: u32) -> String {
         "HEAT_SHIMMER=0".into(),
         format!("FXAA={PP_FXAA}"),
         String::new(),
-        "[MIRROR]".into(),
+        if vr_room { "[VR_ROOM]
+ROTATION=2
+
+[MIRROR]" } else { "[MIRROR]" }.into(),
         format!("HQ={MIRROR_HQ}"),
         format!("SIZE={MIRROR_SIZE}"),
         String::new(),

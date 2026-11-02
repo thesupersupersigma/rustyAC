@@ -987,7 +987,7 @@ impl Game {
             }
             let camera = acs.alloc(SIZE_STEREO_CAMERA_VIVE);
             let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_CTOR));
-            ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false, false);
+            ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false, profile.vr_room);
             // ViveManager::update 0x1401d6380, its first call: the head recentred
             let reset: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_VIVE_RESET_HEAD_POSITION));
             reset(camera);

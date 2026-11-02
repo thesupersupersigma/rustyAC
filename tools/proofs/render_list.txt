@@ -143,3 +143,5 @@ r47b_08 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_
 # -- Task 47c: the camera keys in VR: the free camera (F7) and a camera beside the car seen through the headset
 r47c_01 | --track spa --view free --vr --size 1280x720
 r47c_02 | --track magione --view side --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 8 --oculus --size 1280x720
+# -- Task 47c: room scale (Sim::isRoomVR, which nothing in acs.exe 1.16 sets, forced on both sides): the standing tracking space and [VR_ROOM] ROTATION=2
+r47c_03 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --vr-room --size 1280x720

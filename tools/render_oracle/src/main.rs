@@ -401,6 +401,10 @@ fn parse() -> Result<Args, String> {
             "--vr" => {
                 profile.vr = true;
             }
+            "--vr-room" => {
+                profile.vr = true;
+                profile.vr_room = true;
+            }
             "--oculus" => {
                 profile.vr = true;
                 profile.oculus = true;

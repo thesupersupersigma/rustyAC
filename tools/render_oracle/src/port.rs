@@ -246,7 +246,7 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         if !vr.init() {
             return Err("initOpenVR failed on the stand-in runtime".into());
         }
-        let mut stereo = rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, vr, false)?;
+        let mut stereo = rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, vr, crate::root::profile().vr_room)?;
         stereo.reset_head_position();
         camera.forward.vr = Some(Box::new(stereo));
     }
