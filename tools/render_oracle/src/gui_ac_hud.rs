@@ -237,6 +237,8 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         let sim = acs_ref.alloc(0x2d0);
         wr(sim, 0x8, game_block);
         wr(sim, 0x108, screen);
+        // Sim::tripleScreenMode, before anything is made (a `%triple` sequence)
+        wr(sim, 0x201, input(|i| i.triple_screen) as u8);
         let control = |name: &str| {
             // a Control is 0x178 bytes; zeroed room past it for the ESC menu's fields the game
             // reads (escMenu->setupScreen at +0x1a8, or a pit fuel button follows heap garbage)

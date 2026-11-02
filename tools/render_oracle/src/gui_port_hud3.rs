@@ -47,6 +47,7 @@ pub fn update(hud: &mut HudPort, _gui: &mut Gui, _dt: f32) {
     let Some(names) = &mut hud.more.cars.names else { return };
     let (view, perspective) = crate::gui_seq::hud_view(&hud.input.camera_matrix);
     names.update(&hud.input.camera_matrix, &view, &perspective);
+    names.triple = hud.input.triple_screen.then(|| crate::gui_seq::triple_view(&hud.input.camera_matrix));
 }
 
 pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {

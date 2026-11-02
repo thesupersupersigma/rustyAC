@@ -81,6 +81,20 @@ pub unsafe fn sync(h: &HudGame, state: &HudInput) {
     let (view, perspective) = crate::gui_seq::hud_view(&state.camera_matrix);
     write_matrix(c.names.add(0xb8), &state.camera_matrix);
     write_matrix(c.names.add(0xf8), &xm_matrix_multiply(&view, &perspective));
+    // Task 47c: DriverNameDisplayer::cameraTripleScreen (+0x60), a stand-in CameraTripleScreen
+    // whose TripleScreenData (+0xe80) holds the screens' matrices (+0xb8, +0x178)
+    if state.triple_screen {
+        let mut triple: *mut u8 = rd(c.names, 0x60);
+        if triple.is_null() {
+            triple = acs().alloc(0x1100);
+            wr(c.names, 0x60, triple);
+        }
+        let (view_proj, cameras) = crate::gui_seq::triple_view(&state.camera_matrix);
+        for i in 0..3 {
+            write_matrix(triple.add(0xe80 + 0xb8 + i * 64), &view_proj[i]);
+            write_matrix(triple.add(0xe80 + 0x178 + i * 64), &cameras[i]);
+        }
+    }
     wr(rd::<*mut u8>(h.sim, 0x8), 0x18, state.game_time_now);
     for (avatar, car) in h.cars.iter().zip(&state.cars) {
         let avatar = *avatar;

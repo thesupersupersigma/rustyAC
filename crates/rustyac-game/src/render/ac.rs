@@ -1628,6 +1628,8 @@ impl AcRenderer {
                     gui.drivable_dash = driving.drivable == super::scene::Drivable::Dash;
                     gui.fade_color = driving.fade_color;
                     gui.gui.sim.sun_angle = this.options.sun_angle;
+                    // DriverNameDisplayer's cameraTripleScreen: the screens' matrices of this frame
+                    gui.names.triple = this.camera.base.triple.as_ref().map(|t| (t.current_view_proj, t.current_camera_matrix));
                     gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, this.time_ms, dt);
                     // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
                     let rows = this.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });

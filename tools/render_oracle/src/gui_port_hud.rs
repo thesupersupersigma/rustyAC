@@ -68,6 +68,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
         return Ok(());
     }
     if what == "create" {
+        gui.sim.triple_screen = hud.input.triple_screen;
         hud.input.cars.resize(number as usize, crate::gui_seq::default_car());
         let read = |name: &str| IniReader::load(&game_folder.join("system/cfg").join(name)).ok().filter(|ini| ini.ready);
         let (messages, session_info) = (read("messages.ini"), read("session_info.ini"));

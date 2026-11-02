@@ -13,8 +13,8 @@
 //! `DamageDisplayer::DamageDisplayer` 0x140078c10, `renderHUD` 0x14007ae80, `show`
 //! 0x14007b7f0, its 18 readers 0x14007a120..0x14007a4a0.
 //!
-//! The triple-screen path of the name tags (three view matrices of `CameraTripleScreen`) is
-//! not here: rustyAC has no such camera.
+//! With triple screens (`cameraTripleScreen`) the tags are projected through the three screens'
+//! own matrices, and shown only in the cockpit, drivable and free cameras.
 
 use std::collections::BTreeMap;
 
@@ -238,6 +238,9 @@ pub struct DriverNames {
     pub draw_focused_car: bool,
     pub current_camera_matrix: Mat44f,
     pub current_view_projection_matrix: Mat44f,
+    /// `cameraTripleScreen`: the three screens' `currentViewProj` and `currentCameraMatrix`, as
+    /// the camera left them this frame (none: not a triple-screen camera)
+    pub triple: Option<([Mat44f; 3], [Mat44f; 3])>,
     /// `Sim::flagMapCache`
     pub flag_cache: BTreeMap<String, Texture>,
 }
@@ -258,6 +261,7 @@ impl DriverNames {
             draw_focused_car: false,
             current_camera_matrix: Mat44f { m: [[0.0; 4]; 4] },
             current_view_projection_matrix: Mat44f { m: [[0.0; 4]; 4] },
+            triple: None,
             flag_cache: BTreeMap::new(),
         };
         if let Some(ini) = ini.filter(|ini| ini.ready) {
@@ -318,23 +322,40 @@ impl DriverNames {
     /// `DriverNameDisplayer::projectPoint` 0x14008d550 for one screen: the pixel of a point, or
     /// (-1, -1) behind the camera.
     pub fn project_point(&self, screen: (i32, i32), p: [f32; 3]) -> [f32; 2] {
-        let c = transform(p, &self.current_view_projection_matrix);
-        let (w, h) = (screen.0 as f32, screen.1 as f32);
-        let cam = &self.current_camera_matrix.m;
-        let mut d = Vec3f::new(p[0] - cam[3][0], p[1] - cam[3][1], p[2] - cam[3][2]);
-        d.normalize();
-        let dot = ((-cam[2][1] * d.y) + (-cam[2][0] * d.x)) + (-cam[2][2] * d.z);
-        if dot.acos() < f32::from_bits(0x3fc9_0fd0) {
-            [((c[0] + 1.0) * 0.5) * w, ((1.0 - c[1]) * 0.5) * h]
-        } else {
-            [-1.0, -1.0]
+        let in_front = |cam: &Mat44f| {
+            let cam = &cam.m;
+            let mut d = Vec3f::new(p[0] - cam[3][0], p[1] - cam[3][1], p[2] - cam[3][2]);
+            d.normalize();
+            let dot = ((-cam[2][1] * d.y) + (-cam[2][0] * d.x)) + (-cam[2][2] * d.z);
+            dot.acos() < f32::from_bits(0x3fc9_0fd0)
+        };
+        let h = screen.1 as f32;
+        let Some((view_proj, camera)) = &self.triple else {
+            let c = transform(p, &self.current_view_projection_matrix);
+            if in_front(&self.current_camera_matrix) {
+                return [((c[0] + 1.0) * 0.5) * screen.0 as f32, ((1.0 - c[1]) * 0.5) * h];
+            }
+            return [-1.0, -1.0];
+        };
+        // the first screen whose view holds the point; behind its camera: none
+        let third = screen.0 / 3;
+        for i in 0..3 {
+            let c = transform(p, &view_proj[i]);
+            if -1.0 <= c[0] && -1.0 <= c[1] && c[0] <= 1.0 && c[1] <= 1.0 {
+                if in_front(&camera[i]) {
+                    return [((c[0] + 1.0) * 0.5) * third as f32 + (i as i32 * third) as u32 as f32, ((1.0 - c[1]) * 0.5) * h];
+                }
+                break;
+            }
         }
+        [-1.0, -1.0]
     }
 
     /// `DriverNameDisplayer::renderHUD` 0x14008d900: the tags are placed and drawn, the farthest
     /// first.
     pub fn render_hud(&mut self, gui: &mut Gui, painter: &mut dyn Painter, dt: f32, input: &HudInput) {
-        if input.pause_menu_visible || input.esc_menu_visible || !self.is_active || input.triple_screen {
+        // (triple screens: the cockpit, drivable and free cameras only)
+        if input.pause_menu_visible || input.esc_menu_visible || !self.is_active || (self.triple.is_some() && !matches!(input.camera_mode, 0 | 2 | 6)) {
             return;
         }
         if self.cars.len() != input.cars.len() {

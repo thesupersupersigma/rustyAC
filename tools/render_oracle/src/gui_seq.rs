@@ -281,6 +281,22 @@ pub fn hud_view(camera: &Mat44f) -> (Mat44f, Mat44f) {
     (xm_matrix_inverse(camera), perspective)
 }
 
+/// Task 47c: a triple camera's three screens for the name tags: the left and right ones the
+/// HUD's camera turned 50 degrees about its up axis; each screen's view-projection and camera
+/// matrix (`TripleScreenData::currentViewProj`, `currentCameraMatrix`).
+pub fn triple_view(camera: &Mat44f) -> ([Mat44f; 3], [Mat44f; 3]) {
+    let mut view_proj = [Mat44f::default(); 3];
+    let mut cameras = [Mat44f::default(); 3];
+    for (i, a) in [0.8727f32, 0.0, -0.8727].into_iter().enumerate() {
+        let (c, s) = (a.cos(), a.sin());
+        let turn = Mat44f { m: [[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.0, 0.0, 0.0, 1.0]] };
+        cameras[i] = rustyac_physics::vecmath::xm_matrix_multiply(&turn, camera);
+        let (view, perspective) = hud_view(&cameras[i]);
+        view_proj[i] = rustyac_physics::vecmath::xm_matrix_multiply(&view, &perspective);
+    }
+    (view_proj, cameras)
+}
+
 pub fn damage_line(timer: f32, initialized: bool, enabled: bool, items: &[(f32, f32)]) -> String {
     let items: Vec<String> = items.iter().map(|(h, b)| format!("{:08x}:{:08x}", h.to_bits(), b.to_bits())).collect();
     format!("hud damage timer={:08x} init={} enabled={} items={}\n", timer.to_bits(), initialized as u8, enabled as u8, items.join(","))
@@ -1015,6 +1031,12 @@ pub fn language_or_en() -> String {
 }
 
 pub fn sequence(name: &str) -> Result<Sequence, String> {
+    // Task 47c: `<name>%triple`, the sequence with `Sim::isInTripleScreenMode` on from the start
+    if let Some(base) = name.strip_suffix("%triple") {
+        let mut s = sequence(base)?;
+        s.ops.insert(0, Op::Hud("triple", 1.0, ""));
+        return Ok(s);
+    }
     if let Some((base, language)) = name.split_once('#') {
         *LANGUAGE.lock().unwrap() = Some(language.to_string());
         return sequence(base);
