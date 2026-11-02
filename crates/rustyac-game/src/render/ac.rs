@@ -1598,6 +1598,94 @@ impl AcRenderer {
                 self.gui3d = Some((g, node));
             }
         }
+        // the GUI pass (GUI::render, Game::renderHUD, GUI::renderVPointer). Task 47c: in VR it runs
+        // where Sim::renderScene runs it, first (preRender3D, doRender2D, renderHUDOnDemand,
+        // renderVPointer, then the scene), so the headset shows this frame's GUI
+        let gui_pass = |this: &mut Self, render_ms: f64| {
+            // (VR: no virtual mirror, and isRenderingGui is off: no GUI::render, no renderHUD; the
+            // GUI and HUD go into the headset's GUI target instead, GUI::preRender3D)
+            let vr = this.vr();
+            let drawn = !vr || this.gui3d_pre_render(dt);
+            if let (Some(mirror), Some(v), false) = (&this.mirror, &mut this.virtual_mirror, vr) {
+                v.render(&mut this.graphics, &mirror.texture, modes.0);
+            }
+            // ksgui::GUI::render -> doRender2D 0x1402539d0: the states of the 2D pass, then the game
+            // screen with its forms and the app bar (the HUD objects' update pass runs right before:
+            // nothing between here and the game's place for it reads what they change)
+            match &mut this.gui {
+                Some(gui) => {
+                    let camera = &this.camera.forward.base.camera;
+                    let (matrix, view_matrix, perspective) = (camera.matrix, camera.get_view_matrix(), camera.get_perspective_matrix(&this.graphics));
+                    let mode = driving.manager_mode();
+                    gui.drivable_dash = driving.drivable == super::scene::Drivable::Dash;
+                    gui.fade_color = driving.fade_color;
+                    gui.gui.sim.sun_angle = this.options.sun_angle;
+                    gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, this.time_ms, dt);
+                    // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
+                    let rows = this.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
+                    gui.gui.apps.gpu_profile = rows.collect();
+                    if drawn {
+                        gui.render(&mut this.graphics, dt);
+                    }
+                    this.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
+                    // FormDriverModel: what it wrote into car 0's driverModel_HR, its updateHeadMovement calls
+                    if let (Some(l), Some(d)) = (gui.gui.apps.driver_model.as_mut(), this.cars.first_mut().and_then(|c| c.driver_hr.as_mut())) {
+                        for (i, v) in l.head.iter_mut().enumerate() {
+                            if let Some(v) = v.take() {
+                                *[&mut d.max_g, &mut d.roll_max_deg, &mut d.pitch_max_deg, &mut d.yaw_max_deg, &mut d.filter][i] = v;
+                            }
+                        }
+                        // shortcut: set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if that matters
+                        d.lock_animation |= l.lock_animation;
+                        for (dt, acc) in l.head_updates.drain(..) {
+                            d.update_head_movement(&mut this.scene, dt, dt, &acc);
+                        }
+                    }
+                }
+                None if !drawn => {}
+                None => {
+                    this.graphics.reset_render_states();
+                    this.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
+                    this.graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
+                }
+            }
+            this.graphics.trigger_query("GUI");
+            // Game::renderHUD: TimeAttack::renderGuiStatus, the gate of the next time line
+            if let Some(gates) = &this.gates {
+                if !this.told_paused && !info.replay {
+                    // (the gate of the next checkpoint while the mode is on: TimeAttack's own sector)
+                    let ta = view.lap.time_attack.unwrap_or_default();
+                    gates.borrow_mut().set_active(ta.mode == 1, ta.sector_index as usize, this.gate_sectors);
+                }
+            }
+            // Game::renderHUD: PitStop::renderHUD, the marker's part
+            if let (Some(marker), Some(inputs)) = (&mut this.pit_marker, &pit_inputs) {
+                marker.render_hud(&mut this.scene, inputs);
+            }
+            // Game::renderHUD: StartingLights::renderHUD writes the lamps after the scene is drawn
+            // (they change in the next frame, as in the game)
+            if let Some(lights) = &mut this.start_lights {
+                if lights.is_active && lights.render_hud(&mut this.scene, this.told_paused, session_start < this.time_ms, this.race_start_ms.is_some(), tts) {
+                    lights.render_lamps(&mut this.graphics);
+                }
+            }
+            // Game::renderHUD: the HUD objects of Sim (messages, banners, arrows, name tags, damage,
+            // fuel light)
+            if let Some(gui) = &mut this.gui {
+                if drawn {
+                    gui.render_hud(&mut this.graphics, dt);
+                }
+                // Game::stats.cpuTime and renderHUDTime: the frame up to here
+                let cpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+                gui.frame_end(cpu_ms, cpu_ms - update_ms - render_ms);
+            }
+            // GUI::renderVPointer, then the window again for the post-GUI pass
+            this.gui3d_pointer();
+        };
+        let vr = self.vr();
+        if vr {
+            gui_pass(self, 0.0);
+        }
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
         // Sim::renderScene: the mirror before the picture (MirrorTextureRenderer::render
@@ -1697,85 +1785,9 @@ impl AcRenderer {
                 self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
             }
         }
-        // (VR: no virtual mirror, and isRenderingGui is off: no GUI::render, no renderHUD; the
-        // GUI and HUD go into the headset's GUI target instead, GUI::preRender3D)
-        let vr = self.vr();
-        let drawn = !vr || self.gui3d_pre_render(dt);
-        if let (Some(mirror), Some(v), false) = (&self.mirror, &mut self.virtual_mirror, vr) {
-            v.render(&mut self.graphics, &mirror.texture, modes.0);
+        if !vr {
+            gui_pass(self, render_ms);
         }
-        // ksgui::GUI::render -> doRender2D 0x1402539d0: the states of the 2D pass, then the game
-        // screen with its forms and the app bar (the HUD objects' update pass runs right before:
-        // nothing between here and the game's place for it reads what they change)
-        match &mut self.gui {
-            Some(gui) => {
-                let camera = &self.camera.forward.base.camera;
-                let (matrix, view_matrix, perspective) = (camera.matrix, camera.get_view_matrix(), camera.get_perspective_matrix(&self.graphics));
-                let mode = driving.manager_mode();
-                gui.drivable_dash = driving.drivable == super::scene::Drivable::Dash;
-                gui.fade_color = driving.fade_color;
-                gui.gui.sim.sun_angle = self.options.sun_angle;
-                gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);
-                // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
-                let rows = self.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
-                gui.gui.apps.gpu_profile = rows.collect();
-                if drawn {
-                    gui.render(&mut self.graphics, dt);
-                }
-                self.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
-                // FormDriverModel: what it wrote into car 0's driverModel_HR, its updateHeadMovement calls
-                if let (Some(l), Some(d)) = (gui.gui.apps.driver_model.as_mut(), self.cars.first_mut().and_then(|c| c.driver_hr.as_mut())) {
-                    for (i, v) in l.head.iter_mut().enumerate() {
-                        if let Some(v) = v.take() {
-                            *[&mut d.max_g, &mut d.roll_max_deg, &mut d.pitch_max_deg, &mut d.yaw_max_deg, &mut d.filter][i] = v;
-                        }
-                    }
-                    // shortcut: set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if that matters
-                    d.lock_animation |= l.lock_animation;
-                    for (dt, acc) in l.head_updates.drain(..) {
-                        d.update_head_movement(&mut self.scene, dt, dt, &acc);
-                    }
-                }
-            }
-            None if !drawn => {}
-            None => {
-                self.graphics.reset_render_states();
-                self.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
-                self.graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
-            }
-        }
-        self.graphics.trigger_query("GUI");
-        // Game::renderHUD: TimeAttack::renderGuiStatus, the gate of the next time line
-        if let Some(gates) = &self.gates {
-            if !self.told_paused && !info.replay {
-                // (the gate of the next checkpoint while the mode is on: TimeAttack's own sector)
-                let ta = view.lap.time_attack.unwrap_or_default();
-                gates.borrow_mut().set_active(ta.mode == 1, ta.sector_index as usize, self.gate_sectors);
-            }
-        }
-        // Game::renderHUD: PitStop::renderHUD, the marker's part
-        if let (Some(marker), Some(inputs)) = (&mut self.pit_marker, &pit_inputs) {
-            marker.render_hud(&mut self.scene, inputs);
-        }
-        // Game::renderHUD: StartingLights::renderHUD writes the lamps after the scene is drawn
-        // (they change in the next frame, as in the game)
-        if let Some(lights) = &mut self.start_lights {
-            if lights.is_active && lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts) {
-                lights.render_lamps(&mut self.graphics);
-            }
-        }
-        // Game::renderHUD: the HUD objects of Sim (messages, banners, arrows, name tags, damage,
-        // fuel light)
-        if let Some(gui) = &mut self.gui {
-            if drawn {
-                gui.render_hud(&mut self.graphics, dt);
-            }
-            // Game::stats.cpuTime and renderHUDTime: the frame up to here
-            let cpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
-            gui.frame_end(cpu_ms, cpu_ms - update_ms - render_ms);
-        }
-        // GUI::renderVPointer, then the window again for the post-GUI pass
-        self.gui3d_pointer();
         // Task 46: the fade the race rules asked for (RaceManager, TimeAttack, DriftMode,
         // DragMode call ACCameraManager::fadeIn in their update, before this frame's post-GUI
         // pass draws it at fadeTime 0); the referee counts it down to the black frame and runs

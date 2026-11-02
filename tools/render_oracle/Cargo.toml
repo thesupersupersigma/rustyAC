@@ -6,6 +6,12 @@ publish = false
 license = "GPL-3.0-or-later"
 description = "Test oracle for rustyac-render: runs Assetto Corsa's own GraphicsManager, ShaderManager, KN5IO, SkyBox and CameraForward (mapped from acs.exe, never executed as a program) on a WARP device, off screen, and the Rust port on the same scene, both through one command log, and compares the logs and the pixels"
 
+# Task 47c: the OpenVR stand-in as a DLL for rustyac.exe (openvr_api.dll)
+[lib]
+name = "openvr_api"
+path = "src/openvr_standin.rs"
+crate-type = ["cdylib"]
+
 [dependencies]
 rustyac-render = { path = "../../crates/rustyac-render" }
 rustyac-gui = { path = "../../crates/rustyac-gui" }
