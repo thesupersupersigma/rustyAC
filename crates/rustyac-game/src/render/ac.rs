@@ -1275,12 +1275,12 @@ impl AcRenderer {
         self.camera.on_resize(&mut self.graphics)
     }
 
-    /// F11, `VirtualMirrorRenderer::update` 0x1401d2190: the virtual mirror on or off. The
-    /// answer is what it is now; `None`: `video.ini` has no mirrors.
-    pub fn toggle_virtual_mirror(&mut self) -> Option<bool> {
+    /// F11, `VirtualMirrorRenderer::update` 0x1401d2190: the virtual mirror on or off, or kept
+    /// on when the server `forced` it. The answer is the message's description; `None`:
+    /// `video.ini` has no mirrors.
+    pub fn toggle_virtual_mirror(&mut self, forced: bool) -> Option<&'static str> {
         let mirror = self.virtual_mirror.as_mut()?;
-        mirror.active = !mirror.active;
-        Some(mirror.active)
+        Some(rustyac_render::mirror::f11(&mut mirror.active, forced))
     }
 
     /// Switches the virtual mirror (`--virtual-mirror`).

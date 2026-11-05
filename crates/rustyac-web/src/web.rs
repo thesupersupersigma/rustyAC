@@ -1024,7 +1024,7 @@ impl Game {
 
     /// F11: AC's virtual mirror (Full mode, a `video.ini` with mirrors); false: there is none.
     pub fn virtual_mirror(&mut self) -> bool {
-        self.full.as_mut().and_then(|full| full.toggle_virtual_mirror()).is_some()
+        self.full.as_mut().and_then(|full| full.toggle_virtual_mirror(false)).is_some()
     }
 
     pub fn set_autodrive(&mut self, on: bool) {

@@ -36,6 +36,18 @@ pub fn is_virtual_mirror_on(camera_mode: i32) -> bool {
     (camera_mode & !2) == 0
 }
 
+/// `VirtualMirrorRenderer::update` 0x1401d2190 on a new F11 press (the caller skips it with a
+/// headset): `forced` is the server's FORCE_VIRTUAL_MIRROR (Sim+0x1e3), the mirror then stays
+/// on. The answer is the system message's description under "VIRTUAL MIRROR".
+pub fn f11(active: &mut bool, forced: bool) -> &'static str {
+    if forced {
+        *active = true;
+        return "Virtual Mirror is forced ON by the Server";
+    }
+    *active = !*active;
+    if *active { "ON" } else { "OFF" }
+}
+
 /// The nodes of the scene and of the focused car that a mirror frame needs.
 pub struct MirrorScene<'a> {
     pub root: NodeId,

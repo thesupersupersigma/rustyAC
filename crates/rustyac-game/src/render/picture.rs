@@ -177,10 +177,10 @@ impl Picture {
     }
 
     /// F11: the virtual mirror on or off (AC's renderer with mirrors on only).
-    pub fn toggle_virtual_mirror(&mut self) -> Option<bool> {
+    pub fn toggle_virtual_mirror(&mut self, forced: bool) -> Option<&'static str> {
         match self {
             Picture::Debug(_) => None,
-            Picture::Ac(r) => r.toggle_virtual_mirror(),
+            Picture::Ac(r) => r.toggle_virtual_mirror(forced),
         }
     }
 

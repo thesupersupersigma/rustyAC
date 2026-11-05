@@ -1014,6 +1014,7 @@ fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::onlin
     }
     online.no_race_cars = true;
     online.online_session = true;
+    online.force_virtual_mirror = accepted.force_virtual_mirror;
     online.cars = None;
     online.opponents.clear();
     if online.sun.is_none() {
@@ -1472,7 +1473,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     };
     println!("window {width} x {height}: {}", renderer.describe());
     // (Sim::Sim keeps the virtual mirror off with a headset)
-    if options.virtual_mirror && !renderer.vr() {
+    // (VirtualMirrorRenderer's constructor: forced by the server and no headset, it is on)
+    if (options.virtual_mirror || options.force_virtual_mirror) && !renderer.vr() {
         renderer.set_virtual_mirror(true);
     }
     let mut audio = start_audio(options, &feed, &car_info, &other_infos);
@@ -1864,8 +1866,14 @@ fn run_window(options: &Options) -> Result<(), String> {
                             0x74 if camera.shown != Some(5) => focus.command(FocusCommand::OnboardFreeCamera, &world, &car_names),
                             // F11: AC's virtual mirror
                             // (VirtualMirrorRenderer::update: not with a headset)
-                            0x7a if !renderer.vr() => match renderer.toggle_virtual_mirror() {
-                                Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
+                            0x7a if !renderer.vr() => match renderer.toggle_virtual_mirror(options.force_virtual_mirror) {
+                                Some(description) => {
+                                    println!("VIRTUAL MIRROR: {description}");
+                                    if let Some(gui) = renderer.gui() {
+                                        let description = rustyac_gui::locale::ac_translate(description);
+                                        gui.add_message(&rustyac_gui::locale::ac_translate("VIRTUAL MIRROR"), &description);
+                                    }
+                                }
                                 None => println!("VIRTUAL MIRROR: video.ini has no mirrors ([MIRROR] SIZE=0)"),
                             },
                             0x50 | 0x13 => match transport.as_mut() {

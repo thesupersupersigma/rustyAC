@@ -136,6 +136,8 @@ pub struct Options {
     /// set by the program, not by an option: the drive is on a server (joined with `--join`
     /// or through race.ini's `[REMOTE]`)
     pub online_session: bool,
+    /// set by the program: the server's FORCE_VIRTUAL_MIRROR (the F11 mirror stays on)
+    pub force_virtual_mirror: bool,
     /// `--gui-do <commands>`: mouse moves, keys and a few events for AC's GUI, done before the
     /// first frame (`render::gui::GameGui::script`)
     pub gui_do: Option<String>,
@@ -408,6 +410,7 @@ impl Default for Options {
             setups_dir: None,
             no_ac_setups: false,
             online_session: false,
+            force_virtual_mirror: false,
             gui_do: None,
             free_camera: None,
             debug_view: false,

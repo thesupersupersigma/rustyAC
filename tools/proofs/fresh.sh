@@ -199,6 +199,16 @@ if part cameras; then  # Tasks 34, 46 and 46b: the game's start, free (F7), cock
         r=$(grep '^steam start: ' "$out/steam_$seed.txt" | tail -1)
         case "$r" in *IDENTICAL*) verdict "steam $seed" IDENTICAL "$r" ;; *) verdict "steam $seed" DIFFERENT "${r:-no result}" ;; esac
     done
+    # Task 47d: F11's virtual mirror with the server's FORCE_VIRTUAL_MIRROR and a headset, every message
+    for seed in 1 2 3; do
+        keep "mirror $seed" || continue
+        d=$root/mirror/$seed
+        mkdir -p "$d"
+        "$CO" mirror-micro --seed "$seed" --root "$d" > "$out/mirror_$seed.txt" 2>&1
+        cargo run --release --locked --quiet -p rustyac-game --example mirror_check -- "$d/mirror.tape" "$seed" >> "$out/mirror_$seed.txt" 2>&1
+        r=$(grep '^virtual mirror: ' "$out/mirror_$seed.txt" | tail -1)
+        case "$r" in *IDENTICAL*) verdict "mirror $seed" IDENTICAL "$r" ;; *) verdict "mirror $seed" DIFFERENT "${r:-no result}" ;; esac
+    done
 fi
 
 if part modes; then  # Task 45: special-event files and goals, hotlap, Time Attack, drift, drag and race events judged by the game's code, and their race_out.json extras

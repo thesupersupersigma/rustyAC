@@ -17,6 +17,7 @@ pub mod pad;
 pub mod pit;
 pub mod race;
 pub mod modes;
+pub mod mirror;
 pub mod race_ini;
 pub mod replay;
 pub mod steam;
