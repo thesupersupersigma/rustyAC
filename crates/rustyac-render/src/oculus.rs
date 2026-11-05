@@ -13,7 +13,8 @@
 //! over the functions ([`OvrApi`]): from the Oculus runtime's `LibOVRRT64_1.dll` (only when it is
 //! signed by Oculus, as the shim checks), or a stand-in runtime in a proof.
 //!
-//! Not done: post-processing in VR (`renderYebis`; the constructor refuses it).
+//! Not done: post-processing in VR (`StereoCameraForward::renderYebis` 0x140213b10; it waits for
+//! YEBIS, and the constructor refuses it until then).
 
 use std::ffi::c_void;
 

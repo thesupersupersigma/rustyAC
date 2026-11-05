@@ -1,4 +1,170 @@
-# Triple screens, TrackIR, Steam and VR (Tasks 47 and 47b)
+# Triple screens, TrackIR, Steam and VR (Tasks 47, 47b and 47c)
+
+## Task 47c: triple screens and VR, the rest
+
+### Resume here
+
+Task 47c is done (v0.47.2). Nothing is left in flight; leftovers are under "Not done" and go to
+Task 47e (47d is Steam achievements). Notes per step: `re/scratch/task47c/step1.md` .. `step6.md`,
+the Triple screen app's machine-code spec `tsm.md`.
+
+How to run rustyac.exe in VR without a headset: `re/scratch/task47c/vrroot.ps1` makes an AC root
+of junctions whose `system/x64/openvr_api.dll` is the stand-in runtime (`tools/render_oracle`'s
+`[lib]`, `cargo build --release --lib` there; remove the root only with `vrroot_rm.ps1`), then
+`AC_ROOT=<that root> OPENVR_STANDIN_OUT=<dir> rustyac.exe --video-ini <a video.ini with
+[CAMERA] MODE=OPENVR> ...`: the stand-in writes its calls (`calls.txt`) and the first
+`OPENVR_STANDIN_FRAMES` (8) frames' eyes (`eye_<frame>_<eye>.png`).
+
+### End proofs
+
+`sh tools/proofs/run_all.sh --quick` (0h53m): 170 cases, 170 identical, 0 different, 0 skipped,
+0 vanished.
+
+| area | cases | identical | different | skipped |
+|---|---|---|---|---|
+| physics | 9 | 9 | 0 | 0 |
+| fresh | 62 | 62 | 0 | 0 |
+| sound | 4 | 4 | 0 | 0 |
+| render | 14 | 14 | 0 | 0 |
+| gui | 29 | 29 | 0 | 0 |
+| python | 1 | 1 | 0 | 0 |
+| replays | 6 | 6 | 0 | 0 |
+| net | 16 | 16 | 0 | 0 |
+| browser | 9 | 9 | 0 | 0 |
+| ai_page | 9 | 9 | 0 | 0 |
+| shaders | 4 | 4 | 0 | 0 |
+| launcher | 1 | 1 | 0 | 0 |
+| dumps | 6 | 6 | 0 | 0 |
+
+The areas this task changed, run on the final code:
+
+| proof | why | result |
+|---|---|---|
+| render `r47_01..03` (triple, 5760×1080), `r47b_01..08`, `r47c_01..05`, and the overlays cases render.sh adds | the VR cameras, motion trackers, room scale, the triple camera | 31 cases, 31 identical |
+| GUI `hud_flags`, `hud_flags_triple`, `hud_flags_vr`, `hud_cars`, `hud_cars%triple`, `hud_messages%triple`, `lb_control_12%triple`, `end_race_12%triple`, `app_openvr`, `app_riftaudio`, `app_triple`, `app_ppfilter` | the VR HUD, name tags, the triple switch, the three new apps | 12 cases, 12 identical |
+
+Clippy clean natively (`--workspace --all-targets --locked`) and on both wasm targets as CI runs
+them (`rustyac-web` also `--all-targets` on `wasm32-unknown-unknown`). Free space on C: 56 GB at
+the start, 36 GB at the end (the PC's own use between sessions accounts for most of it; this
+task's scratch folder is 0.8 GB). No web zip files are new or renamed; the preview pack needs no
+new files (the Triple screen app's head picture is under `content/gui`, which the page already
+takes).
+
+### Step 1: the headset GUI on the game's frame
+
+`Sim::renderScene` 0x14019e570 starts with `GUI::preRender3D`, `Game::renderHUDOnDemand` and
+`GUI::renderVPointer`, before the scene. rustyac.exe drew the GUI after the eyes, so the headset
+showed last frame's GUI. Now `AcRenderer::draw` keeps the GUI pass in one closure and runs it
+before the scene in VR, in its old place when flat (the flat order, and so its pictures, are
+unchanged; the quick run's render and GUI cases show it).
+
+Proof: rustyac.exe with the stand-in runtime and `--gpu-log` (frame 2): the GUI target is bound,
+cleared and drawn (log line 49) before the mirror (407), the window (965), the shadow maps (994)
+and the two eyes (3482, 6696), the order of the game's side of `r47b_07`. The entry "VR: the GUI
+in the headset is a frame late in rustyac.exe" is gone from `differences.md`.
+
+### Step 2: what the game hides in VR
+
+Every reader of `Sim::isVrConnected` (+0x1e1) in the game, and what rustyAC now does with a
+headset (`GuiSetup.vr`, `HudInput.vr_connected`, `gui.sim.vr_connected`, the crew's
+`is_vr_connected`):
+
+| the game | in VR | rustyAC |
+|---|---|---|
+| `ACCameraManager`'s fade lambda 0x140032770 | no fade quad (its time still runs) | camera-manager fades and the menu fade not drawn |
+| `Sim::Sim` (blur quality) | motion blur quality not doubled | the same |
+| `Sim::Sim` (`ProximityIndicator`) | not made | not drawn |
+| `Sim::Sim` (`DriverNameDisplayer::setActive(false)`) | name tags off (the key still toggles them) | the same |
+| `Sim::Sim`, `VirtualMirrorRenderer` ctor / update | virtual mirror off, F11 does nothing | the same (`--virtual-mirror` too) |
+| `DriveThroughPenaltyAvatar` ctor / `renderHUD` | a VR banner: the penalty flag (`FLAG_DT`) at the centre, two centred lines above it | ported (`hud_flags.rs`) |
+| `EndSessionDisplayer::displayResults` | results shown, the camera switch skipped | the same (the gate existed, the flag is now set) |
+| `PitCrew::onPitStopBegin` | no switch to the pit-stop camera | the same |
+
+The "mouse pit menu" of Task 47b's list is not hidden by the game: the gate it meant is the
+server's forced virtual mirror (step 4's finding), and `PitStop::renderHUD` has no VR read.
+Proof: GUI sequence `hud_flags_vr` (75 frames) IDENTICAL; `hud_flags`, `hud_flags_triple`,
+`hud_cars` still IDENTICAL.
+
+### Step 3: camera keys in VR
+
+No camera key in the game reads `isVrConnected` or a VR class: F1, F2, F3, F5, F6, F7 and the
+rest work as when flat, and the stereo camera puts the head's pose on whatever camera is chosen
+(its field of view is the headset's). The only VR rules are the first update forcing the cockpit
+(Task 47b), the virtual mirror's F11 (step 2) and the cockpit's look and shake (Task 47b).
+rustyAC's keys have no VR read either. Proof: new render cases `r47c_01` (free camera at Spa
+through OpenVR) and `r47c_02` (side camera at Magione through Oculus) IDENTICAL, every runtime
+call and matrix the same; rustyac.exe with the stand-in and `--focus-script track@2,onboard@4.5`
+shows the F3 and F5 views in the eyes.
+
+### Step 4: room scale
+
+Nothing in acs.exe 1.16 turns room scale on. The PDB's `Sim` layout is 0x1e0 `useProView`,
+0x1e1 `isVrConnected`, 0x1e2 `isRoomVR`, 0x1e3 `isVirtualMirrorForced`, 0x1e4
+`useMousePitstop` (Ghidra's decompiler names are one byte off from 0x1e2 on). A byte scan of
+the machine code finds no store to +0x1e2 but `Sim::Sim`'s zeroing; it is read only by
+`Sim::isVrRoom` and `Sim::createCamera` (the `StereoCameraVive` constructor's last flag). The
+room mode (standing tracking space, `[VR_ROOM] ROTATION`) is dead code unless something patches
+the game's memory. Proof of the rotation Task 47b wrote: `render_oracle --vr-room` forces the
+flag on both sides; `r47c_03` (Spa, the F2004's dash, `ROTATION=2`) IDENTICAL, `SetTrackingSpace(1)`
+in both runtime logs.
+
+### Step 5: FormOpenVR, motion trackers, the Rift's sound device
+
+- **FormOpenVR** ("OpenVR", made only with the HTC Vive camera): SteamVR's supersampling with its
+  Save button (into rustyAC's own `cfg/openvr.ini`, and SteamVR's `renderTargetMultiplier`) and
+  the pupillary distance (live). `app_open_vr.rs`; the oracle's `app_openvr` (101 frames)
+  IDENTICAL with its camera calls and openvr.ini.
+- **openvr.ini `MOTION_TRACKER`** (`LEFT_HAND`, `RIGHT_HAND`, `TRACKER`): the head seen from a hand
+  controller or a tracker, as `UpdateHMDMatrixPose` does. Render cases `r47c_04` (left hand) and
+  `r47c_05` (tracker) IDENTICAL. A right hand without a controller reads 64 bytes before the
+  pose table in the game (index -1) and draws nothing; the port does the same read and also draws
+  nothing, but the NaN signs of the view differ, so it has no case.
+- **oculus.ini `AUTOSELECT_RIFT_AUDIO_DEVICE`**: `OculusManager` asks the runtime for the Rift's
+  waveOut id and hands it to FMOD as its driver (`rift_audio_driver`, then
+  `GameAudio::set_driver`), with the game's messages. GUI sequence `app_riftaudio` (on, none
+  found, no runtime functions, off, no key) IDENTICAL with the runtime calls and oculus.ini.
+
+### Step 6: triple screens
+
+- `SessionLeaderboard`, `EndSessionDisplayer` and `SystemNotification` ask
+  `Sim::isInTripleScreenMode` but never use the answer (both branches compiled to one): no triple
+  path. Proven with the new `%triple` sequence suffix (triple mode from before anything is made):
+  `hud_messages%triple`, `lb_control_12%triple`, `end_race_12%triple` IDENTICAL.
+  `DriveThroughPenaltyAvatar` and `FuelLight` were ported in Task 29 (`hud_flags_triple`).
+- **Name tags** through the three screens (`DriverNameDisplayer::projectPoint`'s triple path: the
+  first screen that sees the car, drawn only in the cockpit, drivable and free cameras);
+  rustyac.exe no longer hides them in triple mode. `hud_cars%triple` (59 frames) IDENTICAL.
+- **The Triple screen app** (`TripleScreenManager`, `app_triple.rs`): the angle, screen width,
+  distance and bezel spinners move the camera's screens at once and, when the game closes after a
+  change, write `triple_screen.ini` into rustyAC's own cfg folder (the page: its own Documents,
+  saved when the drive ends). The camera now reads rustyAC's own triple_screen.ini first, then
+  Documents'. GUI sequence `app_triple` (73 frames): commands, pixels, state, the camera's screens
+  (bit for bit) and triple_screen.ini (333 bytes) IDENTICAL. rustyac.exe in `MODE=TRIPLE` with an
+  unchanged app leaves the file alone, as the game does.
+
+### Post-processing in VR
+
+It waits for the YEBIS tasks. It plugs in where the game's `StereoCameraVive::render` 0x140223720
+calls `StereoCameraVive::renderYebis` 0x140223f60 and `StereoCameraForward::render` 0x1402135c0
+calls `StereoCameraForward::renderYebis` 0x140213b10 (each eye through YEBIS before it is
+submitted): `vr.rs` / `oculus.rs` `render`, which today refuse a video.ini with post-processing
+on (their constructors return "VR with post-processing is not done").
+
+### What still needs real hardware
+
+Nothing here was tried on a headset, a real SteamVR or Oculus runtime, trackers, a Rift's sound
+device or three monitors: the proofs use the stand-in runtimes and the game's own code beside the
+port. The Oculus path in rustyac.exe needs a signed LibOVR, so it was never run there.
+
+### Not done (Task 47e)
+
+- The server's forced virtual mirror online (`FORCE_VIRTUAL_MIRROR`, Sim+0x1e3: mirror on and F11
+  locked when flat): rustyAC reads the byte but never applies it.
+- The page never runs the other apps' shutdown, so their files (force feedback, telemetry preset,
+  chat export and the rest) are not saved in a page drive; only the Triple screen app's file is.
+  The page's triple save was not run live in a browser.
+- A right hand without a controller (`MOTION_TRACKER=RIGHT_HAND`): NaN signs differ (no case).
+- Post-processing in VR (above).
 
 ## Task 47b: VR
 

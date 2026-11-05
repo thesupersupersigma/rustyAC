@@ -12,9 +12,8 @@
 //! vtable slots. Whoever makes the camera hands over the functions ([`OpenVrApi`]): the
 //! player's own `openvr_api.dll`, or a stand-in runtime in a proof.
 //!
-//! Not done: post-processing in VR (`renderYebis`; the constructor refuses it), the motion
-//! tracker of openvr.ini `MOTION_TRACKER`, and openvr.ini's supersampling (`renderMultiplier`,
-//! only the game's "OpenVR" form writes it).
+//! Not done: post-processing in VR (`StereoCameraVive::renderYebis` 0x140223f60, the eyes
+//! through YEBIS; it waits for YEBIS, and the constructor refuses it until then).
 
 use std::ffi::{c_char, c_void, CStr};
 
