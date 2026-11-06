@@ -6,6 +6,7 @@
 //! Addresses are Ghidra addresses of acs.exe 1.16.4; member offsets are from acs.pdb
 //! (`re/types/*.txt`), ODE offsets from the disassembly of ODE's own accessors.
 
+pub mod achievements;
 pub mod ai_record;
 pub mod ghost;
 pub mod telemetry;
@@ -21,6 +22,7 @@ pub mod mirror;
 pub mod race_ini;
 pub mod replay;
 pub mod steam;
+pub mod steam_standin;
 pub mod steer;
 pub mod sus_micro;
 

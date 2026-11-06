@@ -191,6 +191,9 @@ pub fn stop() {
 
 /// `SteamAPI_RunCallbacks`, each frame (`SteamInterface::update` @ 0x1401accd0).
 pub fn run_callbacks() {
+    if crate::achievements::LIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if let Some(steam) = SESSION.lock().unwrap().as_ref() {
         // SAFETY: the session's own API
         unsafe { (steam.api.run_callbacks)() }

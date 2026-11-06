@@ -209,6 +209,16 @@ if part cameras; then  # Tasks 34, 46 and 46b: the game's start, free (F7), cock
         r=$(grep '^virtual mirror: ' "$out/mirror_$seed.txt" | tail -1)
         case "$r" in *IDENTICAL*) verdict "mirror $seed" IDENTICAL "$r" ;; *) verdict "mirror $seed" DIFFERENT "${r:-no result}" ;; esac
     done
+    # Task 47d: SteamInterface's achievements, stats and Friends Leaderboard on scripted drives, every Steam call in order
+    for seed in 1 2 3; do
+        keep "achievements $seed" || continue
+        d=$root/achievements/$seed
+        mkdir -p "$d"
+        "$CO" achievements-micro --seed "$seed" --root "$(cygpath -am "$d")" > "$out/achievements_$seed.txt" 2>&1
+        cargo run --release --locked --quiet -p rustyac-game --example achievements_check -- "$d/achievements.tape" "$d/port" "$ac" >> "$out/achievements_$seed.txt" 2>&1
+        r=$(grep -E '^(IDENTICAL|DIFFERENT)' "$out/achievements_$seed.txt" | tail -1)
+        case "$r" in IDENTICAL*) verdict "achievements $seed" IDENTICAL "$r" ;; *) verdict "achievements $seed" DIFFERENT "${r:-no result}" ;; esac
+    done
 fi
 
 if part modes; then  # Task 45: special-event files and goals, hotlap, Time Attack, drift, drag and race events judged by the game's code, and their race_out.json extras

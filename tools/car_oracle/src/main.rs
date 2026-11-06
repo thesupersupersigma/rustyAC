@@ -320,6 +320,7 @@ fn main() {
         "start-camera-micro" => start_camera_micro(&args),
         "steam-micro" => steam_micro(&args),
         "mirror-micro" => mirror_micro(&args),
+        "achievements-micro" => achievements_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
                 println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
@@ -580,6 +581,27 @@ fn mirror_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::mirror::micro(&acs, args.seed as u32)? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("mirror-micro: {} lines of the game into {}", tape.lines().count(), out.display());
+    Ok(())
+}
+
+/// Task 47d: `car_oracle achievements-micro [--seed <n>] [--root <dir>]` (tape:
+/// `<root>/achievements.tape`): the game's Steam achievements, stats and leaderboards on scripted
+/// drives, every call answered by the stand-in Steam, for the port's `achievements_check` example.
+fn achievements_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    let acs_path = std::path::absolute(&args.acs).map_err(|e| e.to_string())?;
+    let ac = acs_path.parent().ok_or("--acs has no folder")?.to_path_buf();
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let out = root.join("achievements.tape");
+    acs::set_extra_overrides(game::achievements::overrides());
+    let acs = acs::Acs::load(&acs_path)?;
+    acs.silence_game_stdout();
+    let tape = unsafe { game::achievements::micro(&acs, &root, &ac, args.seed as u32)? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("achievements-micro: {} lines of the game into {}", tape.lines().count(), out.display());
     Ok(())
 }
 

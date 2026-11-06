@@ -338,6 +338,8 @@ pub struct LoopConfig {
     pub pit_clicks: Vec<(f64, rustyac_physics::race::pitstop::MousePitClick)>,
     /// Task 45b, a proof: drawn frames of uneven length from this seed (`--drawn-frames`)
     pub drawn_frames: Option<u32>,
+    /// Task 47d: the game's Steam achievements (`--steam-achievements on`), their GUI messages
+    pub achievements: Option<crate::achievements::Messages>,
 }
 
 /// Steps of lying still on its roof (or side) before the car is put back: 3 s.
@@ -391,6 +393,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     if let (Some(_), Some(referee)) = (config.drawn_frames, sim.referee.as_mut()) {
         referee.record_mode_frames();
     }
+    let mut steam = config.achievements.clone().and_then(|messages| crate::achievements::Live::new(&sim, messages, config.replay.is_some()));
     {
         shared.publish_start(&sim);
         *shared.track.lock().unwrap() = sim.track.clone();
@@ -540,12 +543,18 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         }
         for dt in std::mem::take(&mut *shared.drawn_frames.lock().unwrap()) {
             sim.drawn_frame(dt);
+            if let Some(steam) = &mut steam {
+                steam.frame(&sim);
+            }
         }
         while config.drawn_frames.is_some() && sim.sim_seconds() >= frame_at {
             frame_rand = frame_rand.wrapping_mul(214_013).wrapping_add(2_531_011);
             let dt = (5 + (frame_rand >> 16 & 0x7fff) % 36) as f32 * 0.001;
             frame_at += dt as f64;
             sim.drawn_frame(dt);
+            if let Some(steam) = &mut steam {
+                steam.frame(&sim);
+            }
         }
         let begin = Instant::now();
         let jobs_before = sim.setup_log.len();
@@ -557,6 +566,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
         };
         timing.last_step_ms = begin.elapsed().as_secs_f64() * 1000.0;
+        if let Some(steam) = &mut steam {
+            steam.events(&mut sim);
+        }
         if let (Some(_), Some(referee)) = (config.drawn_frames, sim.referee.as_mut()) {
             referee.drift_step_line(crate::sim::DT, &sim.car.car.drift_input, &sim.car.car.drift);
         }

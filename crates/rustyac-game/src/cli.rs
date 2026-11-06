@@ -290,6 +290,9 @@ pub struct Options {
     pub net_identity: Option<PathBuf>,
     /// `--no-steam`: Steam is not asked for the player id.
     pub no_steam: bool,
+    /// Task 47d, `--steam-achievements on|off`: the game's achievements, stats and Friends
+    /// Leaderboard (`SteamInterface`); None: `cfg\rustyac.ini [STEAM] ACHIEVEMENTS` (default off)
+    pub steam_achievements: Option<bool>,
     /// `--net-tape <file>`: every message of the session, written there at its end.
     pub net_tape: Option<PathBuf>,
     /// `--chat <text>@<seconds>` (repeatable): lines sent to the chat, for checks.
@@ -497,6 +500,7 @@ impl Default for Options {
             guid: None,
             net_identity: None,
             no_steam: false,
+            steam_achievements: None,
             net_tape: None,
             chat: Vec::new(),
             car_given: false,
@@ -653,6 +657,10 @@ usage: rustyac [options]
   --offline             never join a server, whatever race.ini says
   --no-steam            do not ask Steam for your player id (rustyAC's own id is used: a
                         random number made once, kept in rustyac_net.ini next to the program)
+  --steam-achievements on|off
+                        the game's Steam achievements, stats and Friends Leaderboard scores
+                        (off unless this or cfg\\rustyac.ini [STEAM] ACHIEVEMENTS=1 turns them on;
+                        they need Steam running)
   --net-identity <file> take rustyAC's own player id from this file (a second player on one PC)
   --net-tape <file>     write every message of the online session to this file at its end
                         (your player id and the server's password are blanked in it;
@@ -910,6 +918,13 @@ impl Options {
                 "--guid" => o.guid = Some(value("--guid")?),
                 "--net-identity" => o.net_identity = Some(absolute(value("--net-identity")?)),
                 "--no-steam" => o.no_steam = true,
+                "--steam-achievements" => {
+                    o.steam_achievements = Some(match value("--steam-achievements")?.as_str() {
+                        "on" => true,
+                        "off" => false,
+                        other => return Err(format!("--steam-achievements: on or off, not {other}")),
+                    })
+                }
                 "--net-tape" => o.net_tape = Some(absolute(value("--net-tape")?)),
                 "--chat" => {
                     let text = value("--chat")?;

@@ -185,6 +185,16 @@ impl Mode {
         }
     }
 
+    pub fn base_mut(&mut self) -> &mut GameMode {
+        match self {
+            Mode::Hotlap(base) => base,
+            Mode::TimeAttack(ta) => &mut ta.base,
+            Mode::Drift(drift) => &mut drift.base,
+            Mode::Drag(drag) => &mut drag.base,
+            Mode::RaceEvent(event) => &mut event.base,
+        }
+    }
+
     /// The player's car finished a lap (the mode's handler runs after the race manager's).
     /// `message`: `SystemMessage::addMessage(text, description)`.
     pub fn on_lap_completed(&mut self, lap: &OnLapCompletedEvent, message: &mut dyn FnMut(&str, &str)) {

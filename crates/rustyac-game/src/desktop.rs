@@ -961,6 +961,14 @@ fn esc_start(options: &Options) -> bool {
 }
 
 /// The car's set-up, and the recorded drive if one is to be played.
+/// Task 47d: the game's Steam achievements, when `--steam-achievements on` (else
+/// `[STEAM] ACHIEVEMENTS` in rustyAC's own `cfg\rustyac.ini`) turns them on and Steam runs.
+fn steam_achievements(options: &Options) -> Option<rustyac_game::achievements::Messages> {
+    let ini = || rustyac_physics::data::ini::IniReader::load(&rustyac_game::conditions::cfg_dir(options).join("rustyac.ini")).ok()?.get_int("STEAM", "ACHIEVEMENTS").ok();
+    let on = options.steam_achievements.unwrap_or_else(|| ini().is_some_and(|v| v != 0));
+    (on && rustyac_game::steam::session().is_some()).then(Default::default)
+}
+
 /// Task 28: where the referee's files go: `--out-dir`, else `out` beside rustyac.exe (never
 /// one of Assetto Corsa's folders).
 fn referee_out(options: &Options) -> Option<PathBuf> {
@@ -1139,6 +1147,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         session_script: session_script(options),
         pit_clicks: options.pit_clicks.clone(),
         drawn_frames: options.drawn_frames,
+        achievements: steam_achievements(options),
     };
     if options.duration.is_none() && options.replay.is_none() {
         println!("no --duration: running until Ctrl+C");
@@ -1399,7 +1408,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
-    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options), pit_clicks: options.pit_clicks.clone(), drawn_frames: None };
+    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options), pit_clicks: options.pit_clicks.clone(), drawn_frames: None, achievements: steam_achievements(options) };
+    let steam_messages = config.achievements.clone();
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
         let (autodrive, drift_drive) = (options.autodrive, options.drift_drive);
@@ -1912,6 +1922,10 @@ fn run_window(options: &Options) -> Result<(), String> {
             // has the keyboard; here only rustyAC's own)
             // SAFETY: a plain call.
             gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
+            // Task 47d: SteamInterface's messages (an achievement unlocked)
+            for (title, text) in steam_messages.as_ref().map(|m| std::mem::take(&mut *m.lock().unwrap())).unwrap_or_default() {
+                gui.add_message(&title, &text);
+            }
             // Task 34: what the client heard (chat, votes, its messages), then
             // ACClientVotingManager::update: Y and N (asked of the OS, whichever window has the
             // keyboard, as the game does)

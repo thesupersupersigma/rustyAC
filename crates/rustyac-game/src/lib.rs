@@ -28,6 +28,8 @@ pub mod autodrive;
 #[cfg(windows)]
 pub mod cli;
 #[cfg(windows)]
+pub mod achievements;
+#[cfg(windows)]
 pub mod conditions;
 pub mod crt;
 pub mod dump;
