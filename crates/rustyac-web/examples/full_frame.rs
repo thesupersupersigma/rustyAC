@@ -10,14 +10,15 @@
 //! folder: what a pack needs for this drive in Full mode). `--race`: the drive of that race.ini
 //! (and the assists.ini beside it) as the page's `Session::from_race` makes it, seeded as `?seed=n`.
 //! `--gui`: AC's GUI and HUD on, this `--gui-do` script run on them first (`""`: none; `results`
-//! in it: the referee's results panel up). `--sessions`: the referee's session list, as the page's `?sessions=`.
+//! in it: the referee's results panel up). `--shutdown`: then the apps' files as the page saves them
+//! when a drive ends (`Game::shutdown_files`), under `<name>.shutdown/`. `--sessions`: the referee's session list, as the page's `?sessions=`.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut car, mut track, mut layout, mut spawn, mut sessions) = (None, None, String::new(), "pit".to_string(), None::<String>);
     let (mut size, mut frames, mut warp, mut out, mut name) = ((1280u32, 720u32), 3u32, false, None, None);
-    let (mut race, mut seed, mut video, mut cockpit, mut gui) = (None::<std::path::PathBuf>, 0u32, None::<std::path::PathBuf>, false, None::<String>);
+    let (mut race, mut seed, mut video, mut cockpit, mut gui, mut shutdown) = (None::<std::path::PathBuf>, 0u32, None::<std::path::PathBuf>, false, None::<String>, false);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
@@ -36,6 +37,7 @@ fn run() -> Result<(), String> {
             "--frames" => frames = value()?.parse().map_err(|e| format!("--frames: {e}"))?,
             "--warp" => warp = true,
             "--cockpit" => cockpit = true,
+            "--shutdown" => shutdown = true,
             "--gui" => gui = Some(value()?),
             "--video-ini" => video = Some(std::path::PathBuf::from(value()?)),
             "--out" => out = Some(std::path::PathBuf::from(value()?)),
@@ -77,6 +79,15 @@ fn run() -> Result<(), String> {
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.write_header().and_then(|mut w| w.write_image_data(&pixels)).map_err(|e| e.to_string())?;
+    // Task 47d: as Game::shutdown_files (the page keeps them; here they go under <name>.shutdown/)
+    if let Some(gui) = renderer.gui.as_mut().filter(|_| shutdown) {
+        for (path, bytes) in rustyac_web::full::shutdown_files(gui) {
+            let target = out.join(format!("{name}.shutdown")).join(path.strip_prefix(&out).map_err(|_| format!("{} is not under --out", path.display()))?);
+            std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
+            println!("shutdown file {}", target.display());
+        }
+    }
     println!("{name}: {} x {}, {frames} frames, {} kgl log lines, {}", size.0, size.1, log.lines().count(), notes.join(" / "));
     Ok(())
 }

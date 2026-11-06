@@ -90,6 +90,9 @@ pub struct GameApps {
     /// is a loose file
     pub ai: rustyac_gui::app_ai::AiAppView,
     loose: bool,
+    /// Task 47d: `Some`: [`GameApps::write_files`] keeps the files here (path, bytes) instead of
+    /// writing them (the page, which has no disk: it saves them in its Documents)
+    pub kept: Option<Vec<(PathBuf, Vec<u8>)>>,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -478,6 +481,10 @@ impl GameApps {
                 _ if relative.starts_with("out/") => setup.out_dir.join(&relative[4..]),
                 _ => setup.cfg_dir.join(relative.strip_prefix("cfg/").unwrap_or(&relative)),
             };
+            if let Some(kept) = &mut self.kept {
+                kept.push((target, bytes));
+                continue;
+            }
             if let Some(parent) = target.parent() {
                 let _ = rustyac_content::guard::create_dir_all(parent);
             }

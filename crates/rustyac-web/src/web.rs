@@ -1031,12 +1031,17 @@ impl Game {
         self.session.input.lock().unwrap().autodrive = on;
     }
 
-    /// Task 47c: the Triple screen app's triple_screen.ini as the game writes it when it closes
-    /// (none: no app, or nothing changed); the page keeps it in its Documents.
-    pub fn triple_screen_ini(&mut self) -> Option<Vec<u8>> {
-        let gui = self.full.as_mut()?.gui.as_mut()?;
-        let id = gui.apps.made.iter().find(|(name, _)| *name == "triple_screen")?.1;
-        gui.gui.with_app(id, |app, gui| app.as_any().downcast_mut::<rustyac_gui::app_triple::TripleScreenApp>()?.file(gui)).flatten()
+    /// Task 47d: the files every app writes when the game shuts down (`GameScreen::shutdown`:
+    /// telemetry_user.ini, triple_screen.ini, the post-processing filter, the chat export, ...),
+    /// at the paths the desktop writes them under rustyAC's own folder (`rustyac/cfg/x.ini`), as
+    /// [path, bytes] pairs; the page keeps them in its Documents. Once: the apps are shut down.
+    pub fn shutdown_files(&mut self) -> js_sys::Array {
+        let files = js_sys::Array::new();
+        let Some(gui) = self.full.as_mut().and_then(|full| full.gui.as_mut()) else { return files };
+        for (path, bytes) in crate::full::shutdown_files(gui) {
+            files.push(&js_sys::Array::of2(&relative(&path).into(), &js_sys::Uint8Array::from(&bytes[..])));
+        }
+        files
     }
 
     /// Task 41b: the sound tape so far (`set_sound_tape`), for `rustyac.exe --sound-tape`.

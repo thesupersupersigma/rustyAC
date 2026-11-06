@@ -106,8 +106,17 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
 /// the page: they need the player's python33.dll (rustyac.exe runs them, Task 42).
 pub const PAGE_HIDDEN_APPS: &[&str] = &["volumes", "ffb", "eyes", "gamestats", "rstats", "telemetry", "setupdebug"];
 
+/// Task 47d: the files every app writes when the game shuts down (`GameScreen::shutdown`), at the
+/// paths rustyac.exe writes them, kept instead of written (the page saves them in its Documents
+/// when a drive ends). Once: the apps are shut down.
+pub fn shutdown_files(gui: &mut rustyac_game::render::gui::GameGui) -> Vec<(PathBuf, Vec<u8>)> {
+    gui.apps.kept = Some(Vec::new());
+    gui.shutdown_apps();
+    gui.apps.kept.take().unwrap_or_default()
+}
+
 /// What AC's GUI reads of the drive and where its files are, as rustyac.exe's `make_ac` gives
-/// it: `cfg_dir` is rustyAC's own cfg folder (what the apps write; the page writes none).
+/// it: `cfg_dir` is rustyAC's own cfg folder (what the apps write; the page keeps them, `shutdown_files`).
 pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
     let sim = &session.sim;
     let info = sim.car_info();

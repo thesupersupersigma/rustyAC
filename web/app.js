@@ -831,7 +831,6 @@ const GFX_PRESETS = {
 };
 // (the keys a preset sets, which say whether the settings are one)
 const GFX_PRESET_KEYS = Object.keys(GFX_HIGH).filter((key) => !['VIDEO/WIDTH', 'VIDEO/HEIGHT', 'VIDEO/FULLSCREEN'].includes(key));
-const VIDEO_INI = 'cfg\\video.ini';
 
 // video.ini as {SECTION/KEY: value} (upper case, as the bridge writes it)
 function iniValues(text) {
@@ -870,9 +869,14 @@ console.assert(iniValues(iniWith('[VIDEO]\r\nVSYNC=1\r\n[A]\r\nB=2', { 'VIDEO/VS
 
 // The page's video.ini: the launcher's copy while it runs, else the player's folder in this browser.
 async function readVideoIni() {
-  const theme = window.rustyacTheme;
-  const bytes = theme ? theme.launcher.read_doc(VIDEO_INI) : snapshotFile(await loadDocuments(), 'cfg/video.ini');
+  const bytes = await readDoc('cfg/video.ini');
   return bytes ? new TextDecoder().decode(bytes) : '';
+}
+
+// A file of the page's Documents\Assetto Corsa (rel: 'cfg/x.ini'), or null.
+async function readDoc(rel) {
+  const theme = window.rustyacTheme;
+  return theme ? theme.launcher.read_doc(rel.replace(/\//g, '\\')) : snapshotFile(await loadDocuments(), rel);
 }
 
 async function writeVideoIni(text) {
@@ -1005,6 +1009,9 @@ async function pictureBackend() {
     state.graphics = await graphicsNow();
     const { SCALE, ...file } = state.graphics;
     rac.fs_put('docs/cfg/video.ini', new TextEncoder().encode(iniWith(await readVideoIni(), file)));
+    // Task 47d: the Triple screen app's file from the last drive (a triple drive reads it)
+    const triple = await readDoc('cfg/triple_screen.ini');
+    if (triple) rac.fs_put('docs/cfg/triple_screen.ini', triple);
   }
   let backend = params.get('backend') || $('backend').value;
   let why = '';
@@ -2081,12 +2088,16 @@ function startDriving() {
 
 function stopDriving() {
   unlockLook();
-  // Task 47c: the Triple screen app's file, as the game writes it when it closes
-  const triple = state.game && hasGui() ? state.game.triple_screen_ini() : null;
-  if (triple) {
-    rac.fs_put('docs/cfg/triple_screen.ini', triple);
-    writeDoc('cfg/triple_screen.ini', triple).catch(fail);
-  }
+  // Task 47d: the apps' files, as the game writes them when it closes (the desktop's
+  // rustyac/cfg/x.ini is the page's Documents cfg/x.ini; savedData/ and out/ likewise)
+  const files = state.game && hasGui() ? state.game.shutdown_files() : [];
+  (async () => {
+    for (const [path, bytes] of files) {
+      const rel = path.replace(/^rustyac\//, '');
+      rac.fs_put('docs/' + rel, bytes);
+      await writeDoc(rel, bytes);
+    }
+  })().catch(fail);
   // (after the drive has stopped, below)
   setTimeout(lockKeys, 0);
   if (state.launch) {
