@@ -1,4 +1,136 @@
-# Triple screens, TrackIR, Steam and VR (Tasks 47, 47b and 47c)
+# Triple screens, TrackIR, Steam and VR (Tasks 47, 47b, 47c and 47d)
+
+## Task 47d: Steam achievements, the forced virtual mirror, the page's app files
+
+### Resume here
+
+Task 47d is done (v0.47.3). Nothing is left in flight; leftovers are under "Not done" and go to
+Task 47e. Scratch: `re/scratch/task47d` (the machine-code briefs `brief_achievements.md`,
+`brief_leaderboards.md`, `brief_triggers.md`; step 3's runs under `step3/`).
+
+How to turn achievements on: `rustyac.exe --steam-achievements on`, or `[STEAM] ACHIEVEMENTS=1`
+in rustyAC's own `cfg\rustyac.ini`. Off by default. It also needs Steam running (the game's
+`steam_api64.dll` loaded and `SteamAPI_Init` working); with it off nothing of `SteamInterface`
+is made and none of its Steam calls happen.
+
+### End proofs
+
+`sh tools/proofs/run_all.sh --quick`: every area identical. The first run was cut short by the
+PC running out of memory; render, gui, fresh, dumps, net and ai_page were run again on their own
+(`CARGO_BUILD_JOBS=4`), the rest are from the first run.
+
+| area | cases | identical | different | skipped |
+|---|---|---|---|---|
+| physics | 9 | 9 | 0 | 0 |
+| fresh | 62 | 62 | 0 | 0 |
+| sound | 4 | 4 | 0 | 0 |
+| render | 14 | 14 | 0 | 0 |
+| gui | 29 | 29 | 0 | 0 |
+| python | 1 | 1 | 0 | 0 |
+| replays | 6 | 6 | 0 | 0 |
+| net | 16 | 16 | 0 | 0 |
+| browser | 9 | 9 | 0 | 0 |
+| ai_page | 9 | 9 | 0 | 0 |
+| shaders | 4 | 4 | 0 | 0 |
+| launcher | 1 | 1 | 0 | 0 |
+| dumps | 6 | 6 | 0 | 0 |
+| all | 170 | 170 | 0 | 0 |
+
+### Step 1: achievements, stats and leaderboards
+
+`SteamInterface` (constructor 0x1401a5d70, `update` 0x1401accd0, destructor 0x1401a6ec0) is
+ported in `crates/rustyac-game/src/achievements.rs`, every Steam call through the flat API and
+the interfaces' vtables in the game's order, so the stand-in DLL sees the same calls. What it
+sends, as the game does:
+
+- Achievements (`SetAchievement` + `StoreStats`, a system message per unlock): 100/200/300 km/h,
+  a clean drive, a crash, hotlapper, time attack 3/5/10, practice 10 laps, practice with no
+  aids, 50/100/250 km driven, drift combos 10/25/50 and drift levels, the four car-and-track
+  lap times (ferrari_458 imola, lotus_49, tatuusfa1, bmw_m3_gt2; standard and `_pro`), an
+  official event's tiers.
+- Stats, each +1 when the drive starts: `runs`, `games`, the car (without a `_step1`, `_drift`,
+  `_S1`... suffix), the track, `drift_mode` / `time_attack_mode`, or `replay_mode` instead in a
+  replay, and `controls_x360` / `controls_keyboard` / `controls_wheel` from `controls.ini
+  [HEADER] INPUT_METHOD`.
+- Leaderboards: the session's board `_lb_HOTLAP_<car>_<track>` (likewise `_lb_TIME_ATTACK_`,
+  `_lb_DRIFT_`) is found, a valid clean lap's time or the drift run's points uploaded, and the
+  friends' rows downloaded for the Friends Leaderboard; the player's avatar is fetched as a
+  184×184 texture (`fetchPlayerImage`).
+- None of it in a replay (only its stat), or with penalties off (no checks, no board).
+
+The proof: `car_oracle achievements-micro --seed n` runs the game's own `SteamInterface` on nine
+scripted drives against the stand-in `steam_api64.dll` (`tools/car_oracle/src/game/steam_standin.rs`,
+every call and argument written down, made-up answers, failures included), and
+`crates/rustyac-game/examples/achievements_check.rs` runs the port on the same inputs and
+answers. Cases: practice (speeds, distance, both times to beat, ten laps without aids),
+penalties off, a mod's hotlap event (the board, its rows, scores), an official hotlap with its
+tiers and a failed upload, time attack with no board found, drift (combos, levels, a score), a
+race crash, drag with Steam failing everywhere, a replay. In `tools/proofs/fresh.sh`.
+
+| Seed | Lines | Cases | Result |
+|---|---|---|---|
+| 1 | 43,491 | 9 | IDENTICAL |
+| 2 | 43,459 | 9 | IDENTICAL |
+| 3 | 43,536 | 9 | IDENTICAL |
+
+In rustyac.exe the port runs on the physics thread (`Live`, once a drawn frame), and its
+unlock messages show in the GUI. A headless run without `--drawn-frames` has no drawn frames,
+so it makes no achievement checks.
+
+### Step 2: the server's forced virtual mirror
+
+The handshake's FORCE_VIRTUAL_MIRROR byte is Sim+0x1e3 (`isVirtualMirrorForced`). Ghidra's
+pseudo-C calls it `useMousePitstop` (that field is Sim+0x1e4) in `ACClient::handshakeTCP` and in
+`VirtualMirrorRenderer`'s constructor, `update` and `shutdown`; the machine code reads 0x1e3.
+Now, online on a forced server with no headset, the mirror starts on and F11 keeps it on with
+the game's message "Virtual Mirror is forced ON by the Server" (`rustyac_render::mirror::f11`,
+`VirtualMirrorRenderer::update` 0x1401d2190); with a headset F11 does nothing, as in the game.
+
+The proof: `car_oracle mirror-micro --seed n` runs the game's `VirtualMirrorRenderer`
+(constructor 0x1401d1ab0, `update`) with a stand-in `GetAsyncKeyState`, eight cases a seed
+(headset, forced, starting state, on and off), every frame's state and system message written
+down; `crates/rustyac-game/examples/mirror_check.rs` runs the port. Seeds 1, 2, 3: IDENTICAL. In
+`tools/proofs/fresh.sh`.
+
+### Step 3: the page saves the apps' files when a drive ends
+
+The game writes the apps' files at shutdown (`GameScreen::shutdown`); the page has no shutdown,
+so it now does the same when a drive ends. `GameApps::kept` keeps the files `write_files` would
+write (same paths, same bytes); `full::shutdown_files` shuts the apps down and returns them;
+`Game::shutdown_files` gives them to `stopDriving` in `web/app.js`, which saves each in the
+page's Documents (rustyAC's `rustyac/cfg/x.ini` is the page's Documents `cfg/x.ini`, likewise
+`savedData/`). At the next drive the page also hands its saved `cfg/triple_screen.ini` to the
+game (before only `video.ini` went in), so a triple drive starts from the last save.
+
+Proofs, on a triple-screen drive at 1920×1080 on magione in the bmw_m3_e30 that clicks the
+Triple screen app's spinners (the same clicks both sides):
+
+- `tools/web_checks/task47d/shutdown_files.sh`: rustyac.exe against the page's code natively
+  (`full_frame --shutdown`): 3 files, 3 IDENTICAL (`cfg/telemetry_user.ini` 28 bytes,
+  `cfg/triple_screen.ini` 325 bytes, changed by the clicks,
+  `savedData/driverPerformances/magione/bmw_m3_e30.ini` 933 bytes).
+- `tools/web_checks/task47d/triple_live.sh`: the page live in Chrome (Full mode, `?guido=` the
+  same clicks, the drive ended by AC's pause menu Exit), the files read back from the page's
+  saved Documents against the desktop's: 3 files, 3 IDENTICAL.
+
+The post-processing filter, the chat export and force feedback's car.ini take the same
+`write_files` path; this session makes none of them, so they are not in the proof.
+`GameGui::shutdown`'s own files (acos.ini, gameplay.ini, exposure.ini, the setup's last.ini) are
+not apps' files and the page still does not save them.
+
+### Not done (Task 47e)
+
+- The Friends Leaderboard rows and the avatar are made and kept but not drawn
+  (`FriendsLeaderboardDisplayer`).
+- A headless run without `--drawn-frames` makes no achievement checks (they run once a drawn
+  frame, as in the game).
+- `MOTION_TRACKER=RIGHT_HAND` with no right controller (a proof case comparing what is drawn,
+  nothing, with the game's NaN signs): not started.
+- Post-processing in VR (Task 47c).
+- The page does not save `GameGui::shutdown`'s acos.ini, gameplay.ini, exposure.ini and last.ini.
+- `car_oracle`'s clippy with `-D warnings` fails on about 70 older lints rustc 1.97 now reports
+  (none in this task's files).
+- Nothing was tried on a real Steam account (the rule): only the stand-in DLL.
 
 ## Task 47c: triple screens and VR, the rest
 
