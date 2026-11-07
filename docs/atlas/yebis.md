@@ -101,7 +101,9 @@ file, section 5), `initRenderTargets` 0x140029a90 and `initPostProcessing` 0x140
   whenever post-processing is on);
 - `IPfxContext_Dx11::Instantiate` 0x14039e5d0; `PFX_INITPARAM::Initialize` 0x1400244e0 (YEBIS is told one
   sample, picks its own buffer formats, `m_uiEffectBufferCriterionWidth = QUALITY / 5 x width`, or
-  min(width, 640) at quality 0); `IPfxBaseContext::Initialize(device parameters, glare quality, depth-of-field
+  min(width, 640) at quality 0, set by `CameraForwardYebis::initRenderTargets` 0x140029a90; it sizes only the
+  glare, depth-of-field, motion-blur and AO sub-buffers through their `*WidthScale` fields, the effect buffer
+  itself is `m_uiEffectBufferWidth` = 0 = the render size, Task Y2); `IPfxBaseContext::Initialize(device parameters, glare quality, depth-of-field
   quality, flags, parameters)` 0x14039a700 with the destination's render-target view (the FXAA target or the
   back buffer); `SetDepthFactorRangeFloatOptimizeEnable(true)`; `SetVignetteParameters`;
   `SetApertureAiryDiscEnable` / `...Parameters`.
@@ -216,7 +218,7 @@ the camera at +0x828), and `setPostProcessing` 0x140025080 hands that block to Y
 | Key | What it decides |
 |---|---|
 | `[POST_PROCESS] ENABLED` | everything: which camera is made (`videoSettings.ppHDREnabled`; the name says HDR, it means YEBIS) |
-| `QUALITY` (0..5) | the width of YEBIS' effect buffers: `QUALITY / 5 x width`; 0: min(width, 640) |
+| `QUALITY` (0..5) | the criterion width of YEBIS' glare / DOF / motion-blur / AO sub-buffers: `QUALITY / 5 x width`; 0: min(width, 640). The main effect buffer is always the render size |
 | `GLARE` (0..5) | glare on (not 0) and its quality: `min(7, 5) x GLARE / 5` |
 | `DOF` (0..5) | depth of field on (not 0) and its quality, the same way |
 | `RAYS_OF_GOD`, `HEAT_SHIMMER` | light shafts on; heat shimmer on |
@@ -264,7 +266,7 @@ turned into radians with a single-precision constant and one multiply.
 
 With this PC's `video.ini` of the moment and only `ENABLED` switched to 1 (`QUALITY`, `GLARE`, `DOF`,
 `RAYS_OF_GOD`, `HEAT_SHIMMER` all 0), YEBIS would do: tone map, automatic exposure, the colour matrix,
-chromatic aberration and the vignette of `default.ini`, in effect buffers 640 wide. That is stage 3 of the
+chromatic aberration and the vignette of `default.ini`, in full-size effect buffers (sub-buffers would be 640 wide; none is used then). That is stage 3 of the
 plan below.
 
 The exact conversion of every key (defaults, units, which member of the block) is in the brief
@@ -352,8 +354,8 @@ a near copy of `CameraForwardYebis::readPPSetOptions`). Same library, same conte
 **Render targets.** YEBIS makes its own targets typeless and views them typed: R16G16B16A16_TYPELESS
 (format 9, viewed as 10 = R16G16B16A16_FLOAT), R8G8B8A8_TYPELESS (27, viewed as 28), R32_TYPELESS (39,
 viewed as 41 = R32_FLOAT, the resolved depth), R24G8_TYPELESS (44, depth). All are 1280x720 with
-`QUALITY=0` except one 128x64 RGBA8 target. **This contradicts section 3** ("effect buffer = min(width,
-640) at QUALITY 0"): at 1280 wide the two agree only if the rule is read the other way. Open for Y2.
+`QUALITY=0` except one 128x64 RGBA8 target. That is right: QUALITY only sizes the sub-buffers (section 3,
+corrected in Task Y2), and none of them is used with glare and DOF off.
 
 **Constant buffers and geometry.** One 4096-byte dynamic constant buffer (Map/Unmap per draw, bound to VS
 and PS slot 0 over the game's B224); one 192-byte dynamic vertex buffer per draw (a 3-vertex triangle strip,
@@ -376,9 +378,23 @@ own constant buffers stay bound in slots 1-12.
 Six distinct pixel shaders and four vertex shaders out of the container's 2,649 programs. Which `tech_*`
 names they are: match the logged bytecode hashes against the container (Y2's first job).
 
-**Open:** why two rounds (1-4 and 5-8) in one frame (a feedback / temporal tone map round, or the
-luminance read-back's frame-late round); what the two 1x1 textures hold (exposure history is the guess);
-the QUALITY rule above. **Settings that drive it** are section 5; the apps that change them at run time:
+**Which techniques (Task Y2, matched by hash in the container):** 1 `MadAlphaColorT2_R_S1` and 5
+`DepthOfField_BlurFactorAlphaFromDepthTextureTypeCastT1_S1_RVALUE_ALPHA_RGB` (depth factor into the effect
+alpha); 2 and 6 `TransformMadT1_S5` (camera motion blur, a 5-tap zoom with scales 1, .998754, .997509,
+.996266, .995025, driven by the camera's movement between frames); 3 `TonemapHDR_Exposure` (inside
+`UpdateAutoExposure`, `TonemapToSurface` into the 128x64 luminance target); 4
+`TonemapHDR_PreMatrix_Dither_Vignette_Gamma` and 7 `TonemapHDR_Dither_Vignette_Exposure_LINEARSAT`
+(`TonemapToSurface` -> `DrawRectGPU_TonemapHDR` 0x1403f1b10); 8 `CompositeColorAndAlphaEffectsMask_A_A`.
+
+**Why two rounds:** AC asks for `m_eAlphaOutput = PFXALPHAOUT_EFFECTRESULT_ALPHA`
+(`CameraForwardYebis::initPostProcessing` 0x140024ca0, the same in `YebisPP::initPP`). With that mode
+`EndPostEffectScene_Process` 0x1403b84d0 runs `EndPostEffectScene_InternalProcess` twice: draws 1-4 are the
+colour, draws 5-8 a second pass with exposure, colour matrix and related fields saved and forced to 1/0
+(the alpha / effects mask), and `CTextureUtil::CompositeColorAndAlphaEffectsMask` (draw 8) blends the two.
+Not temporal. **The 1x1 textures** are constants: black 00000000, grey 7f7f7f7f, white ffffffff (no
+exposure history).
+
+**Settings that drive it** are section 5; the apps that change them at run time:
 `PostProcessFilterSelector` 0x140329360 (picks `FILTER`, reloads the set), the HDR / exposure apps and the
 camera editor's per-view exposure (`docs/port/content_tools.md`), photo mode's exposure, the cinematic
 camera's blur switch (+0x7a0, `docs/port/cameras.md`).

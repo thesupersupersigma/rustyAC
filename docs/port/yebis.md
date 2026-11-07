@@ -1,3 +1,74 @@
+# Task Y2: YEBIS's shader container read; the frame chain stopped at step 2 (rule 7)
+
+## Resume here
+
+- **Step 1 is done** (`crates/rustyac-render/src/yebis_tfxo.rs`). **Steps 2-4 were not started**: see "Why
+  step 2 stopped". Super decides the split below (Y2a / Y2b / Y2c) before work goes on.
+- `Tfxo::from_install(ac_root)` reads `acs.exe` from the player's install at run time and finds the
+  container (`.tfxo file` magic, `hlsl` at +0x38). `technique("<name>")` gives the vertex and pixel programs
+  of `tech_<name>`. Nothing of the container is in the repo, a release or the web pack.
+- Test `cargo test -p rustyac-render --lib yebis_tfxo` (skips without an install): 2,649 programs, 2,653
+  techniques, and the 7 techniques of the default frame hash to exactly the shaders the Y1 log shows bound.
+- PPFX pseudo-C (git-ignored): 2,162 functions in `re/decomp/GPU*/`, `re/decomp/ppfx/`, `TinyEffect/`,
+  indexed in `re/decomp/INDEX.tsv`. They come from `re/index/publics.tsv` (not `functions.tsv`), so plain
+  `tools/bulk_decomp.py` finds none; the copy that works is `re/scratch/taskY2/decomp_ppfx.py --libs
+  ppfx_dx11_x64.lib --match '^PPFX::'`.
+- No version, no tag: the task is not finished.
+
+## What Y2 found
+
+1. **The 8 draws by name** (now in `docs/atlas/yebis.md` s8): 1 / 5 depth factor into the effect alpha
+   (`MadAlphaColorT2_R_S1`, `DepthOfField_BlurFactorAlphaFromDepthTextureTypeCast...`); 2 / 6 camera
+   motion blur (`TransformMadT1_S5`, a 5-tap zoom driven by the camera's movement since the last frame);
+   3 the luminance measurement (`UpdateAutoExposure` -> `TonemapToSurface`, `TonemapHDR_Exposure`); 4 / 7
+   the tone map (`DrawRectGPU_TonemapHDR` 0x1403f1b10, 36 parameters); 8
+   `CompositeColorAndAlphaEffectsMask_A_A`.
+2. **Y1 question 2, why two rounds:** AC initialises YEBIS with `PFXALPHAOUT_EFFECTRESULT_ALPHA`
+   (`CameraForwardYebis::initPostProcessing` 0x140024ca0, also `YebisPP::initPP`). In that mode
+   `EndPostEffectScene_Process` 0x1403b84d0 calls `EndPostEffectScene_InternalProcess` 0x1403b5f40 twice,
+   the second time with exposure, colour matrix and related fields saved and forced to 1 / 0, and then
+   composites colour and alpha mask (draw 8). It is not temporal. The two 1x1 textures are constants
+   (black, grey 7f7f7f7f, white), not exposure history.
+3. **Y1 question 3, the QUALITY rule:** `CameraForwardYebis::initRenderTargets` 0x140029a90 computes
+   `(int)(QUALITY / 5.0 * width)`, 0 -> `min(width, 640)`, into `PFX_INITPARAM::m_uiEffectBufferCriterionWidth`
+   (+0x3c). That only sizes the glare, DOF, motion-blur and AO sub-buffers (their `*WidthScale`). The effect
+   buffer is `m_uiEffectBufferWidth` = 0 = the render size. So Y1's measurement (1280x720) is right and the
+   map's section 3 wording was wrong; fixed.
+
+## Why step 2 stopped (usage rule 7)
+
+Step 2 asks for the parameter block and the 4 KB constant buffer value for value. Reading the code that
+fills it shows it is not a block of maths but most of YEBIS's frame driver:
+`EndPostEffectScene_InternalProcess` alone is 1,176 lines of pseudo-C, plus `Process`, `PreProcess`,
+`UpdateParameters_Base`, `UpdateAutoExposure` with `CTextureLuminanceManage`, the depth-factor and
+motion-blur passes, `TonemapToSurface` (2,958 bytes) and `DrawRectGPU_TonemapHDR`, the composite, and under
+all of it the `IGPUDevice` state cache that decides which Direct3D calls are made, the render-target pool,
+the vertex-buffer ring offsets and the constant-buffer leftovers, all of which carry over between frames.
+About 50 KB of machine code. Step 4's tape scenes (r23_11..14) also need the camera motion and exposure
+over several frames. That is a new subsystem, bigger than the 4-5 h Y1 guessed for the whole of Y2.
+
+**Proposed split** (estimate 3-4 sessions in all):
+
+| Task | Scope | Proof |
+|---|---|---|
+| **Y2a** | parameter block (video.ini + `ppfilters/default.ini` -> `CPostEffect`) and the per-draw constant buffer CPU maths | constant buffer bytes value for value against the Y1 log, single frames |
+| **Y2b** | the device layer (state cache, target pool, ring offsets), the oracle `compare --post` with `RENDER_ORACLE_YEBIS` on both sides, the 8 draws | log + pixels IDENTICAL on r23_09, r23_10, r23_16; `run_all.sh --quick`; release v0.48.0 |
+| **Y2c** (or folded into Y3) | camera motion and exposure over time for the tape scenes | r23_11..r23_14 |
+
+**Plan Y3-Y7:** unchanged in order. Y3 shrinks: "the second round" is answered (not temporal), so Y3 is
+auto exposure over time plus the VR / triple per-eye call. Total stays 7-9 tasks, Y2 now 2-3 of them.
+
+## Not done
+
+- Steps 2, 3 and 4: no parameter block, no constant buffer, no compare mode, no ported draw.
+- No `run_all.sh --quick`: the only code is a reader with its own test, not on any proof path.
+- Release v0.48.0 and its tag.
+
+## Open questions
+
+1. Super: take the Y2a / Y2b / Y2c split, or keep Y2 as one task and accept 3-4 sessions?
+2. (From Y1, still open) does the page read the player's `acs.exe` already, or does the pack step need it?
+
 # Task Y1: YEBIS mapped, a plan (the first pass is not ported yet)
 
 ## Resume here
