@@ -86,4 +86,5 @@ pub mod tyre_crew;
 #[cfg(not(feature = "backend-wgpu"))]
 pub mod vr;
 pub mod wings;
+pub mod yebis_tfxo;
 pub mod texture_fallback;
