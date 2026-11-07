@@ -17,6 +17,7 @@ for name in $(grep -vE '^\s*#' tools/proofs/gui_list.txt); do
         skip "$name" "no saved laps in re/gold/docs/ctelemetry here"; continue
     fi
     f=$out/$(echo "$name" | tr '@#' '__').txt
+    room
     for try in 1 2; do  # a second try only for a log that differs while the pictures agree (load-flaky)
         "$RO" gui --gui "$name" --root "$root" --out "$out/frames" > "$f" 2>&1 < /dev/null
         grep -q '^command log: DIFFERENT' "$f" && grep -q '^pixels: IDENTICAL' "$f" || break
@@ -24,7 +25,7 @@ for name in $(grep -vE '^\s*#' tools/proofs/gui_list.txt); do
     if grep -q '^command log: IDENTICAL' "$f" && grep -q '^pixels: IDENTICAL' "$f" && ! grep -q 'DIFFERENT' "$f"; then
         verdict "$name" IDENTICAL "$(grep -m1 '^sequence ' "$f" | cut -d';' -f1)"
     else
-        verdict "$name" DIFFERENT "$(grep -m1 -E 'DIFFERENT|rror|panic' "$f")"
+        verdict "$name" DIFFERENT "$(why "$f" 'DIFFERENT|rror|panic')"
     fi
     rm -rf "$out/frames"
 done

@@ -41,7 +41,7 @@ find oracle -name '*.mcrec' | sort | while read -r rec; do
     if grep -q 'IDENTICAL' "$out/$name.txt" && ! grep -q 'DIFFERENT' "$out/$name.txt"; then
         verdict "$rec" IDENTICAL
     else
-        verdict "$rec" DIFFERENT "$(grep -m1 -E 'DIFFERENT|error|panic' "$out/$name.txt")"
+        verdict "$rec" DIFFERENT "$(why "$out/$name.txt" 'DIFFERENT|error|panic')"
     fi
 done
 

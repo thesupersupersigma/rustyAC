@@ -22,6 +22,7 @@ grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*
         "$RO" pose-of --tape "$tape" --tape-from "$frame" --pose "$pose" > /dev/null 2>&1 < /dev/null
         args=$(echo "$args" | sed "s#$p#$pose#")
     done
+    room
     for try in 1 2; do  # a second try only for a log that differs while the pictures agree (load-flaky)
         "$RO" compare $args --label "$name" --root "$root" --out "$out/frames" > "$out/$name.txt" 2>&1 < /dev/null
         grep -q '^command log: DIFFERENT' "$out/$name.txt" && grep -q '^pixels: IDENTICAL' "$out/$name.txt" || break
@@ -30,7 +31,7 @@ grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*
     if grep -q '^command log: IDENTICAL' "$out/$name.txt" && grep -q '^pixels: IDENTICAL' "$out/$name.txt" && ! grep -q 'DIFFERENT' "$out/$name.txt"; then
         verdict "$name" IDENTICAL "$detail"
     else
-        verdict "$name" DIFFERENT "$(grep -m1 -E 'DIFFERENT|rror|panic' "$out/$name.txt")"
+        verdict "$name" DIFFERENT "$(why "$out/$name.txt" 'DIFFERENT|rror|panic')"
     fi
     rm -rf "$out/frames"
 done
@@ -53,7 +54,7 @@ for t in "$ac"/content/tracks/*/; do
         if grep -q '^overlays .* IDENTICAL$' "$file" && grep -q '^command log: IDENTICAL' "$file" && grep -q '^pixels: IDENTICAL' "$file"; then
             verdict "$name" IDENTICAL "$(grep -m1 '^overlays' "$file" | sed 's/^overlays [^:]*: //')"
         else
-            verdict "$name" DIFFERENT "$(grep -m1 -E '^overlays|DIFFERENT|rror|panic|failed' "$file")"
+            verdict "$name" DIFFERENT "$(why "$file" '^overlays|DIFFERENT|rror|panic|failed')"
         fi
         rm -rf "$out/frames"
     done

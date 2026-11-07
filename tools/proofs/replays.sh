@@ -27,7 +27,7 @@ for f in "$docs_gold/replay/temp/"*.acreplay; do
     case "$r" in
         *"| IDENTICAL") verdict "replay-file $b" IDENTICAL ;;
         *) if grep -q "game's code crashed" "$out/file.txt"; then skip "replay-file $b" "the game's own loader crashes on it (docs/port/replays.md)"
-           else verdict "replay-file $b" DIFFERENT "$(grep -m1 -E 'DIFFERENT|differ|rror' "$out/file.txt")"; fi ;;
+           else verdict "replay-file $b" DIFFERENT "$(why "$out/file.txt" 'DIFFERENT|differ|rror')"; fi ;;
     esac
 done
 

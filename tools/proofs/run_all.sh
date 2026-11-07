@@ -10,8 +10,10 @@
 #   ... [--rerecord] [--dry-run] [area ...]        record the game's recordings again / only say which
 #                                                  areas would run / only these areas
 # Needs: this repository, the ignored oracle/ and re/gold/ folders, the AC install (read only).
-# Each area writes into target/proofs/<area> and ends with "PROOF <area> cases= identical= different= skipped=";
-# the table below is made from those lines. Exit code 0 only when no area has a difference.
+# Each area writes into target/proofs/<area> and ends with "PROOF <area> cases= identical= different= errors= skipped=";
+# the table below is made from those lines. Exit code 0 only when no area has a difference or an
+# ERROR (a crash, running out of memory or an error exit of either side: run once more, alone, after
+# all lanes, and the new verdict replaces it).
 # The areas run in lanes (below); the shared programs are built first with 8 jobs, then what an
 # area builds for itself with 2 jobs a lane (CARGO_BUILD_JOBS), 8 in all.
 here=$(cd "$(dirname "$0")" && pwd)
@@ -95,23 +97,33 @@ case " $areas " in *" launcher "*)
     cargo build --release --locked --quiet -p rustyac-launcher && built="$built rustyac-launcher" ;;
 esac
 export PROOF_BUILT=$built
+# less than 12 GB of memory free: two lanes joined into one, so fewer areas run at once
+free_kb=$(awk '/^MemFree:/ {print $2}' /proc/meminfo 2> /dev/null)
+if [ "${free_kb:-0}" -lt 12582912 ] && [ "$(echo "$picked_lanes" | grep -c .)" -gt 2 ]; then
+    echo "$((free_kb / 1048576)) GB free: fewer lanes"
+    picked_lanes=$(echo "$picked_lanes" | paste -d' ' - -)
+fi
 n=$(echo "$picked_lanes" | grep -c .)
 export CARGO_BUILD_JOBS=$(( jobs / n > 0 ? jobs / n : 1 ))
 
+# row <area> <PROOF line> <seconds>: the area's row of the table
+row() {
+    if [ -n "$2" ]; then
+        c=$(echo "$2" | sed -E 's/.*cases=([0-9]+).*/\1/'); i=$(echo "$2" | sed -E 's/.*identical=([0-9]+).*/\1/'); d=$(echo "$2" | sed -E 's/.*different=([0-9]+).*/\1/')
+        e=$(echo "$2" | sed -nE 's/.*errors=([0-9]+).*/\1/p'); k=$(echo "$2" | sed -nE 's/.*skipped=([0-9]+).*/\1/p')
+    else
+        c=-; i=-; d="did not run ($(tail -n 1 "$out/$1.log"))"; e=-; k=-
+    fi
+    printf '| %s | %s | %s | %s | %s | %s | %dm%02ds |\n' "$1" "$c" "$i" "$d" "${e:-0}" "${k:-0}" $(($3 / 60)) $(($3 % 60)) | tee "$out/rows/$1.row"
+}
 run_area() {
     a=$1
     start=$(date +%s)
     bash "$here/$a.sh" > "$out/$a.log" 2>&1
     code=$?
     secs=$(( $(date +%s) - start ))
-    line=$(grep '^PROOF ' "$out/$a.log" | tail -n 1)
-    if [ -n "$line" ]; then
-        c=$(echo "$line" | sed -E 's/.*cases=([0-9]+).*/\1/'); i=$(echo "$line" | sed -E 's/.*identical=([0-9]+).*/\1/'); d=$(echo "$line" | sed -E 's/.*different=([0-9]+).*/\1/')
-        k=$(echo "$line" | sed -nE 's/.*skipped=([0-9]+).*/\1/p')
-    else
-        c=-; i=-; d="did not run ($(tail -n 1 "$out/$a.log"))"; k=-
-    fi
-    printf '| %s | %s | %s | %s | %s | %dm%02ds |\n' "$a" "$c" "$i" "$d" "${k:-0}" $((secs / 60)) $((secs % 60)) | tee "$out/rows/$a.row"
+    echo "$secs" > "$out/rows/$a.secs"
+    row "$a" "$(grep '^PROOF ' "$out/$a.log" | tail -n 1)" "$secs"
     [ "$code" = 0 ] || : > "$out/rows/$a.bad"
 }
 rm -f "$out"/rows/*.bad
@@ -122,15 +134,38 @@ $picked_lanes
 LANES
 wait
 
+# the ERROR cases once more, each area's alone (no other lane running): the new verdict replaces the
+# ERROR line; shortcut: a case whose quick key is not its name (launcher, sound's e2e) does not run
+# again and stays ERROR
+for a in $areas; do
+    grep -q '^ERROR ' "$out/$a/cases.log" 2> /dev/null || continue
+    sed -nE 's/^ERROR ([^|]*[^ |]) *(\|.*)?$/\1/p' "$out/$a/cases.log" | sed 's/[][\.*^$+?(){}|/]/\\&/g' > "$out/rows/$a.rerun"
+    echo "running the $(grep -c '' "$out/rows/$a.rerun") ERROR cases of $a again, alone"
+    PROOF_OUT=$out/rerun PROOF_QUICK=1 PROOF_QUICK_RE=$out/rows/$a.rerun bash "$here/$a.sh" > "$out/rerun_$a.log" 2>&1
+    awk 'function key(l) { sub(/^[A-Z]+ /, "", l); sub(/ *[|].*$/, "", l); return l }
+        NR == FNR { if ($0 ~ /^(IDENTICAL|DIFFERENT|ERROR|SKIPPED) /) again[key($0)] = $0; next }
+        /^ERROR / && (key($0) in again) { print again[key($0)] " (run again alone)"; next } { print }' \
+        "$out/rerun/$a/cases.log" "$out/$a/cases.log" > "$out/rows/$a.cases" && mv "$out/rows/$a.cases" "$out/$a/cases.log"
+    l=$out/$a/cases.log
+    i=$(grep -c '^IDENTICAL ' "$l"); d=$(grep -c '^DIFFERENT ' "$l"); e=$(grep -c '^ERROR ' "$l"); k=$(grep -c '^SKIPPED ' "$l")
+    row "$a" "PROOF $a cases=$((i + d + e)) identical=$i different=$d errors=$e skipped=$k" "$(cat "$out/rows/$a.secs")"
+    rm -f "$out/rows/$a.bad"; [ $((d + e)) = 0 ] || : > "$out/rows/$a.bad"
+done
+
 secs=$(( $(date +%s) - start_all ))
 table=$out/table.md
 {
-    echo "| area | cases | identical | different | skipped | time |"
-    echo "|---|---|---|---|---|---|"
+    echo "| area | cases | identical | different | errors | skipped | time |"
+    echo "|---|---|---|---|---|---|---|"
     for a in $areas; do cat "$out/rows/$a.row"; done
-    printf '| all (%s, wall clock) | | | | | %dh%02dm |\n' "$mode" $((secs / 3600)) $((secs % 3600 / 60))
+    printf '| all (%s, wall clock) | | | | | | %dh%02dm |\n' "$mode" $((secs / 3600)) $((secs % 3600 / 60))
 } > "$table"
 echo; cat "$table"
+# every ERROR case (red): a crash, out of memory or an error exit, still there when run alone
+for a in $areas; do grep -h '^ERROR ' "$out/$a/cases.log" 2> /dev/null | sed "s/^ERROR /$a /"; done > "$out/errors.txt"
+n=$(grep -c '' "$out/errors.txt")
+if [ "$n" -gt 0 ]; then printf '\n\033[31m%s cases ERROR\033[0m (%s):\n' "$n" "$out/errors.txt"; sed 's/^/  /' "$out/errors.txt"
+else printf '\n0 cases ERROR\n'; fi
 # every case left out, with its reason (red when there is one: nothing drops out silently)
 for a in $areas; do grep -h '^SKIPPED ' "$out/$a/cases.log" 2> /dev/null; done > "$out/skipped.txt"
 n=$(grep -c '' "$out/skipped.txt")
@@ -141,7 +176,7 @@ else printf '\n0 cases skipped\n'; fi
 mkdir -p "$out/cases/$mode"
 for a in $areas; do
     [ -f "$out/$a/cases.log" ] || continue
-    sed -nE 's/^(IDENTICAL|DIFFERENT|SKIPPED) ([^|]*[^ |]) *(\|.*)?$/\2/p' "$out/$a/cases.log" | sort -u > "$out/cases/$mode/$a.new"
+    sed -nE 's/^(IDENTICAL|DIFFERENT|ERROR|SKIPPED) ([^|]*[^ |]) *(\|.*)?$/\2/p' "$out/$a/cases.log" | sort -u > "$out/cases/$mode/$a.new"
     [ -f "$out/cases/$mode/$a.txt" ] && sort -u -o "$out/cases/$mode/$a.txt" "$out/cases/$mode/$a.txt" && comm -23 "$out/cases/$mode/$a.txt" "$out/cases/$mode/$a.new" |
         grep -vxF -f <(sed -nE "s/^$a ([^|]*[^ |]) *\|.*/\1/p" "$here/retired.txt") | sed "s/^/$a /"
     mv "$out/cases/$mode/$a.new" "$out/cases/$mode/$a.txt"

@@ -2,7 +2,7 @@
 #
 # Shared by the area scripts of tools/proofs (sourced, never run): where things are, how the
 # tools are built, and the tally every area prints last:
-#   PROOF <area> cases=<n> identical=<n> different=<n> skipped=<n>
+#   PROOF <area> cases=<n> identical=<n> different=<n> errors=<n> skipped=<n>
 # An area script sets $area before sourcing this file.
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -68,7 +68,7 @@ AO=tools/audio_oracle/target/release/audio_oracle.exe
 # PROOF_QUICK=1 (run_all.sh --quick): only the cases whose key matches a whole line (a regex) of
 # tools/proofs/quick/<area>.txt run; each area says what its keys look like in that file
 quick_re=$out/quick.re
-grep -vE '^\s*(#|$)' "$repo/tools/proofs/quick/$area.txt" > "$quick_re" 2>/dev/null
+grep -vE '^\s*(#|$)' "${PROOF_QUICK_RE:-$repo/tools/proofs/quick/$area.txt}" > "$quick_re" 2>/dev/null
 # keep <key>: whether a case runs (always, unless this is a quick run and the key is not listed)
 keep() {
     [ -z "$PROOF_QUICK" ] || printf '%s
@@ -164,9 +164,27 @@ build() {
 }
 
 # verdict <case> <IDENTICAL|DIFFERENT> [detail]: one line in the tally
+# A DIFFERENT whose detail is a crash, running out of memory or an error exit (of either side) is an
+# ERROR instead: nothing was compared (run_all.sh runs it once more, alone, at the end)
+crash_re='memory allocation of [0-9]+ bytes failed|0xc0000[0-9a-fA-F]{3}|panicked at|STATUS_[A-Z_]{4,}|stack overflow'
 verdict() {
-    echo "$2 $1${3:+ | $3}" | tee -a "$log"
+    _v=$2
+    if [ "$_v" = DIFFERENT ] && { echo "$3" | grep -qE "$crash_re" ||
+        { ! echo "$3" | grep -qE 'DIFFERENT|differ|IDENTICAL' && echo "$3" | grep -qE '[Ee]rror|panic|failed'; }; }; then _v=ERROR; fi
+    echo "$_v $1${3:+ | $3}" | tee -a "$log"
     now=$(date +%s); printf '%s\t%s\n' $((now - $(cat "$out/last_case"))) "$1" >> "$times"; echo "$now" > "$out/last_case"
+}
+# why <file> <regex>: the line of a tool's output that says why a case failed: its crash first
+why() {
+    grep -m1 -E "$crash_re" "$1" || grep -m1 -E "$2" "$1"
+}
+# room: a heavy case (render, gui) starts only with 6 GB of memory free (another lane's case may be
+# using it); shortcut: gives up waiting after 30 min and starts anyway, the rerun alone catches an ERROR
+room() {
+    for _i in $(seq 180); do
+        [ "$(awk '/^MemFree:/ {print $2}' /proc/meminfo)" -ge 6291456 ] && return
+        sleep 10
+    done
 }
 # skip <case> <reason>: a case that did not run, listed with its reason and counted in the tally
 skip() {
@@ -183,9 +201,10 @@ summary() {
     [ "$(own_print)" = "$own_before" ] || verdict "the default own folder (target/release/cfg and the rest)" DIFFERENT "a run wrote there: proof runs must have --cfg-dir and --documents"
     identical=$(grep -c '^IDENTICAL ' "$log")
     different=$(grep -c '^DIFFERENT ' "$log")
+    errors=$(grep -c '^ERROR ' "$log")
     skipped=$(grep -c '^SKIPPED ' "$log")
-    echo "PROOF $area cases=$((identical + different)) identical=$identical different=$different skipped=$skipped"
-    [ "$different" = 0 ] && [ $((identical + different)) -gt 0 ]
+    echo "PROOF $area cases=$((identical + different + errors)) identical=$identical different=$different errors=$errors skipped=$skipped"
+    [ "$different" = 0 ] && [ "$errors" = 0 ] && [ $((identical + different + errors)) -gt 0 ]
 }
 
 # multi_list <file> <root> <rec> [cache]: one `car_oracle multi` a line ("scenario track cars steps [more]",
@@ -220,7 +239,7 @@ multi_list() {
         if [ "$n" = 3 ] && ! grep -q 'DIFFERENT' "$out/multi.txt"; then
             verdict "$name" IDENTICAL "$(grep -m1 -oE '[0-9]+ steps, [0-9]+ values' "$out/multi.txt")"
         else
-            verdict "$name" DIFFERENT "$(grep -m1 -E 'DIFFERENT|rror|panic' "$out/multi.txt")"
+            verdict "$name" DIFFERENT "$(why "$out/multi.txt" 'DIFFERENT|rror|panic')"
         fi
         cat "$out/multi.txt" >> "$out/multi_all.txt"
         rm -rf "$m_rec/m"

@@ -17,7 +17,7 @@ for name in py_quick py_apps; do
     if grep -q '^command log: IDENTICAL' "$f" && grep -q '^pixels: IDENTICAL' "$f" && ! grep -q 'DIFFERENT' "$f"; then
         verdict "$name" IDENTICAL "$(grep -m1 '^sequence ' "$f" | cut -d';' -f1), $(grep -c '^file .*IDENTICAL' "$f") files"
     else
-        verdict "$name" DIFFERENT "$(grep -m1 -E 'DIFFERENT|rror|panic' "$f")"
+        verdict "$name" DIFFERENT "$(why "$f" 'DIFFERENT|rror|panic')"
     fi
     rm -rf "$out/frames"
 done
