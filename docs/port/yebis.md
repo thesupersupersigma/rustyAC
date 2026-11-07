@@ -1,3 +1,80 @@
+# Task Y2a: YEBIS's settings block and constant buffer, byte for byte
+
+## Resume here
+
+- **Both steps are done** (`crates/rustyac-render/src/yebis_cb.rs`). Next is Task Y2b: the device layer and
+  the 8 draws, proven with log + pixels, then release v0.48.0.
+- `PostEffect::new(ppfilter, video.ini, Camera)` builds the `CPostEffect` fields this chain reads, the way
+  `CameraForwardYebis::setPostProcessing` 0x140025080 fills them. `round_two()` gives what
+  `PFXALPHAOUT_EFFECTRESULT_ALPHA` forces in the second round.
+- `Cbuffer::frame(pe, filmic, used)` returns one frame's 8 uploads (4096 bytes each). `Cbuffer` is YEBIS's
+  global parameter store, so the store carries over between draws and frames. The game's logged frame is the
+  second one from a fresh store.
+- `filmic_table(acs.exe bytes)` reads the 21-float filmic curve from the player's `acs.exe` (file offset
+  0x527cc0) at run time. It is not in the repo.
+- Test: `cargo test -p rustyac-render --lib yebis_cb -- --nocapture`. It skips without an install or without
+  the oracle logs in `re/scratch/taskY2a/runs/` (git-ignored). Those logs come from
+  `RENDER_ORACLE_YEBIS=1 render_oracle run --side ac ... --post` (r23_09, r23_10, r23_16).
+- No version, no tag (v0.48.0 comes with Y2b).
+
+## What it found
+
+1. **All 24 uploads are IDENTICAL** to the game's, byte for byte (3 scenes x 8 draws). The only bytes
+   masked are the sign of draw 8's alpha (see question 2).
+2. **The planted change is caught.** With `[COLOR] SATURATION` 0.95 -> 0.9, draw 4 (the tone map with the
+   colour matrix) differs, and only draw 4.
+3. **What an upload holds.** YEBIS zeroes 4096 bytes, then copies every variable that the draw's vertex and
+   pixel programs mark used (`D3D_SVF_USED`, flag 2), from one global store. The copy runs to the end of
+   the variable's register: the 8-byte `fParam_DepthCastScaleOffset` goes up with its register's .zw, which
+   holds `+0x410`'s other half. Because nothing else is cleared, draws carry over values from earlier
+   draws and from the last frame. For example, the CA's 5-tap weights show up in every later Modulate.
+4. **What the frame's settings come to with `default.ini`:**
+   - exposure is the auto-exposure MAX (0.5)
+   - gamma 1.2
+   - `FUNCTION=-1` becomes the filmic curve (`PFXTM_FILMIC`, id 10)
+   - mapping 32
+   - the colour matrix is Saturation(0.95) x ColorTemperature(6400) x WhiteBalance(6400)
+   - CA 5 samples
+   - the depth factor is (-64000, 0) for near 1, far 1000
+
+   Round two forces exposure, gamma and mapping to 1, the tone map to `LINEARSAT` (id 1) and the colour
+   matrix to the identity.
+5. **The CA source rect is in texture coordinates** (1 x 1), not pixels. Its matrices depend on the
+   aspect ratio and the dispersion only, not the render size.
+
+| Scene | 1 depth | 2 CA | 3 luminance | 4 tone map | 5 depth | 6 CA | 7 tone map | 8 composite |
+|---|---|---|---|---|---|---|---|---|
+| r23_09 spa chase | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL |
+| r23_10 spa chase MSAA 4 | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL |
+| r23_16 monza chase | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL | IDENTICAL |
+
+## What Y2b needs that this didn't do
+
+- **Where the used ranges come from.** The test reads them from the real container with `rustyac-dxbc`.
+  rustyac-dxbc is only an optional or dev dependency of rustyac-render, so the runtime path has to pick
+  one: always link it, or carry the 7 techniques' ranges as a table.
+- **A caller.** Nothing in `post.rs` or the oracle builds a `PostEffect` yet. `Camera` takes near, far,
+  fov and size; the game's values come from `updateYebisParameters` 0x140029e30 (far clamped to [1, 1000]).
+- **The device layer:** the state cache, the target pool, the ring offsets and the draws themselves.
+
+## Not done
+
+- **Settings this frame does not read (later tasks):** glare, DOF, light shafts, heat shimmer, lens
+  distortion, feedback, vignette simulation, HUE and SEPIA, colour temperatures under 4000 K, and tone-map
+  functions other than 0, 1 and filmic. `PostEffect::new` refuses these with an error rather than guessing.
+- **Auto exposure over time (Y3).** Exposure is taken as settled at MAX, as in the oracle's frames (a
+  `shortcut:` comment marks it).
+- **No `run_all.sh`:** no proof area runs this code yet.
+
+## Open questions
+
+1. The CA weights and the XYZ->sRGB matrix are code immediates, written as `f32::from_bits` constants (a few
+   dozen numbers, not code or bytecode). The filmic table is data in `.rdata` and is read at run time. Is that
+   the right line, or should the immediates be read from `acs.exe` too?
+2. Draw 8's alpha is `CRenderGlare+0x108` x 0 with the glare off. That field is never initialised, so the
+   game uploads +0 or -0 by chance (-0 in r23_09, +0 in r23_10 and r23_16). The test masks that one sign bit;
+   rustyAC writes +0. Y2b's pixel compare won't see it, but a strict log compare will.
+
 # Task Y2: YEBIS's shader container read; the frame chain stopped at step 2 (rule 7)
 
 ## Resume here
