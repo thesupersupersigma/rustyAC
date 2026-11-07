@@ -1,0 +1,22 @@
+# Cases skipped on purpose: they cannot run on the game's side, and that is how it should be. They are
+# counted in the table's "expected" column, not red. One a line: <area> <case> | why
+# The six 2026 layouts of the Formula Alpha mod: their surfaces.ini needs Custom Shaders Patch, plain
+# acs.exe refuses it ([SURFACE_0])
+fresh rays ks_barcelona layout_moto_fa_2026 | a CSP-only layout: the game refuses its surfaces.ini ([SURFACE_0])
+fresh rays ks_red_bull_ring layout_gp_fa_2026 | a CSP-only layout: the game refuses its surfaces.ini ([SURFACE_0])
+fresh rays ks_silverstone gp_fa_2026 | a CSP-only layout: the game refuses its surfaces.ini ([SURFACE_0])
+fresh rays montreal montreal_fa_2026 | a CSP-only layout: the game refuses its surfaces.ini ([SURFACE_0])
+fresh rays monza monza_fa_2026 | a CSP-only layout: the game refuses its surfaces.ini ([SURFACE_0])
+fresh rays spa spa_fa_2026 | a CSP-only layout: the game refuses its surfaces.ini ([SURFACE_0])
+# Super's own replays (the kept copy in re/gold/docs/replay), all recorded by his game with Custom
+# Shaders Patch (__AC_SHADERS_PATCH_v in each file): leaderboard snapshots with fewer entries than
+# cars; plain acs.exe's loader reads one entry per car and crashes (0xc0000005), CSP and the port play
+# them (docs/port/replays.md "Your AC replays")
+replays replay-file AC_061026-175153_Q_ks_ferrari_f2004_spa_ | Super's own replay, recorded with CSP: plain acs.exe's loader crashes on its short leaderboard snapshots
+replays replay-file AC_241026-125953_R_ks_ferrari_f2004_spa_ | Super's own replay, recorded with CSP: plain acs.exe's loader crashes on its short leaderboard snapshots
+replays replay-file AC_241026-131941_R_ks_ferrari_f2004_spa_ | Super's own replay, recorded with CSP: plain acs.exe's loader crashes on its short leaderboard snapshots
+replays replay-file AC_311026-094937_O_bmw_z4_gt3_ks_nordschleife_touristenfahrten | Super's own replay, recorded with CSP: plain acs.exe's loader crashes on its short leaderboard snapshots
+replays replay-file AC_311026-163403_O_ks_corvette_c7r_ks_nordschleife_touristenfahrten | Super's own replay, recorded with CSP: plain acs.exe's loader crashes on its short leaderboard snapshots
+# The drive names its setup under re\scratch\task15, deleted since (docs/port/proofs.md): the old
+# exe cannot read it and dumps nothing (browser.sh plays it with the kept copy)
+dumps oracle/game/conditions_spa_setup_launch.ryin | the old exe dumps nothing: its setup file (re\scratch\task15\god_tc4.ini) is gone

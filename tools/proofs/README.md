@@ -7,9 +7,13 @@ Every proof the reports claim reruns from here, one area at a time or all at onc
     bash tools/proofs/run_all.sh [--full]           # every area, every case, against the game's kept results (milestones), ≈ 4.5 h
     bash tools/proofs/run_all.sh --rerecord         # the same, and the game's results made again and held against the kept ones
     bash tools/proofs/run_all.sh gui net            # only these areas (with any of the above)
-    bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different= skipped=)
+    bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different= errors= skipped= expected=)
 
 Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
+A crash, out of memory or error exit is ERROR, not DIFFERENT: run_all.sh runs each ERROR case again
+alone at the end, and with less than 12 GB free it runs half the lanes (lib.sh's `room` holds a heavy
+case until 6 GB are free). A case the game cannot run on purpose is listed in `expected_skips.txt`
+with its reason and counted as an expected skip, not red; any other skip is red.
 `--dry-run` only says which areas would run (and, with `--changed`, why: each changed file and
 the rule of `areas.map` it matched; a file no rule matches runs every area; a `Cargo.toml` or
 `Cargo.lock` whose only change is rustyAC's own version asks for nothing; any other `Cargo.lock`

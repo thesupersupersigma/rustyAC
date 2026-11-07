@@ -2,7 +2,7 @@
 #
 # Shared by the area scripts of tools/proofs (sourced, never run): where things are, how the
 # tools are built, and the tally every area prints last:
-#   PROOF <area> cases=<n> identical=<n> different=<n> errors=<n> skipped=<n>
+#   PROOF <area> cases=<n> identical=<n> different=<n> errors=<n> skipped=<n> expected=<n>
 # An area script sets $area before sourcing this file.
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -186,9 +186,12 @@ room() {
         sleep 10
     done
 }
-# skip <case> <reason>: a case that did not run, listed with its reason and counted in the tally
+# skip <case> <reason>: a case that did not run, listed with its reason and counted in the tally;
+# EXPECTED instead when tools/proofs/expected_skips.txt lists it (a case the game cannot run, on purpose)
 skip() {
-    echo "SKIPPED $1 | $2" | tee -a "$log"
+    why=$(awk -F' [|] ' -v k="$area $1" '$1 == k { print $2; exit }' "$(dirname "$0")/expected_skips.txt" 2> /dev/null)
+    if [ -n "$why" ]; then echo "EXPECTED $1 | $why" | tee -a "$log"
+    else echo "SKIPPED $1 | $2" | tee -a "$log"; fi
     date +%s > "$out/last_case"
 }
 
@@ -203,7 +206,8 @@ summary() {
     different=$(grep -c '^DIFFERENT ' "$log")
     errors=$(grep -c '^ERROR ' "$log")
     skipped=$(grep -c '^SKIPPED ' "$log")
-    echo "PROOF $area cases=$((identical + different + errors)) identical=$identical different=$different errors=$errors skipped=$skipped"
+    expected=$(grep -c '^EXPECTED ' "$log")
+    echo "PROOF $area cases=$((identical + different + errors)) identical=$identical different=$different errors=$errors skipped=$skipped expected=$expected"
     [ "$different" = 0 ] && [ "$errors" = 0 ] && [ $((identical + different + errors)) -gt 0 ]
 }
 
