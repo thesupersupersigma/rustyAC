@@ -47,7 +47,7 @@ that is not mentioned in some document.
 | Library | How it is linked | Size in the image | Used by |
 |---|---|---|---|
 | ODE 0.13.1 (rigid bodies, collision, OPCODE) | static (`ode_single.lib`) | 609 functions / 343 k | car physics (`docs/map/physics_engine.md`) |
-| YEBIS 2 (post-processing) | static (`ppfx_dx11_x64.lib`), no source | 680 k | renderer |
+| YEBIS 2 (post-processing) | static (`ppfx_dx11_x64.lib`), no source | 680 k | renderer (map: [`yebis.md`](yebis.md)) |
 | FW1FontWrapper (text on D3D11) | static | 42 k | UI, renderer |
 | Fanatec SDK | static | 51 k | input (wheel LEDs and display only) |
 | LibOVR (Oculus) | static, small stub | 8 k | renderer (VR) |

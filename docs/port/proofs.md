@@ -672,8 +672,8 @@ path: they say where the work was done, not where it is now.
 | renderer_leftovers.md:466 | 22c | task22c/ | reader briefs (seven) | no | no | historical |
 | renderer_leftovers.md:479 | 22c | task22c/batch.sh ("ideal" filter) | script | no | yes | rerun (replaced) |
 | renderer_leftovers.md:487 | 22c | `O=<exe copy> ROOT=re/scratch/render_oracle/root2 sh task22c/batch22.… | env contract of the batch scripts: `O` = a private copy of render_oracle.exe, `ROOT` = `--root` | no | yes | rerun (replaced) |
-| docs/map/yebis.md:266 | 23 | `yebis_3_params.md`, `yebis_2_frame.md` s9 | notes | no | no | historical |
-| docs/map/yebis.md:6 | 23 | `re/scratch/task23/` (yebis_1_compilands.md ... reader briefs "with t… | notes + extraction scripts | no | no | historical |
+| docs/atlas/yebis.md:266 | 23 | `yebis_3_params.md`, `yebis_2_frame.md` s9 | notes | no | no | historical |
+| docs/atlas/yebis.md:6 | 23 | `re/scratch/task23/` (yebis_1_compilands.md ... reader briefs "with t… | notes + extraction scripts | no | no | historical |
 | postfx.md:10 | 23 | task23/batch_msaa.sh, batch_post.sh | scripts: 8 + 16 = 24 seqs, ~15 min | no | yes | rerun (replaced) |
 | postfx.md:11 | 23 | task23/batch20.sh, 21, 22, 22c | scripts: older batches on the Task 23 oracle | no | yes | rerun (replaced) |
 | postfx.md:14 | 23 | task23/ (spec_*.md, yebis_*.md, p_*.py, out*/, spk/, fps/) | briefs, patch scripts, outputs | no | no | historical |

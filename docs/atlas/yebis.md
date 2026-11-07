@@ -143,7 +143,7 @@ file, section 5), `initRenderTargets` 0x140029a90 and `initPostProcessing` 0x140
  8  FXAA=1: the FXAA target into slot 5, one full-screen quad with ksFXAA into the back buffer
 ```
 
-Inside `ApplyEffects` (library code; this is the order of the call sites in
+Inside `ApplyEffects` (library code; this is the order of the call sites in (Task Y1: confirmed by the call index, `re_query.py callees 0x1403b5f40`; what one frame really draws is section 8)
 `EndPostEffectScene_InternalProcess` 0x1403b5f40, which is 9,472 bytes; which branch runs under which
 setting is **not verified**): save the device's state; resample the scene into the effect buffer; depth
 factor; [ambient occlusion: never on]; [YEBIS' motion blur: never on]; heat-shimmer particles; depth of field
@@ -270,7 +270,7 @@ plan below.
 The exact conversion of every key (defaults, units, which member of the block) is in the brief
 `re/scratch/task23/yebis_3_params.md` and in `yebis_2_frame.md` section 9.
 
-## 6. A port plan for Task 23b
+## 6. A port plan for Task 23b (superseded: the Y2... plan is in `docs/port/yebis.md`, Task Y1)
 
 **What a port needs, in the order that can be proven piece by piece:**
 
@@ -331,3 +331,54 @@ written then, and steps 1 and 2 are needed for it anyway.
   two patches out and compares against the real thing.
 - The game's side of the oracle runs every frame at 1/60 s and on WARP, so YEBIS' time-dependent parts
   (exposure delay, feedback, afterimage) get the same inputs on both sides.
+
+## 8. What one frame really draws (Task Y1, measured)
+
+Measured, not read: `RENDER_ORACLE_YEBIS=1 render_oracle run --side ac --track spa --view chase --post`
+keeps the real YEBIS in the game's side of the oracle (without the variable the two patches of section 7
+stay). YEBIS goes through the same logged device context as the game (`GetImmediateContext` is wrapped), so
+every one of its Direct3D calls is in `<frame>.ac.gpulog`. Profile: the Task 20 video.ini plus
+`[POST_PROCESS] ENABLED=1 QUALITY=0 FILTER=default GLARE=0`, 1280x720, WARP. Raw logs (git-ignored):
+`re/scratch/taskY1/y1/` (YEBIS) and `y0/` (stand-in), summary script `re/scratch/taskY1/sum.awk`.
+
+**Entry points.** Desktop: `CameraForwardYebis::applyPostProcessing` 0x140025c30 -> `ApplyEffects(0)`
+0x14039b230 -> `CPostEffect::ApplyEffects` 0x1403c5cd0 -> `BeginPostEffectScene` 0x1403c5a50 (resolve, frame
+buffer) and `EndPostEffectScene` 0x1403c5c60 -> `EndPostEffectScene_Process` 0x1403b84d0 ->
+`EndPostEffectScene_InternalProcess` 0x1403b5f40. VR and triple screen: `StereoCameraForward::renderYebis`
+0x140213b10 -> `YebisPP::applyPostProcessing` 0x14002bb70 (`YebisPP` 0x6a0 bytes: `initPP` 0x140030540,
+`updatePP` 0x14002c270, `updatePPCameraValues` 0x14002bcc0, `loadPPSet` 0x14002cc80, `readPPSet` 0x14002cd60,
+a near copy of `CameraForwardYebis::readPPSetOptions`). Same library, same context, one call per eye.
+
+**Render targets.** YEBIS makes its own targets typeless and views them typed: R16G16B16A16_TYPELESS
+(format 9, viewed as 10 = R16G16B16A16_FLOAT), R8G8B8A8_TYPELESS (27, viewed as 28), R32_TYPELESS (39,
+viewed as 41 = R32_FLOAT, the resolved depth), R24G8_TYPELESS (44, depth). All are 1280x720 with
+`QUALITY=0` except one 128x64 RGBA8 target. **This contradicts section 3** ("effect buffer = min(width,
+640) at QUALITY 0"): at 1280 wide the two agree only if the rule is read the other way. Open for Y2.
+
+**Constant buffers and geometry.** One 4096-byte dynamic constant buffer (Map/Unmap per draw, bound to VS
+and PS slot 0 over the game's B224); one 192-byte dynamic vertex buffer per draw (a 3-vertex triangle strip,
+stride 16 or 48: corners plus texture coordinates / view rays), an 8-byte index buffer, topology 5. The game's
+own constant buffers stay bound in slots 1-12.
+
+**The draws** (8 in the frame; the stand-in's frame has 1, so 7 more DrawIndexed):
+
+| # | Target | Viewport | Shaders (log hash) | Reads | Interpretation |
+|---|---|---|---|---|---|
+| 1 | effect RGBA16F | 1280x720 | vs 20c40342 / ps e63f5c5e | depth R32F, scene RGBA16F | depth factor / resample into the effect buffer |
+| 2 | scene RGBA16F (+depth) | 1280x720 | vs f2401e29 / ps e2def517 | effect buffer | written back to the scene target |
+| 3 | 128x64 RGBA8 | 128x12 at y=12 | vs b3244b52 / ps d2fdb938 | scene, two 1x1 RGBA8 | luminance measurement (auto exposure) |
+| 4 | 1280x720 RGBA8 | full | vs b3244b52 / ps b8549c36 | scene, 1x1, 1x1, 4x4 RGBA8 | tone map (4x4 = dither/noise) |
+| 5 | effect RGBA16F | full | vs 5c593d0d / ps a7cdd855 | depth, scene | as 1, other variant |
+| 6 | scene RGBA16F (+depth) | full | vs f2401e29 / ps e2def517 | effect buffer | as 2 |
+| 7 | 1280x720 RGBA8 | full | vs b3244b52 / ps 30316e88 | as 4 | tone map, other variant |
+| 8 | 1280x720 RGBA8 | full | vs 2e98bed6 / ps 1200229c | two 1280x720 RGBA8 + four 1x1 | final combine into the destination |
+
+Six distinct pixel shaders and four vertex shaders out of the container's 2,649 programs. Which `tech_*`
+names they are: match the logged bytecode hashes against the container (Y2's first job).
+
+**Open:** why two rounds (1-4 and 5-8) in one frame (a feedback / temporal tone map round, or the
+luminance read-back's frame-late round); what the two 1x1 textures hold (exposure history is the guess);
+the QUALITY rule above. **Settings that drive it** are section 5; the apps that change them at run time:
+`PostProcessFilterSelector` 0x140329360 (picks `FILTER`, reloads the set), the HDR / exposure apps and the
+camera editor's per-view exposure (`docs/port/content_tools.md`), photo mode's exposure, the cinematic
+camera's blur switch (+0x7a0, `docs/port/cameras.md`).

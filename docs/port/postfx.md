@@ -15,7 +15,7 @@ State after the last commit (kept up to date with every commit):
 - To pick the work up again: section 11 has the checks. `RENDER_ONLY='r23_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task23/batch_msaa.sh`, deleted) and
   `RENDER_ONLY='r23_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task23/batch_post.sh`, deleted) run the 24 new proof sequences (about 15 minutes); `batch20.sh`,
   `batch21.sh`, `batch22.sh`, `batch22c.sh` in the same folder run the older ones with this task's oracle.
-- Task 23b (YEBIS itself) starts from `docs/map/yebis.md`, section 6 (the plan) and section 7 (what is ready).
+- Task 23b (YEBIS itself) starts from `docs/atlas/yebis.md`, section 6 (the plan) and section 7 (what is ready).
 - On disk, git-ignored: `re/scratch/task23/` (the eight reader briefs `spec_*.md` and `yebis_*.md` with their
   listings and scripts, the patch scripts `p_*.py`, the batches and their results, oracle output in `out*/`,
   the sparkle pictures in `spk/`, the frame-rate logs in `fps/`).
@@ -31,7 +31,7 @@ State after the last commit (kept up to date with every commit):
   from `video.ini`).
 - **The start lights' six lamps at the top of the screen** are drawn, as the game draws them in its HUD pass.
 - **`--graphics max` no longer says "Task 23"** for anything: it draws 4 samples, FXAA and motion blur.
-- **A map of YEBIS** (the post-processing library) with a plan for porting it: `docs/map/yebis.md`.
+- **A map of YEBIS** (the post-processing library) with a plan for porting it: `docs/atlas/yebis.md`.
 
 **Three things the game's code turned out to say, which change what "ported" means here.**
 
@@ -462,7 +462,7 @@ this PC (AMD Radeon Pro 5500M), with this PC's `video.ini` of the moment plus th
 
 ## 8. The YEBIS plan in short
 
-The whole map is `docs/map/yebis.md`.
+The whole map is `docs/atlas/yebis.md`.
 
 - YEBIS is 680 kB of code in 2,272 functions (Kunos' whole renderer: 479 kB). The PDB has its function names
   and nothing else. The game uses a part of it: tone mapping with automatic exposure, glare, light shafts,

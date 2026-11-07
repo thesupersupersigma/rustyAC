@@ -580,7 +580,7 @@ What the hooked classes expose (verified by name only, the Lua glue is in `lua.m
 **XL** as a whole (it is a second render pipeline), **M** for the seams alone, **S** for the plain hook layer.
 `[interp]`
 
-* **Reusable** (read `docs/atlas/renderer.md`, `docs/port/renderer_core.md`, `docs/port/postfx.md`, `docs/map/yebis.md`):
+* **Reusable** (read `docs/atlas/renderer.md`, `docs/port/renderer_core.md`, `docs/port/postfx.md`, `docs/atlas/yebis.md`):
   rustyAC already has Rust twins of every hooked class (`crates/rustyac-render`: `kgl.rs`, `shader.rs`, `material.rs`,
   `scene.rs`, `camera.rs`, `forward.rs`, `cubemap.rs`, `sky.rs`, `post.rs`, `fw1.rs`, `particles.rs`, `texture.rs`,
   `gpulog.rs`) with a draw-for-draw oracle (the command log compares every `UpdateSubresource` byte). The per-class
@@ -664,7 +664,7 @@ x4 (`getTextureFromBuffer` 70%), `KN5IO` small x4 + `loadMaterialsBinary` + `loa
   extra_fx,data_gbuffer,general,yebisest}.ini`; `extension/shaders.zip` (placeholder), `extension/vao-patches*`;
   `Documents/Assetto Corsa/logs/custom_shaders_patch.log` lines 5, 37, 79, 119, 910-913;
   `cfg/video.ini`.
-* `docs/atlas/renderer.md`, `docs/port/renderer_core.md`, `docs/port/postfx.md`, `docs/map/yebis.md`;
+* `docs/atlas/renderer.md`, `docs/port/renderer_core.md`, `docs/port/postfx.md`, `docs/atlas/yebis.md`;
   `attach.md` 1.7, 1.8, 2; `lua.md` 3.5 / 3.7; `acs_index/functions.tsv` for the kgl VAs.
 
 ## Decompile requests

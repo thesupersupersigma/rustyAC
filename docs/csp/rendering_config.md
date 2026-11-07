@@ -576,7 +576,7 @@ All of this lives in per-car and per-track config sections `[ini][lua]`:
   saturation, brightness, contrast, sepia, colour temperature, white balance, 15 tonemap fields, 10 auto-exposure
   fields, vignette, chromatic aberration, diaphragm, feedback, 40 glare / bloom / star / ghost fields, 14 DOF fields,
   17 god-ray fields, lens distortion, `filmicContrast`, `customTonemappi...`), with 45 `ac.getPp*` / `ac.setPp*`
-  accessors. `[sdk]` Cross-ref `docs/map/yebis.md` (rustyAC's own YEBIS map).
+  accessors. `[sdk]` Cross-ref `docs/atlas/yebis.md` (rustyAC's own YEBIS map).
 - **Tone mapping.** `ac.TonemapFunction` 0..16 (Linear, LinearClamped, Sensitometric, Reinhard, ReinhardLum, Log,
   LogLum, ACES, Uchimura, RomBinDaHouse, Lottes, Uncharted, Unreal, Filmic, ReinhardWp, Juicy, AgX); 10 alternative
   shaders `accAltTonemapping_ps_{aces,agx,filmic,gt,juicy,lottes,rbdh,unc2,unreal,wplb}`; custom code via

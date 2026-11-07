@@ -744,7 +744,7 @@ Collected from the steps above, plus step 7:
 
 ## Open questions
 
-- The exposure multiplier's start value: rustyAC assumes 1; docs/map/yebis.md says the game takes
+- The exposure multiplier's start value: rustyAC assumes 1; docs/atlas/yebis.md says the game takes
   it from Documents `cfg/exposure.ini [EXPOSURE] VALUE` (not checked against the game).
 - The whole-car compare with `--ai-record` after the first lap: expected to agree again once the
   kept lap is the live line (item 1), not proven.
