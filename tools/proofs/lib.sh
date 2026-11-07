@@ -170,13 +170,14 @@ crash_re='memory allocation of [0-9]+ bytes failed|0xc0000[0-9a-fA-F]{3}|panicke
 verdict() {
     _v=$2
     if [ "$_v" = DIFFERENT ] && { echo "$3" | grep -qE "$crash_re" ||
-        { ! echo "$3" | grep -qE 'DIFFERENT|differ|IDENTICAL' && echo "$3" | grep -qE '[Ee]rror|panic|failed'; }; }; then _v=ERROR; fi
+        { ! echo "$3" | grep -qE 'DIFFERENT|differ|IDENTICAL' && echo "$3" | grep -qE '[Ee]rror|panic|failed|^no result'; }; }; then _v=ERROR; fi
     echo "$_v $1${3:+ | $3}" | tee -a "$log"
     now=$(date +%s); printf '%s\t%s\n' $((now - $(cat "$out/last_case"))) "$1" >> "$times"; echo "$now" > "$out/last_case"
 }
-# why <file> <regex>: the line of a tool's output that says why a case failed: its crash first
+# why <file> <regex>: the line of a tool's output that says why a case failed: its crash first; an
+# empty or cut-off output (the tool was killed) says "no result", which verdict counts as an ERROR
 why() {
-    grep -m1 -E "$crash_re" "$1" || grep -m1 -E "$2" "$1"
+    grep -m1 -E "$crash_re" "$1" || grep -m1 -E "$2" "$1" || echo "no result: the tool's output ends without a verdict (killed?)"
 }
 # room: a heavy case (render, gui) starts only with 6 GB of memory free (another lane's case may be
 # using it); shortcut: gives up waiting after 30 min and starts anyway, the rerun alone catches an ERROR
