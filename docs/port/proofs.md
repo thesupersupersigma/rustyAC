@@ -16,6 +16,46 @@ the ignored `oracle/` (saved game recordings of Tasks 9 to 34, as they always we
 `tools/proofs/README.md` says what each area compares and needs; `re/gold/README.md` how each
 file under `re/gold/` was made and how to make it again.
 
+## Milestone M2: every proof on v0.47.3, and its clean-up (v0.47.4)
+
+The M2 run on v0.47.3 (every area, every case, 7 h 27 min) found 1,735 cases: 1 DIFFERENT, 22
+skipped, 0 vanished. Task M2b cleaned up what it found:
+
+- **ERROR is not DIFFERENT.** A crash, out of memory, error exit, or a tool output that is empty or
+  cut off (the tool was killed) is an ERROR, in its own red column. `run_all.sh` runs every ERROR case
+  again, alone, at the end. With less than 12 GB free it runs fewer lanes, and a heavy case (render, gui)
+  waits for 6 GB free. M2's one DIFFERENT, `render r23_18`, was not a port bug: alone it is IDENTICAL
+  (3015 calls and 578 draws on both sides).
+- **Expected skips.** `tools/proofs/expected_skips.txt` lists the cases the game cannot run, on
+  purpose, with the reason. They count in their own column and are not red. There are 12: 6 `fresh rays`
+  on the Formula Alpha 2026 layouts (their surfaces need CSP), 5 `replays replay-file` of replays CSP
+  recorded, and `dumps conditions_spa_setup_launch.ryin` (its setup file is gone).
+- **The 22 skips of M2**, now: 12 expected skips, 9 fixed, 1 retired.
+  - Fixed: the 6 `oracle/t28/*` race recordings (cut, race6, race_short, timed, weekend,
+    weekend_dbg), recorded again against today's referee. Also the 2 version-6 AI-line recordings
+    (`oracle/t27/v6`, `oracle/t27f/v6_line`), recorded again with a kept root: `re/gold/roots/t27_v6`
+    holds the line that multi-check reads.
+  - Fixed: `game-replay t18_trento-bondone__ks_ferrari_f2004/trk_run`. The oracle moves the car 250 m
+    before the finish gate. Input files now carry that teleport (`teleport=<step> <invalidate>
+    <position> <rotation>` in the header, applied by `Sim` at the step), so rustyac.exe replays it at 100 %.
+  - Retired: `oracle/t34/mp_fault/pit_mouse`, a deliberate fault of Task 34 (`retired.txt`).
+
+| run | area | cases | identical | different | errors | skipped | expected skips | time |
+|---|---|---|---|---|---|---|---|---|
+| quick | physics | 9 | 9 | 0 | 0 | 0 | 0 | 4m16s |
+| quick | fresh | 62 | 62 | 0 | 0 | 0 | 0 | 21m58s |
+| quick | replays | 6 | 6 | 0 | 0 | 0 | 0 | 5m34s |
+| quick | render | 14 | 14 | 0 | 0 | 0 | 0 | 10m03s |
+| quick | dumps | 6 | 6 | 0 | 0 | 0 | 0 | 10m11s |
+| alone | physics: the 8 re-recorded | 8 | 8 | 0 | 0 | 0 | 0 | |
+| alone | fresh: trento-bondone survey (trk_run and its 2 neighbours, recorded and replayed) | 6 | 6 | 0 | 0 | 0 | 0 | |
+| alone | render: r23_18, r23_21 | 2 | 2 | 0 | 0 | 0 | 0 | |
+
+The quick run took 27 min of wall clock: 0 ERROR, 0 vanished, 0 red skips. No full run was done:
+M2 had already run every case on v0.47.3. The two v6 recordings were ERROR in the first run alone
+because their root had been removed. After they were recorded again with the kept root, both are
+IDENTICAL.
+
 ## Task 46c: proof runs start clean (v0.46.2)
 
 A proof's game run used to read and write the folders a player's rustyac.exe uses: `target/release/cfg`
