@@ -27,16 +27,8 @@ done
 find oracle -name '*.mcrec' | sort | while read -r rec; do
     keep "$rec" || continue
     name=$(echo "$rec" | tr '/' '_')
-    # not proofs, each listed as skipped: recordings the game made while the port's referee stand-in was
-    # still wrong (Task 28's, a deliberate fault of Task 34), and Task 27's version-6 line, whose
-    # made-up file was lost (fresh.sh records it again). A fixed list, not the recording's own
-    # result.txt: multi-check writes that file, so one bad run would hide the recording for good.
-    case "$rec" in
-        oracle/t28/cut/*|oracle/t28/race6/*|oracle/t28/race_short/*|oracle/t28/timed/*|oracle/t28/weekend/*|oracle/t28/weekend_dbg/*)
-            skip "$rec" "recorded during Task 28 against the old referee stand-in (DIFFERENT at step 2, world.referee.lo)"; continue ;;
-        oracle/t34/mp_fault/*) skip "$rec" "a deliberate fault of Task 34 (development recording)"; continue ;;
-        */v6/*|*/v6_line/*) skip "$rec" "its AI line file is lost; fresh.sh records it again"; continue ;;
-    esac
+    # a deliberate fault of Task 34, not a proof (retired.txt)
+    case "$rec" in oracle/t34/mp_fault/*) continue ;; esac
     "$CO" multi-check "$rec" --threads 0,1,8 > "$out/$name.txt" 2>&1
     if grep -q 'IDENTICAL' "$out/$name.txt" && ! grep -q 'DIFFERENT' "$out/$name.txt"; then
         verdict "$rec" IDENTICAL

@@ -2058,6 +2058,13 @@ impl GameSim {
             self.pit_schedule.pop_front();
             self.pit_job(job);
         }
+        // the oracle's teleports of the file (Car::forceRotation, Car::forcePosition before the step)
+        for &(_, invalidate, position, tail) in self.setup.teleports.iter().filter(|(step, ..)| *step == self.steps) {
+            self.car.car.queue(move |car| {
+                car.force_rotation(&Vec3f::new(tail[0], tail[1], tail[2]));
+                car.force_position_with(&Vec3f::new(position[0], position[1], position[2]), invalidate);
+            });
+        }
         for job in std::mem::take(&mut self.setup_jobs) {
             if let SetupJob::SetFfUpgrade { which, value } = job {
                 self.car.device.source.set_ff_upgrade(which, value);

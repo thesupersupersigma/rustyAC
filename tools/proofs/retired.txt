@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Cases retired on purpose: run_all.sh does not print them as vanished. One a line:
 #   <area> <case> | why it was retired
+physics oracle/t34/mp_fault/pit_mouse.mcrec | a deliberate fault of Task 34 (a development recording), not a proof

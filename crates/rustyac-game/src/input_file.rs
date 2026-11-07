@@ -595,6 +595,9 @@ pub struct SimSetup {
     /// Task 43: the pit strategy page's edits and the mouse menu's clicks, each with the step
     /// it is done before (the file `<input>.pit`)
     pub pit_jobs: Vec<(u64, PitJob)>,
+    /// The oracle's teleports (`Car::forceRotation` then `Car::forcePosition`), each with the step
+    /// it is done before: (step, invalidate the lap, position, tail). Header lines `teleport=`.
+    pub teleports: Vec<(u64, bool, [f32; 3], [f32; 3])>,
     pub oracle: Option<OracleSetup>,
     /// The track: a folder, or a name under the game's `content/tracks`. Empty: the endless
     /// flat road.
@@ -649,6 +652,7 @@ impl Default for SimSetup {
             ai_record: false,
             setup_jobs: Vec::new(),
             pit_jobs: Vec::new(),
+            teleports: Vec::new(),
             oracle: None,
             track: String::new(),
             layout: String::new(),
@@ -756,6 +760,9 @@ impl SimSetup {
         }
         if self.ai_record {
             put("ai_record", "1".to_string());
+        }
+        for (step, invalidate, position, tail) in &self.teleports {
+            put("teleport", format!("{step} {} {} {}", *invalidate as u32, hex3(position), hex3(tail)));
         }
         put("ff_gain", format!("{:?}", self.ff_gain));
         // the session's additions, each only when it is not the default (older files have none)
@@ -951,6 +958,12 @@ impl SimSetup {
                 "auto_shifter" => setup.auto_shifter = flag(),
                 "auto_blip" => setup.auto_blip = Some(flag()),
                 "session_starts_at_spawn" => setup.session_starts_at_spawn = flag(),
+                "teleport" => {
+                    let words: Vec<&str> = value.split(' ').collect();
+                    let [step, invalidate, position, tail] = words[..] else { return Err(format!("teleport: {value:?}")) };
+                    let step = step.parse().map_err(|e| format!("teleport: {e}"))?;
+                    setup.teleports.push((step, invalidate != "0", parse_hex3(position)?, parse_hex3(tail)?));
+                }
                 "esc_start" => setup.esc_start = flag(),
                 "drs_zones" => setup.drs_zones = flag(),
                 "ai_record" => setup.ai_record = flag(),
@@ -1399,6 +1412,15 @@ mod setup_jobs_tests {
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n5 tc 1\n4 tc 1\n").is_err());
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n-1 tc 1\n").is_err());
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n1 turbo 7fc00000\n").is_err());
+    }
+
+    /// The oracle's teleports come back from the header as they went in, floats to the bit.
+    #[test]
+    fn teleports_round_trip() {
+        let setup = SimSetup { teleports: vec![(0, false, [1.5, -0.0, 3.25], [0.0, 0.0, -1.0]), (18449, true, [-12.75, 400.5, f32::from_bits(0x3dcc_cccd)], [0.6, 0.0, 0.8])], ..SimSetup::default() };
+        let (back, _) = SimSetup::parse_header(setup.header().as_bytes()).unwrap();
+        assert_eq!(format!("{:?}", back.teleports), format!("{:?}", setup.teleports));
+        assert!(SimSetup::parse_header(format!("{MAGIC}\nteleport=1 0 00000000\nend\n").as_bytes()).is_err());
     }
 
     #[test]

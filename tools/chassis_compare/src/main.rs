@@ -1735,8 +1735,21 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
 
 /// Does the recording's script ask anything of the car besides the device's controls (locks,
 /// a gentle stop, penalties)? An input file of the game has no such commands.
+/// The recording's teleports as the input file holds them: (step, invalidate the lap, position, tail).
+fn teleports(recording: &Recording) -> Vec<(u64, bool, [f32; 3], [f32; 3])> {
+    if !recording.has("script.teleport") {
+        return Vec::new();
+    }
+    let vector = |step: usize, name: &str| ["x", "y", "z"].map(|axis| recording.f(step, &format!("{name}.{axis}")));
+    (0..recording.steps.len())
+        .filter(|&step| matches!(recording.i(step, "script.teleport"), 1 | 2))
+        .map(|step| (step as u64, recording.i(step, "script.teleport") == 2, vector(step, "script.teleportPosition"), vector(step, "script.teleportTail")))
+        .collect()
+}
+
 fn has_jobs(recording: &Recording) -> bool {
-    if recording.has("script.teleport") && (0..recording.steps.len()).any(|step| recording.i(step, "script.teleport") != 0) {
+    // a teleport goes into the input file (`teleport=`), except a car put down in any attitude
+    if recording.has("script.teleport") && (0..recording.steps.len()).any(|step| recording.i(step, "script.teleport") == 3) {
         return true;
     }
     recording.has("script.lockMs")
@@ -1823,6 +1836,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             esc_start: false,
             setup_jobs: Vec::new(),
             pit_jobs: Vec::new(),
+            teleports: teleports(&recording),
             drs_zones: true,
             ff_gain: 1.0,
             track: String::new(),
