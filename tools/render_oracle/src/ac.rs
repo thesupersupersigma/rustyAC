@@ -921,12 +921,15 @@ impl Game {
         let camera = if profile.post || profile.triple {
             // the game's own post-processing camera, without YEBIS: its start-up returns at once
             // (g_pPfxContext stays null, so every YEBIS call of the frame is skipped by the game's
-            // own tests) and applyPostProcessing is the stand-in the port draws too
-            acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);
-            let mut jump = vec![0x48u8, 0xb8];
-            jump.extend_from_slice(&(stand_in_apply_post_processing as *const () as usize).to_le_bytes());
-            jump.extend_from_slice(&[0xff, 0xe0]);
-            acs.patch(acs.va(VA_YEBIS_APPLY_POST_PROCESSING), &jump);
+            // own tests) and applyPostProcessing is the stand-in the port draws too;
+            // RENDER_ORACLE_YEBIS=1 keeps the real YEBIS (Task Y1: its D3D calls land in the log)
+            if std::env::var_os("RENDER_ORACLE_YEBIS").is_none() {
+                acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);
+                let mut jump = vec![0x48u8, 0xb8];
+                jump.extend_from_slice(&(stand_in_apply_post_processing as *const () as usize).to_le_bytes());
+                jump.extend_from_slice(&[0xff, 0xe0]);
+                acs.patch(acs.va(VA_YEBIS_APPLY_POST_PROCESSING), &jump);
+            }
             let get_shader: extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GRAPHICS_GET_SHADER));
             STAND_IN.store(Box::into_raw(Box::new(StandIn {
                 graphics: self.graphics,
