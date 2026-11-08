@@ -412,7 +412,7 @@ target/release/rustyac.exe --car ks_ferrari_f2004 --track monza --no-race-ini --
 | Option | What it does |
 |---|---|
 | `--aa <1\|2\|4\|8>` | samples per pixel (`[VIDEO] AASAMPLES`) |
-| `--post <0\|1>` | the post-processing frame (`[POST_PROCESS] ENABLED`), without YEBIS |
+| `--post <0\|1>` | the post-processing frame (`[POST_PROCESS] ENABLED`), with YEBIS's filter and tone mapping from acs.exe (Task Y2b) |
 | `--fxaa <0\|1>` | AC's FXAA pass (`[POST_PROCESS] FXAA`); 1 switches the post-processing frame on |
 | `--motion-blur <0..12>` | AC's motion blur (`[EFFECTS] MOTION_BLUR`); above 0 it switches the post-processing frame on |
 | `--hdr-levels` | with the post-processing frame: the engine's HDR light levels (washed out until YEBIS is there) |

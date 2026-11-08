@@ -104,6 +104,9 @@ does something else on purpose, each with its reason and the report that has the
   is not repeatable). (ai.md)
 - Online: the pong carries the physics clock, not the wall clock (sessions replay from tapes).
   (multiplayer.md)
+- YEBIS's composite (draw 8) uploads an alpha weight of zero. The game's is -0 while its
+  `CRenderGlare`+0x108 is set and rustyAC's is +0. The oracle's game side zeroes that field, so
+  the logs match with no ignored bit. The picture is the same either way. (yebis.md, Task Y2b)
 
 ## Online
 

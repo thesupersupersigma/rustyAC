@@ -1,3 +1,62 @@
+# Task Y2b: YEBIS's 8 draws on the desktop, proven against the game
+
+## Resume here
+
+- **Done, released as v0.48.0.** `crates/rustyac-render/src/yebis.rs` draws YEBIS's frame (both rounds and
+  the composite) on Direct3D 11. `CameraForwardYebis::start_yebis` (`post.rs`) reads it from the player's
+  `acs.exe` and the ppfilter named in video.ini. `rustyac.exe --post 1` and `render_oracle --post` with
+  `RENDER_ORACLE_YEBIS=1` use it. Without `start_yebis` (wgpu, the browser, the proofs' default rows) the
+  plain-copy stand-in stays.
+- Next is **Task Y2c** (leftovers below), then Y3 (eye adaptation) and the rest of the Y1 plan.
+- Check one scene: `bash re/scratch/taskY2b/cmp.sh r23_09 out --track spa --view chase --post` (also
+  r23_10 with `--aa 4`, r23_16 with `--track monza --ldr-levels`). It writes `re/scratch/taskY2b/out.txt`.
+- Test: `cargo test --locked -p rustyac-render --lib yebis`. The uploads test reads the game logs in
+  `re/scratch/taskY2b/runs/` (git-ignored) and skips without them.
+
+## What it found
+
+1. **All three scenes are IDENTICAL**: call log with no ignored bit, and pixels.
+2. **The planted change is caught.** A tone-map vignette 1% larger makes r23_09 DIFFERENT.
+3. **YEBIS reads two surfaces in turn.** Its render-texture array (`CPostEffect`+0x100) holds 2 effect
+   surfaces. A draw never reads the surface it writes, because Direct3D 11 unbinds such a read and it
+   returns 0. Each round tone-maps into its own 8-bit target. The composite reads round 1's colour (slots
+   0-2) and round 2's alpha (slots 3-5).
+4. **The vertex ring** is `CTextureUtil`'s 768 dynamic buffers of 192 bytes. A draw goes to the next
+   buffer when it would reach byte 192. Only the wrap past buffer 767 is a real discard; every other map is
+   `NO_OVERWRITE`. This is why each wrap in the log shows a buffer of zeros plus the new vertices.
+5. **The dither** is `CTextureUtil::InitializeDevice` 0x1403e6890's 4x4 Bayer texture. **The noise** is
+   four linear congruential states (seeds 1, 0x3391, 0x61e9b, 0xbf1), stepped once a frame from the
+   second frame on; both tone maps of a frame use the same values.
+6. **The screen after start.** `initPostProcessing` leaves the back buffer bound without depth, outside
+   kgl's cache. The port does the same, and the static cube map's first `OMSetRenderTargets` then matches.
+7. **Draw 8's alpha sign.** The game's composite weight is -0 while `CRenderGlare`+0x108 is set. The
+   oracle zeroes it (`differences.md`, Repeatability), so the Y2a test needs no mask either.
+
+| Scene | Call log | Pixels |
+|---|---|---|
+| r23_09 spa chase | IDENTICAL | IDENTICAL |
+| r23_10 spa chase MSAA 4 | IDENTICAL | IDENTICAL |
+| r23_16 monza chase, LDR levels | IDENTICAL | IDENTICAL |
+| r23_09 with the planted change | DIFFERENT (2 lines: the draw 4 vertex upload) | DIFFERENT (6300 pixels, by 1) |
+
+`tools/proofs/run_all.sh --quick` (post-processing rows without YEBIS): all 170 cases IDENTICAL in 13 areas, no difference, no error (browser and ai_page ran again alone: the first run's page build got a second `--sysroot` from the check script's own environment, not from the port).
+
+## What Y2c / Y3 need
+
+- **Y2c:** run the proofs' `--post` rows with YEBIS on too (`RENDER_ORACLE_YEBIS=1` as a row option).
+  Put YEBIS on in the graphics preset and drop the stand-in once the rest is ported. Cover a second
+  ppfilter, more than one frame (the luminance draw only shows from frame 2), and a window resize (the
+  targets are made once, at start).
+- **Y3:** eye adaptation (`UpdateAutoExposure`). Today exposure is the filter's maximum and the luminance
+  target is drawn but never read back.
+- **Not on wgpu / the web.** YEBIS needs Direct3D 11 bytecode, so the browser keeps the stand-in until
+  the shaders have a route there (no translated shaders are shipped).
+
+## Not done
+
+- Glare, depth of field, rays of god and heat shimmer: `PostEffect::new` refuses a filter that turns them on.
+- Only the first two frames' order is proven (the oracle logs one frame).
+
 # Task Y2a: YEBIS's settings block and constant buffer, byte for byte
 
 ## Resume here
