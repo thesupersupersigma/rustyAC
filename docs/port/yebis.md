@@ -1,3 +1,92 @@
+# Task Y3d-1: YEBIS's device states, generated textures and buffers in the game's order
+
+## Resume here
+
+- **Released as v0.48.4.** `Yebis::new` now creates, in the game's order:
+  - `IGPUDevice::InitializeDevice`'s states: the DrawRect raster, depth and blend, 30 blend/raster pairs
+    and 16 samplers;
+  - the screen bind and its viewport;
+  - `CTextureUtil::InitializeDevice`'s textures, filled with the game's maths;
+  - the 1,541 buffers.
+
+  Shaders, the B4096 cbuffer and the input layouts are created on first draw, as the game does.
+- **Next: Task Y3d-2** (render-target pool, the 49 clears, the teardown; see "What next needs").
+- Check: run `RENDER_ORACLE_TEXTURE_DATA=1 bash re/scratch/taskY3d1/cmp.sh rszfx rszfx <args>`, with the
+  rszfx/trirsz arguments from `re/scratch/taskY3b/regress.sh`. Then run
+  `python re/scratch/taskY3d1/startup.py re/scratch/taskY3d1/runs/rszfx`. It compares game and port
+  from frame 10's first `CreateRasterizerState`, and counts differing screen-bind lines without
+  stopping at them.
+- Disk: C: had 21 GB free at the start and 21 GB before the proof runs.
+
+## What it found
+
+1. **gpulog `RENDER_ORACLE_TEXTURE_DATA=1`** (crates/rustyac-render/src/gpulog.rs). After each texture
+   `UpdateSubresource`, the texture is read back and renamed by its new contents, so the upload line
+   names the hash of what was uploaded. It is off by default, so the default proofs are unchanged.
+2. **Device states** (`IGPUDevice::InitializeDevice` 0x1403d4610):
+   - The DrawRect depth state is off, write mask ZERO, compare ALWAYS.
+   - The blend state has only RT0 filled; RT1–7 are zero bytes.
+   - The 30 pairs are blend first, then raster.
+   - The 16 samplers have MaxAniso 1 and comparison 0. The port's five samplers are game samplers 1,
+     4, 5, 13 and 0.
+   - `InitializeDeviceBuffers` takes the bound target (OMGetRenderTargets), rebinds it and sets a
+     viewport of its size.
+3. **Generated textures** (crates/rustyac-render/src/yebis_tex.rs; `CTextureUtil::InitializeDevice`
+   0x1403e6890). Each one is made as SRV first (MipLevels −1), then one upload per mip:
+   - **film grain:** `ppfx_GaussianNoise`, read from acs.exe at file offset 0x52fa20;
+   - **spectrum:** `GPUMath_Wavelength_to_RGB` over the CIE tables at 0x151f600 and 0x151f360;
+   - **mipmaps:** `GPUTexUtil_Build2DMipmaps` with its 4x4 dither bias;
+   - **Gaussian:** the 64x64 A8 radius fade;
+   - the three 1x1 textures, the 16x16 depth and the analyzer.
+
+   The maths is MSVCR120's `expf`, `logf` and `powf` from rustyac-math. No new CRT functions were
+   needed. The normalising maximum (`FUN_1403add60`, a static initializer) is recomputed from the table.
+4. **Buffers:** 768× B192 (the ring), B8, 768× B32, 3× B45056 and B3072, in that order. The two
+   buffers with initial data hash the same as the game's.
+5. **Lazy creation:** the game creates each VS, then the B4096 cbuffer on the first draw, then the PS.
+   The input layout comes after the cbuffers are bound. Identical bytes share one object, so frame 10
+   has 5 VS, 7 PS and 3 layouts, not 8 each.
+6. **Frame 10 of the resize runs.** The first difference is now the first render-target pool entry
+   (rszfx game line 1823, trirsz 1828), as planned. The screen-bind lines still differ: the game
+   rebinds its 1280x720 back buffer without depth, but the port has KGL's target with its depth bound.
+   The game binds the screen during its teardown (`CRenderTexture::UninitializeDevice`), which the
+   port does not have yet (Y3d-2). The game has one more texture upload than the port: a 64x64 A8 at
+   line 1917, inside the pool (Y3d-2).
+
+| Case | Frames compared | Call log | Pixels | Textures |
+|---|---|---|---|---|
+| 16 `--post` rows r23_09..r23_24 (render.sh) | each row's frames | IDENTICAL (16/16) | IDENTICAL (16/16) | not hashed (default) |
+| rszfx (resize at frame 10, start-up from line 152) | 20 | start-up IDENTICAL to line 1822 (2 screen-bind lines); whole log DIFFERENT (Y3d-2) | IDENTICAL | 28 uploads IDENTICAL |
+| trirsz (same, triple 5760x1080) | 20 | start-up IDENTICAL to line 1827 (1 screen-bind line); whole log DIFFERENT (Y3d-2) | IDENTICAL | 28 uploads IDENTICAL |
+| `run_all.sh --quick` (13 areas, 1h00m) | each case's | 169 of 170 IDENTICAL; launcher quickrace DIFFERENT once (live display-mode list, 1465 vs 489 bytes), IDENTICAL 1984/1984 when rerun alone | IDENTICAL | - |
+
+Frame 10 calls:
+
+| Case | Before | After |
+|---|---|---|
+| rszfx | start-up identical 152..152; 7,376 lines differ, first at 35 | start-up identical 152..1822; 6,622 lines differ, first at 35 (the teardown) |
+| trirsz | start-up identical 155..155; 13,714 lines differ, first at 34 | start-up identical 157..1827; 12,945 lines differ, first at 34 |
+
+## What next needs (Task Y3d-2)
+
+- The render-target pool, the array, the glare, DOF and luminance allocations, the resource manager's
+  creation order and the 49 clears (Y3c item 1). This includes the 64x64 A8 at game line 1917.
+- The teardown (`CPostEffect::Uninitialize` → `CRenderTexture::UninitializeDevice`). It also fixes
+  the screen-bind lines: the game binds its back buffer with no depth.
+- The one extra blend and A2C set in the port's YEBIS draws (4 vs 5 and 3 vs 4 against the game), not
+  investigated.
+- Heat shimmer (Y3d-3) and VR with YEBIS, unchanged.
+
+## Not done
+
+- Y3d-2 and Y3d-3 above.
+- Frame 0's start-up is still not compared: capture starts at frame 1. Only the frame-10 remake
+  checks it.
+
+## Open questions
+
+- Why the port sets the blend and A2C state once more than the game in its YEBIS draws (pixels agree).
+
 # Task Y3c: YEBIS's setup and teardown mapped in game code; step 1 stopped before it (rule 7)
 
 ## Resume here
