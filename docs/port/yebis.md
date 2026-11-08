@@ -1,3 +1,149 @@
+# Task Y3d-2: YEBIS's render targets, clears and teardown (part 1, no release)
+
+## Resume here
+
+- **Not released; resume at step 2.** Done so far:
+  - step 0: the launcher's fixed display-mode list (d089bd0);
+  - step 1: frame 0 compared on the `--post` rows (25b0317);
+  - step 4: answered by measurement, no code change (see below);
+  - the `RENDER_ORACLE_RT_LOG=1` tool in render_oracle.
+- **Next:** step 2 (the target list and the clear pass in `Yebis::new`), then step 3 (the teardown), then
+  step 5 (all proofs, release v0.48.5). The game's rules for each target group are below; the
+  per-size lists to match are in `re/scratch/taskY3d2/made_{rszfx,trirsz,tri5760}_ac.txt`.
+- Check:
+  - `RENDER_ORACLE_RESIZE=10:1024x576 bash re/scratch/taskY3d2/cmp.sh rszfx <name> --track spa --view chase --post --fxaa $T`
+  - `RENDER_ORACLE_RESIZE=10:3840x720 bash re/scratch/taskY3d2/cmp.sh trirsz <name> --track spa --view chase --triple --size 5760x1080 --post $T`
+  - with `T="--car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 20"`.
+  - Then run `python re/scratch/taskY3d2/startup.py re/scratch/taskY3d2/runs/<label>` (frame-10 diff).
+  - `made.py` / `compact.py` give the created-target list; `clears.py` gives the clear pass.
+- Today frame 10 of rszfx matches through game line 1822 (28 uploads, 1,641 creates). The first difference
+  is the render-target creation at game 1823 vs port 1719. Pixels are IDENTICAL.
+- Disk: C: had 19.2 GB free at the start and 18.9 GB at this stop.
+
+## Results so far
+
+| case | frames | call log | pixels |
+|---|---|---|---|
+| launcher (step 0) | — | 12/12 IDENTICAL | — |
+| f0b (`--post`, frame 0 captured) | 0, 1 | IDENTICAL | IDENTICAL |
+| tri0 / tri10 (no resize) | 1 / 9 | IDENTICAL | IDENTICAL |
+| rszfx (rszfx0, tdrsz) | 20 | DIFFERENT, 6,617 lines from line 35 (frame-10 remake) | IDENTICAL |
+| trirsz (tri1) | 20 | DIFFERENT, 5,638 lines from line 32 (frame-10 remake) | IDENTICAL |
+
+## Step 4: the extra blend / A2C set
+
+There is none in the logs measured today:
+- rszfx frame 10 has 39 `OMSetBlendState` calls on each side, 9 of them with a2c=1, and 31
+  `CreateBlendState` on each side.
+- gpulog writes every `OMSetBlendState` call with no dedupe, so a redundant set would show up as a
+  different line.
+
+The Y3d-1 counts (4 vs 5, 3 vs 4) do not reproduce on today's logs.
+
+## The game's target list (from `CPostEffect::Initialize` 0x1403bbb80)
+
+**Creation order** (`InitializeDevice` calls, decomp :2090-2290):
+1. render buffer array
+2. glare modulator work (+0x120)
+3. effect colour alpha dest (+0x118)
+4. `CRenderGlare` (+0x108)
+5. DOF (+0x110, if this[0x128])
+6. objects +0x140..+0x180
+7. feedback buffers (+0x188)
+8. AE query scene luminance
+9. AF query scene depth
+10. `CTextureUtil::InitializeDeviceSharedTexturePool` (the pool)
+
+**How each target is made:**
+- Each render texture is a bind-0x28 texture, then its SRV, then its RTV, in that order. This is the
+  reverse of the port's `target()`.
+- f26 (R11G11B10) RTVs are made with a null desc (logged f0).
+
+**rszfx at 1280x720:**
+- 3× f9 1280x720 (render buffer: SRV/RTV f10)
+- f44 + DSV f45
+- 2× f27 1280x720 (f28 views)
+- 25× f26 glare targets: 80x45 ×4, 160x90, 80x45 ×20
+- 64x64 A8 SRV-only with one upload (data source not found yet)
+- DOF f9 160x90 and 320x180
+- 128x64 f27
+- 1x1 f27, staging 1x1 f28, 1x1 f27, 1x1 f27, staging 1x1 f28
+- pool:
+  - f26 640x360 / 320x180 / 160x90
+  - f9 160x90 / 320x180 / 640x360
+  - f27 64x32 / 32x16 / 16x8 / 8x4 / 4x2
+
+**trirsz at 3840x720:**
+- glare 427x16 (854x32 in the 2× slot)
+- DOF 160x30 and 320x60
+- 128x24 f27
+- pool: f26 1920x360 / 960x180 / 480x90, f9 160x30 / 320x60 / 1920x360 / 960x180 / 480x90 / 240x45,
+  f27 64x8 / 32x4 / 16x2
+- (at 5760x1080 the pool also gains f9 180x34)
+
+**Size rules:**
+- **Glare** (:1516-1550):
+  - s = sqrt((this+0x2fc / this+0x324) / aspect)
+  - a = (long)(w · DAT_141521650[q·8] · s + 0.99), clamped to ≤ w
+  - h = (long)(a / ratio + 0.499999)
+  - If either a or h is < 16, the smaller one becomes 16 and the other is (long)(16 · aspect + 0.499999)
+    or (long)(16 / aspect + 0.499999).
+  - This is why 3840x720 gives 427x16 and not 80x45: Y3c's question is answered.
+- **DOF levels** (`CDepthOfField::CreateSystemObjects` 0x1404200a0 :412-459):
+  - halve with (float)x · 0.5 + 0.99 per level from the DOF base size;
+  - a level that equals the size of the target at +0x200 reuses that target (refcount +1);
+  - the last level also gets a half-size partner.
+- **Pool lists:**
+  - this+0x3e0 (:1400-1450): halvings of e460 with (float)x · 0.5 + 0.99, count
+    max(0, ceil(log(max(...)) / log 0.5) − 1).
+  - this+0x3f8 (:1452-1515): halving pairs down to 16 wide, made with `AllocateTextures(pool, 2, ...)`.
+  - The pool shares a texture when `CRenderTexturePool::CanBeShared` 0x140412020 says so.
+
+## The clear pass (end of `Initialize`, ~:2596-2655)
+
+**Order:**
+1. pool `ClearAllGPUResources` 0x140411fb0
+2. `CRenderTextureArray::ClearAllGPUResources` 0x1404104e0: the 3 render-buffer targets, each with the
+   depth bound and `ClearDepthStencilView 1 1.0 0`, then one restore after all three
+3. `CRenderGlare` 0x14041c400, in groups bound with no restore in between
+4. DOF 0x14042b930
+5. feedback
+6. the +0x3e0 list
+7. the +0x3f0 pairs
+8. `InitializeAutoExposure` 0x1403c83d0
+9. `InitializeAutoFocus` 0x1403c8540
+10. `SetRenderTarget(this+0x20)` and `SetDepthStencilSurface(this+0x28)`, then
+    `IASetPrimitiveTopology 4`
+
+**Each single clear** is `CRenderTexture::ColorFill` 0x1403d2ff0:
+- bind the target and its viewport, then `ClearRenderTargetView 0`;
+- then bind the screen and its full viewport again.
+
+The owners of pool-shared targets clear them again after the glare. The exact sequence for both sizes
+is in `clears.py`'s output for `runs/rszfx` and `runs/rtlogtri`.
+
+## The teardown (step 3)
+
+- At the resize, `CPostEffect::Uninitialize` 0x1403c08a0 calls `CRenderTexture::UninitializeDevice`
+  0x1403d29f0 once per target. Each call binds the screen with no depth plus its full viewport.
+- The game's frame 10:
+  - 1 + N + 1 pairs of `OMSetRenderTargets 1 [screen] -` plus the viewport, then `OMSetRenderTargets 0 [] -`;
+  - rszfx: 52 pairs on the 1280x720 f28 screen;
+  - trirsz: 54 pairs on the 5760x1080 back buffer.
+- The port emits OM 0 at line 35 instead.
+- Port plan:
+  - save the bound screen RTV and size where `Yebis::new` rebinds it (~yebis.rs:465);
+  - add `teardown()`, called from `post.rs` `on_resize` before `forward.on_resize` (the old screen
+    must still be bound).
+- `RENDER_ORACLE_RT_LOG=1` logs every `SetRenderTarget` ("RTS") and `UninitializeDevice` ("RTU") with
+  callers. The runs are in `runs/rtlog` and `runs/rtlogtri`.
+
+## Open questions
+
+- The 64x64 A8 upload's data source (it is not the `CTextureUtil` gaussian).
+- Y3d-1's rszfx game log had an extra 1280x720 f9 after the DOF levels; today's runs don't. It may
+  depend on `RENDER_ORACLE_TEXTURE_DATA=1`. Retest in step 5.
+
 # Task Y3d-1: YEBIS's device states, generated textures and buffers in the game's order
 
 ## Resume here
