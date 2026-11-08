@@ -941,7 +941,23 @@ unsafe extern "system" fn ctx_unmap(this: P, resource: P, sub: u32) {
 unsafe extern "system" fn ctx_update_subresource(this: P, resource: P, sub: u32, region: *const D3D11_BOX, data: *const c_void, row_pitch: u32, depth_pitch: u32) {
     let orig: unsafe extern "system" fn(P, P, u32, *const D3D11_BOX, *const c_void, u32, u32) = orig_ctx(48);
     let this = { let _ = this; real() };
+    // RENDER_ORACLE_TEXTURE_DATA=1 (Task Y3d-1): a texture's name is re-hashed after each upload, so
+    // generated textures are compared by content (by default the hash is frozen before the first upload)
+    static TEXTURE_DATA: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let rehash = *TEXTURE_DATA.get_or_init(|| std::env::var_os("RENDER_ORACLE_TEXTURE_DATA").is_some_and(|v| v == "1"))
+        && ID3D11Resource::from_raw_borrowed(&resource).is_some_and(|r| r.GetType() == D3D11_RESOURCE_DIMENSION_TEXTURE2D);
+    if rehash {
+        orig(this, resource, sub, region, data, row_pitch, depth_pitch);
+    }
     if let Some(mut state) = enter() {
+        if rehash {
+            let texture = ID3D11Resource::from_raw_borrowed(&resource).and_then(|r| r.cast::<ID3D11Texture2D>().ok());
+            if let (Some(device), Some(context), Some(texture)) = (state.device(), state.context(), texture) {
+                if let Some(hash) = read_texture_hash(&device, &context, &texture) {
+                    set_tag(resource, hash);
+                }
+            }
+        }
         let region_text = if region.is_null() {
             "all".to_string()
         } else {
@@ -971,7 +987,9 @@ unsafe extern "system" fn ctx_update_subresource(this: P, resource: P, sub: u32,
             }
         }
     }
-    orig(this, resource, sub, region, data, row_pitch, depth_pitch)
+    if !rehash {
+        orig(this, resource, sub, region, data, row_pitch, depth_pitch)
+    }
 }
 
 unsafe extern "system" fn ctx_ia_set_input_layout(this: P, layout: P) {
