@@ -194,12 +194,12 @@ mod device {
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
 
-    // samplers: border, linear, point, wrap, linear with border
-    const SB: usize = 0;
-    const SL: usize = 1;
-    const SP: usize = 2;
-    const SW: usize = 3;
-    const SLB: usize = 4;
+    // samplers, as numbered in `IGPUDevice`'s set of 16: border, linear, point, wrap, linear with border
+    const SB: usize = 1;
+    const SL: usize = 4;
+    const SP: usize = 5;
+    const SW: usize = 13;
+    const SLB: usize = 0;
 
     struct Target {
         rtv: ID3D11RenderTargetView,
@@ -219,13 +219,18 @@ mod device {
         context: ID3D11DeviceContext,
         vs: Vec<Option<ID3D11VertexShader>>,
         ps: Vec<Option<ID3D11PixelShader>>,
-        /// The bytecode of the two analysis techniques, made on first use.
-        lazy: Vec<(Vec<u8>, Vec<u8>)>,
-        layouts: Vec<ID3D11InputLayout>,
+        /// Every technique's bytecode: YEBIS makes a program on its first draw.
+        code: Vec<(Vec<u8>, Vec<u8>)>,
+        /// Each technique's input elements; a layout is shared by every program with the same ones.
+        inputs: Vec<Vec<(std::ffi::CString, u32, DXGI_FORMAT)>>,
+        layouts: Vec<Option<ID3D11InputLayout>>,
         strides: Vec<u32>,
         used: [Vec<(usize, usize)>; 13],
         filmic: [f32; 21],
-        cb: ID3D11Buffer,
+        /// Made with the first program.
+        cb: Option<ID3D11Buffer>,
+        /// What YEBIS makes and keeps but the port does not use yet (state modes, generated textures, buffers).
+        _kept: Vec<windows::core::IUnknown>,
         cbuffer: Cbuffer,
         ring: Vec<ID3D11Buffer>,
         ring_at: Ring,
@@ -246,7 +251,7 @@ mod device {
         auto_exposure: AutoExposure,
         /// One per round: the composite reads the first round's colour and the second's alpha.
         tonemap: [Target; 2],
-        samplers: [ID3D11SamplerState; 5],
+        samplers: Vec<ID3D11SamplerState>,
         raster: ID3D11RasterizerState,
         depth: ID3D11DepthStencilState,
         blend: ID3D11BlendState,
@@ -288,7 +293,7 @@ mod device {
         let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
             Format: format,
             ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1 } },
+            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_SRV { MostDetailedMip: 0, MipLevels: u32::MAX } },
         };
         let mut v = None;
         err("CreateShaderResourceView", device.CreateShaderResourceView(t, Some(&desc), Some(&mut v)))?;
@@ -350,61 +355,195 @@ mod device {
             let used = used_all(&tfxo)?;
             let vignette = vignette(&filter)?;
             unsafe {
-                let (mut vs, mut ps, mut layouts, mut strides, mut lazy) = (Vec::<Option<ID3D11VertexShader>>::new(), Vec::<Option<ID3D11PixelShader>>::new(), Vec::<ID3D11InputLayout>::new(), Vec::new(), Vec::new());
-                let mut made: Vec<(&[u8], &[u8])> = Vec::new();
+                // every program is made on its first draw (see draw)
+                let (mut code, mut inputs, mut strides) = (Vec::new(), Vec::new(), Vec::new());
                 for name in TECHNIQUES {
                     let (v, p) = tfxo.technique(name).ok_or_else(|| format!("yebis: no technique {name}"))?;
-                    let (same_v, same_p) = (made.iter().position(|m| m.0 == v), made.iter().position(|m| m.1 == p));
-                    made.push((v, p));
-                    if vs.len() >= 8 {
-                        // the analysis and no-vignette programs are made on their first draw, as YEBIS does; a program
-                        // an earlier technique already made is shared, and so are its input layouts
-                        lazy.push((v.to_vec(), p.to_vec()));
-                        vs.push(same_v.and_then(|i| vs[i].clone()));
-                        ps.push(same_p.and_then(|i| ps[i].clone()));
-                        let k = same_v.unwrap_or(0);
-                        layouts.push(layouts[k].clone());
-                        strides.push(strides[k]);
-                        continue;
-                    }
-                    let mut s = None;
-                    err("CreateVertexShader", device.CreateVertexShader(v, None, Some(&mut s)))?;
-                    vs.push(Some(s.ok_or("yebis: no shader")?));
-                    let mut s = None;
-                    err("CreatePixelShader", device.CreatePixelShader(p, None, Some(&mut s)))?;
-                    ps.push(Some(s.ok_or("yebis: no shader")?));
                     // the input layout from the program's input signature: float2s, packed
-                    let inputs = rustyac_dxbc::parse(v)?.inputs;
-                    let names: Vec<std::ffi::CString> = inputs.iter().map(|e| std::ffi::CString::new(e.name.as_str()).unwrap_or_default()).collect();
-                    let elements: Vec<D3D11_INPUT_ELEMENT_DESC> = inputs
+                    let elements: Vec<(std::ffi::CString, u32, DXGI_FORMAT)> = rustyac_dxbc::parse(v)?
+                        .inputs
                         .iter()
-                        .zip(&names)
-                        .enumerate()
-                        .map(|(i, (e, n))| D3D11_INPUT_ELEMENT_DESC {
-                            SemanticName: PCSTR(n.as_ptr().cast()),
-                            SemanticIndex: e.index,
-                            Format: [DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT][(8 - e.mask.leading_zeros()) as usize],
-                            InputSlot: 0,
-                            AlignedByteOffset: 8 * i as u32,
-                            InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
-                            InstanceDataStepRate: 0,
+                        .map(|e| {
+                            let format = [DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT][(8 - e.mask.leading_zeros()) as usize];
+                            (std::ffi::CString::new(e.name.as_str()).unwrap_or_default(), e.index, format)
                         })
                         .collect();
-                    let mut l = None;
-                    err("CreateInputLayout", device.CreateInputLayout(&elements, v, Some(&mut l)))?;
-                    layouts.push(l.ok_or("yebis: no layout")?);
-                    strides.push(8 * inputs.len() as u32);
+                    strides.push(8 * elements.len() as u32);
+                    inputs.push(elements);
+                    code.push((v.to_vec(), p.to_vec()));
                 }
-                let tex1 = |c: u8| -> Result<ID3D11ShaderResourceView, String> {
-                    // as the game: made empty, its view, then filled (seen when a resize remakes YEBIS, Task Y2c)
-                    let t = texture(device, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0, None)?;
-                    let view = srv(device, &t, DXGI_FORMAT_R8G8B8A8_UNORM)?;
-                    context.UpdateSubresource(&t, 0, None, [c; 4].as_ptr().cast(), 4, 0);
+                let n = code.len();
+                let mut kept: Vec<windows::core::IUnknown> = Vec::new();
+                let state = |r: windows::core::Result<()>, what: &str, s: Option<windows::core::IUnknown>| -> Result<windows::core::IUnknown, String> {
+                    err(what, r)?;
+                    s.ok_or_else(|| format!("yebis: no {what}"))
+                };
+                // IGPUDevice::InitializeDevice_CreateDeviceStates 0x1403d4fa0: the draw-rect defaults (YEBIS's reset
+                // sets them), then the blend/raster pair of every render-state mode, then 16 samplers
+                let raster_desc = |scissor: bool| D3D11_RASTERIZER_DESC {
+                    FillMode: D3D11_FILL_SOLID,
+                    CullMode: D3D11_CULL_NONE,
+                    FrontCounterClockwise: true.into(),
+                    DepthBias: 0,
+                    DepthBiasClamp: 0.0,
+                    SlopeScaledDepthBias: 0.0,
+                    DepthClipEnable: false.into(),
+                    ScissorEnable: scissor.into(),
+                    MultisampleEnable: true.into(),
+                    AntialiasedLineEnable: false.into(),
+                };
+                // (enable, src, dst, src alpha, dst alpha) by mode, `_RenderStateMode` 0x1403d4b00; only target 0 is filled
+                let blend_desc = |mode: usize, mask: u8| {
+                    let (on, s, d, sa, da) = [(false, 2, 2, 2, 2), (true, 5, 6, 5, 6), (true, 2, 2, 2, 2), (true, 2, 4, 2, 6), (true, 2, 0xe, 2, 0xe)][mode];
+                    let mut bd = D3D11_BLEND_DESC::default();
+                    bd.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
+                        BlendEnable: on.into(),
+                        SrcBlend: D3D11_BLEND(s),
+                        DestBlend: D3D11_BLEND(d),
+                        BlendOp: D3D11_BLEND_OP_ADD,
+                        SrcBlendAlpha: D3D11_BLEND(sa),
+                        DestBlendAlpha: D3D11_BLEND(da),
+                        BlendOpAlpha: D3D11_BLEND_OP_ADD,
+                        RenderTargetWriteMask: mask,
+                    };
+                    bd
+                };
+                let mut raster = None;
+                err("CreateRasterizerState", device.CreateRasterizerState(&raster_desc(false), Some(&mut raster)))?;
+                let keep = D3D11_DEPTH_STENCILOP_DESC { StencilFailOp: D3D11_STENCIL_OP_KEEP, StencilDepthFailOp: D3D11_STENCIL_OP_KEEP, StencilPassOp: D3D11_STENCIL_OP_KEEP, StencilFunc: D3D11_COMPARISON_ALWAYS };
+                let dd = D3D11_DEPTH_STENCIL_DESC {
+                    DepthEnable: false.into(),
+                    DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ZERO,
+                    DepthFunc: D3D11_COMPARISON_ALWAYS,
+                    StencilEnable: false.into(),
+                    StencilReadMask: 0xff,
+                    StencilWriteMask: 0xff,
+                    FrontFace: keep,
+                    BackFace: keep,
+                };
+                let mut depth = None;
+                err("CreateDepthStencilState", device.CreateDepthStencilState(&dd, Some(&mut depth)))?;
+                let mut blend = None;
+                err("CreateBlendState", device.CreateBlendState(&blend_desc(0, 0xf), Some(&mut blend)))?;
+                for p in 0..64usize {
+                    let (mode, mask, scissor) = (p & 7, (p >> 3) & 3, p >> 5 & 1);
+                    if mode > 4 || mask > 2 {
+                        continue;
+                    }
+                    let mut b = None;
+                    let r = device.CreateBlendState(&blend_desc(mode, [0xf, 7, 8][mask]), Some(&mut b));
+                    kept.push(state(r, "CreateBlendState", b.map(|b| b.into()))?);
+                    let mut s = None;
+                    let r = device.CreateRasterizerState(&raster_desc(scissor == 1), Some(&mut s));
+                    kept.push(state(r, "CreateRasterizerState", s.map(|s| s.into()))?);
+                }
+                // `_SamplerStateMode` 0x1403d4dd0: border, clamp, mirror, wrap; each linear and point without
+                // mips, then linear and trilinear with them
+                let mut samplers = Vec::with_capacity(16);
+                for p in 0..16usize {
+                    let address = D3D11_TEXTURE_ADDRESS_MODE(4 - (p >> 2) as i32);
+                    let desc = D3D11_SAMPLER_DESC {
+                        Filter: D3D11_FILTER([0x14, 0, 0x14, 0x15][p & 3]),
+                        AddressU: address,
+                        AddressV: address,
+                        AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+                        MipLODBias: 0.0,
+                        MaxAnisotropy: 1,
+                        ComparisonFunc: D3D11_COMPARISON_FUNC(0),
+                        BorderColor: [0.0; 4],
+                        MinLOD: 0.0,
+                        MaxLOD: if p & 3 < 2 { 0.0 } else { f32::MAX },
+                    };
+                    let mut s = None;
+                    err("CreateSamplerState", device.CreateSamplerState(&desc, Some(&mut s)))?;
+                    samplers.push(s.ok_or("yebis: no sampler")?);
+                }
+                // `InitializeDeviceBuffers` 0x1403d4330: the bound target again, with a viewport of its size
+                let mut bound: [Option<ID3D11RenderTargetView>; 1] = [None];
+                let mut bound_depth = None;
+                context.OMGetRenderTargets(Some(&mut bound), Some(&mut bound_depth));
+                if let Some(rtv) = &bound[0] {
+                    let t: ID3D11Texture2D = err("GetResource", rtv.GetResource().and_then(|r| windows::core::Interface::cast(&r)))?;
+                    let mut d = D3D11_TEXTURE2D_DESC::default();
+                    t.GetDesc(&mut d);
+                    context.OMSetRenderTargets(Some(&bound), bound_depth.as_ref());
+                    context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: d.Width as f32, Height: d.Height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
+                }
+                // CTextureUtil::InitializeDevice 0x1403e6890: each texture made empty, its view, then filled
+                let made = |w: u32, h: u32, mips: u32, format: DXGI_FORMAT, bind: i32| -> Result<ID3D11Texture2D, String> {
+                    let desc = D3D11_TEXTURE2D_DESC {
+                        Width: w,
+                        Height: h,
+                        MipLevels: mips,
+                        ArraySize: 1,
+                        Format: format,
+                        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                        Usage: D3D11_USAGE_DEFAULT,
+                        BindFlags: bind as u32,
+                        CPUAccessFlags: 0,
+                        MiscFlags: 0,
+                    };
+                    let mut t = None;
+                    err("CreateTexture2D", device.CreateTexture2D(&desc, None, Some(&mut t)))?;
+                    t.ok_or_else(|| "yebis: no texture".into())
+                };
+                let filled = |w: u32, h: u32, mips: u32, format: DXGI_FORMAT, levels: &[Vec<u8>], texel: u32| -> Result<ID3D11ShaderResourceView, String> {
+                    let t = made(w, h, mips, format, D3D11_BIND_SHADER_RESOURCE.0)?;
+                    let view = srv(device, &t, format)?;
+                    for (l, data) in levels.iter().enumerate() {
+                        context.UpdateSubresource(&t, l as u32, None, data.as_ptr().cast(), (w >> l).max(1) * texel, 0);
+                    }
                     Ok(view)
                 };
-                let dither_tex = texture(device, 4, 4, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0, None)?;
-                let dither = srv(device, &dither_tex, DXGI_FORMAT_R8G8B8A8_UNORM)?;
-                context.UpdateSubresource(&dither_tex, 0, None, dither_texels().as_ptr().cast(), 16, 0);
+                let rgba = DXGI_FORMAT_R8G8B8A8_UNORM;
+                // the luminance analyser's 16x16 target (its InitializeDevice), its view before its target view
+                let t = made(16, 16, 1, DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0)?;
+                kept.push(srv(device, &t, rgba)?.into());
+                let mut rtv = None;
+                let rd = D3D11_RENDER_TARGET_VIEW_DESC { Format: rgba, ViewDimension: D3D11_RTV_DIMENSION_TEXTURE2D, Anonymous: D3D11_RENDER_TARGET_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_RTV { MipSlice: 0 } } };
+                err("CreateRenderTargetView", device.CreateRenderTargetView(&t, Some(&rd), Some(&mut rtv)))?;
+                kept.push(rtv.ok_or("yebis: no view")?.into());
+                let dither = filled(4, 4, 1, rgba, &[dither_texels().to_vec()], 4)?;
+                // film grain (PFX_INITPARAM always asks for it), spectrum, radius fade: full mip chains but the fade's 5
+                let grain = crate::yebis_tex::mipmaps(256, 256, crate::yebis_tex::grain(&exe)?, true, true);
+                kept.push(filled(256, 256, 0, rgba, &grain, 4)?.into());
+                let spectrum = crate::yebis_tex::mipmaps(256, 1, &crate::yebis_tex::spectrum(&crate::yebis_tex::Cie::from_exe(&exe)?), true, true);
+                kept.push(filled(256, 1, 0, rgba, &spectrum, 4)?.into());
+                kept.push(filled(64, 64, 5, DXGI_FORMAT_A8_UNORM, &crate::yebis_tex::gaussian(), 1)?.into());
+                let black = filled(1, 1, 1, rgba, &[vec![0; 4]], 4)?;
+                let grey = filled(1, 1, 1, rgba, &[vec![0x7f; 4]], 4)?;
+                let white = filled(1, 1, 1, rgba, &[vec![0xff; 4]], 4)?;
+                // a depth surface of the analyser's size
+                let t = made(16, 16, 1, DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_DEPTH_STENCIL.0)?;
+                let dsv_desc = D3D11_DEPTH_STENCIL_VIEW_DESC {
+                    Format: DXGI_FORMAT_D24_UNORM_S8_UINT,
+                    ViewDimension: D3D11_DSV_DIMENSION_TEXTURE2D,
+                    Flags: 0,
+                    Anonymous: D3D11_DEPTH_STENCIL_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_DSV { MipSlice: 0 } },
+                };
+                let mut dsv = None;
+                err("CreateDepthStencilView", device.CreateDepthStencilView(&t, Some(&dsv_desc), Some(&mut dsv)))?;
+                kept.push(dsv.ok_or("yebis: no view")?.into());
+                // 16x16 ramp: texel i is byte i four times
+                let ramp: Vec<u8> = (0..256u32).flat_map(|i| [i as u8; 4]).collect();
+                kept.push(filled(16, 16, 1, rgba, &[ramp], 4)?.into());
+                // vertex rings and index buffers; the heat-shimmer buffers for PFX_INITPARAM's 256 particles, 1 view
+                let mut ring = Vec::with_capacity(RING_COUNT);
+                for _ in 0..RING_COUNT {
+                    ring.push(buffer(device, RING_BYTES, D3D11_BIND_VERTEX_BUFFER.0, true, None)?);
+                }
+                let indices: [u16; 4] = [0, 1, 2, 3];
+                let ib_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+                let ib = buffer(device, 8, D3D11_BIND_INDEX_BUFFER.0, false, Some(&ib_bytes))?;
+                for _ in 0..RING_COUNT {
+                    kept.push(buffer(device, 32, D3D11_BIND_INDEX_BUFFER.0, true, None)?.into());
+                }
+                const PARTICLES: u32 = 256;
+                for _ in 0..3 {
+                    kept.push(buffer(device, PARTICLES * 0xb0, D3D11_BIND_VERTEX_BUFFER.0, true, None)?.into());
+                }
+                let quads: Vec<u8> = (0..PARTICLES as u16).flat_map(|i| [4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 2, 4 * i + 1, 4 * i + 3]).flat_map(|i| i.to_le_bytes()).collect();
+                kept.push(buffer(device, PARTICLES * 12, D3D11_BIND_INDEX_BUFFER.0, false, Some(&quads))?.into());
                 let (w, h) = (width as u32, height as u32);
                 let depth_tex = texture(device, w, h, DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_DEPTH_STENCIL.0, None)?;
                 let dsv_desc = D3D11_DEPTH_STENCIL_VIEW_DESC {
@@ -415,76 +554,6 @@ mod device {
                 };
                 let mut dsv = None;
                 err("CreateDepthStencilView", device.CreateDepthStencilView(&depth_tex, Some(&dsv_desc), Some(&mut dsv)))?;
-                let sampler = |filter: D3D11_FILTER, u: D3D11_TEXTURE_ADDRESS_MODE| -> Result<ID3D11SamplerState, String> {
-                    let desc = D3D11_SAMPLER_DESC {
-                        Filter: filter,
-                        AddressU: u,
-                        AddressV: u,
-                        AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
-                        MipLODBias: 0.0,
-                        MaxAnisotropy: 0,
-                        ComparisonFunc: D3D11_COMPARISON_NEVER,
-                        BorderColor: [0.0; 4],
-                        MinLOD: 0.0,
-                        MaxLOD: 0.0,
-                    };
-                    let mut s = None;
-                    err("CreateSamplerState", device.CreateSamplerState(&desc, Some(&mut s)))?;
-                    s.ok_or_else(|| "yebis: no sampler".into())
-                };
-                let samplers = [
-                    sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_BORDER)?,
-                    sampler(D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP)?,
-                    sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP)?,
-                    sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_WRAP)?,
-                    sampler(D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D11_TEXTURE_ADDRESS_BORDER)?,
-                ];
-                let mut raster = None;
-                let rd = D3D11_RASTERIZER_DESC {
-                    FillMode: D3D11_FILL_SOLID,
-                    CullMode: D3D11_CULL_NONE,
-                    FrontCounterClockwise: true.into(),
-                    DepthBias: 0,
-                    DepthBiasClamp: 0.0,
-                    SlopeScaledDepthBias: 0.0,
-                    DepthClipEnable: false.into(),
-                    ScissorEnable: false.into(),
-                    MultisampleEnable: true.into(),
-                    AntialiasedLineEnable: false.into(),
-                };
-                err("CreateRasterizerState", device.CreateRasterizerState(&rd, Some(&mut raster)))?;
-                let keep = D3D11_DEPTH_STENCILOP_DESC { StencilFailOp: D3D11_STENCIL_OP_KEEP, StencilDepthFailOp: D3D11_STENCIL_OP_KEEP, StencilPassOp: D3D11_STENCIL_OP_KEEP, StencilFunc: D3D11_COMPARISON_ALWAYS };
-                let dd = D3D11_DEPTH_STENCIL_DESC {
-                    DepthEnable: false.into(),
-                    DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ALL,
-                    DepthFunc: D3D11_COMPARISON_LESS,
-                    StencilEnable: false.into(),
-                    StencilReadMask: 0xff,
-                    StencilWriteMask: 0xff,
-                    FrontFace: keep,
-                    BackFace: keep,
-                };
-                let mut depth = None;
-                err("CreateDepthStencilState", device.CreateDepthStencilState(&dd, Some(&mut depth)))?;
-                let rt = D3D11_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    SrcBlend: D3D11_BLEND_ONE,
-                    DestBlend: D3D11_BLEND_ZERO,
-                    BlendOp: D3D11_BLEND_OP_ADD,
-                    SrcBlendAlpha: D3D11_BLEND_ONE,
-                    DestBlendAlpha: D3D11_BLEND_ZERO,
-                    BlendOpAlpha: D3D11_BLEND_OP_ADD,
-                    RenderTargetWriteMask: 0xf,
-                };
-                let bd = D3D11_BLEND_DESC { AlphaToCoverageEnable: false.into(), IndependentBlendEnable: false.into(), RenderTarget: [rt; 8] };
-                let mut blend = None;
-                err("CreateBlendState", device.CreateBlendState(&bd, Some(&mut blend)))?;
-                let mut ring = Vec::with_capacity(RING_COUNT);
-                for _ in 0..RING_COUNT {
-                    ring.push(buffer(device, RING_BYTES, D3D11_BIND_VERTEX_BUFFER.0, true, None)?);
-                }
-                let indices: [u16; 4] = [0, 1, 2, 3];
-                let ib_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
                 let (luminance_size, chain) = super::luminance_sizes(width, height);
                 let mut analysis = Vec::new();
                 for (aw, ah) in chain {
@@ -509,21 +578,23 @@ mod device {
                 Ok(Yebis {
                     device: device.clone(),
                     context: context.clone(),
-                    vs,
-                    ps,
-                    lazy,
-                    layouts,
+                    vs: vec![None; n],
+                    ps: vec![None; n],
+                    code,
+                    inputs,
+                    layouts: vec![None; n],
                     strides,
                     used,
                     filmic,
-                    cb: buffer(device, 4096, D3D11_BIND_CONSTANT_BUFFER.0, true, None)?,
+                    cb: None,
+                    _kept: kept,
                     cbuffer: Cbuffer::default(),
                     ring,
                     ring_at: Ring::default(),
-                    ib: buffer(device, 8, D3D11_BIND_INDEX_BUFFER.0, false, Some(&ib_bytes))?,
-                    black: tex1(0)?,
-                    grey: tex1(0x7f)?,
-                    white: tex1(0xff)?,
+                    ib,
+                    black,
+                    grey,
+                    white,
                     dither,
                     effect: [target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?, target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?],
                     current: 0,
@@ -596,6 +667,26 @@ mod device {
             self.cache = Cache::default();
         }
 
+        /// Technique `d`'s input layout: its inputs packed one after another.
+        unsafe fn layout(&self, d: usize) -> Result<ID3D11InputLayout, String> {
+            let elements: Vec<D3D11_INPUT_ELEMENT_DESC> = self.inputs[d]
+                .iter()
+                .enumerate()
+                .map(|(i, (name, index, format))| D3D11_INPUT_ELEMENT_DESC {
+                    SemanticName: PCSTR(name.as_ptr().cast()),
+                    SemanticIndex: *index,
+                    Format: *format,
+                    InputSlot: 0,
+                    AlignedByteOffset: 8 * i as u32,
+                    InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                    InstanceDataStepRate: 0,
+                })
+                .collect();
+            let mut l = None;
+            err("CreateInputLayout", self.device.CreateInputLayout(&elements, &self.code[d].0, Some(&mut l)))?;
+            l.ok_or_else(|| "yebis: no layout".into())
+        }
+
         /// One draw: `samplers` are (slot, sampler) and only the changed ones are set.
         unsafe fn draw(&mut self, d: usize, upload: &[u8; 4096], samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>], vertices: &[f32]) -> Result<(), String> {
             let c = self.context.clone();
@@ -609,21 +700,38 @@ mod device {
             }
             let none: [Option<ID3D11ShaderResourceView>; 6] = Default::default();
             c.PSSetShaderResources(0, Some(&none));
+            // a program is made on its first draw unless another technique made the same one
             if self.vs[d].is_none() {
-                let mut s = None;
-                err("CreateVertexShader", self.device.CreateVertexShader(&self.lazy[d - 8].0, None, Some(&mut s)))?;
-                self.vs[d] = s;
+                let same = (0..self.code.len()).find(|&j| self.vs[j].is_some() && self.code[j].0 == self.code[d].0);
+                self.vs[d] = match same {
+                    Some(j) => self.vs[j].clone(),
+                    None => {
+                        let mut s = None;
+                        err("CreateVertexShader", self.device.CreateVertexShader(&self.code[d].0, None, Some(&mut s)))?;
+                        s
+                    }
+                };
+            }
+            if self.cb.is_none() {
+                self.cb = Some(buffer(&self.device, 4096, D3D11_BIND_CONSTANT_BUFFER.0, true, None)?);
             }
             if self.ps[d].is_none() {
-                let mut s = None;
-                err("CreatePixelShader", self.device.CreatePixelShader(&self.lazy[d - 8].1, None, Some(&mut s)))?;
-                self.ps[d] = s;
+                let same = (0..self.code.len()).find(|&j| self.ps[j].is_some() && self.code[j].1 == self.code[d].1);
+                self.ps[d] = match same {
+                    Some(j) => self.ps[j].clone(),
+                    None => {
+                        let mut s = None;
+                        err("CreatePixelShader", self.device.CreatePixelShader(&self.code[d].1, None, Some(&mut s)))?;
+                        s
+                    }
+                };
             }
+            let cb = self.cb.clone().ok_or("yebis: no cbuffer")?;
             c.GSSetShader(None, None);
             c.HSSetShader(None, None);
             c.DSSetShader(None, None);
             let mut m = D3D11_MAPPED_SUBRESOURCE::default();
-            err("Map", c.Map(&self.cb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut m)))?;
+            err("Map", c.Map(&cb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut m)))?;
             c.VSSetShader(self.vs[d].as_ref(), None);
             c.PSSetShader(self.ps[d].as_ref(), None);
             for (slot, &s) in samplers.iter().enumerate() {
@@ -634,9 +742,16 @@ mod device {
             }
             c.PSSetShaderResources(0, Some(srvs));
             std::ptr::copy_nonoverlapping(upload.as_ptr(), m.pData.cast::<u8>(), 4096);
-            c.Unmap(&self.cb, 0);
-            c.VSSetConstantBuffers(0, Some(&[Some(self.cb.clone())]));
-            c.PSSetConstantBuffers(0, Some(&[Some(self.cb.clone())]));
+            c.Unmap(&cb, 0);
+            c.VSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
+            c.PSSetConstantBuffers(0, Some(&[Some(cb)]));
+            if self.layouts[d].is_none() {
+                let same = (0..self.code.len()).find(|&j| self.layouts[j].is_some() && self.inputs[j] == self.inputs[d]);
+                self.layouts[d] = match same {
+                    Some(j) => self.layouts[j].clone(),
+                    None => Some(self.layout(d)?),
+                };
+            }
             let bytes: Vec<u8> = vertices.iter().flat_map(|v| v.to_le_bytes()).collect();
             let (index, offset, discard) = self.ring_at.alloc(bytes.len() as u32);
             let vb = self.ring[index].clone();
@@ -644,7 +759,7 @@ mod device {
             err("Map", c.Map(&vb, 0, kind, 0, Some(&mut m)))?;
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), m.pData.cast::<u8>().add(offset as usize), bytes.len());
             c.Unmap(&vb, 0);
-            c.IASetInputLayout(&self.layouts[d]);
+            c.IASetInputLayout(self.layouts[d].as_ref());
             let stride = self.strides[d];
             c.IASetVertexBuffers(0, 1, Some(&Some(vb)), Some(&stride), Some(&offset));
             c.IASetIndexBuffer(&self.ib, DXGI_FORMAT_R16_UINT, 0);
