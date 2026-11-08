@@ -84,6 +84,7 @@ struct Crt {
     atan2f: F2,
     powf: F2,
     log10f: F1,
+    logf: F1,
     sin: D1,
     cos: D1,
     asin: D1,
@@ -123,6 +124,9 @@ unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
 }
 unsafe extern "C" fn std_log10f(x: f32) -> f32 {
     x.log10()
+}
+unsafe extern "C" fn std_logf(x: f32) -> f32 {
+    x.ln()
 }
 unsafe extern "C" fn std_sin(x: f64) -> f64 {
     x.sin()
@@ -190,6 +194,9 @@ const PURE: Crt = Crt {
     // (the DLL's log10f is not rewritten: its one reader rounds the result to a whole
     // number, the wheel speeds of a multiplayer car update)
     log10f: std_log10f,
+    // shortcut: the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a
+    // last-bit difference moves the exposure by one ulp); port it if a pure proof shows one
+    logf: std_logf,
     sin: pure_sin,
     // (the DLL's double-precision cosine is not rewritten: only the version 1 flames' wobble
     // reads it, on a desktop that has the DLL)
@@ -215,6 +222,7 @@ const STD: Crt = Crt {
     atan2f: std_atan2f,
     powf: std_powf,
     log10f: std_log10f,
+    logf: std_logf,
     sin: std_sin,
     cos: std_cos,
     // (the DLL's double-precision asin, acos, tan and pow are not rewritten: only the AI
@@ -261,6 +269,7 @@ mod msvcr120 {
                 atan2f: std::mem::transmute::<*mut c_void, super::F2>(get(c"atan2f")?),
                 powf: std::mem::transmute::<*mut c_void, super::F2>(get(c"powf")?),
                 log10f: std::mem::transmute::<*mut c_void, super::F1>(get(c"log10f")?),
+                logf: std::mem::transmute::<*mut c_void, super::F1>(get(c"logf")?),
                 sin: std::mem::transmute::<*mut c_void, super::D1>(get(c"sin")?),
                 cos: std::mem::transmute::<*mut c_void, super::D1>(get(c"cos")?),
                 asin: std::mem::transmute::<*mut c_void, super::D1>(get(c"asin")?),
@@ -401,6 +410,13 @@ pub fn powf(x: f32, y: f32) -> f32 {
 pub fn log10f(x: f32) -> f32 {
     // SAFETY: as `sinf`.
     unsafe { (crt().log10f)(x) }
+}
+
+/// `logf` (MSVCR120). Without the DLL: Rust's own.
+#[inline]
+pub fn logf(x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().logf)(x) }
 }
 
 /// `sin` (MSVCR120), double precision.
