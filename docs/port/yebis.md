@@ -1,3 +1,128 @@
+# Task Y3c: YEBIS's setup and teardown mapped in game code; step 1 stopped before it (rule 7)
+
+## Resume here
+
+- **Not released (no code change).** Step 1 is about 60 KB of game code, not the expected ~30 KB, so
+  it was stopped before it under rule 7. Steps 2 and 3 depend on it. The whole of it moves to **Task
+  Y3d**, split as below. Heat shimmer and VR with YEBIS move with it.
+- Check (unchanged): `bash re/scratch/taskY3b/regress.sh`. Frame-10 logs of the resize run are in
+  `re/scratch/taskY3/runs/rszfx/*.f10.gpulog`. `re/scratch/taskY3c/init_skim.c` is
+  `CPostEffect::Initialize` with prints and declarations removed (scratch only, not committed).
+- Disk: C: had 21 GB free at the start and 21 GB at the end (no build or run was made).
+
+## What it found
+
+1. **Who creates what on a remake** (the order in game frame 10 of rszfx, log lines 141–2200):
+   - The KGL resize (lines 141–151, already ported).
+   - `IGPUDevice::InitializeDevice` 0x1403d4610 (lines 152–232), about 3.5 KB:
+     - `…_DrawRectDefaultStates` 0x1403d48c0: raster, depth, blend.
+     - `…_RenderStateMode` 0x1403d4b00: for p in 0..64, a blend then a raster, only when
+       blend = p&7 ≤ 4 and write = p>>3&3 ≤ 2 (30 pairs). Blend modes: 0 (off, 2/2/1), 1 (5/6/1), 2
+       (2/2/1), 3 (2/4/1, alpha 2/6/1), 4 (2/0xe/1). Write masks: 0xf, 7, 8. Scissor = p>>5&1.
+     - `…_SamplerStateMode` 0x1403d4dd0: 16 samplers. kind p&3 is filter 0x14/0/0x14/0x15 with MaxLOD
+       0/0/FLT_MAX/FLT_MAX. Address p>>2&3 is border/clamp/mirror/wrap (W is always clamp). The
+       port's SB, SL, SP, SW and SLB are game samplers 1, 4, 5, 13 and 0.
+     - `InitializeDeviceBuffers` 0x1403d4330: OMGetRenderTargets, then binds the screen and its
+       viewport (lines 231–232).
+     - The D3D11 runtime normalizes bound state descriptions, so creating the states with the game's
+       exact bytes leaves every per-frame log line as it is.
+   - `CTextureUtil::InitializeDevice` 0x1403e6890 (4,944 B, reached through a vtable) creates:
+     - lines 233–281: a 16x16 f27 target; the 4x4 dither; film grain 256x256 with 9 mips; spectrum
+       256x1 with 9 mips; Gaussian 64x64 A8 with 5 mips; three 1x1 textures; a 16x16 depth; a 16x16
+       analyzer.
+     - lines 282–1822: 768× B192 (the port's ring), B8 with data, 768× B32, 3× B45056, and B3072 with
+       data.
+   - Render targets (lines 1823–1970, about 40) are allocated through `CRenderTexturePool`
+     (`AllocateTextures` 0x140411900, `CanBeShared` / `PostTexture`, which decide how many distinct
+     80x45 targets exist), `CRenderTextureArray` (0x14040ede0 / 0x14040f710), the glare and DOF
+     `CreateSystemObjects` (0x140413c00 6,432 B, 0x1404200a0 9,904 B) and the luminance managers
+     (0x140432ea0 / 0x140431b70). They are then created on the device in `CGPUResourceManage`
+     registration order (`ResetDevice` 0x1403dd640, `InitializeDevice` 0x1403dd8b0). The whole run is
+     driven by `CPostEffect::Initialize` 0x1403bbb80 (19,744 B).
+   - **The 49 clears** come from `CRenderTexture::CreateDeviceResources` 0x1403d1280 (2,320 B), which
+     clears when `ms_bClearWhenInitializeDevice` is set (`CPostEffect::Initialize` sets it). Each clear
+     binds the target and viewport, clears to 0 and rebinds the screen. Some runs of 80x45 targets rebind the screen only
+     once; why is not traced yet.
+2. **The teardown's source.** `CPostEffect::Initialize` first calls `CPostEffect::Uninitialize`
+   0x1403c08a0 (4,048 B). That releases each render texture through `CRenderTexture::UninitializeDevice`
+   0x1403d29f0 (1,328 B), which:
+   - takes the default surface (device vtable +0x58);
+   - binds it as target 0 (+0x30), which logs the OMSet screen and viewport pair;
+   - sets targets 1–3 and the depth to null (+0x30 / +0x38).
+
+   So a remake really is teardown plus setup inside one `Initialize`. `IGPUDevice::ReleaseDeviceBuffers`
+   0x1403d55f0 and `CTextureUtil::UninitializeDevice` 0x1403e7c10 release the rest.
+3. **Size.**
+
+   | Part | Code |
+   |---|---|
+   | device states | ~3.5 KB |
+   | CTextureUtil | ~5.8 KB |
+   | CPostEffect::Initialize | 19.7 KB |
+   | glare | ~7.3 KB |
+   | DOF | ~11.3 KB |
+   | luminance | ~2.1 KB |
+   | pool, array, render texture and resource manager | ~10 KB |
+   | teardown | ~6.5 KB |
+   | **total** | **about 66 KB, against the ~30 KB expected** |
+
+4. **A gap in the proof.** The oracle names a texture by a hash read back when its first view is
+   created, which is before `UpdateSubresource`, so the hash is of an empty texture. The generated
+   textures' contents (film grain, spectrum, Gaussian, the 64x64 A8 at line 1915) therefore never
+   reach the call log. Only the B8 and B3072 buffers are checked by content. Proving the CRT maths
+   needs a gpulog option, behind an env var, that hashes texture `UpdateSubresource` data.
+5. **`rand()` for heat shimmer.** acs.exe has 39 `rand` call sites and 4 `srand` sites. Some are
+   `ksRand` 0x140033770 / 0x1400337c0, which `CarBrakeLights::loadLights` and others use. The
+   `ksRandomize` 0x14004b290 site sits in `ACClient::handshakeTCP`, and `CameraFacing::CameraFacing`
+   0x14005e640 and `PhysicsDriveThread::run` / `step` call `srand` themselves. MSVCR120 keeps the
+   `rand` state per thread (`_holdrand` in the thread data). So the physics thread's draws never mix
+   with the render thread's, and the shimmer only has to follow the render thread's sequence.
+
+| Case | Frames compared | Call log | Pixels |
+|---|---|---|---|
+| all (no code change; nothing run) | - | - | - |
+
+## What next needs (Task Y3d, split)
+
+- **Y3d-1, about 1 session.** Port the device states, `CTextureUtil::InitializeDevice` (textures with
+  their CRT maths, plus the 1541 buffers) and the screen bind into `Yebis::new`, in the game's order.
+  Map the port's five samplers to game indices 1, 4, 5, 13 and 0. Add the gpulog texture-data hash.
+  Frame 10's first difference should then move from line 141 to the first render target at line 1823.
+- **Y3d-2, about 2 sessions.** Port the render-texture side: the pool's sharing rules, the array, the
+  glare, DOF and luminance allocations, the resource-manager creation order and the 49 clears. The
+  port's effect, tonemap, luminance, analysis and depth targets become entries of that set. Then port
+  the teardown (`CPostEffect::Uninitialize` → `CRenderTexture::UninitializeDevice`), so a remake is
+  `Uninitialize` plus `Initialize`. Check: rszfx and trirsz frame 10 IDENTICAL, then the 16 `--post`
+  rows and `--quick`.
+- **Y3d-3, heat shimmer, about 1–1.5 sessions, after Y3d-1** (it needs the CTextureUtil textures):
+  - The updater 0x1400abc20 and `KGLYebisParticle::initialize` 0x140024600, which draws seven
+    `rand()` per particle.
+  - The four PPFX functions and their programs.
+  - A root with `HEAT_SHIMMER=1` and a slow tape segment.
+  - For `rand()`, one render-thread `MsvcRand` (crates/rustyac-physics/src/session.rs), starting at 1
+    like MSVCR120's per-thread default. Pass it by `&mut` to every render-thread caller in the game's
+    order (`ParticleGenerator::generateParticle`, `SkyBox::updateCloudsGeneration`,
+    `ACCameraManager::stepCameraRandom`, `CameraModeStart::updateCar`, `ksRand` users, the shimmer
+    particles), applying `CameraFacing`'s and `ksRandomize`'s `srand` where the game calls them.
+    Physics-thread callers (AI, drag, pit, sessions) keep their own state.
+  - Before porting, list the render-thread callers that are live in the proof's frames, for example by
+    counting calls through the `rand` import slot in an oracle run. A frame with no other live
+    caller makes a first proof possible without the rest.
+- VR with YEBIS (`YebisPP`): about one session, unchanged.
+
+## Not done
+
+- Steps 1–3: the setup port, the teardown port, the runs and the v0.48.4 release. All of them were
+  stopped under rule 7 with the estimate above.
+- Heat shimmer and VR with YEBIS (Task Y3d).
+
+## Open questions
+
+- Whether `CRenderTexturePool::CanBeShared` gives the same sharing at every window size, or whether
+  the number of 80x45 targets changes with the size (to be checked in trirsz at 3840x720).
+- Which render-thread `rand()` callers are live in a shimmer proof's frames: particles and sky clouds
+  likely are.
+
 # Task Y3b: the two Y3 shortcuts from game code; the resize remake and heat shimmer stopped (rule 7)
 
 ## Resume here
