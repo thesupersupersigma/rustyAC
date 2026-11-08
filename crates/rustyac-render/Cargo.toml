@@ -19,8 +19,9 @@ rustyac-gui = { path = "../rustyac-gui" }
 # native wgpu: for now only the per-shader proof of the WGSL translation uses it
 # (Vulkan for SwiftShader, the second software rasterizer of the proof)
 wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"], optional = true }
-# the game's compiled shaders read and translated to WGSL: kgl on wgpu (backend-wgpu)
-rustyac-dxbc = { path = "../rustyac-dxbc", optional = true }
+# the game's compiled shaders read: YEBIS's variable lists and input layouts, and the WGSL
+# translation of kgl on wgpu (backend-wgpu)
+rustyac-dxbc = { path = "../rustyac-dxbc" }
 # png textures without WIC (kgl on wgpu)
 png = { version = "0.17", optional = true }
 # and jpg (pure Rust, no threads: it also runs in the browser)
@@ -47,15 +48,13 @@ features = [
 ]
 
 [dev-dependencies]
-# the game's compiled shaders read without Direct3D: the reflection test and the WGSL proof
-rustyac-dxbc = { path = "../rustyac-dxbc" }
 # the proof prints wgpu's and the D3D12 debug layer's messages (already in the lock file through wgpu)
 log = "0.4"
 
 [features]
 wgpu = ["dep:wgpu"]
 # kgl on wgpu instead of Direct3D 11 (kgl_wgpu.rs): the same renderer above it
-backend-wgpu = ["wgpu", "dep:rustyac-dxbc", "dep:png", "dep:jpeg-decoder"]
+backend-wgpu = ["wgpu", "dep:png", "dep:jpeg-decoder"]
 
 [[example]]
 name = "shader_proof"

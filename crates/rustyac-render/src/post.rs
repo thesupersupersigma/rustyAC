@@ -13,11 +13,10 @@
 //! YEBIS turns that picture into the final one, into the screen or into a target the game's
 //! FXAA pass (`ksFXAA`) reads.
 //!
-//! **YEBIS itself is not here** (Task 23b): where the game calls
-//! `CameraForwardYebis::applyPostProcessing` 0x140025c30 this draws [`stand_in_apply_effects`],
-//! a plain copy with the game's `ksPostCopy` shader: no tone mapping, no glare, no depth of
-//! field. Everything else is the game's call for call, and the render oracle runs the game's
-//! own `CameraForwardYebis` with that one function swapped for the same copy.
+//! Where the game calls `CameraForwardYebis::applyPostProcessing` 0x140025c30 this draws YEBIS
+//! ([`crate::yebis`], Task Y2b) once [`CameraForwardYebis::start_yebis`] has read it from the
+//! player's acs.exe; until then (and on wgpu) [`stand_in_apply_effects`], a plain copy with the
+//! game's `ksPostCopy` shader, which the render oracle swaps into the game for the same frame.
 
 use rustyac_content::vfs::PathExt;
 use crate::kgl::{FORMAT_R32F as DXGI_FORMAT_R32_FLOAT, FORMAT_RGBA16F as DXGI_FORMAT_R16G16B16A16_FLOAT, FORMAT_RGBA8 as DXGI_FORMAT_R8G8B8A8_UNORM};
@@ -47,6 +46,9 @@ pub struct CameraForwardYebis {
     height: i32,
     /// NOT Assetto Corsa: the shader of the copy that stands where YEBIS will be
     stand_in_shader: Option<ShaderId>,
+    /// YEBIS (`CPostEffect`), once started
+    #[cfg(all(windows, not(feature = "backend-wgpu")))]
+    yebis: Option<crate::yebis::Yebis>,
 }
 
 impl std::ops::Deref for CameraForwardYebis {
@@ -79,6 +81,8 @@ impl CameraForwardYebis {
             width: 0,
             height: 0,
             stand_in_shader: None,
+            #[cfg(all(windows, not(feature = "backend-wgpu")))]
+            yebis: None,
         };
         if graphics.video.pp_hdr_enabled {
             camera.depth_resolve_shader = Some(graphics.shaders.get_shader(&graphics.kgl, "ksMSDepthResolve")?);
@@ -159,6 +163,18 @@ impl CameraForwardYebis {
         Ok(())
     }
 
+    /// Reads YEBIS from `root`'s acs.exe and makes its objects: call after [`Self::new`], outside
+    /// a logged frame. `video` is video.ini; its `[POST_PROCESS] FILTER` names the ppfilter.
+    #[cfg(all(windows, not(feature = "backend-wgpu")))]
+    pub fn start_yebis(&mut self, graphics: &Graphics, root: &std::path::Path, video: rustyac_physics::data::ini::IniReader) -> Result<(), String> {
+        let filter = video.get_string("POST_PROCESS", "FILTER");
+        let filter = rustyac_physics::data::ini::IniReader::load(&root.join("system/cfg/ppfilters").join(format!("{filter}.ini")))?;
+        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height)?);
+        // YEBIS's initPostProcessing leaves the screen bound without depth (and kgl's cache unaware)
+        unsafe { graphics.kgl.context.OMSetRenderTargets(Some(std::slice::from_ref(&graphics.kgl.screen_render_target.render_target_view)), None) };
+        Ok(())
+    }
+
     /// `CameraForwardYebis::renderApplyEffect` 0x14002a740.
     fn render_apply_effect(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, unblurred: NodeId, root: NodeId, dt: f32) {
         let Some(ms) = self.yebis_rt_ms.take() else { return };
@@ -183,6 +199,31 @@ impl CameraForwardYebis {
         }
         // CameraForwardYebis::applyPostProcessing 0x140025c30: YEBIS. Its source is the resolved
         // colour (or the scene target itself), its destination the FXAA target or the screen.
+        #[cfg(all(windows, not(feature = "backend-wgpu")))]
+        if let Some(yebis) = &mut self.yebis {
+            let depth = match &self.yebis_rt_resolved_depth {
+                Some(resolved) => resolved.kid_color.as_ref(),
+                None => ms.kid_depth.as_ref(),
+            };
+            let scene = match &self.yebis_rt_resolved_color {
+                Some(resolved) => resolved.kid_color.as_ref(),
+                None => ms.kid_color.as_ref(),
+            };
+            let destination = match &self.fxaa_temp_rt {
+                Some(t) => t.kid_color.as_ref().and_then(|c| c.render_target_view.clone()),
+                None => graphics.kgl.screen_render_target.render_target_view.clone(),
+            };
+            let camera = &self.forward.base.camera;
+            let camera = crate::yebis_cb::Camera { near: camera.near_plane, far: camera.far_plane, fov_deg: camera.fov, width: self.width as u32, height: self.height as u32 };
+            if let (Some(depth), Some(scene), Some(destination)) = (depth.and_then(|t| t.shader_resource_view.as_ref()), scene.and_then(|t| t.shader_resource_view.as_ref()), destination) {
+                if let Err(e) = yebis.render(depth, scene, &destination, &camera) {
+                    eprintln!("{e}");
+                }
+            }
+            graphics.trigger_query("YEBIS");
+            self.yebis_rt_ms = Some(ms);
+            return;
+        }
         {
             let source = match &self.yebis_rt_resolved_color {
                 Some(resolved) => resolved.kid_color.as_ref(),
@@ -215,7 +256,7 @@ fn color_target(graphics: &Graphics, format: crate::kgl::Format, width: i32, hei
     RenderTarget { kid_color: Some(color), kid_depth: None, width, height }
 }
 
-/// NOT Assetto Corsa: what stands where YEBIS' `ApplyEffects` will be (Task 23b). The source
+/// NOT Assetto Corsa: what stands where YEBIS' `ApplyEffects` is when YEBIS is not started. The source
 /// picture is copied into the destination (`None`: the screen) as it is, by one full-screen
 /// quad with the game's `ksPostCopy` shader; a target of 8 bits a channel cuts values above 1.
 /// The render oracle's game side draws exactly this in place of `applyPostProcessing`.

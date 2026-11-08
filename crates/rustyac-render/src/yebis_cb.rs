@@ -46,6 +46,7 @@ const PRE_TONEMAP_GLARE: usize = 3488;
 const TRANSFORM: usize = 3584;
 
 const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+/// BT.709 luma weights (YEBIS's colour code uses them as immediates).
 const LUM: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// What the camera and the frame hand YEBIS (`updateYebisParameters` 0x140029e30).
@@ -276,7 +277,8 @@ fn saturation(s: f32) -> [f32; 16] {
     m
 }
 
-/// GPUMath_ColorMatrix_XYZ_to_RGB 0x1403a1630 (sRGB).
+/// GPUMath_ColorMatrix_XYZ_to_RGB 0x1403a1630: the standard sRGB / BT.709 (D65) XYZ-to-RGB matrix,
+/// column by column, as the code's immediates.
 const XYZ_TO_RGB: [u32; 12] = [
     0x404f6402, 0xbf782129, 0x3d63ef28, 0, 0xbfc4c155, 0x3ff02079, 0xbe50f0a6, 0, 0xbeff3ffb, 0x3d2a36a0, 0x3f8755f8, 0,
 ];
@@ -508,37 +510,48 @@ fn filmic_norm(t: &[f32; 21], v: f32) -> f32 {
     (t[j] - t[i]) * (x - i as f32) + t[i]
 }
 
+/// Used `$Globals` ranges of a technique's two programs (D3D_SVF_USED), read from the bytecode at
+/// run time. A variable is copied up to the end of its register or the next variable, whichever
+/// comes first (measured: the 8-byte depth cast goes up with its register's .zw).
+pub fn used(vs: &[u8], ps: &[u8]) -> Result<Vec<(usize, usize)>, String> {
+    let mut r = Vec::new();
+    for blob in [vs, ps] {
+        for cb in rustyac_dxbc::parse(blob)?.reflection.constant_buffers {
+            if cb.size != 4096 {
+                return Err(format!("constant buffer {} is {} bytes, not 4096", cb.name, cb.size));
+            }
+            let vars = &cb.variables;
+            for (k, v) in vars.iter().enumerate().filter(|(_, v)| v.flags & 2 != 0) {
+                let next = vars.get(k + 1).map_or(4096, |n| n.offset);
+                let end = next.min((v.offset + v.size).div_ceil(16) * 16);
+                r.push((v.offset as usize, (end - v.offset) as usize));
+            }
+        }
+    }
+    Ok(r)
+}
+
+/// `used` for all 8 draws.
+pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<[Vec<(usize, usize)>; 8], String> {
+    let mut out: [Vec<(usize, usize)>; 8] = Default::default();
+    for (o, name) in out.iter_mut().zip(TECHNIQUES) {
+        let (vs, ps) = tfxo.technique(name).ok_or_else(|| format!("no technique {name}"))?;
+        *o = used(vs, ps)?;
+    }
+    Ok(out)
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use crate::yebis_tfxo::Tfxo;
     use std::path::{Path, PathBuf};
 
-    const SCENES: [(&str, &str); 3] = [("r23_09", "spa_chase"), ("r23_10", "spa_chase"), ("r23_16", "monza_chase")];
+    const SCENES: [(&str, &str); 3] = [("r23_09", "spa_chase_r23_09"), ("r23_10", "spa_chase_r23_10"), ("r23_16", "monza_chase_r23_16")];
     const NAMES: [&str; 8] = ["depth factor", "CA", "luminance", "tone map", "depth factor 2", "CA 2", "tone map 2", "composite"];
 
-    /// Used `$Globals` ranges of a technique's two programs (D3D_SVF_USED). A variable is copied
-    /// up to the end of its register or the next variable, whichever comes first (measured: the
-    /// 8-byte depth cast goes up with its register's .zw).
-    fn used(tfxo: &Tfxo, name: &str) -> Vec<(usize, usize)> {
-        let (vs, ps) = tfxo.technique(name).unwrap();
-        let mut r = Vec::new();
-        for blob in [vs, ps] {
-            for cb in rustyac_dxbc::parse(blob).unwrap().reflection.constant_buffers {
-                assert_eq!(cb.size, 4096, "{name} {}", cb.name);
-                let vars = &cb.variables;
-                for (k, v) in vars.iter().enumerate().filter(|(_, v)| v.flags & 2 != 0) {
-                    let next = vars.get(k + 1).map_or(4096, |n| n.offset);
-                    let end = next.min((v.offset + v.size).div_ceil(16) * 16);
-                    r.push((v.offset as usize, (end - v.offset) as usize));
-                }
-            }
-        }
-        r
-    }
-
     /// The last 8 constant buffer uploads of an oracle `RENDER_ORACLE_YEBIS=1` log (git-ignored,
-    /// re/scratch/taskY2a/runs).
+    /// re/scratch/taskY2b/runs: the game side zeroes CRenderGlare+0x108, so draw 8 is +0).
     fn logged(path: &Path) -> Option<Vec<Vec<u8>>> {
         let text = std::fs::read_to_string(path).ok()?;
         let ups: Vec<Vec<u8>> = text
@@ -564,26 +577,14 @@ mod tests {
         let exe = std::fs::read(root.join("acs.exe")).unwrap();
         let filmic = filmic_table(&exe).unwrap();
         let tfxo = Tfxo::from_exe(&exe).unwrap();
-        let used: [Vec<(usize, usize)>; 8] = std::array::from_fn(|d| used(&tfxo, TECHNIQUES[d]));
+        let used = used_all(&tfxo).unwrap();
         let mut cb = Cbuffer::default();
         cb.frame(&pe, &filmic, &used);
         cb.frame(&pe, &filmic, &used)
     }
 
-    /// Draw 8's alpha is CRenderGlare+0x108 x 0 with the glare off: +0 or -0 by chance.
-    fn same(d: usize, a: &[u8], b: &[u8]) -> bool {
-        let mask = |x: &[u8]| {
-            let mut x = x.to_vec();
-            if d == 7 {
-                x[MODULATE + 15] &= 0x7f;
-            }
-            x
-        };
-        mask(a) == mask(b)
-    }
-
     fn runs() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/scratch/taskY2a/runs")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/scratch/taskY2b/runs")
     }
 
     #[test]
@@ -600,7 +601,7 @@ mod tests {
                 continue;
             };
             for d in 0..8 {
-                let ok = same(d, &ours[d], &game[d]);
+                let ok = game[d] == ours[d];
                 eprintln!("{scene} draw {} {:<15} {}", d + 1, NAMES[d], if ok { "IDENTICAL" } else { "DIFFERENT" });
                 if !ok {
                     let first = (0..4096).find(|&k| ours[d][k] != game[d][k]).unwrap();
@@ -619,14 +620,14 @@ mod tests {
             eprintln!("no Assetto Corsa install: skipped");
             return;
         };
-        let Some(game) = logged(&runs().join("r23_09/spa_chase.ac.gpulog")) else {
+        let Some(game) = logged(&runs().join("r23_09/spa_chase_r23_09.ac.gpulog")) else {
             eprintln!("no oracle log: skipped");
             return;
         };
         let text = std::fs::read_to_string(root.join("system/cfg/ppfilters/default.ini")).unwrap();
         assert!(text.contains("SATURATION=0.95"));
         let ours = rust_frame(&root, Some(&text.replace("SATURATION=0.95", "SATURATION=0.9")));
-        let differ: Vec<usize> = (0..8).filter(|&d| !same(d, &ours[d], &game[d])).map(|d| d + 1).collect();
+        let differ: Vec<usize> = (0..8).filter(|&d| game[d] != ours[d]).map(|d| d + 1).collect();
         assert_eq!(differ, [4]);
     }
 
@@ -636,4 +637,5 @@ mod tests {
         s[12..15].copy_from_slice(&[640.0, 360.0, 0.0]);
         assert_eq!(mul(&s, &inverse(&s)), IDENTITY);
     }
+
 }

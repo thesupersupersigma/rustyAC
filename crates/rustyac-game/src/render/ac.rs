@@ -301,7 +301,7 @@ pub struct AcOptions {
     pub fxaa: Option<bool>,
     pub motion_blur: Option<f32>,
     /// `--hdr-levels`: with post-processing on, the engine's HDR light levels as in the game
-    /// (washed out until YEBIS is there to map them)
+    /// (washed out unless YEBIS maps them)
     pub hdr_levels: bool,
     /// rustyAC's own folder (`conditions::own_dir`), where generated car shadows are kept;
     /// `None` (the page): they are not kept
@@ -362,9 +362,9 @@ impl GraphicsPreset {
     }
 
     /// The `video.ini` the launcher would write with every slider at its end, four samples per
-    /// pixel, and post-processing off: `[POST_PROCESS] ENABLED=0` until YEBIS is ported (Task
-    /// 23b). The post-processing frame without YEBIS' tone mapping is a picture the game never
-    /// draws (Task 23), so the preset does not switch it on; with it off, FXAA and motion blur
+    /// pixel, and post-processing off: `[POST_PROCESS] ENABLED=0` until all of YEBIS is ported
+    /// (Task Y2b drew its filter and tone mapping; glare, depth of field and eye adaptation are
+    /// still missing), so the preset does not switch it on; with it off, FXAA and motion blur
     /// do not exist in acs.exe either. `--post 1 --fxaa 1 --motion-blur 6` ask for that frame.
     ///
     /// The reflection cube map is 1024, not the launcher's highest 2048 (Task 22c): with six
@@ -680,7 +680,7 @@ impl AcRenderer {
             notes.retain(|n| !n.contains("[CUBEMAP] SIZE=0"));
             notes.insert(0, format!("{video_name}: the built-in settings, your video.ini is not read"));
             if options.preset == Some(GraphicsPreset::Max) {
-                notes.insert(1, "  (4 samples per pixel; post-processing stays off until YEBIS is ported: --post 1 --fxaa 1 --motion-blur 6 switch its frame on)".to_string());
+                notes.insert(1, "  (4 samples per pixel; post-processing stays off until all of YEBIS is ported: --post 1 --fxaa 1 --motion-blur 6 switch its frame on)".to_string());
             }
         } else if options.video_ini.is_some() {
             notes.insert(0, format!("the video settings of {video_name}"));
@@ -704,8 +704,8 @@ impl AcRenderer {
         }
         if video.pp_hdr_enabled {
             notes.retain(|n| !n.contains("do nothing then"));
-            // YEBIS is Task 23b: without its tone mapper the engine's HDR levels wash the picture
-            // out, so everything outside the camera's frame keeps the levels of "off"
+            // without YEBIS's tone mapper the engine's HDR levels wash the picture out, so the
+            // levels of "off" stay until YEBIS starts (below, Task Y2b)
             video.ldr_levels = !options.hdr_levels;
             let mut parts = vec![format!("{} samples", video.aa_samples)];
             if video.pp_fxaa {
@@ -715,9 +715,9 @@ impl AcRenderer {
                 parts.push(format!("motion blur {motion_blur}"));
             }
             notes.push(format!(
-                "post-processing on: the game's post-processing frame ({}) without YEBIS itself (its filter, tone mapping, glare, depth of field come in Task 23b){}",
+                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter and tone mapping from your acs.exe on Direct3D (no glare, depth of field or eye adaptation yet){}",
                 parts.join(", "),
-                if options.hdr_levels { "; --hdr-levels: the engine's HDR light levels, which only YEBIS brings back into range" } else { "; the light levels stay those of post-processing off" }
+                if options.hdr_levels { "; --hdr-levels: the engine's HDR light levels, which only YEBIS brings back into range" } else { "; the light levels are the game's once YEBIS starts" }
             ));
         }
         // the high-quality mirror's target has the screen's samples
@@ -823,6 +823,17 @@ impl AcRenderer {
         camera.base.camera.min_exposure = hdr_levels.min_exposure;
         camera.base.camera.max_exposure = hdr_levels.max_exposure;
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
+        // Task Y2b: YEBIS from the player's acs.exe; with its tone mapper the light levels are the game's
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if graphics.video.pp_hdr_enabled {
+            let video = video_ini.clone().unwrap_or_else(|| IniReader::from_text(std::path::Path::new("video.ini"), "[POST_PROCESS]
+FILTER=default
+"));
+            match camera.start_yebis(&graphics, &options.game, video) {
+                Ok(()) => graphics.video.ldr_levels = false,
+                Err(e) => notes.push(format!("{e}; post-processing without YEBIS")),
+            }
+        }
         camera.base.camera.max_layer = graphics.video.world_detail as f32;
         // SkyBox::SkyBox: race.ini [WEATHER] NAME makes the clouds a first time
         let weather = (!options.weather.is_empty()).then(|| options.weather.clone());

@@ -221,6 +221,11 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     let profile = crate::root::profile();
     // (CameraTripleScreen's constructor asks for no blur)
     let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur > 0 && !profile.triple)?;
+    // Task Y2b: YEBIS on the port's side too when the game's side runs it
+    if profile.post && std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
+        let video = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("video.ini"), &crate::root::video_ini(args.width, args.height));
+        camera.start_yebis(&graphics, &args.game, video)?;
+    }
     if profile.triple {
         let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::root::TRIPLE_SCREEN_INI);
         camera.base.triple = Some(Box::new(rustyac_render::triple::TripleScreen::new(&ini, graphics.video.width, graphics.video.height)?));

@@ -143,6 +143,7 @@ const VA_CAMERA_TRIPLE_SCREEN_CTOR: usize = 0x1_4022_48e0; // CameraTripleScreen
 const VA_CAMERA_FORWARD_YEBIS_CTOR: usize = 0x1_4002_5db0; // CameraForwardYebis::CameraForwardYebis(const std::wstring&, GraphicsManager*, bool, bool, int)
 const VA_YEBIS_INIT_POST_PROCESSING: usize = 0x1_4002_4ca0; // CameraForwardYebis::initPostProcessing()
 const VA_YEBIS_APPLY_POST_PROCESSING: usize = 0x1_4002_5c30; // CameraForwardYebis::applyPostProcessing()
+const VA_PFX_SYSTEM: usize = 0x1_4155_d670; // the global PPFX::GetRenderGlare reads
 const VA_GRAPHICS_GET_SHADER: usize = 0x1_4020_2c60; // GraphicsManager::getShader(const std::wstring&)
 const VA_GRAPHICS_SET_BLEND_MODE: usize = 0x1_4020_44e0; // GraphicsManager::setBlendMode(BlendMode)
 const VA_GRAPHICS_SET_DEPTH_MODE: usize = 0x1_4020_4580; // GraphicsManager::setDepthMode(DepthMode)
@@ -958,6 +959,16 @@ impl Game {
                 ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1)
             };
             self.hdr_flag(false);
+            if std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
+                // CRenderGlare+0x108 (PPFX::GetRenderGlare 0x14039e960) is never set with GLARE=0, so
+                // draw 8's alpha (GenerateGlare_GetGlareResultScale) is ±0 by chance: make it +0
+                let system = *(acs.va(VA_PFX_SYSTEM) as *const *mut u8);
+                let glare = if system.is_null() { std::ptr::null_mut() } else { *(system.add(0x108) as *const *mut u8) };
+                if glare.is_null() {
+                    return Err("YEBIS: no CRenderGlare after initPostProcessing".into());
+                }
+                wr(glare, 0x108, 0.0f32);
+            }
             wr(camera, 0x2a0, profile.motion_blur as f32 * 2.0); // blurQuality (Sim::Sim)
             camera
         } else if profile.oculus {
