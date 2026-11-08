@@ -12,7 +12,7 @@
 //! The programs and the filmic table are read from the player's acs.exe at start; nothing of
 //! YEBIS is in this source but the call order, the state descriptions and the small constants.
 //!
-//! Auto exposure (Task Y2c): frames draw one of the five rows of the 128x64 luminance target in
+//! Auto exposure (Task Y2c): frames draw one of the five rows of the luminance target (128x64 at 16:9) in
 //! turn, then one frame reduces it to 1x1 and copies that into a read-back texture that a later
 //! frame reads without waiting; `yebis_cb::AutoExposure` turns the result into the exposure.
 
@@ -77,9 +77,30 @@ pub fn rect_vertices(size: [f32; 2], rect: [f32; 4], tex: &[[f32; 4]]) -> Vec<f3
     out
 }
 
-/// The top of luminance row `row` of the 128x64 target; its viewport starts at the whole part.
-pub fn row_y(row: u32) -> f32 {
-    64.0 * (row as f32 * 0.2)
+/// The top of luminance row `row` of a target `lh` high; its viewport starts at the whole part.
+pub fn row_y(row: u32, lh: f32) -> f32 {
+    lh * (row as f32 * 0.2)
+}
+
+/// The luminance target of a `w` x `h` YEBIS and its analysis targets down to the 1x1 result:
+/// `CPostEffect::Initialize` 0x1403bbb80 (an eighth, power-of-two floor, at most 128 wide at the
+/// frame's aspect) and `CTextureLuminance::CreateSystemObjects` 0x140431b70 (2:1 steps).
+pub fn luminance_sizes(w: i32, h: i32) -> ((u32, u32), Vec<(u32, u32)>) {
+    let floor2 = |v: u32| 2f64.powi(((v as f64).ln() / 2f64.ln()) as i32) as u32;
+    let (mut lw, mut lh) = (floor2(w as u32 >> 3), floor2(h as u32 >> 3));
+    if lw > 128 {
+        lw = 128;
+        lh = (128.0 / (w as f32 / h as f32) + 0.49999) as u32;
+    }
+    let (mut aw, mut ah) = (floor2(lw), floor2(lh));
+    let n = ((1.0 / aw as f32).max(1.0 / ah as f32).ln() / 0.5f32.ln()).ceil() as i32 - 1;
+    let mut chain = Vec::new();
+    for _ in 0..n.max(0) {
+        (aw, ah) = ((aw as f32 / 2.0 + 0.99) as u32, (ah as f32 / 2.0 + 0.99) as u32);
+        chain.push((aw, ah));
+    }
+    chain.push((1, 1));
+    ((lw, lh), chain)
 }
 
 /// The vertices of draw `d` (0-based) of a `w` x `h` frame. `noise` is the draw's noise (draws
@@ -95,17 +116,19 @@ pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32, r
         [n0, n1, n0 + s2 * (((1024.0 / 1.0) * 2.0 * p33) / p32), n1 + s3 * (((1024.0 / 1.0) * 2.0) / p32)]
     };
     match d {
-        // TonemapToSurface 0x14041d7f0: one of the five rows of the 128x64 luminance target
+        // TonemapToSurface 0x14041d7f0: one of the five rows of the `w` x `h` luminance target
         2 => {
-            let y = row_y(row);
+            let y = row_y(row, h);
             let v = row as f32 * 0.2;
-            rect_vertices([128.0, 12.0], [0.0, y - y.trunc(), 128.0, 64.0 * 0.2], &[[0.0, v, 1.0, v + 0.2], zero, zero, noise_rect(0.0, 0.0), zero])
+            rect_vertices([w, (h * 0.2).trunc()], [0.0, y - y.trunc(), w, h * 0.2], &[[0.0, v, 1.0, v + 0.2], zero, zero, noise_rect(0.0, 0.0), zero])
         }
         // DrawRectGPU_TonemapHDR 0x1403f1b10: vignette, noise and the 4x4 dither
         3 | 6 => {
             let aspect = w / h;
             let a = vignette;
-            rect_vertices([w, h], [0.0, 0.0, w, h], &[full, zero, [-a * aspect, -a, a * aspect, a], noise_rect(1.0, aspect), [0.0, 0.0, w / 4.0, h / 4.0]])
+            // no vignette: the rectangle is left zero (+0, not -0)
+            let rect = if a == 0.0 { zero } else { [-a * aspect, -a, a * aspect, a] };
+            rect_vertices([w, h], [0.0, 0.0, w, h], &[full, zero, rect, noise_rect(1.0, aspect), [0.0, 0.0, w / 4.0, h / 4.0]])
         }
         7 => rect_vertices([w, h], [0.0, 0.0, w, h], &[full, zero, zero, zero]),
         _ => rect_vertices([w, h], [0.0, 0.0, w, h], &[full]),
@@ -177,8 +200,6 @@ mod device {
     const SP: usize = 2;
     const SW: usize = 3;
     const SLB: usize = 4;
-    /// The luminance analysis targets: 2:1 steps from 128x64, then 4x2 to 1x1.
-    const ANALYSIS: [(u32, u32); 6] = [(64, 32), (32, 16), (16, 8), (8, 4), (4, 2), (1, 1)];
 
     struct Target {
         rtv: ID3D11RenderTargetView,
@@ -202,7 +223,7 @@ mod device {
         lazy: Vec<(Vec<u8>, Vec<u8>)>,
         layouts: Vec<ID3D11InputLayout>,
         strides: Vec<u32>,
-        used: [Vec<(usize, usize)>; 10],
+        used: [Vec<(usize, usize)>; 13],
         filmic: [f32; 21],
         cb: ID3D11Buffer,
         cbuffer: Cbuffer,
@@ -219,7 +240,8 @@ mod device {
         current: usize,
         effect_depth: ID3D11DepthStencilView,
         luminance: Target,
-        analysis: Vec<(Target, ID3D11Texture2D)>,
+        luminance_size: (u32, u32),
+        analysis: Vec<(Target, ID3D11Texture2D, (u32, u32))>,
         readback: ID3D11Texture2D,
         auto_exposure: AutoExposure,
         /// One per round: the composite reads the first round's colour and the second's alpha.
@@ -233,7 +255,8 @@ mod device {
         root: std::path::PathBuf,
         filter: IniReader,
         video: IniReader,
-        vignette: f32,
+        /// The vignette's half-height, from the filter's `[VIGNETTING] STRENGTH` at init.
+        pub vignette: f32,
         width: i32,
         height: i32,
     }
@@ -327,17 +350,21 @@ mod device {
             let used = used_all(&tfxo)?;
             let vignette = vignette(&filter)?;
             unsafe {
-                let (mut vs, mut ps, mut layouts, mut strides, mut lazy) = (Vec::<Option<ID3D11VertexShader>>::new(), Vec::new(), Vec::<ID3D11InputLayout>::new(), Vec::new(), Vec::new());
+                let (mut vs, mut ps, mut layouts, mut strides, mut lazy) = (Vec::<Option<ID3D11VertexShader>>::new(), Vec::<Option<ID3D11PixelShader>>::new(), Vec::<ID3D11InputLayout>::new(), Vec::new(), Vec::new());
+                let mut made: Vec<(&[u8], &[u8])> = Vec::new();
                 for name in TECHNIQUES {
                     let (v, p) = tfxo.technique(name).ok_or_else(|| format!("yebis: no technique {name}"))?;
-                    if name.starts_with("MadT1_") {
-                        // the analysis programs are made on their first draw, as YEBIS does;
-                        // MadT1_S1's vertex program and both input layouts are the first technique's
+                    let (same_v, same_p) = (made.iter().position(|m| m.0 == v), made.iter().position(|m| m.1 == p));
+                    made.push((v, p));
+                    if vs.len() >= 8 {
+                        // the analysis and no-vignette programs are made on their first draw, as YEBIS does; a program
+                        // an earlier technique already made is shared, and so are its input layouts
                         lazy.push((v.to_vec(), p.to_vec()));
-                        vs.push(if name == "MadT1_S1" { vs[0].clone() } else { None });
-                        ps.push(None);
-                        layouts.push(layouts[0].clone());
-                        strides.push(strides[0]);
+                        vs.push(same_v.and_then(|i| vs[i].clone()));
+                        ps.push(same_p.and_then(|i| ps[i].clone()));
+                        let k = same_v.unwrap_or(0);
+                        layouts.push(layouts[k].clone());
+                        strides.push(strides[k]);
                         continue;
                     }
                     let mut s = None;
@@ -458,9 +485,11 @@ mod device {
                 }
                 let indices: [u16; 4] = [0, 1, 2, 3];
                 let ib_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+                let (luminance_size, chain) = super::luminance_sizes(width, height);
                 let mut analysis = Vec::new();
-                for (aw, ah) in ANALYSIS {
-                    analysis.push(target_texture(device, aw, ah, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?);
+                for (aw, ah) in chain {
+                    let (t, tex) = target_texture(device, aw, ah, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?;
+                    analysis.push((t, tex, (aw, ah)));
                 }
                 // the CPU copy of the 1x1 result
                 let rd = D3D11_TEXTURE2D_DESC {
@@ -499,7 +528,8 @@ mod device {
                     effect: [target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?, target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?],
                     current: 0,
                     effect_depth: dsv.ok_or("yebis: no view")?,
-                    luminance: target(device, 128, 64, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?,
+                    luminance: target(device, luminance_size.0, luminance_size.1, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?,
+                    luminance_size,
                     analysis,
                     readback: readback.ok_or("yebis: no texture")?,
                     auto_exposure: AutoExposure::default(),
@@ -643,9 +673,16 @@ mod device {
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
             let (t0, t1) = (self.tonemap[0].srv.clone(), self.tonemap[1].srv.clone());
             let (black, grey, white, dither) = (Some(self.black.clone()), Some(self.grey.clone()), Some(self.white.clone()), Some(self.dither.clone()));
-            let (depth, scene) = (Some(depth.clone()), Some(scene.clone()));
             let plain = |d: usize| draw_vertices(d, w, h, [0.0; 4], 0.0, 0);
             unsafe {
+                // a scene of another size (window resized with FXAA on) is read with the linear border sampler
+                // shortcut: rule taken from the game's Task Y3 logs, not from PPFX's code; check it there if a case disagrees
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                if let Some(t) = scene.GetResource().ok().and_then(|r| windows::core::Interface::cast::<ID3D11Texture2D>(&r).ok()) {
+                    t.GetDesc(&mut desc);
+                }
+                let ss = if (desc.Width as i32, desc.Height as i32) == (self.width, self.height) { SB } else { SLB };
+                let (depth, scene) = (Some(depth.clone()), Some(scene.clone()));
                 // BeginPostEffectScene / EndPostEffectScene: round one
                 self.current = 0;
                 self.effect_with_depth();
@@ -658,7 +695,7 @@ mod device {
                 self.full_viewport();
                 self.effect_of_eight();
                 let u = self.cbuffer.draw(0, &pe, &self.filmic, &self.used);
-                self.draw(0, &u, &[SB, SB], &[depth.clone(), scene.clone()], &plain(0))?;
+                self.draw(0, &u, &[SB, ss], &[depth.clone(), scene.clone()], &plain(0))?;
                 self.current = 1;
                 self.effect_with_depth();
                 self.full_viewport();
@@ -666,7 +703,6 @@ mod device {
                 self.draw(1, &u, &[SL], std::slice::from_ref(&e0), &plain(1))?;
                 // UpdateAutoExposure: last analysis's result if the GPU has it, then this frame's step
                 let readback = if self.auto_exposure.waiting() { self.read_back() } else { None };
-                // shortcut: with auto exposure off no luminance step is drawn (every shipped ppfilter has it on, never seen in a game log), check when a ppfilter turns it off
                 let step = pe.auto_exposure.map(|ae| {
                     let (e, step) = self.auto_exposure.frame(readback, ae, camera.dt);
                     pe.exposure = e;
@@ -676,38 +712,53 @@ mod device {
                     Some(Luminance::Row(row)) => {
                         self.effect_of_eight();
                         self.target_only(&self.luminance.rtv.clone());
-                        self.viewport(0.0, 0.0, 128.0, 64.0);
+                        let (lw, lh) = (self.luminance_size.0 as f32, self.luminance_size.1 as f32);
+                        self.viewport(0.0, 0.0, lw, lh);
                         self.reset();
-                        self.viewport(0.0, row_y(row).trunc(), 128.0, 12.0);
+                        self.viewport(0.0, row_y(row, lh).trunc(), lw, (lh * 0.2).trunc());
                         let n = self.noise.next(false);
                         let u = self.cbuffer.draw(2, &pe, &self.filmic, &self.used);
-                        self.draw(2, &u, &[SL, SP, SP], &[e1.clone(), black.clone(), grey.clone()], &draw_vertices(2, w, h, n, self.vignette, row))?;
+                        self.draw(2, &u, &[SL, SP, SP], &[e1.clone(), black.clone(), grey.clone()], &draw_vertices(2, lw, lh, n, self.vignette, row))?;
                     }
                     Some(Luminance::Analyze) => {
-                        // CTextureLuminance::Analyze: 128x64 down to 1x1, then the CPU copy
+                        // CTextureLuminance::Analyze: the luminance target down to 1x1, then the CPU copy
                         self.effect_of_eight();
                         let mut src = self.luminance.srv.clone();
-                        for k in 0..ANALYSIS.len() {
-                            let (aw, ah) = ANALYSIS[k];
-                            let t = if k + 1 < ANALYSIS.len() { 8 } else { 9 };
+                        let last = self.analysis.len() - 1;
+                        for k in 0..=last {
+                            let (aw, ah) = self.analysis[k].2;
+                            let from = if k == 0 { self.luminance_size } else { self.analysis[k - 1].2 };
+                            self.cbuffer.taps = crate::yebis_cb::box_taps(from, (aw, ah));
+                            let t = match self.cbuffer.taps.len() {
+                                1 => 8,
+                                2 => 9,
+                                5 => 10,
+                                n => return Err(format!("yebis: no analysis program with {n} taps")),
+                            };
                             self.target_only(&self.analysis[k].0.rtv.clone());
                             self.viewport(0.0, 0.0, aw as f32, ah as f32);
                             let u = self.cbuffer.draw(t, &pe, &self.filmic, &self.used);
                             self.draw(t, &u, &[SLB], std::slice::from_ref(&src), &draw_vertices(t, aw as f32, ah as f32, [0.0; 4], 0.0, 0))?;
                             src = self.analysis[k].0.srv.clone();
                         }
-                        self.context.CopyResource(&self.readback, &self.analysis[ANALYSIS.len() - 1].1);
+                        self.context.CopyResource(&self.readback, &self.analysis[last].1);
                     }
                     _ => {}
                 }
                 self.reset();
+                if step.is_none() {
+                    // with auto exposure off YEBIS binds the effect surface after the reset (Task Y3, ae_off filter)
+                    self.effect_of_eight();
+                }
                 self.target_only(&self.tonemap[0].rtv.clone());
                 self.full_viewport();
                 self.full_viewport();
                 let n = self.noise.next(true);
+                // DrawRectGPU_TonemapHDR 0x1403f1b10 drops the vignette program when its rectangle is zero
+                let (t3, t6) = if self.vignette == 0.0 { (11, 12) } else { (3, 6) };
                 let tonemap_vertices = draw_vertices(3, w, h, n, self.vignette, 0);
-                let u = self.cbuffer.draw(3, &pe, &self.filmic, &self.used);
-                self.draw(3, &u, &[SP, SP, SP, SW], &[e1.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
+                let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
+                self.draw(t3, &u, &[SP, SP, SP, SW], &[e1.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
                 // round two
                 self.reset();
                 self.current = 0;
@@ -715,7 +766,7 @@ mod device {
                 self.full_viewport();
                 self.effect_of_eight();
                 let u = self.cbuffer.draw(4, &pe, &self.filmic, &self.used);
-                self.draw(4, &u, &[SB, SB], &[depth, scene], &plain(4))?;
+                self.draw(4, &u, &[SB, ss], &[depth, scene], &plain(4))?;
                 self.current = 1;
                 self.effect_with_depth();
                 self.full_viewport();
@@ -726,8 +777,8 @@ mod device {
                 self.target_only(&self.tonemap[1].rtv.clone());
                 self.full_viewport();
                 self.full_viewport();
-                let u = self.cbuffer.draw(6, &pe, &self.filmic, &self.used);
-                self.draw(6, &u, &[SP, SP, SP, SW], &[e1, black.clone(), grey, dither], &draw_vertices(6, w, h, n, self.vignette, 0))?;
+                let u = self.cbuffer.draw(t6, &pe, &self.filmic, &self.used);
+                self.draw(t6, &u, &[SP, SP, SP, SW], &[e1, black.clone(), grey, dither], &draw_vertices(6, w, h, n, self.vignette, 0))?;
                 // the composite into the destination
                 self.target_only(destination);
                 self.full_viewport();
@@ -744,6 +795,15 @@ mod device {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn luminance_sizes_follow_the_game() {
+        let chain = vec![(64, 32), (32, 16), (16, 8), (8, 4), (4, 2), (1, 1)];
+        assert_eq!(luminance_sizes(1280, 720), ((128, 64), chain.clone()));
+        assert_eq!(luminance_sizes(1024, 576), ((128, 64), chain));
+        // triple screens: 128 wide at the frame's aspect (the game's tri log, Task Y3)
+        assert_eq!(luminance_sizes(5760, 1080).0, (128, 24));
+    }
 
     /// The payloads of the 8 vertex uploads of the r23_09 game frame (the second YEBIS frame).
     #[test]
@@ -771,7 +831,8 @@ mod tests {
                 } else if d == 3 {
                     n = noise.next(true);
                 }
-                let v = draw_vertices(d, w, h, n, a, 1);
+                // the luminance draw is in its 128x64 target
+                let v = if d == 2 { draw_vertices(d, 128.0, 64.0, n, a, 1) } else { draw_vertices(d, w, h, n, a, 1) };
                 let bytes: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
                 let (i, off, discard) = ring.alloc(bytes.len() as u32);
                 if discard {

@@ -829,7 +829,7 @@ impl AcRenderer {
             let video = video_ini.clone().unwrap_or_else(|| IniReader::from_text(std::path::Path::new("video.ini"), "[POST_PROCESS]
 FILTER=default
 "));
-            match camera.start_yebis(&graphics, &options.game, video) {
+            match camera.start_yebis(&graphics, &options.game, &options.game, video) {
                 Ok(()) => graphics.video.ldr_levels = false,
                 Err(e) => notes.push(format!("{e}; post-processing without YEBIS")),
             }

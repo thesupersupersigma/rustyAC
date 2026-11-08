@@ -25,7 +25,7 @@ use rustyac_physics::data::ini::IniReader;
 
 /// Program pair of each draw, in order: round one 1-4, round two 5-7, composite 8, then the
 /// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step.
-pub const TECHNIQUES: [&str; 10] = [
+pub const TECHNIQUES: [&str; 13] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -36,6 +36,9 @@ pub const TECHNIQUES: [&str; 10] = [
     "CompositeColorAndAlphaEffectsMask_A_A",
     "MadT1_S1",
     "MadT1_S2",
+    "MadT1_S5",
+    "TonemapHDR_PreMatrix_Dither_Gamma",
+    "TonemapHDR_Dither_Exposure_LINEARSAT",
 ];
 
 // $Globals byte offsets (c-register x 16)
@@ -388,11 +391,13 @@ fn ca_weights(n: usize) -> Vec<[f32; 4]> {
 /// YEBIS's global parameter store, 4096 bytes laid out as `$Globals`.
 pub struct Cbuffer {
     store: [u8; 4096],
+    /// the (u, v) offsets of the next analysis draw, from `box_taps`
+    pub taps: Vec<[f32; 2]>,
 }
 
 impl Default for Cbuffer {
     fn default() -> Cbuffer {
-        Cbuffer { store: [0; 4096] }
+        Cbuffer { store: [0; 4096], taps: vec![[0.0; 2]] }
     }
 }
 
@@ -418,7 +423,7 @@ impl Cbuffer {
     }
 
     /// The puts and the upload of one draw of `TECHNIQUES[t]`; `used[t]` are its variable ranges.
-    pub fn draw(&mut self, t: usize, pe: &PostEffect, filmic: &[f32; 21], used: &[Vec<(usize, usize)>; 10]) -> [u8; 4096] {
+    pub fn draw(&mut self, t: usize, pe: &PostEffect, filmic: &[f32; 21], used: &[Vec<(usize, usize)>; 13]) -> [u8; 4096] {
         match t {
             0 => {
                 self.put(SCREEN_SPACE_SCALE, &[1.0, -1.0]);
@@ -428,19 +433,17 @@ impl Cbuffer {
             }
             1 | 5 => self.chromatic_aberration(pe),
             2 => self.tonemap(pe, filmic, false),
-            3 => self.tonemap(pe, filmic, true),
+            3 | 11 => self.tonemap(pe, filmic, true),
             4 => self.depth_blur_factor(pe),
-            6 => self.tonemap(&pe.round_two(), filmic, true),
+            6 | 12 => self.tonemap(&pe.round_two(), filmic, true),
             7 => self.put(MODULATE, &[if pe.alpha_out == 2 { pe.alpha_out_scale } else { 1.0 }, 0.0, 0.0, 0.0]),
-            // CTextureLuminance::Analyze: 2:1 steps with one tap, then 4x2 to 1x1 with two
-            8 => {
-                self.put(MODULATE, &[1.0; 4]);
-                self.put(TAPS, &[0.0; 4]);
+            // CTextureLuminance::Analyze's Resample steps: `taps` with equal weights
+            8..=10 => {
+                let taps: Vec<f32> = self.taps.iter().flat_map(|&[u, v]| [u, v, 0.0, 0.0]).collect();
+                self.put(TAPS, &taps);
+                self.put(MODULATE, &vec![1.0 / self.taps.len() as f32; taps.len()]);
             }
-            _ => {
-                self.put(TAPS, &[-0.25, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0]);
-                self.put(MODULATE, &[0.5; 8]);
-            }
+            _ => unreachable!("no technique {t}"),
         }
         self.upload(&used[t])
     }
@@ -691,9 +694,29 @@ pub fn used(vs: &[u8], ps: &[u8]) -> Result<Vec<(usize, usize)>, String> {
     Ok(r)
 }
 
+/// The taps of `CTextureUtil::Resample` 0x1403f6710 from a filtered `src` into `dst`: per axis
+/// GPUTexUtil_GetTexCoordOffset_Box 0x1403a7e20 (at most 5) and _Resample 0x1403a7c90, v outer.
+pub fn box_taps(src: (u32, u32), dst: (u32, u32)) -> Vec<[f32; 2]> {
+    let axis = |s: u32, d: u32| -> Vec<f32> {
+        let (s, d) = (s as f32, d as f32);
+        let mut n = ((s * 0.5) / d).ceil() as i32;
+        if n > 1 && d >= 8.0 {
+            let f = (n - 1) as f32 * d * 2.0;
+            if f < s && s - (n * 2 - 2) as f32 <= f {
+                n -= 1;
+            }
+        }
+        let n = n.min(5) as f32;
+        let step = (n * 2.0) / n;
+        (0..n as i32).map(|i| (i as f32 * step - (n - 1.0)) * (1.0 / s)).collect()
+    };
+    let (u, v) = (axis(src.0, dst.0), axis(src.1, dst.1));
+    v.iter().flat_map(|&y| u.iter().map(move |&x| [x, y])).collect()
+}
+
 /// `used` for every technique.
-pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<[Vec<(usize, usize)>; 10], String> {
-    let mut out: [Vec<(usize, usize)>; 10] = Default::default();
+pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<[Vec<(usize, usize)>; 13], String> {
+    let mut out: [Vec<(usize, usize)>; 13] = Default::default();
     for (o, name) in out.iter_mut().zip(TECHNIQUES) {
         let (vs, ps) = tfxo.technique(name).ok_or_else(|| format!("no technique {name}"))?;
         *o = used(vs, ps)?;
@@ -706,6 +729,16 @@ mod tests {
     use super::*;
     use crate::yebis_tfxo::Tfxo;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn box_taps_follow_the_game() {
+        // 16:9: 2:1 steps with one tap, 4x2 to 1x1 with two (the Y2c uploads)
+        assert_eq!(box_taps((128, 64), (64, 32)), vec![[0.0, 0.0]]);
+        assert_eq!(box_taps((4, 2), (1, 1)), vec![[-0.25, 0.0], [0.25, 0.0]]);
+        // triple 128x24: 2:3 first step, then 16x2 to 1x1 capped at five taps
+        assert_eq!(box_taps((128, 24), (64, 8)), vec![[0.0, -1.0 / 24.0], [0.0, 1.0 / 24.0]]);
+        assert_eq!(box_taps((16, 2), (1, 1)).len(), 5);
+    }
 
     const SCENES: [(&str, &str); 3] = [("r23_09", "spa_chase_r23_09"), ("r23_10", "spa_chase_r23_10"), ("r23_16", "monza_chase_r23_16")];
     const NAMES: [&str; 8] = ["depth factor", "CA", "luminance", "tone map", "depth factor 2", "CA 2", "tone map 2", "composite"];

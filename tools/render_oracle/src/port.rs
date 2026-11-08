@@ -224,7 +224,8 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     // Task Y2b: YEBIS on the port's side too when the game's side runs it
     if profile.post && std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
         let video = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("video.ini"), &crate::root::video_ini(args.width, args.height));
-        camera.start_yebis(&graphics, &args.game, video)?;
+        // the filter from the game's working folder, the oracle root
+        camera.start_yebis(&graphics, &args.game, &args.root, video)?;
     }
     if profile.triple {
         let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::root::TRIPLE_SCREEN_INI);
