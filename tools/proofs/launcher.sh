@@ -17,6 +17,8 @@ build rustyac-launcher cargo build --release --locked --quiet -p rustyac-launche
 LO=$(ls tools/launcher_oracle/bin/Release/launcher_oracle.exe tools/launcher_oracle/bin/Release/net*/launcher_oracle.exe 2> /dev/null | head -n 1)
 # the oracle takes only a fake player folder under re\scratch (never Documents); it is deleted at the end
 fake=$repo/re/scratch/proofs/launcher
+# the same display modes on both sides (the screen's own list changed between runs); twice to keep the dedup
+export RUSTYAC_DISPLAY_MODES=1280x720,1280x720,1600x900,1920x1080
 for req in ${LAUNCHER_LISTS:-$gold/launcher}/*.req; do
     name=$(basename "$req" .req)
     keep "$name" || continue  # quick keys: the list's name

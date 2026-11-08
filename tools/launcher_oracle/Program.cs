@@ -16,6 +16,9 @@
 // `FORMAT <name>` (AppIniFile.Format of cfg\<name>.ini, what "start" does before it starts the
 // game), or `SETUP` (Startup.SetupUserDirectory, what the launcher does with the player's folder
 // when it starts). Blank lines and lines starting with # are skipped.
+//
+// RUSTYAC_DISPLAY_MODES=1280x720,1920x1080 answers user32's EnumDisplaySettingsA with that list
+// instead of the screen's (ACUtility.GetAvailableResolutionsJSON); rustyac-launcher reads it too.
 
 using System;
 using System.Collections;
@@ -24,6 +27,7 @@ using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Web;
 
@@ -123,6 +127,8 @@ static class Program
             }
             return null;
         };
+        string displayModes = Environment.GetEnvironmentVariable("RUSTYAC_DISPLAY_MODES");
+        if (displayModes != null) FixDisplayModes(displayModes);
         Assembly launcher = Assembly.LoadFrom(acRoot + "AssettoCorsa.exe");
         Type appFolder = launcher.GetType("AC.Launcher.Utility.AppFolder", true);
         string userData = (string)appFolder.GetField("UserDataPath").GetValue(null);
@@ -273,5 +279,35 @@ static class Program
             files.Add(file + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks);
         }
         return files;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate bool EnumDisplaySettingsA(IntPtr device, int mode, IntPtr devMode);
+    static EnumDisplaySettingsA standIn;  // kept alive: user32 jumps into it
+    static int[] modes;
+
+    [DllImport("kernel32", CharSet = CharSet.Ansi)] static extern IntPtr LoadLibraryA(string name);
+    [DllImport("kernel32", CharSet = CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr module, string name);
+    [DllImport("kernel32")] static extern bool VirtualProtect(IntPtr address, UIntPtr size, uint protect, out uint old);
+
+    // The display modes from a fixed list: user32!EnumDisplaySettingsA's first bytes become a jump
+    // to standIn (x86, this process only), which fills DEVMODEA's dmPelsWidth/dmPelsHeight.
+    static void FixDisplayModes(string list)
+    {
+        modes = list.Split(',').SelectMany(m => m.Split('x')).Select(int.Parse).ToArray();
+        standIn = (device, i, devMode) =>
+        {
+            if (i < 0 || 2 * i >= modes.Length) return false;
+            Marshal.WriteInt32(devMode, 108, modes[2 * i]);
+            Marshal.WriteInt32(devMode, 112, modes[2 * i + 1]);
+            return true;
+        };
+        IntPtr target = GetProcAddress(LoadLibraryA("user32.dll"), "EnumDisplaySettingsA");
+        int to = Marshal.GetFunctionPointerForDelegate(standIn).ToInt32();
+        if (target == IntPtr.Zero || !VirtualProtect(target, (UIntPtr)5, 0x40, out uint old))
+            throw new Exception("EnumDisplaySettingsA could not be replaced");
+        Marshal.WriteByte(target, 0xE9);
+        Marshal.WriteInt32(target + 1, to - (target.ToInt32() + 5));
+        VirtualProtect(target, (UIntPtr)5, old, out old);
     }
 }
