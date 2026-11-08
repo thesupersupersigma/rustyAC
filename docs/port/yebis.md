@@ -1,3 +1,70 @@
+# Task Y2c: YEBIS over many frames, eye adaptation and a window resize
+
+## Resume here
+
+- **Done, released as v0.48.1.** YEBIS now runs every frame like the game: the luminance analysis and
+  read-back, eye adaptation (`AutoExposure` in `yebis_cb.rs`), and a remake on window resize
+  (`CameraForwardYebis::on_resize`). The proofs' `--post` rows run the real YEBIS on both sides
+  (`tools/proofs/render.sh` sets `RENDER_ORACLE_YEBIS=1`); r23_09 is in `--quick`, every `--post` row is in `--full`.
+- Next is **Task Y2d** (leftovers below), then Y3 (VR and triple with YEBIS).
+- Check one run: `bash re/scratch/taskY2c/cmp.sh <label> <out> <render_oracle compare args>` writes
+  `re/scratch/taskY2c/<out>.txt`. New oracle inputs: `--ppfilter <name>` (video.ini `FILTER=`) and
+  `RENDER_ORACLE_RESIZE=<frame>:<W>x<H>` (resizes the window before that frame's capture; dump only frames
+  after it, the PNGs use the last size).
+- Test: `cargo test --locked -p rustyac-render --lib yebis`.
+
+## What it found
+
+1. **The ppfilter is loaded by loadPPSet** 0x140029960 from video.ini's `FILTER`. The oracle's game side
+   now calls it with `--ppfilter`, so a second filter (`default_dark`, filmic) is proven.
+2. **The vertex ring starts on buffer 767**, so the first map of a run is the wrap's discard.
+3. **Frame 0 differs on purpose**: the game makes YEBIS's shaders and layouts lazily on first use.
+   Sequences capture from frame 1, as before.
+4. **Eye adaptation** is `CTextureLuminanceManage::UpdateFrame` 0x140433230: a 17-slot history. The
+   luminance target is read back (staging copy of the 1x1), weighted 0.2126 / 0.7152 / 0.0722 times
+   0.003921569, decoded with the filmic `-logf(1-x)`, smoothed in log space with
+   `rate = 1 - powf(0.050000012, dt*6/0.1)` and lerped between slots. The analysis is two draws,
+   `MadT1_S1` (2:1 resample) and `MadT1_S2` (4x2 to 1x1). `logf` now comes from MSVCR120 like the other
+   CRT functions. Exposure on the La Source run (default_dark), game = port:
+
+   | Frame | 20 | 60 | 100 | 140 | 180 | 220 | 239 |
+   |---|---|---|---|---|---|---|---|
+   | Exposure | 0.4846618 | 0.3045707 | 0.2810263 | 0.2782328 | 0.2686784 | 0.2682259 | 0.2686277 |
+
+5. **Resize**: `GraphicsManager::onResize` 0x140204330 calls `kglResizeBuffers` 0x1400193d0
+   (`ResizeBuffers(0,0,…)` takes the window's client size, so the window is sized first), then
+   `CameraForwardYebis::onResize` 0x140029da0 remakes YEBIS. The noise is process-wide and survives. The
+   remade 1x1 textures and the 4x4 dither are created empty, then get their view, then `UpdateSubresource`
+   (gpulog keys a texture made inside a capture by that order).
+6. **With FXAA on**, start leaves YEBIS's destination (the FXAA target) bound, not the screen. This
+   fixed the 5 FXAA rows' first cube-map line.
+
+| Case | Frames compared | Call log | Pixels |
+|---|---|---|---|
+| 16 `--post` rows r23_09..r23_24 | 1 to 59 each | IDENTICAL | IDENTICAL |
+| f16, spa chase | 15 | IDENTICAL in all | IDENTICAL in all |
+| lsrc, La Source, default_dark, light changes | 239 | IDENTICAL in all | IDENTICAL in all |
+| rsz, resize to 1024x576 at frame 10 | 19 | 18 IDENTICAL; frame 10 DIFFERENT (7961 vs 6672 calls, same 863 draws) | IDENTICAL in all |
+
+`tools/proofs/run_all.sh --quick`: all 170 cases IDENTICAL in 13 areas, no difference, no error (r23_24 left the quick set for r23_09). Clippy `-D warnings --all-targets` is clean natively and on both wasm targets.
+
+## What Y2d / Y3 need
+
+- **Y2d:** the resize frame's resource creation (the game remakes far more inside its YEBIS init: 1542 vs
+  770 `CreateBuffer`, 50 vs 13 RTVs); the auto-exposure-off path (no luminance step is drawn, unproven:
+  `shortcut:` in `yebis.rs`); `PostProcessEffectsUpdater`'s per-frame update; the game keeps its FXAA
+  target at the old size on resize while the port remakes it; render_oracle's 27 old clippy errors
+  (`--all-targets`, from before Y2c).
+- **Y3 (VR and triple with YEBIS):** YEBIS per eye / per screen: the targets and the luminance history
+  are per `Yebis` today, sized to one view. VR's two eyes and triple's three viewports need either one
+  `Yebis` per view or the game's own sharing, found in its VR/triple camera classes, plus oracle runs
+  with `--vr` / `--triple` and `--post`.
+
+## Not done
+
+- Glare, depth of field, rays of god and heat shimmer (filters with them are refused).
+- YEBIS in the graphics preset (post-processing stays off, decided) and in the browser (stand-in until Y4).
+
 # Task Y2b: YEBIS's 8 draws on the desktop, proven against the game
 
 ## Resume here
