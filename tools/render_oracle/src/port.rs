@@ -573,6 +573,13 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         if index >= frame.capture && !crate::timing() {
             rustyac_render::gpulog::begin_capture(&frame.name);
         }
+        if let Some((_, w, h)) = crate::resize().filter(|r| r.0 == index) {
+            if let Some(chain) = &graphics.kgl.swap_chain {
+                unsafe { crate::ac::size_window(chain, w, h)? };
+            }
+            graphics.on_resize(w, h)?;
+            camera.on_resize(&mut graphics)?;
+        }
         let started = std::time::Instant::now();
         graphics.begin_scene();
         macro_rules! hud {

@@ -12,8 +12,9 @@
 //! The programs and the filmic table are read from the player's acs.exe at start; nothing of
 //! YEBIS is in this source but the call order, the state descriptions and the small constants.
 //!
-//! Shortcut: the first frame has no auto exposure update (as in the game), every later frame
-//! draws the luminance row 1 of the 128x64 target; Y3 ports the adaptation.
+//! Auto exposure (Task Y2c): frames draw one of the five rows of the 128x64 luminance target in
+//! turn, then one frame reduces it to 1x1 and copies that into a read-back texture that a later
+//! frame reads without waiting; `yebis_cb::AutoExposure` turns the result into the exposure.
 
 use rustyac_physics::data::ini::IniReader;
 
@@ -76,9 +77,14 @@ pub fn rect_vertices(size: [f32; 2], rect: [f32; 4], tex: &[[f32; 4]]) -> Vec<f3
     out
 }
 
+/// The top of luminance row `row` of the 128x64 target; its viewport starts at the whole part.
+pub fn row_y(row: u32) -> f32 {
+    64.0 * (row as f32 * 0.2)
+}
+
 /// The vertices of draw `d` (0-based) of a `w` x `h` frame. `noise` is the draw's noise (draws
 /// 3, 4 and 7); `vignette` is the half-height of the vignette rectangle.
-pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32) -> Vec<f32> {
+pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32, row: u32) -> Vec<f32> {
     let full = [0.0, 0.0, 1.0, 1.0];
     let zero = [0.0; 4];
     // the noise offsets of the 1x1 noise texture; the luminance draw passes 0 for both scales,
@@ -89,11 +95,11 @@ pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32) -
         [n0, n1, n0 + s2 * (((1024.0 / 1.0) * 2.0 * p33) / p32), n1 + s3 * (((1024.0 / 1.0) * 2.0) / p32)]
     };
     match d {
-        // TonemapToSurface 0x14041d7f0: row 1 of five of the 128x64 luminance target
+        // TonemapToSurface 0x14041d7f0: one of the five rows of the 128x64 luminance target
         2 => {
-            let (lw, lh) = (128.0f32, 64.0f32);
-            let row = 1.0f32;
-            rect_vertices([lw, 12.0], [0.0, lh * (row * 0.2) - 12.0, lw, lh * 0.2], &[[0.0, 0.2, 1.0, 0.4], zero, zero, noise_rect(0.0, 0.0), zero])
+            let y = row_y(row);
+            let v = row as f32 * 0.2;
+            rect_vertices([128.0, 12.0], [0.0, y - y.trunc(), 128.0, 64.0 * 0.2], &[[0.0, v, 1.0, v + 0.2], zero, zero, noise_rect(0.0, 0.0), zero])
         }
         // DrawRectGPU_TonemapHDR 0x1403f1b10: vignette, noise and the 4x4 dither
         3 | 6 => {
@@ -108,10 +114,18 @@ pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32) -
 
 /// The shared vertex buffer ring's bookkeeping: which buffer and offset a draw of `size` bytes
 /// lands in, and whether its map is a real discard.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Ring {
     pub index: usize,
     pub cur: u32,
+}
+
+impl Default for Ring {
+    /// The game's ring starts on its last buffer: its first move to a new buffer (frame 0's third
+    /// draw) is already the discard of buffer 0 (seen in a frame-0 log, Task Y2c).
+    fn default() -> Self {
+        Ring { index: RING_COUNT - 1, cur: 0 }
+    }
 }
 
 impl Ring {
@@ -150,18 +164,21 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, Camera, Cbuffer, PostEffect, TECHNIQUES};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Luminance, PostEffect, TECHNIQUES};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
     use windows::Win32::Graphics::Direct3D11::*;
     use windows::Win32::Graphics::Dxgi::Common::*;
 
-    // samplers: border, linear, point, wrap
+    // samplers: border, linear, point, wrap, linear with border
     const SB: usize = 0;
     const SL: usize = 1;
     const SP: usize = 2;
     const SW: usize = 3;
+    const SLB: usize = 4;
+    /// The luminance analysis targets: 2:1 steps from 128x64, then 4x2 to 1x1.
+    const ANALYSIS: [(u32, u32); 6] = [(64, 32), (32, 16), (16, 8), (8, 4), (4, 2), (1, 1)];
 
     struct Target {
         rtv: ID3D11RenderTargetView,
@@ -177,12 +194,15 @@ mod device {
     }
 
     pub struct Yebis {
+        device: ID3D11Device,
         context: ID3D11DeviceContext,
-        vs: Vec<ID3D11VertexShader>,
-        ps: Vec<ID3D11PixelShader>,
+        vs: Vec<Option<ID3D11VertexShader>>,
+        ps: Vec<Option<ID3D11PixelShader>>,
+        /// The bytecode of the two analysis techniques, made on first use.
+        lazy: Vec<(Vec<u8>, Vec<u8>)>,
         layouts: Vec<ID3D11InputLayout>,
         strides: Vec<u32>,
-        used: [Vec<(usize, usize)>; 8],
+        used: [Vec<(usize, usize)>; 10],
         filmic: [f32; 21],
         cb: ID3D11Buffer,
         cbuffer: Cbuffer,
@@ -199,15 +219,18 @@ mod device {
         current: usize,
         effect_depth: ID3D11DepthStencilView,
         luminance: Target,
+        analysis: Vec<(Target, ID3D11Texture2D)>,
+        readback: ID3D11Texture2D,
+        auto_exposure: AutoExposure,
         /// One per round: the composite reads the first round's colour and the second's alpha.
         tonemap: [Target; 2],
-        samplers: [ID3D11SamplerState; 4],
+        samplers: [ID3D11SamplerState; 5],
         raster: ID3D11RasterizerState,
         depth: ID3D11DepthStencilState,
         blend: ID3D11BlendState,
         cache: Cache,
         noise: Noise,
-        frames: u64,
+        root: std::path::PathBuf,
         filter: IniReader,
         video: IniReader,
         vignette: f32,
@@ -250,6 +273,10 @@ mod device {
     }
 
     unsafe fn target(device: &ID3D11Device, w: u32, h: u32, typeless: DXGI_FORMAT, format: DXGI_FORMAT, with_srv: bool) -> Result<Target, String> {
+        Ok(target_texture(device, w, h, typeless, format, with_srv)?.0)
+    }
+
+    unsafe fn target_texture(device: &ID3D11Device, w: u32, h: u32, typeless: DXGI_FORMAT, format: DXGI_FORMAT, with_srv: bool) -> Result<(Target, ID3D11Texture2D), String> {
         let t = texture(device, w, h, typeless, D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0, None)?;
         let desc = D3D11_RENDER_TARGET_VIEW_DESC {
             Format: format,
@@ -258,7 +285,8 @@ mod device {
         };
         let mut rtv = None;
         err("CreateRenderTargetView", device.CreateRenderTargetView(&t, Some(&desc), Some(&mut rtv)))?;
-        Ok(Target { rtv: rtv.ok_or("yebis: no view")?, srv: if with_srv { Some(srv(device, &t, format)?) } else { None } })
+        let srv = if with_srv { Some(srv(device, &t, format)?) } else { None };
+        Ok((Target { rtv: rtv.ok_or("yebis: no view")?, srv }, t))
     }
 
     unsafe fn buffer(device: &ID3D11Device, size: u32, bind: i32, dynamic: bool, data: Option<&[u8]>) -> Result<ID3D11Buffer, String> {
@@ -299,15 +327,25 @@ mod device {
             let used = used_all(&tfxo)?;
             let vignette = vignette(&filter)?;
             unsafe {
-                let (mut vs, mut ps, mut layouts, mut strides) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                let (mut vs, mut ps, mut layouts, mut strides, mut lazy) = (Vec::<Option<ID3D11VertexShader>>::new(), Vec::new(), Vec::<ID3D11InputLayout>::new(), Vec::new(), Vec::new());
                 for name in TECHNIQUES {
                     let (v, p) = tfxo.technique(name).ok_or_else(|| format!("yebis: no technique {name}"))?;
+                    if name.starts_with("MadT1_") {
+                        // the analysis programs are made on their first draw, as YEBIS does;
+                        // MadT1_S1's vertex program and both input layouts are the first technique's
+                        lazy.push((v.to_vec(), p.to_vec()));
+                        vs.push(if name == "MadT1_S1" { vs[0].clone() } else { None });
+                        ps.push(None);
+                        layouts.push(layouts[0].clone());
+                        strides.push(strides[0]);
+                        continue;
+                    }
                     let mut s = None;
                     err("CreateVertexShader", device.CreateVertexShader(v, None, Some(&mut s)))?;
-                    vs.push(s.ok_or("yebis: no shader")?);
+                    vs.push(Some(s.ok_or("yebis: no shader")?));
                     let mut s = None;
                     err("CreatePixelShader", device.CreatePixelShader(p, None, Some(&mut s)))?;
-                    ps.push(s.ok_or("yebis: no shader")?);
+                    ps.push(Some(s.ok_or("yebis: no shader")?));
                     // the input layout from the program's input signature: float2s, packed
                     let inputs = rustyac_dxbc::parse(v)?.inputs;
                     let names: Vec<std::ffi::CString> = inputs.iter().map(|e| std::ffi::CString::new(e.name.as_str()).unwrap_or_default()).collect();
@@ -331,10 +369,15 @@ mod device {
                     strides.push(8 * inputs.len() as u32);
                 }
                 let tex1 = |c: u8| -> Result<ID3D11ShaderResourceView, String> {
-                    let t = texture(device, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0, Some(&[c; 4]))?;
-                    srv(device, &t, DXGI_FORMAT_R8G8B8A8_UNORM)
+                    // as the game: made empty, its view, then filled (seen when a resize remakes YEBIS, Task Y2c)
+                    let t = texture(device, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0, None)?;
+                    let view = srv(device, &t, DXGI_FORMAT_R8G8B8A8_UNORM)?;
+                    context.UpdateSubresource(&t, 0, None, [c; 4].as_ptr().cast(), 4, 0);
+                    Ok(view)
                 };
-                let dither = texture(device, 4, 4, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0, Some(&dither_texels()))?;
+                let dither_tex = texture(device, 4, 4, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0, None)?;
+                let dither = srv(device, &dither_tex, DXGI_FORMAT_R8G8B8A8_UNORM)?;
+                context.UpdateSubresource(&dither_tex, 0, None, dither_texels().as_ptr().cast(), 16, 0);
                 let (w, h) = (width as u32, height as u32);
                 let depth_tex = texture(device, w, h, DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_DEPTH_STENCIL.0, None)?;
                 let dsv_desc = D3D11_DEPTH_STENCIL_VIEW_DESC {
@@ -367,6 +410,7 @@ mod device {
                     sampler(D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP)?,
                     sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP)?,
                     sampler(D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_WRAP)?,
+                    sampler(D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT, D3D11_TEXTURE_ADDRESS_BORDER)?,
                 ];
                 let mut raster = None;
                 let rd = D3D11_RASTERIZER_DESC {
@@ -414,10 +458,31 @@ mod device {
                 }
                 let indices: [u16; 4] = [0, 1, 2, 3];
                 let ib_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+                let mut analysis = Vec::new();
+                for (aw, ah) in ANALYSIS {
+                    analysis.push(target_texture(device, aw, ah, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?);
+                }
+                // the CPU copy of the 1x1 result
+                let rd = D3D11_TEXTURE2D_DESC {
+                    Width: 1,
+                    Height: 1,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_STAGING,
+                    BindFlags: 0,
+                    CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                    MiscFlags: 0,
+                };
+                let mut readback = None;
+                err("CreateTexture2D", device.CreateTexture2D(&rd, None, Some(&mut readback)))?;
                 Ok(Yebis {
+                    device: device.clone(),
                     context: context.clone(),
                     vs,
                     ps,
+                    lazy,
                     layouts,
                     strides,
                     used,
@@ -430,11 +495,14 @@ mod device {
                     black: tex1(0)?,
                     grey: tex1(0x7f)?,
                     white: tex1(0xff)?,
-                    dither: srv(device, &dither, DXGI_FORMAT_R8G8B8A8_UNORM)?,
+                    dither,
                     effect: [target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?, target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?],
                     current: 0,
                     effect_depth: dsv.ok_or("yebis: no view")?,
-                    luminance: target(device, 128, 64, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, false)?,
+                    luminance: target(device, 128, 64, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?,
+                    analysis,
+                    readback: readback.ok_or("yebis: no texture")?,
+                    auto_exposure: AutoExposure::default(),
                     tonemap: [target(device, w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?, target(device, w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?],
                     samplers,
                     raster: raster.ok_or("yebis: no state")?,
@@ -442,7 +510,7 @@ mod device {
                     blend: blend.ok_or("yebis: no state")?,
                     cache: Cache::default(),
                     noise: Noise::default(),
-                    frames: 0,
+                    root: root.to_path_buf(),
                     filter,
                     video,
                     vignette,
@@ -450,6 +518,14 @@ mod device {
                     height,
                 })
             }
+        }
+
+        /// `CameraForwardYebis::onResize` 0x140029da0: the game destroys YEBIS and makes it again
+        /// at the new size, so every carried-over value (parameter store, exposure) starts over; the noise goes on
+        pub fn remade(&self, width: i32, height: i32) -> Result<Yebis, String> {
+            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height)?;
+            yebis.noise = self.noise; // process-wide in the game, it outlives the context (resize log, Task Y2c)
+            Ok(yebis)
         }
 
         unsafe fn viewport(&self, x: f32, y: f32, w: f32, h: f32) {
@@ -503,13 +579,23 @@ mod device {
             }
             let none: [Option<ID3D11ShaderResourceView>; 6] = Default::default();
             c.PSSetShaderResources(0, Some(&none));
+            if self.vs[d].is_none() {
+                let mut s = None;
+                err("CreateVertexShader", self.device.CreateVertexShader(&self.lazy[d - 8].0, None, Some(&mut s)))?;
+                self.vs[d] = s;
+            }
+            if self.ps[d].is_none() {
+                let mut s = None;
+                err("CreatePixelShader", self.device.CreatePixelShader(&self.lazy[d - 8].1, None, Some(&mut s)))?;
+                self.ps[d] = s;
+            }
             c.GSSetShader(None, None);
             c.HSSetShader(None, None);
             c.DSSetShader(None, None);
             let mut m = D3D11_MAPPED_SUBRESOURCE::default();
             err("Map", c.Map(&self.cb, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut m)))?;
-            c.VSSetShader(&self.vs[d], None);
-            c.PSSetShader(&self.ps[d], None);
+            c.VSSetShader(self.vs[d].as_ref(), None);
+            c.PSSetShader(self.ps[d].as_ref(), None);
             for (slot, &s) in samplers.iter().enumerate() {
                 if self.cache.samplers[slot] != Some(s) {
                     c.PSSetSamplers(slot as u32, Some(&[Some(self.samplers[s].clone())]));
@@ -539,19 +625,26 @@ mod device {
             Ok(())
         }
 
+        /// The 1x1 analysis result, if the GPU has finished it (YEBIS never waits).
+        unsafe fn read_back(&self) -> Option<[u8; 4]> {
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context.Map(&self.readback, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32, Some(&mut m)).ok()?;
+            let mut out = [0u8; 4];
+            std::ptr::copy_nonoverlapping(m.pData.cast::<u8>(), out.as_mut_ptr(), 4);
+            self.context.Unmap(&self.readback, 0);
+            Some(out)
+        }
+
         /// `CPostEffect::ApplyEffects` for AC's chain: `depth` and `scene` are the game's
         /// (resolved) depth and colour, `destination` the back buffer or the FXAA target.
         pub fn render(&mut self, depth: &ID3D11ShaderResourceView, scene: &ID3D11ShaderResourceView, destination: &ID3D11RenderTargetView, camera: &Camera) -> Result<(), String> {
-            let pe = PostEffect::new(&self.filter, &self.video, camera)?;
-            let uploads = self.cbuffer.frame(&pe, &self.filmic, &self.used);
-            let first = self.frames == 0;
-            self.frames += 1;
+            let mut pe = PostEffect::new(&self.filter, &self.video, camera)?;
             let (w, h) = (self.width as f32, self.height as f32);
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
             let (t0, t1) = (self.tonemap[0].srv.clone(), self.tonemap[1].srv.clone());
             let (black, grey, white, dither) = (Some(self.black.clone()), Some(self.grey.clone()), Some(self.white.clone()), Some(self.dither.clone()));
             let (depth, scene) = (Some(depth.clone()), Some(scene.clone()));
-            let plain = |d: usize| draw_vertices(d, w, h, [0.0; 4], 0.0);
+            let plain = |d: usize| draw_vertices(d, w, h, [0.0; 4], 0.0, 0);
             unsafe {
                 // BeginPostEffectScene / EndPostEffectScene: round one
                 self.current = 0;
@@ -564,50 +657,83 @@ mod device {
                 self.effect_with_depth();
                 self.full_viewport();
                 self.effect_of_eight();
-                self.draw(0, &uploads[0], &[SB, SB], &[depth.clone(), scene.clone()], &plain(0))?;
+                let u = self.cbuffer.draw(0, &pe, &self.filmic, &self.used);
+                self.draw(0, &u, &[SB, SB], &[depth.clone(), scene.clone()], &plain(0))?;
                 self.current = 1;
                 self.effect_with_depth();
                 self.full_viewport();
-                self.draw(1, &uploads[1], &[SL], std::slice::from_ref(&e0), &plain(1))?;
-                if !first {
-                    // UpdateAutoExposure: the luminance row
-                    self.effect_of_eight();
-                    self.target_only(&self.luminance.rtv.clone());
-                    self.viewport(0.0, 0.0, 128.0, 64.0);
-                    self.reset();
-                    self.viewport(0.0, 12.0, 128.0, 12.0);
-                    let n = self.noise.next(true);
-                    self.draw(2, &uploads[2], &[SL, SP, SP], &[e1.clone(), black.clone(), grey.clone()], &draw_vertices(2, w, h, n, self.vignette))?;
+                let u = self.cbuffer.draw(1, &pe, &self.filmic, &self.used);
+                self.draw(1, &u, &[SL], std::slice::from_ref(&e0), &plain(1))?;
+                // UpdateAutoExposure: last analysis's result if the GPU has it, then this frame's step
+                let readback = if self.auto_exposure.waiting() { self.read_back() } else { None };
+                // shortcut: with auto exposure off no luminance step is drawn (every shipped ppfilter has it on, never seen in a game log), check when a ppfilter turns it off
+                let step = pe.auto_exposure.map(|ae| {
+                    let (e, step) = self.auto_exposure.frame(readback, ae, camera.dt);
+                    pe.exposure = e;
+                    step
+                });
+                match step {
+                    Some(Luminance::Row(row)) => {
+                        self.effect_of_eight();
+                        self.target_only(&self.luminance.rtv.clone());
+                        self.viewport(0.0, 0.0, 128.0, 64.0);
+                        self.reset();
+                        self.viewport(0.0, row_y(row).trunc(), 128.0, 12.0);
+                        let n = self.noise.next(false);
+                        let u = self.cbuffer.draw(2, &pe, &self.filmic, &self.used);
+                        self.draw(2, &u, &[SL, SP, SP], &[e1.clone(), black.clone(), grey.clone()], &draw_vertices(2, w, h, n, self.vignette, row))?;
+                    }
+                    Some(Luminance::Analyze) => {
+                        // CTextureLuminance::Analyze: 128x64 down to 1x1, then the CPU copy
+                        self.effect_of_eight();
+                        let mut src = self.luminance.srv.clone();
+                        for k in 0..ANALYSIS.len() {
+                            let (aw, ah) = ANALYSIS[k];
+                            let t = if k + 1 < ANALYSIS.len() { 8 } else { 9 };
+                            self.target_only(&self.analysis[k].0.rtv.clone());
+                            self.viewport(0.0, 0.0, aw as f32, ah as f32);
+                            let u = self.cbuffer.draw(t, &pe, &self.filmic, &self.used);
+                            self.draw(t, &u, &[SLB], std::slice::from_ref(&src), &draw_vertices(t, aw as f32, ah as f32, [0.0; 4], 0.0, 0))?;
+                            src = self.analysis[k].0.srv.clone();
+                        }
+                        self.context.CopyResource(&self.readback, &self.analysis[ANALYSIS.len() - 1].1);
+                    }
+                    _ => {}
                 }
                 self.reset();
                 self.target_only(&self.tonemap[0].rtv.clone());
                 self.full_viewport();
                 self.full_viewport();
-                let n = self.noise.next(!first);
-                let tonemap_vertices = draw_vertices(3, w, h, n, self.vignette);
-                self.draw(3, &uploads[3], &[SP, SP, SP, SW], &[e1.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
+                let n = self.noise.next(true);
+                let tonemap_vertices = draw_vertices(3, w, h, n, self.vignette, 0);
+                let u = self.cbuffer.draw(3, &pe, &self.filmic, &self.used);
+                self.draw(3, &u, &[SP, SP, SP, SW], &[e1.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
                 // round two
                 self.reset();
                 self.current = 0;
                 self.effect_with_depth();
                 self.full_viewport();
                 self.effect_of_eight();
-                self.draw(4, &uploads[4], &[SB, SB], &[depth, scene], &plain(4))?;
+                let u = self.cbuffer.draw(4, &pe, &self.filmic, &self.used);
+                self.draw(4, &u, &[SB, SB], &[depth, scene], &plain(4))?;
                 self.current = 1;
                 self.effect_with_depth();
                 self.full_viewport();
-                self.draw(5, &uploads[5], &[SL], &[e0], &plain(5))?;
+                let u = self.cbuffer.draw(5, &pe, &self.filmic, &self.used);
+                self.draw(5, &u, &[SL], &[e0], &plain(5))?;
                 self.reset();
                 self.effect_of_eight();
                 self.target_only(&self.tonemap[1].rtv.clone());
                 self.full_viewport();
                 self.full_viewport();
-                self.draw(6, &uploads[6], &[SP, SP, SP, SW], &[e1, black.clone(), grey, dither], &draw_vertices(6, w, h, n, self.vignette))?;
+                let u = self.cbuffer.draw(6, &pe, &self.filmic, &self.used);
+                self.draw(6, &u, &[SP, SP, SP, SW], &[e1, black.clone(), grey, dither], &draw_vertices(6, w, h, n, self.vignette, 0))?;
                 // the composite into the destination
                 self.target_only(destination);
                 self.full_viewport();
                 self.full_viewport();
-                self.draw(7, &uploads[7], &[SP; 6], &[t0, black.clone(), white.clone(), t1, black, white], &plain(7))?;
+                let u = self.cbuffer.draw(7, &pe, &self.filmic, &self.used);
+                self.draw(7, &u, &[SP; 6], &[t0, black.clone(), white.clone(), t1, black, white], &plain(7))?;
                 // (the shader reset after this is the caller's resetYebisStates)
             }
             Ok(())
@@ -640,13 +766,12 @@ mod tests {
             let first = frame == 0;
             let mut n = [0.0; 4];
             for d in 0..8 {
-                if d == 2 && first {
-                    continue;
+                if d == 2 {
+                    n = noise.next(false);
+                } else if d == 3 {
+                    n = noise.next(true);
                 }
-                if d == 2 || d == 3 {
-                    n = noise.next(!first);
-                }
-                let v = draw_vertices(d, w, h, n, a);
+                let v = draw_vertices(d, w, h, n, a, 1);
                 let bytes: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
                 let (i, off, discard) = ring.alloc(bytes.len() as u32);
                 if discard {

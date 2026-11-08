@@ -14,14 +14,18 @@
 //! store differs from the game's; the second frame is the steady state the game logs.
 //!
 //! Not ported (not on this chain): glare, DOF, light shafts, heat shimmer, lens distortion,
-//! feedback, vignette simulation, HUE / SEPIA, auto exposure over time (Y3), tone-map
-//! functions other than 0, 1 and the filmic default.
+//! feedback, vignette simulation, HUE / SEPIA, tone-map functions other than 0, 1 and the filmic
+//! default, auto exposure with a delay, a metering window, glare or another tone map.
+//!
+//! Step 3 (Task Y2c), `AutoExposure`: the exposure over time from the luminance row draws, the
+//! analysis down to 1x1 and its readback.
 
-use rustyac_math::powf;
+use rustyac_math::{logf, powf};
 use rustyac_physics::data::ini::IniReader;
 
-/// Program pair of each draw, in order: round one 1-4, round two 5-7, composite 8.
-pub const TECHNIQUES: [&str; 8] = [
+/// Program pair of each draw, in order: round one 1-4, round two 5-7, composite 8, then the
+/// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step.
+pub const TECHNIQUES: [&str; 10] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -30,12 +34,15 @@ pub const TECHNIQUES: [&str; 8] = [
     "TransformMadT1_S5",
     "TonemapHDR_Dither_Vignette_Exposure_LINEARSAT",
     "CompositeColorAndAlphaEffectsMask_A_A",
+    "MadT1_S1",
+    "MadT1_S2",
 ];
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
 const SCREEN_SPACE_SCALE: usize = 80;
 const CONVERT_DEPTH: usize = 272;
+const TAPS: usize = 544;
 const MODULATE: usize = 2464;
 const OFFSET: usize = 2976;
 const GAMMA: usize = 3232;
@@ -57,6 +64,11 @@ pub struct Camera {
     pub fov_deg: f32,
     pub width: u32,
     pub height: u32,
+    /// The camera's exposure (40 by default) and `[EXPOSURE]` of the graphics settings.
+    pub exposure: f32,
+    pub exposure_multiplier: f32,
+    /// The frame time auto exposure moves by.
+    pub dt: f32,
 }
 
 /// The `CPostEffect` fields of this chain; the comments name their offsets.
@@ -85,6 +97,8 @@ pub struct PostEffect {
     pub ca_uniform: [f32; 2], // +0x9a4
     pub depth_cast: [f32; 4], // +0x410
     pub depth: [f32; 5],      // +0xb8c..+0xb9c
+    /// `[AUTO_EXPOSURE]` on: MIN, MAX and the middle grey `updatePP` hands YEBIS.
+    pub auto_exposure: Option<[f32; 3]>,
 }
 
 impl PostEffect {
@@ -109,8 +123,24 @@ impl PostEffect {
         if i("CHROMATIC_ABERRATION", "ENABLED")? == 0 {
             return Err("yebis: chromatic aberration off changes the draw list: not ported".into());
         }
-        // shortcut: auto exposure is taken as settled at MAX, as in the oracle's frames; Y3 ports adaptation
-        let exposure = if i("AUTO_EXPOSURE", "ENABLED")? != 0 { f("AUTO_EXPOSURE", "MAX")? } else { f("TONEMAPPING", "EXPOSURE")? };
+        let auto_exposure = if i("AUTO_EXPOSURE", "ENABLED")? != 0 {
+            let checks = [("DELAY", 0.0), ("METERING_WIDTH", 100.0), ("METERING_HEIGHT", 100.0), ("METERING_OFFSET_X", 0.0), ("METERING_OFFSET_Y", 0.0), ("INFLUENCED_BY_GLARE", 0.0)];
+            for (key, want) in checks {
+                if f("AUTO_EXPOSURE", key)? != want {
+                    return Err(format!("yebis: [AUTO_EXPOSURE] {key} other than {want} not ported"));
+                }
+            }
+            if tonemap != 2 {
+                return Err("yebis: auto exposure with a tone map other than filmic not ported".into());
+            }
+            // YebisPP::updatePP 0x14002c270
+            let grey = ((cam.exposure / 30.0) * f("AUTO_EXPOSURE", "TARGET")?) * cam.exposure_multiplier;
+            Some([f("AUTO_EXPOSURE", "MIN")?, f("AUTO_EXPOSURE", "MAX")?, grey])
+        } else {
+            None
+        };
+        // with auto exposure on, the caller puts `AutoExposure::frame`'s exposure here
+        let exposure = if auto_exposure.is_some() { 1.0 } else { f("TONEMAPPING", "EXPOSURE")? };
 
         let mut m = IDENTITY;
         if f("COLOR", "HUE")? != 0.0 || f("COLOR", "SEPIA")? != 0.0 {
@@ -149,6 +179,7 @@ impl PostEffect {
             far,
             fov: cam.fov_deg * 0.017453,
             aspect: cam.width as f32 / cam.height as f32,
+            auto_exposure,
             exposure: exposure.max(f32::MIN_POSITIVE),
             exposure_scale: 1.0,
             gamma: f("TONEMAPPING", "GAMMA")?.max(0.0),
@@ -386,24 +417,32 @@ impl Cbuffer {
         out
     }
 
-    /// One frame's 8 uploads; `used[d]` are the variable ranges of `TECHNIQUES[d]`.
-    pub fn frame(&mut self, pe: &PostEffect, filmic: &[f32; 21], used: &[Vec<(usize, usize)>; 8]) -> Vec<[u8; 4096]> {
-        let two = pe.round_two();
-        let mut out = Vec::with_capacity(8);
-        self.put(SCREEN_SPACE_SCALE, &[1.0, -1.0]);
-        for draw in 0..8 {
-            match draw {
-                0 => self.depth_alpha(pe),
-                1 | 5 => self.chromatic_aberration(pe),
-                2 => self.tonemap(pe, filmic, false),
-                3 => self.tonemap(pe, filmic, true),
-                4 => self.depth_blur_factor(pe),
-                6 => self.tonemap(&two, filmic, true),
-                _ => self.put(MODULATE, &[if pe.alpha_out == 2 { pe.alpha_out_scale } else { 1.0 }, 0.0, 0.0, 0.0]),
+    /// The puts and the upload of one draw of `TECHNIQUES[t]`; `used[t]` are its variable ranges.
+    pub fn draw(&mut self, t: usize, pe: &PostEffect, filmic: &[f32; 21], used: &[Vec<(usize, usize)>; 10]) -> [u8; 4096] {
+        match t {
+            0 => {
+                self.put(SCREEN_SPACE_SCALE, &[1.0, -1.0]);
+                // the first tap's offset is set (zero), the second keeps what the analysis left
+                self.put(TAPS, &[0.0; 4]);
+                self.depth_alpha(pe)
             }
-            out.push(self.upload(&used[draw]));
+            1 | 5 => self.chromatic_aberration(pe),
+            2 => self.tonemap(pe, filmic, false),
+            3 => self.tonemap(pe, filmic, true),
+            4 => self.depth_blur_factor(pe),
+            6 => self.tonemap(&pe.round_two(), filmic, true),
+            7 => self.put(MODULATE, &[if pe.alpha_out == 2 { pe.alpha_out_scale } else { 1.0 }, 0.0, 0.0, 0.0]),
+            // CTextureLuminance::Analyze: 2:1 steps with one tap, then 4x2 to 1x1 with two
+            8 => {
+                self.put(MODULATE, &[1.0; 4]);
+                self.put(TAPS, &[0.0; 4]);
+            }
+            _ => {
+                self.put(TAPS, &[-0.25, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0]);
+                self.put(MODULATE, &[0.5; 8]);
+            }
         }
-        out
+        self.upload(&used[t])
     }
 
     /// Draw 1: DrawRectGPU_DepthOfField_FromBlurFactorTexture 0x1403f48b0 (depth into alpha).
@@ -510,6 +549,127 @@ fn filmic_norm(t: &[f32; 21], v: f32) -> f32 {
     (t[j] - t[i]) * (x - i as f32) + t[i]
 }
 
+/// What the luminance step of a frame draws.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Luminance {
+    /// One of the 5 rows of the 128x64 luminance target (`TonemapToSurface`).
+    Row(u32),
+    /// `CTextureLuminance::Analyze`: down to 1x1 and the copy into the read-back texture.
+    Analyze,
+    /// The last analysis is not read back yet.
+    Skip,
+}
+
+/// Auto exposure over time: YEBIS's `CTextureLuminanceManage` (`UpdateFrame` 0x140433230, a
+/// 17-slot history of read-back luminance) and `UpdateAutoExposure`'s exposure step, for the
+/// filmic tone map, no delay, the whole screen metered and no glare.
+pub struct AutoExposure {
+    frames: [u32; 17],  // +0x7c
+    lum: [f32; 17],     // +0x368
+    exposure: [f32; 17], // +0x3f0
+    at: i32,            // +0x58
+    pending: bool,      // +0x5c
+    since: u32,         // +0x60
+    adjust: f32,        // +0x4c
+    value: f32,         // +0x54
+    rows: i32,          // +0x48
+    current: f32,       // the manager's +0x64
+}
+
+impl Default for AutoExposure {
+    fn default() -> AutoExposure {
+        AutoExposure { frames: [1; 17], lum: [0.18; 17], exposure: [1.0; 17], at: 0, pending: false, since: 0, adjust: 0.0, value: 1.0, rows: 0, current: 0.0 }
+    }
+}
+
+/// HDRTMAP_DecodeTonemap for the filmic tone map.
+fn decode(x: f32) -> f32 {
+    let r = -logf(1.0 - x.clamp(0.0, 1.0));
+    if r > 0.0 {
+        r
+    } else {
+        0.0
+    }
+}
+
+impl AutoExposure {
+    /// An analysis waits for its read-back.
+    pub fn waiting(&self) -> bool {
+        self.pending
+    }
+
+    /// One frame: `readback` is the 1x1 RGBA of the last analysis once it is there, `ae` is
+    /// `PostEffect::auto_exposure`. Returns this frame's tone-map exposure and luminance step.
+    pub fn frame(&mut self, readback: Option<[u8; 4]>, ae: [f32; 3], dt: f32) -> (f32, Luminance) {
+        let [min, max, grey] = ae;
+        let e_now = self.value;
+        let rate = 1.0 - powf(0.050000012, (dt * 6.0) / 0.1);
+        self.since += 1;
+        if let (true, Some(b)) = (self.pending, readback) {
+            let c = b.map(|v| v as f32 * 0.003921569);
+            let lum = ((c[1] * 0.7152) + (c[0] * 0.2126)) + (c[2] * 0.0722);
+            let (k, next) = (self.at as usize % 17, (self.at as usize + 1) % 17);
+            self.frames[k] = self.since;
+            self.lum[k] = ((lum - self.lum[next]) * rate) + self.lum[next];
+            self.at = if self.at == 0 { 16 } else { self.at - 1 };
+            self.pending = false;
+            self.since = 0;
+        }
+        let (b, a) = ((self.at as usize + 1) % 17, (self.at as usize + 2) % 17);
+        let t = self.since as f32 / self.frames[b] as f32;
+        let t = if !(t >= 0.0) { 0.0 } else if t > 1.0 { 1.0 } else { t };
+        let mean = ((self.lum[b] - self.lum[a]) * t) + self.lum[a];
+        let current = decode(mean) / (((self.exposure[b] - self.exposure[a]) * t) + self.exposure[a]);
+        let step = if self.rows > 4 {
+            if self.pending {
+                Luminance::Skip
+            } else {
+                self.rows = -1;
+                self.exposure[self.at as usize % 17] = e_now;
+                self.pending = true;
+                Luminance::Analyze
+            }
+        } else {
+            Luminance::Row(self.rows as u32)
+        };
+        // UpdateAutoExposure: move log2 exposure towards the target, at most 8 stops a second
+        let l2 = logf(2.0);
+        let e = logf(e_now + f32::MIN_POSITIVE) / l2;
+        let v = decode(grey) / (current + f32::MIN_POSITIVE);
+        let lp = logf(1.0) / l2;
+        let target = (((logf(v) / l2) - lp) * 0.85) + lp;
+        let a = 1.0 - powf(0.5, dt / 0.3);
+        let want = ((a * (target - e)) + e) - e;
+        let x = self.adjust;
+        let (to, ok) = if target <= e {
+            let limit = -(8.0 * dt);
+            let f13 = if want <= limit { limit } else { want };
+            let new = (a * (f13 - x)) + x;
+            self.adjust = if f13 <= new { if new <= 0.0 { new } else { 0.0 } } else { f13 };
+            let to = self.adjust + e;
+            (to, target < to)
+        } else {
+            let limit = 8.0 * dt;
+            let f13 = if limit <= want { limit } else { want };
+            let new = (a * (f13 - x)) + x;
+            self.adjust = if new < 0.0 { 0.0 } else if new <= f13 { new } else { f13 };
+            let to = self.adjust + e;
+            (to, to < target)
+        };
+        let to = if ok {
+            to
+        } else {
+            self.adjust = 0.0;
+            target
+        };
+        let p = powf(2.0, to);
+        self.value = if p < min { min } else if p > max { max } else { p };
+        self.rows += 1;
+        self.current = current;
+        (e_now, step)
+    }
+}
+
 /// Used `$Globals` ranges of a technique's two programs (D3D_SVF_USED), read from the bytecode at
 /// run time. A variable is copied up to the end of its register or the next variable, whichever
 /// comes first (measured: the 8-byte depth cast goes up with its register's .zw).
@@ -531,9 +691,9 @@ pub fn used(vs: &[u8], ps: &[u8]) -> Result<Vec<(usize, usize)>, String> {
     Ok(r)
 }
 
-/// `used` for all 8 draws.
-pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<[Vec<(usize, usize)>; 8], String> {
-    let mut out: [Vec<(usize, usize)>; 8] = Default::default();
+/// `used` for every technique.
+pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<[Vec<(usize, usize)>; 10], String> {
+    let mut out: [Vec<(usize, usize)>; 10] = Default::default();
     for (o, name) in out.iter_mut().zip(TECHNIQUES) {
         let (vs, ps) = tfxo.technique(name).ok_or_else(|| format!("no technique {name}"))?;
         *o = used(vs, ps)?;
@@ -572,15 +732,17 @@ mod tests {
             None => IniReader::load(&path).unwrap(),
         };
         let video = IniReader::from_text(Path::new("video.ini"), "[POST_PROCESS]\nENABLED=1\nFILTER=default\nQUALITY=0\nGLARE=0\nDOF=0\n");
-        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720 };
-        let pe = PostEffect::new(&filter, &video, &cam).unwrap();
+        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668 };
+        let mut pe = PostEffect::new(&filter, &video, &cam).unwrap();
+        // the logged frame is the second, after one auto exposure step from 1 to MAX
+        pe.exposure = 0.5;
         let exe = std::fs::read(root.join("acs.exe")).unwrap();
         let filmic = filmic_table(&exe).unwrap();
         let tfxo = Tfxo::from_exe(&exe).unwrap();
         let used = used_all(&tfxo).unwrap();
         let mut cb = Cbuffer::default();
-        cb.frame(&pe, &filmic, &used);
-        cb.frame(&pe, &filmic, &used)
+        (0..8).for_each(|t| _ = cb.draw(t, &pe, &filmic, &used));
+        (0..8).map(|t| cb.draw(t, &pe, &filmic, &used)).collect()
     }
 
     fn runs() -> PathBuf {
@@ -629,6 +791,52 @@ mod tests {
         let ours = rust_frame(&root, Some(&text.replace("SATURATION=0.95", "SATURATION=0.9")));
         let differ: Vec<usize> = (0..8).filter(|&d| game[d] != ours[d]).map(|d| d + 1).collect();
         assert_eq!(differ, [4]);
+    }
+
+    /// The game's auto exposure (re/scratch/taskY2c ae_a16: `YebisPP` +0x54, +0x4c and the
+    /// luminance manager's +0x64 after frames 1-15 of the y16 run), fed its two read-backs.
+    #[test]
+    fn auto_exposure_follows_the_games() {
+        const GAME: [(u32, u32, u32); 15] = [
+            (0x3f000000, 0x3ba2bd76, 0x3e4b36ba),
+            (0x3f000000, 0x3c033acf, 0x3e4b36ba),
+            (0x3f000000, 0x3c3334b6, 0x3e4b36ba),
+            (0x3f000000, 0x3c615ea6, 0x3e4b36ba),
+            (0x3f000000, 0x3c86e513, 0x3e4b36ba),
+            (0x3f000000, 0x3c9c440a, 0x3e4b36ba),
+            (0x3f000000, 0x3caaeacd, 0x3e997906),
+            (0x3f000000, 0x3cb3f9a8, 0x3eda2106),
+            (0x3f000000, 0x3cb8203c, 0x3f15f66b),
+            (0x3f000000, 0x3cafa2a0, 0x3f4aa003),
+            (0x3f000000, 0x3c000a80, 0x3f87f498),
+            (0x3f000000, 0x00000000, 0x3ff83139),
+            (0x3effddfc, 0xba445471, 0x3ff6e77f),
+            (0x3eff9bc3, 0xbabf499f, 0x3ff59f69),
+            (0x3eff3b24, 0xbb0bb67c, 0x3ff458f8),
+        ];
+        let grey = ((40.0f32 / 30.0) * 0.32) * 1.0;
+        assert_eq!(grey, 0.42666668);
+        let mut ae = AutoExposure::default();
+        let mut steps = Vec::new();
+        for n in 0..16 {
+            let readback = match n {
+                6 => Some([168, 164, 155, 0]),
+                12 => Some([158, 155, 149, 0]),
+                _ => None,
+            };
+            let (e, step) = ae.frame(readback, [0.2, 0.5, grey], 0.016666668);
+            steps.push(step);
+            // the tone map of frame n uses the exposure after frame n-1
+            if n != 1 {
+                assert_eq!(e, if n == 0 { 1.0 } else { f32::from_bits(GAME[n - 2].0) }, "frame {n} exposure");
+            }
+            if n > 0 {
+                let got = (ae.value.to_bits(), ae.adjust.to_bits(), ae.current.to_bits());
+                assert_eq!(got, GAME[n - 1], "frame {n}: {} {} {}", ae.value, ae.adjust, ae.current);
+            }
+        }
+        use Luminance::*;
+        assert_eq!(steps, [Row(0), Row(1), Row(2), Row(3), Row(4), Analyze, Row(0), Row(1), Row(2), Row(3), Row(4), Analyze, Row(0), Row(1), Row(2), Row(3)]);
     }
 
     #[test]

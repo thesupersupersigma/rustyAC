@@ -101,7 +101,7 @@ mod tests {
 
     /// The techniques of the default frame (docs/atlas/yebis.md s8) and the shader tags the
     /// oracle's real-YEBIS log (re/scratch/taskY1/y1) shows bound for them.
-    const FRAME: [(&str, u64, u64); 7] = [
+    const FRAME: [(&str, u64, u64); 9] = [
         ("MadAlphaColorT2_R_S1", 0x20c403425f52bd2a, 0xe63f5c5eb7f2a381),
         ("TransformMadT1_S5", 0xf2401e2969114091, 0xe2def5179bee7285),
         ("TonemapHDR_Exposure", 0xb3244b52ca4b93b5, 0xd2fdb9385624e376),
@@ -109,6 +109,9 @@ mod tests {
         ("DepthOfField_BlurFactorAlphaFromDepthTextureTypeCastT1_S1_RVALUE_ALPHA_RGB", 0x5c593d0d18e76cf2, 0xa7cdd8559f4bb6dd),
         ("TonemapHDR_Dither_Vignette_Exposure_LINEARSAT", 0xb3244b52ca4b93b5, 0x30316e885216aafd),
         ("CompositeColorAndAlphaEffectsMask_A_A", 0x2e98bed6aa6d52d1, 0x1200229cbcb9f2b7),
+        // the luminance analysis (Task Y2c): 2:1 resample steps, then the 4x2 to 1x1 step
+        ("MadT1_S1", 0x20c403425f52bd2a, 0xc3de4b0c7da640bd),
+        ("MadT1_S2", 0xc3cd22168c465d96, 0xb576b99a7dcaecb7),
     ];
 
     #[test]

@@ -127,6 +127,11 @@ impl CameraForwardYebis {
                 self.fxaa_temp_rt = Some(color_target(graphics, DXGI_FORMAT_R8G8B8A8_UNORM, self.width, self.height));
             }
             self.init_render_targets(graphics)?;
+            #[cfg(all(windows, not(feature = "backend-wgpu")))]
+            if let Some(yebis) = self.yebis.take() {
+                self.yebis = Some(yebis.remade(self.width, self.height)?);
+                unsafe { graphics.kgl.context.OMSetRenderTargets(Some(std::slice::from_ref(&graphics.kgl.screen_render_target.render_target_view)), None) };
+            }
         }
         Ok(())
     }
@@ -214,7 +219,16 @@ impl CameraForwardYebis {
                 None => graphics.kgl.screen_render_target.render_target_view.clone(),
             };
             let camera = &self.forward.base.camera;
-            let camera = crate::yebis_cb::Camera { near: camera.near_plane, far: camera.far_plane, fov_deg: camera.fov, width: self.width as u32, height: self.height as u32 };
+            let camera = crate::yebis_cb::Camera {
+                near: camera.near_plane,
+                far: camera.far_plane,
+                fov_deg: camera.fov,
+                width: self.width as u32,
+                height: self.height as u32,
+                exposure: camera.exposure,
+                exposure_multiplier: graphics.exposure_multiplier,
+                dt,
+            };
             if let (Some(depth), Some(scene), Some(destination)) = (depth.and_then(|t| t.shader_resource_view.as_ref()), scene.and_then(|t| t.shader_resource_view.as_ref()), destination) {
                 if let Err(e) = yebis.render(depth, scene, &destination, &camera) {
                     eprintln!("{e}");

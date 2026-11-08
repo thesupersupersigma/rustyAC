@@ -68,7 +68,7 @@ const USAGE: &str = "usage:
                     the mirror and the dashboard follow the focused car) [--set alllights=1] (every car's headlights)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
                     [--world-detail <n>] [--anisotropic <n>] [--cubemap-faces <0..6>] [--cubemap-far <m>]
-                    [--aa <AASAMPLES>] [--post [--fxaa] [--motion-blur <0..12>] [--ldr-levels]]: [POST_PROCESS] ENABLED=1, the game's
+                    [--aa <AASAMPLES>] [--post [--fxaa] [--motion-blur <0..12>] [--ldr-levels] [--ppfilter <name>]]: [POST_PROCESS] ENABLED=1, the game's
                     CameraForwardYebis with YEBIS' ApplyEffects replaced by a plain copy on both sides
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
@@ -387,6 +387,10 @@ fn parse() -> Result<Args, String> {
             "--fxaa" => {
                 profile.fxaa = true;
             }
+            "--ppfilter" => {
+                text = value()?;
+                profile.ppfilter = Box::leak(text.clone().into_boxed_str());
+            }
             "--motion-blur" => {
                 text = value()?;
                 // Sim::Sim 0x140192070: 0 to 12
@@ -454,6 +458,14 @@ pub fn pick_line(side: &str, index: usize, at: (i32, i32), distance: f32) {
 /// The picked points, as parts of the screen: its centre (END's), and around it.
 pub fn pick_at(w: i32, h: i32) -> [(i32, i32); 5] {
     [(w / 2, h / 2), (w / 4, h / 2), (w * 3 / 4, h * 2 / 3), (w / 2, h * 3 / 4), (w / 3, h / 3)]
+}
+
+/// `RENDER_ORACLE_RESIZE=<frame>:<W>x<H>` (Task Y2c): the window resized before that frame, as the game's WM_SIZE does
+pub fn resize() -> Option<(usize, i32, i32)> {
+    let v = std::env::var("RENDER_ORACLE_RESIZE").ok()?;
+    let (frame, size) = v.split_once(':')?;
+    let (w, h) = size.split_once('x')?;
+    Some((frame.parse().ok()?, w.parse().ok()?, h.parse().ok()?))
 }
 
 pub fn timing() -> bool {

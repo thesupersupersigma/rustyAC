@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
-use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP};
+use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, RegisterClassW, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP};
 
 use crate::acs::Acs;
 use crate::frames::Frame;
@@ -71,6 +71,7 @@ const VA_CREATE_AND_SAVE_OVERLAYS: usize = 0x1_401b_9b00; // TimeAttack::createA
 const VA_FUNCTION_QUEUE_VTABLE: usize = 0x1_404c_7b30; // Concurrency::concurrent_queue<std::function<void(void)>>::`vftable'
 const VA_STARTING_LIGHTS_CTOR: usize = 0x1_401a_1a20; // StartingLights::StartingLights(Sim*)
 const VA_STARTING_LIGHTS_RENDER_HUD: usize = 0x1_401a_2e80; // StartingLights::renderHUD(float)
+const VA_GRAPHICS_ON_RESIZE: usize = 0x1_4020_4330; // GraphicsManager::onResize(int, int)
 const VA_GRAPHICS_RESET_RENDER_STATES: usize = 0x1_4020_4440; // GraphicsManager::resetRenderStates()
 const VA_SEMAPHORE_CTOR: usize = 0x1_401a_37a0; // StartingTrackSemaphore::StartingTrackSemaphore(Sim*)
 const VA_SEMAPHORE_UPDATE: usize = 0x1_401a_4cc0; // StartingTrackSemaphore::update(float)
@@ -141,6 +142,7 @@ const SIZE_CAMERA_FORWARD_YEBIS: usize = 0xe80;
 const SIZE_CAMERA_TRIPLE_SCREEN: usize = 0x10c0;
 const VA_CAMERA_TRIPLE_SCREEN_CTOR: usize = 0x1_4022_48e0; // CameraTripleScreen::CameraTripleScreen(const std::wstring&, GraphicsManager*, int)
 const VA_CAMERA_FORWARD_YEBIS_CTOR: usize = 0x1_4002_5db0; // CameraForwardYebis::CameraForwardYebis(const std::wstring&, GraphicsManager*, bool, bool, int)
+const VA_CAMERA_FORWARD_YEBIS_LOAD_PP_SET: usize = 0x1_4002_9960; // CameraForwardYebis::loadPPSet(std::wstring)
 const VA_YEBIS_INIT_POST_PROCESSING: usize = 0x1_4002_4ca0; // CameraForwardYebis::initPostProcessing()
 const VA_YEBIS_APPLY_POST_PROCESSING: usize = 0x1_4002_5c30; // CameraForwardYebis::applyPostProcessing()
 const VA_PFX_SYSTEM: usize = 0x1_4155_d670; // the global PPFX::GetRenderGlare reads
@@ -338,6 +340,12 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
 }
 
 /// A window that is never shown: the swap chain needs one.
+/// The swap chain's window resized, as WM_SIZE finds it (ResizeBuffers(0, 0) then takes its client size).
+pub unsafe fn size_window(chain: &windows::Win32::Graphics::Dxgi::IDXGISwapChain, w: i32, h: i32) -> Result<(), String> {
+    let desc = chain.GetDesc().map_err(|e| e.to_string())?;
+    SetWindowPos(desc.OutputWindow, None, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE).map_err(|e| e.to_string())
+}
+
 pub unsafe fn hidden_window(width: u32, height: u32) -> Result<HWND, String> {
     let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
     let class = WNDCLASSW { lpfnWndProc: Some(window_proc), hInstance: instance.into(), lpszClassName: w!("rustyac_render_oracle"), ..Default::default() };
@@ -956,7 +964,18 @@ impl Game {
             } else {
                 let camera = acs.alloc(SIZE_CAMERA_FORWARD_YEBIS);
                 let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_CTOR));
-                ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1)
+                let camera = ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1);
+                if profile.ppfilter != "default" {
+                    // the ctor loads "default"; Sim::createCamera's PostProcessEffectsUpdater (0x1400ab880)
+                    // then loads video.ini FILTER through loadPPSet, which takes the string by value and frees it
+                    let name = acs.alloc(0x20);
+                    write_wstring(acs, name, profile.ppfilter);
+                    let load: extern "C" fn(*mut u8, *mut u8) -> bool = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_LOAD_PP_SET));
+                    if !load(camera, name) {
+                        return Err(format!("loadPPSet({}) failed", profile.ppfilter));
+                    }
+                }
+                camera
             };
             self.hdr_flag(false);
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
@@ -1389,6 +1408,14 @@ impl Game {
             if index >= frame.capture && !crate::timing() {
                 rustyac_render::gpulog::begin_capture(&frame.name);
             }
+            if let Some((_, w, h)) = crate::resize().filter(|r| r.0 == index) {
+                // WM_SIZE: the window first (ResizeBuffers(0, 0) takes its client size), then
+                // GraphicsManager::onResize, whose evWindowResize reaches CameraForwardYebis::onResize
+                use windows::core::Interface;
+                size_window(windows::Win32::Graphics::Dxgi::IDXGISwapChain::from_raw_borrowed(&self.swap_chain).ok_or("no swap chain")?, w, h)?;
+                let on_resize: extern "C" fn(*mut u8, i32, i32) = std::mem::transmute(acs.va(VA_GRAPHICS_ON_RESIZE));
+                on_resize(self.graphics, w, h);
+            }
             // Game::onIdle 0x140242730
             let started = std::time::Instant::now();
             self.hdr_flag(true);
@@ -1480,6 +1507,24 @@ impl Game {
             // Game::evOnPostGui: the camera manager's fade (the game's own handler)
             if let (Some(car), Some(_)) = (&car, frame.fade_at) {
                 self.post_gui_fade(car, crate::frames::DT);
+            }
+            if std::env::var_os("RENDER_ORACLE_AE_DUMP").is_some() {
+                let pe = *(acs.va(VA_PFX_SYSTEM) as *const *mut u8);
+                if !pe.is_null() {
+                    let ae = (*(pe.add(0x1c8) as *const *mut u8)).add(rd::<i32>(pe, 0x1c0) as usize * 0x68);
+                    let fl = |p: *mut u8, a: usize, b: usize| (a..b).step_by(4).map(|o| format!("{:e}", rd::<f32>(p, o))).collect::<Vec<_>>().join(" ");
+                    let ul = |p: *mut u8, a: usize, b: usize| (a..b).step_by(4).map(|o| format!("{}", rd::<u32>(p, o))).collect::<Vec<_>>().join(" ");
+                    eprintln!("AE {index} ae {} rows {} pe6f4 {:e} head {} pe {} {}", fl(ae, 0x4c, 0x58), rd::<i32>(ae, 0x48), rd::<f32>(pe, 0x6f4), fl(ae, 0, 0x48), fl(pe, 0xb08, 0xb10), fl(pe, 0x65c, 0x660));
+                    let mgr = rd::<*mut u8>(ae, 0x60);
+                    if !mgr.is_null() {
+                        eprintln!("AE {index} mgr at {} pend {} since {} cur {:e} lumnow {:e} rate {:e} d {} id {}", rd::<i32>(mgr, 0x58), rd::<u8>(mgr, 0x5c), rd::<u32>(mgr, 0x60), rd::<f32>(mgr, 0x64), rd::<f32>(mgr, 0x68), rd::<f32>(mgr, 0x504), rd::<i32>(mgr, 0x500), rd::<i32>(mgr, 0x508));
+                        eprintln!("AE {index} frames {}", ul(mgr, 0x7c, 0xc0));
+                        eprintln!("AE {index} raw {}", fl(mgr, 0x1d0, 0x214));
+                        eprintln!("AE {index} lum {}", fl(mgr, 0x368, 0x3ac));
+                        eprintln!("AE {index} val {}", fl(mgr, 0x3ac, 0x3f0));
+                        eprintln!("AE {index} exp {}", fl(mgr, 0x3f0, 0x434));
+                    }
+                }
             }
             if index >= frame.capture {
                 // (a timing run keeps no log: the logger costs far more than the frame)

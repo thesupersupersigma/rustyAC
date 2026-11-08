@@ -1003,17 +1003,30 @@ impl Kgl {
 }
 
 impl Kgl {
-    /// `kglResizeBuffers` 0x1400193d0 for a screen that is a texture: nothing stays bound, the
+    /// `kglResizeBuffers` 0x1400193d0: nothing stays bound, the
     /// screen's colour and depth targets are made again and bound.
     pub fn resize_screen(&mut self, width: i32, height: i32) -> Result<(), String> {
         kgl_log::line(format_args!("resize_screen {width} {height}"));
-        if self.swap_chain.is_some() {
-            return Err("resizing a swap chain's buffers is the window's business here".into());
-        }
         self.video.width = width;
         self.video.height = height;
         unsafe {
             self.context.OMSetRenderTargets(None, None);
+            if let Some(chain) = self.swap_chain.clone() {
+                // the game's path: the buffers take the window's client size (the caller sizes the window first)
+                self.screen_render_target = KglRenderTarget::default();
+                self.active_render_target_view = None;
+                err("ResizeBuffers", chain.ResizeBuffers(0, 0, 0, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH))?;
+                let texture: ID3D11Texture2D = err("GetBuffer", chain.GetBuffer(0))?;
+                let mut rtv = None;
+                err("CreateRenderTargetView", self.device.CreateRenderTargetView(&texture, None, Some(&mut rtv)))?;
+                if let Some(k) = com(&rtv) {
+                    kgl_log::new_name(k, "screen");
+                }
+                self.screen_render_target = KglRenderTarget { render_target_view: rtv, samples: -1, ..Default::default() };
+                self.create_depth_buffer()?;
+                self.set_screen_render_targets(true);
+                return Ok(());
+            }
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: width as u32,
                 Height: height as u32,
