@@ -227,6 +227,39 @@ pub unsafe fn wstring(acs: &Acs, text: &str) -> *mut u8 {
     s
 }
 
+// RENDER_ORACLE_RT_LOG=1: every IGPUDevice::SetRenderTarget 0x1403d5410 ("RTS") and CRenderTexture::
+// UninitializeDevice 0x1403d29f0 ("RTU") to stderr (object, size,
+// format, device, views, the three return addresses as Ghidra addresses), for the teardown order
+static RT_UNINIT: AtomicUsize = AtomicUsize::new(0);
+static RT_BASE: AtomicUsize = AtomicUsize::new(0);
+#[link(name = "kernel32")]
+extern "system" {
+    fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
+}
+static RT_SET: AtomicUsize = AtomicUsize::new(0);
+unsafe extern "C" fn rt_set_hook(this: *mut u8, slot: u32, surface: *mut u8, flags: u32) -> i32 {
+    let mut frames = [std::ptr::null_mut::<c_void>(); 3];
+    let n = RtlCaptureStackBackTrace(1, 3, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
+    let base = RT_BASE.load(Ordering::SeqCst);
+    let calls: Vec<String> = frames[..n].iter().map(|&f| format!("{:x}", (f as usize).wrapping_sub(base) + 0x1_4000_0000)).collect();
+    eprintln!("RTS {slot} {:p} {flags} {}", surface, calls.join(" "));
+    let original: unsafe extern "C" fn(*mut u8, u32, *mut u8, u32) -> i32 = std::mem::transmute(RT_SET.load(Ordering::SeqCst));
+    original(this, slot, surface, flags)
+}
+unsafe extern "C" fn rt_uninit_hook(this: *mut u8) -> i32 {
+    let rd = |o: usize| std::ptr::read_unaligned(this.add(o) as *const u64);
+    let rd32 = |o: usize| std::ptr::read_unaligned(this.add(o) as *const u32);
+    let mut frames = [std::ptr::null_mut::<c_void>(); 4];
+    let n = RtlCaptureStackBackTrace(1, 4, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
+    let base = RT_BASE.load(Ordering::SeqCst);
+    let calls: Vec<String> = frames[..n].iter().map(|&f| format!("{:x}", (f as usize).wrapping_sub(base) + 0x1_4000_0000)).collect();
+    eprintln!(
+        "RTU {:p} {}x{} f{} flags{:x} dev{} a8:{} b0:{} cnt{} {}",
+        this, rd32(0x5c), rd32(0x60), rd32(0x44), rd32(0x38), (rd(0x28) != 0) as u8, (rd(0xa8) != 0) as u8, (rd(0xb0) != 0) as u8, rd32(0x98), calls.join(" ")
+    );
+    let original: unsafe extern "C" fn(*mut u8) -> i32 = std::mem::transmute(RT_UNINIT.load(Ordering::SeqCst));
+    original(this)
+}
 static DEVICE: AtomicUsize = AtomicUsize::new(0);
 static CONTEXT: AtomicUsize = AtomicUsize::new(0);
 static SWAP_CHAIN: AtomicUsize = AtomicUsize::new(0);
@@ -932,6 +965,13 @@ impl Game {
             // (g_pPfxContext stays null, so every YEBIS call of the frame is skipped by the game's
             // own tests) and applyPostProcessing is the stand-in the port draws too;
             // RENDER_ORACLE_YEBIS=1 keeps the real YEBIS (Task Y1: its D3D calls land in the log)
+            if std::env::var_os("RENDER_ORACLE_RT_LOG").is_some() {
+                RT_BASE.store(acs.va(0x1_4000_0000), Ordering::SeqCst);
+                let expected = [0x48, 0x8b, 0xc4, 0x56, 0x57, 0x48, 0x81, 0xec, 0x98, 0x00, 0x00, 0x00];
+                let set = [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40];
+                RT_SET.store(acs.detour(0x1_403d_5410, 15, &set, rt_set_hook as *const () as usize), Ordering::SeqCst);
+                RT_UNINIT.store(acs.detour(0x1_403d_29f0, 12, &expected, rt_uninit_hook as *const () as usize), Ordering::SeqCst);
+            }
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_none() {
                 acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);
                 let mut jump = vec![0x48u8, 0xb8];
