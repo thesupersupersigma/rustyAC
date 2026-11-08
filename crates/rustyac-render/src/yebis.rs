@@ -256,6 +256,10 @@ mod device {
         depth: ID3D11DepthStencilState,
         blend: ID3D11BlendState,
         cache: Cache,
+        /// `CTinyEffect` +0x90: the highest texture slot end of the pixel programs made so far, emptied before each draw.
+        srv_slots: usize,
+        /// `CPostEffect::RegisterDeviceTexture`'s map (+0xc0): each source view once, with the view made on it.
+        sources: Vec<(ID3D11ShaderResourceView, windows::core::IUnknown)>,
         noise: Noise,
         root: std::path::PathBuf,
         filter: IniReader,
@@ -610,6 +614,8 @@ mod device {
                     depth: depth.ok_or("yebis: no state")?,
                     blend: blend.ok_or("yebis: no state")?,
                     cache: Cache::default(),
+                    srv_slots: 0,
+                    sources: Vec::new(),
                     noise: Noise::default(),
                     root: root.to_path_buf(),
                     filter,
@@ -698,8 +704,10 @@ mod device {
                 c.RSSetState(&self.raster);
                 self.cache.raster = true;
             }
-            let none: [Option<ID3D11ShaderResourceView>; 6] = Default::default();
-            c.PSSetShaderResources(0, Some(&none));
+            // CTinyEffect::SetPassState empties the slots before it makes the pass's programs
+            if self.srv_slots > 0 {
+                c.PSSetShaderResources(0, Some(&vec![None; self.srv_slots]));
+            }
             // a program is made on its first draw unless another technique made the same one
             if self.vs[d].is_none() {
                 let same = (0..self.code.len()).find(|&j| self.vs[j].is_some() && self.code[j].0 == self.code[d].0);
@@ -722,6 +730,7 @@ mod device {
                     None => {
                         let mut s = None;
                         err("CreatePixelShader", self.device.CreatePixelShader(&self.code[d].1, None, Some(&mut s)))?;
+                        self.srv_slots = self.srv_slots.max(srvs.len()); // CTinyEffect::CreateParameter
                         s
                     }
                 };
@@ -790,6 +799,31 @@ mod device {
             let (black, grey, white, dither) = (Some(self.black.clone()), Some(self.grey.clone()), Some(self.white.clone()), Some(self.dither.clone()));
             let plain = |d: usize| draw_vertices(d, w, h, [0.0; 4], 0.0, 0);
             unsafe {
+                // YebisPP::applyPostProcessing: SetEffectSource then SetDepthFactorSource(R32_TYPELESS); a view not in
+                // the map is registered with a target or depth view on its texture (CreateRenderTargetOrDepthStencilViewFromShaderResourceView)
+                for (view, is_depth) in [(scene, false), (depth, true)] {
+                    if self.sources.iter().any(|(v, _)| v == view) {
+                        continue;
+                    }
+                    let t = view.GetResource().map_err(|e| format!("yebis: {e}"))?;
+                    let made: windows::core::IUnknown = if is_depth {
+                        let d = D3D11_DEPTH_STENCIL_VIEW_DESC {
+                            Format: DXGI_FORMAT_D32_FLOAT,
+                            ViewDimension: D3D11_DSV_DIMENSION_TEXTURE2D,
+                            Flags: 0,
+                            Anonymous: D3D11_DEPTH_STENCIL_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_DSV { MipSlice: 0 } },
+                        };
+                        let mut v = None;
+                        err("CreateDepthStencilView", self.device.CreateDepthStencilView(&t, Some(&d), Some(&mut v)))?;
+                        v.ok_or("yebis: no view")?.into()
+                    } else {
+                        let d = D3D11_RENDER_TARGET_VIEW_DESC { Format: DXGI_FORMAT_UNKNOWN, ViewDimension: D3D11_RTV_DIMENSION_TEXTURE2D, Anonymous: D3D11_RENDER_TARGET_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_RTV { MipSlice: 0 } } };
+                        let mut v = None;
+                        err("CreateRenderTargetView", self.device.CreateRenderTargetView(&t, Some(&d), Some(&mut v)))?;
+                        v.ok_or("yebis: no view")?.into()
+                    };
+                    self.sources.push((view.clone(), made));
+                }
                 // CTextureUtil::Resample 0x1403f6710: its second texture (the scene) gets filter 1 (point) when it is the
                 // destination's size, else filter 0 (MIN_MAG_LINEAR_MIP_POINT), keeping the texture's border address
                 let mut desc = D3D11_TEXTURE2D_DESC::default();

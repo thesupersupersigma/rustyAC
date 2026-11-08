@@ -23,7 +23,8 @@ grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*
         args=$(echo "$args" | sed "s#$p#$pose#")
     done
     # Task Y2c: a --post row is the real YEBIS on both sides (an empty value would still count as on)
-    case " $args " in *" --post "*) export RENDER_ORACLE_YEBIS=1 ;; *) unset RENDER_ORACLE_YEBIS ;; esac
+    # Task Y3d-2: and from frame 0, where YEBIS makes its programs and wraps the scene's views
+    case " $args " in *" --post "*) export RENDER_ORACLE_YEBIS=1; args="$args --capture 0" ;; *) unset RENDER_ORACLE_YEBIS ;; esac
     room
     for try in 1 2; do  # a second try only for a log that differs while the pictures agree (load-flaky)
         "$RO" compare $args --label "$name" --root "$root" --out "$out/frames" > "$out/$name.txt" 2>&1 < /dev/null
