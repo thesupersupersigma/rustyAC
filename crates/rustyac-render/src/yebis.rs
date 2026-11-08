@@ -675,8 +675,8 @@ mod device {
             let (black, grey, white, dither) = (Some(self.black.clone()), Some(self.grey.clone()), Some(self.white.clone()), Some(self.dither.clone()));
             let plain = |d: usize| draw_vertices(d, w, h, [0.0; 4], 0.0, 0);
             unsafe {
-                // a scene of another size (window resized with FXAA on) is read with the linear border sampler
-                // shortcut: rule taken from the game's Task Y3 logs, not from PPFX's code; check it there if a case disagrees
+                // CTextureUtil::Resample 0x1403f6710: its second texture (the scene) gets filter 1 (point) when it is the
+                // destination's size, else filter 0 (MIN_MAG_LINEAR_MIP_POINT), keeping the texture's border address
                 let mut desc = D3D11_TEXTURE2D_DESC::default();
                 if let Some(t) = scene.GetResource().ok().and_then(|r| windows::core::Interface::cast::<ID3D11Texture2D>(&r).ok()) {
                     t.GetDesc(&mut desc);

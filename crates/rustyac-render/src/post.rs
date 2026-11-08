@@ -49,6 +49,9 @@ pub struct CameraForwardYebis {
     /// YEBIS (`CPostEffect`), once started
     #[cfg(all(windows, not(feature = "backend-wgpu")))]
     yebis: Option<crate::yebis::Yebis>,
+    /// evOnPostYebisParametersUpdate has fired once: on triple screens the vignette strength is zero from then on
+    #[cfg(all(windows, not(feature = "backend-wgpu")))]
+    parameters_updated: bool,
 }
 
 impl std::ops::Deref for CameraForwardYebis {
@@ -83,6 +86,8 @@ impl CameraForwardYebis {
             stand_in_shader: None,
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             yebis: None,
+            #[cfg(all(windows, not(feature = "backend-wgpu")))]
+            parameters_updated: false,
         };
         if graphics.video.pp_hdr_enabled {
             camera.depth_resolve_shader = Some(graphics.shaders.get_shader(&graphics.kgl, "ksMSDepthResolve")?);
@@ -128,10 +133,9 @@ impl CameraForwardYebis {
                 // YEBIS sizes its buffers from its destination: the FXAA target keeps its first size
                 let (w, h) = self.fxaa_temp_rt.as_ref().map_or((self.width, self.height), |t| (t.width, t.height));
                 let mut yebis = yebis.remade(w, h)?;
-                // CameraTripleScreen's handler 0x140224dc0 zeroes the vignette strength after every
-                // frame's parameters, and only YEBIS's init reads it.
-                // shortcut: a resize before the first triple frame should keep the filter's vignette, no caller does that
-                if self.forward.base.triple.is_some() {
+                // CameraTripleScreen's handler 0x140224dc0 zeroes the vignette strength on every
+                // evOnPostYebisParametersUpdate, and only YEBIS's init reads it
+                if self.forward.base.triple.is_some() && self.parameters_updated {
                     yebis.vignette = 0.0;
                 }
                 self.yebis = Some(yebis);
@@ -162,7 +166,11 @@ impl CameraForwardYebis {
             }
         }
         graphics.set_depth_mode(crate::graphics::DEPTH_NORMAL);
-        // (evOnPostYebisParametersUpdate: the heat shimmer's particles, YEBIS)
+        // (evOnPostYebisParametersUpdate 0x14002a57c: the heat shimmer's particles, YEBIS)
+        #[cfg(all(windows, not(feature = "backend-wgpu")))]
+        {
+            self.parameters_updated = true;
+        }
         self.render_apply_effect(graphics, scene, blurred, unblurred, root, dt);
         self.reset_yebis_states(graphics);
         if let (Some(rt), Some(shader)) = (&self.fxaa_temp_rt, self.fxaa_shader) {
