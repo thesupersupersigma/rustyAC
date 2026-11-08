@@ -1,3 +1,80 @@
+# Task Y3: YEBIS on resize, auto exposure off, triple screens; the remake, VR and heat shimmer stopped (rule 7)
+
+## Resume here
+
+- **Done, released as v0.48.2.** YEBIS now sizes its luminance target and analysis chain from the window
+  like the game (`luminance_sizes` / `box_taps` in `yebis.rs` / `yebis_cb.rs`), picks the analysis
+  program by tap count (`MadT1_S1` / `_S2` / `_S5`), uses the no-vignette tonemap programs when the
+  vignette is zero (triple screens), keeps the FXAA target at its old size on resize, and draws nothing
+  for the luminance with auto exposure off.
+- Next is **Task Y3b**: the three steps stopped under rule 7 (below), each about one session.
+- Check one run: `bash re/scratch/taskY3/cmp.sh <label> <out> <render_oracle compare args>` writes
+  `re/scratch/taskY3/<out>.txt`; `re/scratch/taskY3/regress.sh` reruns the cases below one after another.
+  The `ae_off` filter is `default` with `[AUTO_EXPOSURE] ENABLED=0`, in the scratch root
+  `re/scratch/taskY2c/root/system/cfg/ppfilters/`.
+- Test: `cargo test --locked -p rustyac-render --lib yebis`.
+- Disk: C: had 24 GB free; `tools/proofs/archive_kept.sh` (dry run) found 0 old kept folders, so there was nothing to move.
+
+## What it found
+
+1. **Luminance size** (`CPostEffect::Initialize` 0x1403bbb80): power-of-two floor of `W>>3` by `H>>3`;
+   when wider than 128 it is 128 by `(int)(128/aspect + 0.49999)`. 1280x720 gives 128x64, 5760x1080
+   gives 128x24 (the port had 128x64 hard-coded; the triple log differed there).
+2. **Analysis chain** (`CTextureLuminance::CreateSystemObjects` 0x140431b70) and its taps: per axis
+   `n = ceil(s/2/d)`, one fewer when `n > 1`, `d ≥ 8` and the edge rule holds, at most 5; 1, 2 or 5 taps
+   choose `MadT1_S1`, `MadT1_S2` or `MadT1_S5`. The analysis and no-vignette programs are made lazily on
+   their first draw, as the game does.
+3. **Triple screens zero the vignette** (CameraTripleScreen handler 0x140224dc0) and
+   `DrawRectGPU_TonemapHDR` 0x1403f1b10 then uses `TonemapHDR_PreMatrix_Dither_Gamma` and
+   `TonemapHDR_Dither_Exposure_LINEARSAT` with an all-zero rectangle.
+4. **Resize keeps the FXAA target** at its first size, and YEBIS is remade at that size, so the effects
+   run at the old size and the result is scaled into the new window. Not seen as a visible fault in the
+   runs; the port does the same.
+5. **The scaled scene uses the linear sampler** when the scene and YEBIS sizes differ (rule read from the
+   game's logs, `shortcut:` in `yebis.rs`).
+6. **Auto exposure off** draws no luminance step; proven
+   over 38 frames, its `shortcut:` is gone.
+7. **gpulog**: a texture created at a released buffer's address was taken for that buffer; fixed.
+
+| Case | Frames compared | Call log | Pixels |
+|---|---|---|---|
+| aeoff, spa chase, `ae_off` filter | 38 | IDENTICAL in all | IDENTICAL in all |
+| tri, triple 5760x1080 `--post` | 19 | IDENTICAL in all | IDENTICAL in all |
+| rszfx, resize to 1024x576 at frame 10, FXAA | 20 | 19 IDENTICAL; frame 10 DIFFERENT (7981 vs 6684 calls, same 864 draws) | IDENTICAL in all |
+| trirsz, triple, resize to 3840x720 at frame 10 | 19 | 18 IDENTICAL; frame 10 DIFFERENT (14315 vs 12992 calls, same 1590 draws) | IDENTICAL in all |
+
+`tools/proofs/run_all.sh --quick`: all 170 cases IDENTICAL in 13 areas, no error, skip or vanished case (1h00m). Clippy `-D warnings --all-targets` is clean natively and on both wasm targets; render_oracle's own `--all-targets` clippy still has its 25 old errors (none from this task).
+
+## Stopped under rule 7 (Task Y3b)
+
+- **The resize frame's remake (step 1, call log of frame 10).** The game's YEBIS init rebuilds its whole
+  device setup: CreateBuffer 1542 vs 770, render-target views 51 vs 13, Texture2D 64 vs 20,
+  ClearRenderTargetView 49 vs 0, blend / rasterizer states 31 vs 0, all inside PPFX's own setup. Pixels
+  and the draw sequence already match. About half a session to one session.
+- **`PostProcessEffectsUpdater::update`** 0x1400abc20 (step 2) drives the heat shimmer: active when the
+  focused car is under 25 km/h, a projected particle per connected car (up to 30), from `[HEAT_SHIMMER]`
+  (`ENABLED=1` in default.ini and most filters). Modelling it means porting a new YEBIS effect (the
+  shimmer draws). About one session.
+- **VR with YEBIS (step 3).** `YebisPP` 0x14002ba30 is its own class, made by `StereoCameraForward`
+  0x140211370 and `StereoCameraVive` 0x140220b80: one instance per camera, shared by both eyes.
+  `StereoCameraVive::renderYebis` 0x140223f60 runs per eye: render into `rtYebisTarget`,
+  `updatePPCameraValues`, zero `+0x5a4` / `+0x48`, `updatePP(eye==0)`, `applyPostProcessing` (optional
+  MSAA and depth resolve) into the eye's target or through `rtFXAA_Temp` and an FXAA quad. Its
+  `readPPSet` 0x14002cd60 is 14 KB on its own. About one session or more, plus oracle runs with the
+  OpenVR / Oculus stand-ins. Triple screens are done (one YEBIS over the whole window, as the game).
+
+## What Y4 (the page) needs
+
+- The page still uses the plain-copy stand-in. YEBIS's programs can't ship, so the page needs them from
+  the player's own install (as the desktop reads `acs.exe`) and translated for wgpu, then the same rules
+  as here: `luminance_sizes`, `box_taps`, the lazy programs, the FXAA target kept on resize, and a
+  luminance read-back that fits WebGPU's asynchronous buffer mapping.
+
+## Not done
+
+- The three rule-7 steps above.
+- Glare, depth of field, rays of god and heat shimmer (filters with them are refused).
+
 # Task Y2c: YEBIS over many frames, eye adaptation and a window resize
 
 ## Resume here
@@ -6,7 +83,7 @@
   read-back, eye adaptation (`AutoExposure` in `yebis_cb.rs`), and a remake on window resize
   (`CameraForwardYebis::on_resize`). The proofs' `--post` rows run the real YEBIS on both sides
   (`tools/proofs/render.sh` sets `RENDER_ORACLE_YEBIS=1`); r23_09 is in `--quick`, every `--post` row is in `--full`.
-- Next is **Task Y2d** (leftovers below), then Y3 (VR and triple with YEBIS).
+- Superseded: Task Y3 above did Y2d's leftovers and triple screens.
 - Check one run: `bash re/scratch/taskY2c/cmp.sh <label> <out> <render_oracle compare args>` writes
   `re/scratch/taskY2c/<out>.txt`. New oracle inputs: `--ppfilter <name>` (video.ini `FILTER=`) and
   `RENDER_ORACLE_RESIZE=<frame>:<W>x<H>` (resizes the window before that frame's capture; dump only frames
