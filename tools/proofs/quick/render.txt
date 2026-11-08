@@ -11,7 +11,8 @@ r22_23
 r22c_01
 r22c_18
 r23_01
-r23_24
+# Task Y2c: the one YEBIS row (a --post row, the real YEBIS on both sides)
+r23_09
 r43c_01
 r43c_03
 # Task 45b: one layout the game makes gates for, one without gates

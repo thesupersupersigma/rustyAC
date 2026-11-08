@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The render oracle (Tasks 20-23): every frame and sequence of tools/proofs/render_list.txt drawn by
+# The render oracle (Tasks 20-23, Y2c): every frame and sequence of tools/proofs/render_list.txt drawn by
 # the game's renderer and by the port on WARP, compared call by call and byte by byte.
 #   RENDER_ONLY=<regex> runs only the matching case names.
 # One compare at a time: two at once make the game's side load-flaky.
@@ -22,6 +22,8 @@ grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*
         "$RO" pose-of --tape "$tape" --tape-from "$frame" --pose "$pose" > /dev/null 2>&1 < /dev/null
         args=$(echo "$args" | sed "s#$p#$pose#")
     done
+    # Task Y2c: a --post row is the real YEBIS on both sides (an empty value would still count as on)
+    case " $args " in *" --post "*) export RENDER_ORACLE_YEBIS=1 ;; *) unset RENDER_ORACLE_YEBIS ;; esac
     room
     for try in 1 2; do  # a second try only for a log that differs while the pictures agree (load-flaky)
         "$RO" compare $args --label "$name" --root "$root" --out "$out/frames" > "$out/$name.txt" 2>&1 < /dev/null
