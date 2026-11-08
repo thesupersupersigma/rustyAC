@@ -130,7 +130,7 @@ impl CameraForwardYebis {
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             if let Some(yebis) = self.yebis.take() {
                 self.yebis = Some(yebis.remade(self.width, self.height)?);
-                unsafe { graphics.kgl.context.OMSetRenderTargets(Some(std::slice::from_ref(&graphics.kgl.screen_render_target.render_target_view)), None) };
+                unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
             }
         }
         Ok(())
@@ -168,6 +168,15 @@ impl CameraForwardYebis {
         Ok(())
     }
 
+    #[cfg(all(windows, not(feature = "backend-wgpu")))]
+    /// What YEBIS draws into: the FXAA target when FXAA is on, else the screen.
+    fn destination(fxaa_temp_rt: &Option<RenderTarget>, graphics: &Graphics) -> Option<windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView> {
+        match fxaa_temp_rt {
+            Some(t) => t.kid_color.as_ref().and_then(|c| c.render_target_view.clone()),
+            None => graphics.kgl.screen_render_target.render_target_view.clone(),
+        }
+    }
+
     /// Reads YEBIS from `root`'s acs.exe and makes its objects: call after [`Self::new`], outside
     /// a logged frame. `video` is video.ini; its `[POST_PROCESS] FILTER` names the ppfilter.
     #[cfg(all(windows, not(feature = "backend-wgpu")))]
@@ -175,8 +184,8 @@ impl CameraForwardYebis {
         let filter = video.get_string("POST_PROCESS", "FILTER");
         let filter = rustyac_physics::data::ini::IniReader::load(&root.join("system/cfg/ppfilters").join(format!("{filter}.ini")))?;
         self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height)?);
-        // YEBIS's initPostProcessing leaves the screen bound without depth (and kgl's cache unaware)
-        unsafe { graphics.kgl.context.OMSetRenderTargets(Some(std::slice::from_ref(&graphics.kgl.screen_render_target.render_target_view)), None) };
+        // YEBIS's initPostProcessing leaves its destination bound without depth (and kgl's cache unaware)
+        unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
         Ok(())
     }
 
@@ -214,10 +223,7 @@ impl CameraForwardYebis {
                 Some(resolved) => resolved.kid_color.as_ref(),
                 None => ms.kid_color.as_ref(),
             };
-            let destination = match &self.fxaa_temp_rt {
-                Some(t) => t.kid_color.as_ref().and_then(|c| c.render_target_view.clone()),
-                None => graphics.kgl.screen_render_target.render_target_view.clone(),
-            };
+            let destination = Self::destination(&self.fxaa_temp_rt, graphics);
             let camera = &self.forward.base.camera;
             let camera = crate::yebis_cb::Camera {
                 near: camera.near_plane,
