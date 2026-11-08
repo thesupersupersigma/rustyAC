@@ -1,3 +1,90 @@
+# Task Y3b: the two Y3 shortcuts from game code; the resize remake and heat shimmer stopped (rule 7)
+
+## Resume here
+
+- **Released as v0.48.3.** The two Y3 shortcuts are now rules read from game code (step 2). Step 1 (the
+  resize frame's call log) and step 3 (heat shimmer) were stopped under rule 7 and moved to **Task Y3c**,
+  together with VR with YEBIS.
+- Check: `bash re/scratch/taskY3b/regress.sh` runs rszfx, trirsz, tri and aeoff one after another
+  (through `re/scratch/taskY3/cmp.sh`) and writes `re/scratch/taskY3b/regress.txt`.
+- Disk: C: had 23 GB free at the start and 19 GB before the runs (under the 22 GB mark). Free RAM was
+  11.1 GB before the runs; the quick run still used its full lanes (it checks at its own start).
+
+## What it found
+
+1. **The linear filter rule** is `CTextureUtil::Resample` 0x1403f6710. The second texture's sampler mode
+   is set through `IGPUBaseTexture::SetSamplerStateMode_Filter` 0x1404365b0 (vtable +0x68, `(mode & ~3) |
+   filter`). It is point when that texture's size equals the destination's (+0x5c / +0x60), and
+   otherwise linear (min/mag linear, mip point). The address bits (border) are kept. Draw 0 binds
+   [depth, scene], so the scene is that second texture, and the port's size test was already the
+   game's. Only the comment changed.
+2. **The vignette on a triple-screen resize.** The `CameraTripleScreen` ctor 0x1402248e0 registers
+   lambda 0x140224dc0 on `evOnPostYebisParametersUpdate` (CameraForwardYebis +0x788). It is fired in
+   `CameraForwardYebis::render` 0x14002a450 at 0x14002a57c, right after `updateYebisParameters`. So
+   the vignette is zero at a remake only once a frame has been rendered. `post.rs` now keeps
+   `parameters_updated` and tests it in `on_resize`, which replaces the "no caller does that" marker.
+3. **The resize remake (step 1) is bigger than its Y3 estimate.** Frame 10's pixels were already
+   IDENTICAL in rszfx and trirsz. What differs is only PPFX's full device setup:
+   - IGPUDevice states: `DrawRectDefaultStates`, the 0x40-mode `RenderStateMode` loop (5 blend modes ×
+     3 write masks × scissor), and 16 `SamplerStateMode`.
+   - `CTextureUtil::InitializeDevice` 0x1403e6890 (4,944 B): film grain 256x256 with 9 mips, spectrum
+     256x1 with 9 mips, Gaussian fade 64x64 A8 with 5 mips, zero / grey / one, a 16x16 depth, and a
+     16x16 analyzer, all with exact CRT math.
+   - `IGPUDevice::InitializeDeviceBuffers`: 768× B192, 768× B32, 3× B45056 and B3072.
+   - `CPostEffect::Initialize` 0x1403bbb80 (19,744 B): about 40 targets (glare, DOF and luminance
+     managers) and 49 clears.
+   - 52 OMSet + viewport pairs during teardown, whose source was not found.
+4. **Heat shimmer (step 3) is bigger than its Y3 estimate.**
+   - `PostProcessEffectsUpdater::update` 0x1400abc20 is small: it is off above 25 km/h for the focused
+     car, and it stops at the first car that is not connected. For each car under 30 it places a volume
+     at the body matrix times (0, 0, -2, 1), plus 0.5 in y, with width 1.5, depth 1.5 and height 0.
+   - The particles in those volumes use CRT `rand()` (`KGLYebisParticle::initialize` 0x140024600:
+     seven calls per particle), so the port's rand sequence would have to match every other `rand()`
+     user in the frame.
+   - The effect itself is about 8.8 KB of PPFX: `HeatShimmerParticles` 0x1403fdc70 (1,392),
+     `SetupHeatShimmerParticles` 0x1403fd860 (1,040), `DrawIndicesGPU_HeatShimmerParticles` 0x1403fc950
+     (3,856), and `UpdateParameters_EffectiveHeatShimmerParticleEnable` 0x1403ba2e0 (464).
+   - Its default textures (CTextureUtil +0x21668 / +0x21678) come from step 1's unported init.
+   - A proof also needs a new run: the oracle root has `video.ini HEAT_SHIMMER=0`, and the trk_lap tape
+     from frame 480 is above 25 km/h.
+
+| Case | Frames compared | Call log | Pixels |
+|---|---|---|---|
+| rszfx, resize to 1024x576 at frame 10, FXAA | 19 | 18 IDENTICAL; frame 10 DIFFERENT (7981 vs 6684 calls, same 864 draws; step 1) | IDENTICAL in all |
+| trirsz, triple, resize to 3840x720 at frame 10 | 19 | 18 IDENTICAL; frame 10 DIFFERENT (14315 vs 12992 calls, same 1590 draws; step 1) | IDENTICAL in all |
+| tri, triple 5760x1080 `--post` | 19 | IDENTICAL in all | IDENTICAL in all |
+| aeoff, spa chase, `ae_off` filter | 38 | IDENTICAL in all | IDENTICAL in all |
+| heat shimmer (step 3) | not run | - | - |
+
+`tools/proofs/run_all.sh --quick`: all 170 cases IDENTICAL in 13 areas, no error, skip or vanished case
+(1h04m). Clippy `-D warnings --all-targets` is clean natively, with `--features wgpu`, and on both wasm
+targets; `cargo test -p rustyac-render --lib yebis` passes.
+
+## What next needs (Task Y3c)
+
+- Step 1: port PPFX's device init in its order (the list above), make the shaders and the B4096 cbuffer
+  lazy as now, and find the teardown's 52 OMSet / viewport pairs (likely `CPostEffect::Uninitialize` /
+  `OnLostDevice`, or the IGPUDevice release). About 1.5 to 2 sessions.
+- Step 3, after step 1 (it needs the CTextureUtil textures):
+  - the updater and `KGLYebisParticle*` (initialize, set update, manager setup) on the port's CRT `rand()`
+  - the four PPFX functions and the `HeatShimmerParticle_Sn` / `MadT1_Sn` programs
+  - a root with `HEAT_SHIMMER=1` and a slow tape segment (a standing start)
+
+  About 1 to 1.5 sessions.
+- VR with YEBIS (`YebisPP`), unchanged from Y3: about one session or more.
+
+## Not done
+
+- Step 1 (frame 10's call log on resize) and step 3 (heat shimmer), both stopped under rule 7 with the
+  estimates above.
+- VR with YEBIS (Task Y3c, as planned).
+
+## Open questions
+
+- Where the 52 OMSet + viewport pairs at YEBIS teardown come from.
+- Whether the port's `rand()` order can match the game's for the shimmer particles, or whether the
+  proof needs a run with no other `rand()` users in the frame.
+
 # Task Y3: YEBIS on resize, auto exposure off, triple screens; the remake, VR and heat shimmer stopped (rule 7)
 
 ## Resume here
