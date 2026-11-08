@@ -949,6 +949,10 @@ unsafe extern "system" fn ctx_update_subresource(this: P, resource: P, sub: u32,
             format!("{},{},{},{},{},{}", b.left, b.top, b.front, b.right, b.bottom, b.back)
         };
         let mut shown = None;
+        // as in Map: a texture at a released buffer's address is not that buffer
+        if state.buffers.contains_key(&(resource as usize)) && ID3D11Resource::from_raw_borrowed(&resource).is_some_and(|r| r.GetType() != D3D11_RESOURCE_DIMENSION_BUFFER) {
+            state.buffers.remove(&(resource as usize));
+        }
         if let Some(info) = state.buffers.get_mut(&(resource as usize)) {
             let (from, to) = if region.is_null() { (0, info.size as usize) } else { ((*region).left as usize, ((*region).right as usize).min(info.size as usize)) };
             if !data.is_null() && to >= from {
