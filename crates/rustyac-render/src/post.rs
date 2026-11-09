@@ -207,7 +207,7 @@ impl CameraForwardYebis {
     pub fn start_yebis(&mut self, graphics: &Graphics, root: &std::path::Path, data: &std::path::Path, video: rustyac_physics::data::ini::IniReader) -> Result<(), String> {
         let filter = video.get_string("POST_PROCESS", "FILTER");
         let filter = rustyac_physics::data::ini::IniReader::load(&data.join("system/cfg/ppfilters").join(format!("{filter}.ini")))?;
-        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, None)?);
+        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, Self::destination(&self.fxaa_temp_rt, graphics))?);
         // YEBIS's initPostProcessing leaves its destination bound without depth (and kgl's cache unaware)
         unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
         Ok(())

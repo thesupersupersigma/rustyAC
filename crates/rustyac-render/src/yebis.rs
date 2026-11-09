@@ -994,12 +994,15 @@ mod device {
             unsafe {
                 // YebisPP::applyPostProcessing: SetEffectSource then SetDepthFactorSource(R32_TYPELESS); a view not in
                 // the map is registered with a target or depth view on its texture (CreateRenderTargetOrDepthStencilViewFromShaderResourceView)
-                for (view, is_depth) in [(scene, false), (depth, true)] {
+                // (0x1404340b0: a render target view when the texture binds as one, else a depth view)
+                for view in [scene, depth] {
                     if self.sources.iter().any(|(v, _)| v == view) {
                         continue;
                     }
                     let t = view.GetResource().map_err(|e| format!("yebis: {e}"))?;
-                    let made: windows::core::IUnknown = if is_depth {
+                    let mut td = D3D11_TEXTURE2D_DESC::default();
+                    err("GetResource", windows::core::Interface::cast::<ID3D11Texture2D>(&t))?.GetDesc(&mut td);
+                    let made: windows::core::IUnknown = if td.BindFlags & D3D11_BIND_RENDER_TARGET.0 as u32 == 0 {
                         let d = D3D11_DEPTH_STENCIL_VIEW_DESC {
                             Format: DXGI_FORMAT_D32_FLOAT,
                             ViewDimension: D3D11_DSV_DIMENSION_TEXTURE2D,
