@@ -198,11 +198,15 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         _crowds = rustyac_render::crowds::camera_facing(&mut graphics, &mut scene, data, track_node, blurred, crate::frames::RAND_SEED_TRACK)?;
     }
 
+    // ksRandomize after the track's objects, with or without a crowd (Task Y3d-3: the heat
+    // shimmer's particles draw from here)
+    if frame.track.is_some() {
+        graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED_TRACK);
+    }
     // Sim::Sim: StartingLights (two numbers of rand()), StartingTrackSemaphore
     let mut start_lights = None;
     if let (Some(track), true) = (&frame.track, frame.start_lights) {
         let data = std::path::Path::new(&track.data_folder);
-        graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED_TRACK);
         let lights = rustyac_render::start_lights::StartingLights::new(&mut graphics, &mut scene, track_node, data)?;
         let semaphore = rustyac_render::start_lights::StartingTrackSemaphore::new(&mut graphics, &mut scene, track_node, data)?;
         start_lights = Some((lights, semaphore));
@@ -225,7 +229,8 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     if profile.post && std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
         let video = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("video.ini"), &crate::root::video_ini(args.width, args.height));
         // the filter from the game's working folder, the oracle root
-        camera.start_yebis(&graphics, &args.game, &args.root, video)?;
+        // (the heat shimmer's sets: the game's race.ini CARS, one for CameraTripleScreen)
+        camera.start_yebis(&mut graphics, &args.game, &args.root, video, if profile.triple { 1 } else { 1 + frame.others.len() })?;
     }
     if profile.triple {
         let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("triple_screen.ini"), crate::root::TRIPLE_SCREEN_INI);
@@ -468,6 +473,15 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         for crew in &mut lollipops {
             crew.update(&mut scene, crate::frames::DT, Some(step.extra.pit_state), false);
         }
+        // Sim::update: PostProcessEffectsUpdater::update, before the cars (last frame's speed and bodies)
+        if let (Some(heat), Some(car), false) = (&mut camera.heat, &car, profile.triple) {
+            let speed = index.checked_sub(1).map_or(0.0, |i| match step.extra.focus {
+                0 => frame.steps[i].state.speed,
+                n => frame.steps[i].others[n as usize - 1].speed,
+            });
+            let bodies: Vec<_> = std::iter::once(car.body_transform).chain(others.iter().map(|o| o.body_transform)).map(|n| scene.get_world_matrix(n)).collect();
+            heat.update_cars(speed, &bodies);
+        }
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let (Some(car), Some(spec)) = (&mut car, &frame.car) {
             // Sim::update: CarNodeSorter::sort
@@ -640,6 +654,22 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             }
         }
         camera.render(&mut graphics, &mut scene, Some(blurred), unblurred, root, 1.0 / 60.0)?;
+        if let (Some(heat), true) = (&camera.heat, std::env::var_os("RENDER_ORACLE_HEAT_DUMP").is_some()) {
+            // the game side's line (ac.rs): the first volume and particle after each frame
+            let (on, v) = heat.volumes[0];
+            let set = [f32::from_bits(on as u32), v.center[0], v.center[1], v.center[2], v.width, v.depth, v.height];
+            let p = heat.sets[0][0];
+            let p0 = [p.position[0], p.position[1], p.position[2], p.radius, p.intensity, p.position_velocity[0], p.position_velocity[1], p.position_velocity[2], p.radius_velocity, p.intensity_velocity, p.life];
+            let b = car.as_ref().map(|c| scene.get_world_matrix(c.body_transform).m[3]);
+            eprintln!("HEAT {index} enabled 1 active {} set {set:?} p0 {p0:?} car {:?}", heat.active as i32, b.map(|b| [b[0], b[1], b[2]]));
+            for i in 1..heat.sets.len() {
+                let (on, v) = heat.volumes[i.min(29)];
+                let set = [f32::from_bits(on as u32), v.center[0], v.center[1], v.center[2], v.width, v.depth, v.height];
+                let p = heat.sets[i][0];
+                let p0 = [p.position[0], p.position[1], p.position[2], p.radius, p.intensity, p.position_velocity[0], p.position_velocity[1], p.position_velocity[2], p.radius_velocity, p.intensity_velocity, p.life];
+                eprintln!("HEATS {index} {i} set {set:?} p0 {p0:?}");
+            }
+        }
         if let Some(triple) = camera.base.triple.as_deref() {
             let flat = |list: &[rustyac_physics::vecmath::Mat44f; 3]| std::array::from_fn(|i| std::array::from_fn(|k| list[i].m[k / 4][k % 4]));
             rendered.triple = crate::ac::triple_lines(&flat(&triple.current_view_proj), &flat(&triple.current_camera_matrix));

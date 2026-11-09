@@ -52,6 +52,8 @@ pub struct CameraForwardYebis {
     /// evOnPostYebisParametersUpdate has fired once: on triple screens the vignette strength is zero from then on
     #[cfg(all(windows, not(feature = "backend-wgpu")))]
     parameters_updated: bool,
+    /// the heat shimmer's particles, with video.ini's HEAT_SHIMMER on (Task Y3d-3)
+    pub heat: Option<crate::heat_shimmer::HeatShimmer>,
 }
 
 impl std::ops::Deref for CameraForwardYebis {
@@ -88,6 +90,7 @@ impl CameraForwardYebis {
             yebis: None,
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             parameters_updated: false,
+            heat: None,
         };
         if graphics.video.pp_hdr_enabled {
             camera.depth_resolve_shader = Some(graphics.shaders.get_shader(&graphics.kgl, "ksMSDepthResolve")?);
@@ -138,6 +141,11 @@ impl CameraForwardYebis {
         self.height = graphics.video.height;
         if graphics.video.pp_hdr_enabled {
             self.init_render_targets(graphics)?;
+            // initPostProcessing 0x140024ca0: a new particle manager
+            #[cfg(all(windows, not(feature = "backend-wgpu")))]
+            if let Some(heat) = &mut self.heat {
+                heat.remake(&mut graphics.crt_rand);
+            }
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             if let Some(yebis) = self.yebis.take() {
                 // YEBIS sizes its buffers from its destination: the FXAA target keeps its first size;
@@ -203,11 +211,23 @@ impl CameraForwardYebis {
 
     /// Reads YEBIS from `root`'s acs.exe and makes its objects: call after [`Self::new`], outside
     /// a logged frame. `video` is video.ini; its `[POST_PROCESS] FILTER` names the ppfilter in
-    /// `data`'s `system/cfg/ppfilters` (the game's working folder).
+    /// `data`'s `system/cfg/ppfilters` (the game's working folder). `heat_sets` is race.ini's
+    /// [RACE] CARS (Sim::createCamera 0x1401982e0): the heat shimmer's sets.
     #[cfg(all(windows, not(feature = "backend-wgpu")))]
-    pub fn start_yebis(&mut self, graphics: &Graphics, root: &std::path::Path, data: &std::path::Path, video: rustyac_physics::data::ini::IniReader) -> Result<(), String> {
-        let filter = video.get_string("POST_PROCESS", "FILTER");
-        let filter = rustyac_physics::data::ini::IniReader::load(&data.join("system/cfg/ppfilters").join(format!("{filter}.ini")))?;
+    pub fn start_yebis(&mut self, graphics: &mut Graphics, root: &std::path::Path, data: &std::path::Path, video: rustyac_physics::data::ini::IniReader, heat_sets: usize) -> Result<(), String> {
+        let name = video.get_string("POST_PROCESS", "FILTER");
+        let load = |name: &str| rustyac_physics::data::ini::IniReader::load(&data.join("system/cfg/ppfilters").join(format!("{name}.ini")));
+        if video.get_int("POST_PROCESS", "HEAT_SHIMMER").unwrap_or(0) != 0 {
+            // the ctor's loadPPSet("default"), then PostProcessEffectsUpdater's loadPPSet(FILTER):
+            // each reads [HEAT_SHIMMER] and makes a particle manager (initPostProcessing)
+            let mut heat = crate::heat_shimmer::HeatShimmer::new(heat_sets);
+            for name in if name == "default" { vec!["default"] } else { vec!["default", name.as_str()] } {
+                heat.read(&load(name)?)?;
+                heat.remake(&mut graphics.crt_rand);
+            }
+            self.heat = Some(heat);
+        }
+        let filter = load(&name)?;
         self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, self.width, Self::destination(&self.fxaa_temp_rt, graphics))?);
         // YEBIS's initPostProcessing leaves its destination bound without depth (and kgl's cache unaware)
         unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
@@ -260,6 +280,10 @@ impl CameraForwardYebis {
                 exposure_multiplier: graphics.exposure_multiplier,
                 dt,
             };
+            // setPostProcessing 0x140025080: the particles move (the shimmer's draws: Y3d-3 part 2)
+            if let Some(heat) = &mut self.heat {
+                heat.update(dt, &mut graphics.crt_rand);
+            }
             if let (Some(depth), Some(scene), Some(destination)) = (depth.and_then(|t| t.shader_resource_view.as_ref()), scene.and_then(|t| t.shader_resource_view.as_ref()), destination) {
                 if let Err(e) = yebis.render(depth, scene, &destination, &camera) {
                     eprintln!("{e}");

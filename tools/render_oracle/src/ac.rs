@@ -1104,7 +1104,8 @@ impl Game {
             } else {
                 let camera = acs.alloc(SIZE_CAMERA_FORWARD_YEBIS);
                 let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_CTOR));
-                let camera = ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1);
+                // the last: heatParticleSetsNumber, race.ini [RACE] CARS in Sim::createCamera
+                let camera = ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1 + frame.others.len() as i32);
                 if profile.ppfilter != "default" {
                     // the ctor loads "default"; Sim::createCamera's PostProcessEffectsUpdater (0x1400ab880)
                     // then loads video.ini FILTER through loadPPSet, which takes the string by value and frees it
@@ -1624,6 +1625,12 @@ impl Game {
                 let first: *mut u8 = rd(sets, 0);
                 let p0: [f32; 11] = rd(first, 0);
                 eprintln!("HEAT {index} enabled {} active {} set {:?} p0 {:?} car {:?}", rd::<i32>(pp, 0x40), rd::<i32>(pp, 0x44), set, p0, car.as_ref().map(|c| c.body_position()));
+                let end: *mut u8 = rd(manager, 8);
+                for i in 1..(end as usize - sets as usize) / 24 {
+                    let set: [f32; 7] = rd(pp, 0x94 + i * 28);
+                    let p0: [f32; 11] = rd(rd::<*mut u8>(sets, i * 24), 0);
+                    eprintln!("HEATS {index} {i} set {set:?} p0 {p0:?}");
+                }
             }
             if profile.triple {
                 // TripleScreenData: currentViewProj at +0xf38, currentCameraMatrix at +0xff8

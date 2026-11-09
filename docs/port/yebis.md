@@ -1,19 +1,30 @@
-# Task Y3d-3: YEBIS's heat shimmer (stopped at step 2, no release)
+# Task Y3d-3: YEBIS's heat shimmer (in progress)
 
 ## Resume here
 
-- **Not released.** Step 0 is done and committed. Step 1 (which `rand()` calls run, and in what
-  order) is measured. The game side of the oracle now runs the shimmer. **Step 2 (the port) has
-  not started.** It is about three times the size the prompt expected, so it stopped under rule 7.
-  The estimate is below.
-- **Next: Y3d-3 step 2.** Resume with the port, using "The port, in order".
-- Check (game side only, until the port exists):
+- **Not released.** Steps 0 and 1 are done. Step 2 part 1 (the particles move as the game's) is
+  committed and proven. **Next: step 2 part 2, the YEBIS draws** ("The port, in order", items 6-8).
+- Part 1 check: `bash re/scratch/taskY3d3/heat2.sh` (100 frames of `spa_launch`, both sides,
+  `RENDER_ORACLE_HEAT_DUMP=1`) writes `h.both`: the per-frame `HEAT` lines are SAME.
+  `LABEL=h2 CARS="--tapes oracle/t24b/field/mc_field --max-cars 2" bash re/scratch/taskY3d3/heat2.sh`
+  is the 2-car run (200 lines, SAME; car 1's set is active and moves).
+- Game side only:
   - `bash re/scratch/taskY3d3/gameonly.sh` runs 100 frames of `spa_launch` from frame 0 with
     `RENDER_ORACLE_HEAT_SHIMMER=1`. The shimmer adds 90 calls and 4 draws per frame from frame 45.
   - `LABEL=gd FRAMES=52 EXTRA="--dump 44,46,50" bash re/scratch/taskY3d3/gameonly.sh` keeps one
     frame without the shimmer (44) and two with it.
   - `bash re/scratch/taskY3d3/quality.sh` is the step 0.3 check (QUALITY 5 and 3, resized at
     frame 10).
+
+## Step 2 part 1: the particles (done)
+
+- `crates/rustyac-render/src/heat_shimmer.rs` (new): the [HEAT_SHIMMER] keys, the particle sets,
+  `KGLYebisParticle::initialize` 0x140024600, `PostProcessEffectsUpdater::update` 0x1400abc20
+  (off above 25 km/h; each car's volume 2 m behind its body) and `KGLYebisParticleSet::update`
+  0x140024950. Random numbers come from the graphics `crt_rand`, as the game's render thread.
+- rustyac.exe: one set at start, remade with the real car count in `set_cars_to_be_loaded`
+  (shortcut: acs.exe makes CARS sets once in `Sim::createCamera`; the remake draws more `rand()`).
+- The oracle's game side passes `1 + others` sets to the `CameraForwardYebis` constructor.
 
 ## Step 0 (done)
 

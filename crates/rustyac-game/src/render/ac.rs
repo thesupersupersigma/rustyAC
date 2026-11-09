@@ -583,6 +583,9 @@ pub struct AcRenderer {
     /// once the car is there: the track's model, its data folder, its pit boxes (on the road)
     /// and the track itself for the rays
     lollipops: Vec<rustyac_render::pit_crew::LollipopCrew>,
+    /// the focused car's speed (m/s) of the last frame, for the heat shimmer
+    #[cfg_attr(not(all(windows, not(feature = "wgpu"))), allow(dead_code))]
+    heat_speed: f32,
     pit_marker: Option<rustyac_render::pit_crew::PitIndicator>,
     pit_setup: Option<(NodeId, PathBuf, Vec<Mat44f>, rustyac_physics::track::Track)>,
     /// the gates of a time-attack session (`TimeAttack`) and the time lines of the track
@@ -829,7 +832,8 @@ impl AcRenderer {
             let video = video_ini.clone().unwrap_or_else(|| IniReader::from_text(std::path::Path::new("video.ini"), "[POST_PROCESS]
 FILTER=default
 "));
-            match camera.start_yebis(&graphics, &options.game, &options.game, video) {
+            // (one heat shimmer set until set_cars_to_be_loaded says how many cars)
+            match camera.start_yebis(&mut graphics, &options.game, &options.game, video, 1) {
                 Ok(()) => graphics.video.ldr_levels = false,
                 Err(e) => notes.push(format!("{e}; post-processing without YEBIS")),
             }
@@ -886,7 +890,7 @@ FILTER=default
             // (Sim::Sim switches it off with a headset)
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active && !vr)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink { vr, ..CrewLink::default() }, crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { heat_speed: 0.0, pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink { vr, ..CrewLink::default() }, crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1056,6 +1060,13 @@ FILTER=default
     /// first car is loaded (the tyre smoke's size depends on it).
     pub fn set_cars_to_be_loaded(&mut self, count: usize) {
         self.cars_to_be_loaded = count as i32;
+        // shortcut: the game makes race.ini CARS sets in Sim::createCamera, here they are made again
+        // once the count is known (more rand() draws than acs.exe); upgrade if live runs are compared
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(heat) = self.camera.heat.as_mut().filter(|h| h.sets_number != count) {
+            heat.sets_number = count;
+            heat.remake(&mut self.graphics.crt_rand);
+        }
     }
 
     /// How many cars are loaded.
@@ -1430,6 +1441,14 @@ FILTER=default
                 _ => false,
             };
             crew.update(&mut self.scene, dt, pit_state, in_pit);
+        }
+        // PostProcessEffectsUpdater::update 0x1400abc20: the focused car's speed and the cars'
+        // bodies as the last frame left them
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(heat) = self.camera.heat.as_mut() {
+            let bodies: Vec<_> = self.cars.iter().map(|car| self.scene.get_world_matrix(car.body_transform)).collect();
+            heat.update_cars(self.heat_speed, &bodies);
+            self.heat_speed = world.get(focus).map_or(0.0, |car| car.speed_ms);
         }
         // ACCameraManager::mode and CameraDrivableManager::currentMode
         let modes = match (driving.shown, driving.mode) {

@@ -13,7 +13,7 @@
 //! declared size). Leftovers carry over between draws and frames, so a frame from a fresh
 //! store differs from the game's; the second frame is the steady state the game logs.
 //!
-//! Not ported (not on this chain): glare, DOF, light shafts, heat shimmer, lens distortion,
+//! Not ported (not on this chain): glare, DOF, light shafts, the heat shimmer's draws, lens distortion,
 //! feedback, vignette simulation, HUE / SEPIA, tone-map functions other than 0, 1 and the filmic
 //! default, auto exposure with a delay, a metering window, glare or another tone map.
 //!
@@ -107,7 +107,7 @@ pub struct PostEffect {
 impl PostEffect {
     /// `filter` is `system/cfg/ppfilters/<[POST_PROCESS] FILTER>.ini`.
     pub fn new(filter: &IniReader, video: &IniReader, cam: &Camera) -> Result<PostEffect, String> {
-        for key in ["DOF", "GLARE", "RAYS_OF_GOD", "HEAT_SHIMMER"] {
+        for key in ["DOF", "GLARE", "RAYS_OF_GOD"] {
             if video.get_int("POST_PROCESS", key).unwrap_or(0) != 0 {
                 return Err(format!("yebis: [POST_PROCESS] {key} is on: not ported (Y5-Y7)"));
             }
