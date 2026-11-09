@@ -140,10 +140,11 @@ impl CameraForwardYebis {
             self.init_render_targets(graphics)?;
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             if let Some(yebis) = self.yebis.take() {
-                // YEBIS sizes its buffers from its destination: the FXAA target keeps its first size
+                // YEBIS sizes its buffers from its destination: the FXAA target keeps its first size;
+                // the base width comes from the camera's new width (initRenderTargets 0x140029a90)
                 let (w, h) = self.fxaa_temp_rt.as_ref().map_or((self.width, self.height), |t| (t.width, t.height));
                 // YEBIS's clears restore its destination, which the game hands it without binding it
-                let mut yebis = yebis.remade(w, h, Self::destination(&self.fxaa_temp_rt, graphics))?;
+                let mut yebis = yebis.remade(w, h, self.width, Self::destination(&self.fxaa_temp_rt, graphics))?;
                 // CameraTripleScreen's handler 0x140224dc0 zeroes the vignette strength on every
                 // evOnPostYebisParametersUpdate, and only YEBIS's init reads it
                 if self.forward.base.triple.is_some() && self.parameters_updated {
@@ -207,7 +208,7 @@ impl CameraForwardYebis {
     pub fn start_yebis(&mut self, graphics: &Graphics, root: &std::path::Path, data: &std::path::Path, video: rustyac_physics::data::ini::IniReader) -> Result<(), String> {
         let filter = video.get_string("POST_PROCESS", "FILTER");
         let filter = rustyac_physics::data::ini::IniReader::load(&data.join("system/cfg/ppfilters").join(format!("{filter}.ini")))?;
-        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, Self::destination(&self.fxaa_temp_rt, graphics))?);
+        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, self.width, Self::destination(&self.fxaa_temp_rt, graphics))?);
         // YEBIS's initPostProcessing leaves its destination bound without depth (and kgl's cache unaware)
         unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
         Ok(())

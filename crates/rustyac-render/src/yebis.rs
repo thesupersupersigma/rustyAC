@@ -446,14 +446,15 @@ mod device {
 
     impl Yebis {
         /// Everything YEBIS makes before its first frame. `filter` is the ppfilter of video.ini's
-        /// `[POST_PROCESS] FILTER`; `root` holds the player's acs.exe.
-        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
+        /// `[POST_PROCESS] FILTER`; `root` holds the player's acs.exe. `width` x `height` is the
+        /// destination's size; `camera_width` the camera's, which the base width comes from.
+        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
             let exe = std::fs::read(root.join("acs.exe")).map_err(|e| format!("yebis: acs.exe: {e}"))?;
             let tfxo = crate::yebis_tfxo::Tfxo::from_exe(&exe)?;
             let filmic = filmic_table(&exe)?;
             let used = used_all(&tfxo)?;
             let vignette = vignette(&filter)?;
-            let base = super::base_width(video.get_int("POST_PROCESS", "QUALITY").unwrap_or(0), width);
+            let base = super::base_width(video.get_int("POST_PROCESS", "QUALITY").unwrap_or(0), camera_width);
             unsafe {
                 // every program is made on its first draw (see draw)
                 let (mut code, mut inputs, mut strides) = (Vec::new(), Vec::new(), Vec::new());
@@ -845,8 +846,8 @@ mod device {
 
         /// `CameraForwardYebis::onResize` 0x140029da0: the game destroys YEBIS and makes it again
         /// at the new size, so every carried-over value (parameter store, exposure) starts over; the noise goes on
-        pub fn remade(&self, width: i32, height: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
-            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, screen)?;
+        pub fn remade(&self, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
+            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, camera_width, screen)?;
             yebis.noise = self.noise; // process-wide in the game, it outlives the context (resize log, Task Y2c)
             Ok(yebis)
         }
