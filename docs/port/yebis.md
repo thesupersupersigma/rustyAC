@@ -1,6 +1,122 @@
-# Task Y3d-2: YEBIS's render targets, clears and teardown (v0.48.5)
+# Task Y3d-2b: YEBIS's sizes from the game's code, and its two flakes (v0.48.6)
 
 ## Resume here
+
+- **Released as v0.48.6.** The four fitted values are now rules read from the game's code. Both
+  flakes had one cause, a heap byte the game never sets, and the oracle now zeroes it.
+- **Next: Y3d-2c** (leftovers, see "Not done"). **Heat shimmer stays in Y3d-3.**
+- Check:
+  - `bash re/scratch/taskY3d2b/sizes.sh` runs four never-measured sizes, each resized at frame 10
+    (14 frames each).
+  - `bash re/scratch/taskY3d2b/end.sh` runs trirsz20 five times, then the 16 `--post` rows, then
+    `run_all.sh --quick`.
+  - `RENDER_ORACLE_RT_LOG=1` now also prints `RTA` lines (each `CRenderTexturePool::AllocateTextures`
+    call: the request, its two callers, what it returned, and the pool's list) and `RTD` lines (each
+    `CRenderTexture::InitializeDevice`, with six return addresses).
+
+## The sizes, from the code
+
+All sizes hang off the effect buffers' base width. `CameraForwardYebis::initRenderTargets`
+(0x140029a90, decomp :122-131) sets `optFixedWidth = (int)(ppQuality / 5.0f * width)`, or
+`min(640, width)` when that is 0. `ppQuality` is video.ini `[POST_PROCESS] QUALITY`.
+`initPostProcessing` hands it to YEBIS as the effect-buffer criterion width, and
+`CPostEffect::Initialize` uses that as its base width (:764-771). This is `base_width`.
+
+- **Glare** (`glare_size`). `CPostEffect::Initialize` :1515-1530 computes
+  `(u32)(base * factor + 0.99)`, clamped to the base and the frame width. The height is
+  `(u32)(w / aspect + 0.499999)`. Below 16 the min-16 rule applies. The factor is
+  table 0x141521650[glare quality]: 0.125 at GLARE=0.
+- **DOF level 0** (`dof_sizes[0]`). Same shape, :1647-1700. The factor is
+  table 0x141521690 + quality·0x1c: 0.25 at DOF=0. 1280x720 gives 160x90.
+- **DOF level 1** (`dof_sizes[1]`). `CDepthOfField::CreateApertureFilterLevelParams` 0x14041f750
+  picks factor index 1 (table 0x14052dce8 = 0, 0.5, 0.75, 1) only when `this[0x129] == 0` and
+  `w0 <= this+0x118 || w0 <= this+0x144 · this+0x11c`. Those two are the DOF table's +0x14 (128) and
+  +0x18 (0.125), copied by `CDepthOfField::Initialize`; +0x144 is the frame width. Then level 1 is
+  (min(2w, W), min(2h, H)), else level 0's size again. So at 1280x720 (160 ≤ 160) it doubles, at
+  1024x770 (160 > 128 and > 128) it does not: each level's own target is 160x120.
+- **DOF halvings** (`half_pool`). `CDepthOfField::CreateSystemObjects` :185-205 and :1284-1294:
+  `n = max(0, ceil(ln(max((d0w+1)/W, (d0h+1)/H)) / ln 0.5) - 1)` halvings of W×H, each
+  `(u32)(x * 0.5 + 0.99)`. They come from the shared pool, so a size the pool already holds is
+  shared. The pool order is the DOF level-0 entry, then its double, then the halvings it lacks (RTA
+  log).
+  - The level asks the shared pool for that pair only when it doubles. `DOFLEVELPARAM::Initialize`
+    0x14041e420 counts +0x60 up only when the two sizes differ, and the level loop
+    (CreateSystemObjects :816-858) allocates nothing when +0x60 and +0x70 are 0. So at 1024x770 the
+    shared pool holds only the halvings (512x385, 256x193).
+- **Clear order** (`half_pairs`). `CDepthOfField::ClearAllGPUResources` 0x14042b930 clears:
+  - first its own pool (level 0);
+  - then the halvings list (this+0x458, count +0x460);
+  - then, in the level loop, level 1.
+  The RT_LOG `RTS` callers confirm it: 14042b954, 14042bb63, 14042bbb2.
+- **Teardown count.** `CRenderTexture::UninitializeDevice` 0x1403d29f0 puts the screen back only when
+  the texture holds a GPU texture (+0x28). So the count is one per made texture:
+  - 38 at every size;
+  - plus the glare's and DOF's pools;
+  - plus the luminance chain.
+- **The aspect after a resize.** `CPostEffect+0x2fc` is set once in `Initialize` (:784-788), and the
+  frame-10 remake is made at the old size. The chromatic aberration's matrix uses it. The port took
+  the aspect from the current frame size; `Yebis::render` now takes YEBIS's made size.
+- The old fitted `dof_sizes` (round(320·H/W)) gave the same sizes at every measured size. It is off by
+  one when frac(160·H/W) is in [0.25, 0.5), for example 1024x770 (old 160x121, code 160x120).
+
+## The run-dependent extra target and the trirsz20 flake (one cause)
+
+- `CPostEffect` is `CPfxMemoryAllocator::Alloc(0xbd8)`. Its constructor (0x1403bb820) never writes the
+  ambient-occlusion flag at +0x131. `Initialize` only sets it (:529-531). When that heap byte is
+  non-zero, `Initialize` makes `m_pAmbientOcclusion_NormalDepthTexture` (:1841-1853): an extra W×H
+  R16G16B16A16, at start-up and in every remake. The teardown frees it too, which accounts for the
+  extra pair.
+  - Proof: the hook forcing the byte to 1 gives 52 targets and 270 `RTU` (game-only run), against
+    51 and 267.
+  - Seen only in compare runs (two processes at once), never in 8 game-only runs.
+- trirsz20's rc=1 with everything IDENTICAL was the same byte at **frame 10** (the resize remake).
+  Frame 10's log differed on the first pass. compare then redrew frame 10 in fresh processes, the byte
+  was zero, so the redraw matched. compare still returns rc=1, which is right.
+  - Caught in `re/scratch/taskY3d2b/c2.log`: frame 10, game line 1923 is
+    `CreateTexture2D 1280x720 f9` and the port has none. Pixels are IDENTICAL.
+- Fix: render_oracle's `pfx_ctor_hook` zeroes +0x131 after the constructor (under
+  `RENDER_ORACLE_YEBIS`). This is listed under "Repeatability" in differences.md. rustyAC never makes
+  the target.
+
+## Results
+
+Each case is resized at frame 10 (`RENDER_ORACLE_RESIZE`), 14 frames (13 compared), `--post`, the
+f2004 lap tape at Spa from 480.
+
+| case | window → resize | frames | call log | pixels |
+|---|---|---|---|---|
+| s1024 (`--fxaa`) | 1024x770 → 1920x1080 | 13 | IDENTICAL | IDENTICAL |
+| s1920 (`--fxaa`) | 1920x1080 → 1250x800 | 13 | IDENTICAL | IDENTICAL |
+| s2560 (`--fxaa`) | 2560x1440 → 1024x770 | 13 | IDENTICAL | IDENTICAL |
+| s4800 (`--triple`) | 4800x900 → 3072x768 | 13 | IDENTICAL | IDENTICAL |
+| trirsz20 ×5 (`--triple`) | 5760x1080 → 3840x720 | 19 | 5/5 IDENTICAL in all 19 frames, rc=0 | 5/5 IDENTICAL |
+| 16 `--post` rows (r23_09..24) | as in render.sh | 1 each | 16/16 IDENTICAL (31/31 cases with the overlays) | IDENTICAL |
+| `run_all.sh --quick` | — | 340 cases in 27 areas | 340 passed | — |
+
+- s1024 at 1024x770 is the size where the old fit and the code differ (DOF level 160x120, no
+  double). Its first run said "4 frames with a different command log" (frames 10-13) on the first
+  pass, and the redraw of frame 10 matched. Four reruns with frames 10-13 dumped on the first pass
+  (`re/scratch/taskY3d2b/catch.sh`) were IDENTICAL in all 13 frames, so the cause is not known.
+  `render_oracle compare` now keeps the first pass's hashes as `<name>.<side>.first.seq` before the
+  redraw, so a repeat shows which side changed.
+
+## Not done (Y3d-2c)
+
+- The 38 fixed teardown entries are counted from the c1.log teardown (7 full-size, 25 glare, 2 DOF
+  levels, 128x64, 16x16, the AE/AF 1x1s). The UninitializeDevice rule is from code, but the list of
+  textures is not walked in code.
+- `[POST_PROCESS] QUALITY` other than 0 (base width = QUALITY/5·W) is read but never compared, and
+  the other glare/DOF quality tables are refused by yebis_cb.rs (Y5-Y7).
+- The s1024 first-pass difference above.
+
+## Open questions
+
+- What made s1024's frames 10-13 differ once, with the AO flag zeroed?
+- Does a DOF quality other than 0 change the level-1 rule (`this[0x129]`, the +0x118/+0x11c limits)?
+
+# Task Y3d-2: YEBIS's render targets, clears and teardown (v0.48.5)
+
+## Resume here (Y3d-2)
 
 - **Released as v0.48.5.** Frame 10 is IDENTICAL on both resize cases, and every step-5 proof passed.
   - step 0: the launcher's fixed display-mode list (d089bd0);
