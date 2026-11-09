@@ -1,6 +1,127 @@
-# Task Y3d-2b: YEBIS's sizes from the game's code, and its two flakes (v0.48.6)
+# Task Y3d-3: YEBIS's heat shimmer (stopped at step 2, no release)
 
 ## Resume here
+
+- **Not released.** Step 0 is done and committed. Step 1 (which `rand()` calls run, and in what
+  order) is measured. The game side of the oracle now runs the shimmer. **Step 2 (the port) has
+  not started.** It is about three times the size the prompt expected, so it stopped under rule 7.
+  The estimate is below.
+- **Next: Y3d-3 step 2.** Resume with the port, using "The port, in order".
+- Check (game side only, until the port exists):
+  - `bash re/scratch/taskY3d3/gameonly.sh` runs 100 frames of `spa_launch` from frame 0 with
+    `RENDER_ORACLE_HEAT_SHIMMER=1`. The shimmer adds 90 calls and 4 draws per frame from frame 45.
+  - `LABEL=gd FRAMES=52 EXTRA="--dump 44,46,50" bash re/scratch/taskY3d3/gameonly.sh` keeps one
+    frame without the shimmer (44) and two with it.
+  - `bash re/scratch/taskY3d3/quality.sh` is the step 0.3 check (QUALITY 5 and 3, resized at
+    frame 10).
+
+## Step 0 (done)
+
+- 848d613: the s1024 flake fix (CRenderGlare's glare scale is zeroed in its constructor).
+- 28dd5a3: the 38 fixed teardown releases, each named by its owner.
+- b7ed687: `RENDER_ORACLE_PP_QUALITY` and `RENDER_ORACLE_HEAT_SHIMMER` set video.ini and the
+  game's VideoSettings alike.
+  - Before this, the oracle's hand-made VideoSettings hard-coded `ppQuality` at +0x3c to 0.
+  - It now writes `ppHeatShimmer` at +0x39 too.
+- 4c49ebb: YEBIS's base width follows the camera's resized width, not the FXAA target's.
+  - `CameraForwardYebis::onResize` 0x140029da0 sets `width`, then `initRenderTargets` 0x140029a90
+    runs again.
+  - `quality.sh`: QUALITY 5 and 3, resized at frame 10, are IDENTICAL in all 13 frames, by call
+    log and by pixels. Before the fix, frame 10 differed in 159 log lines.
+
+## Step 1: rand() on the render thread (measured with `RENDER_ORACLE_RAND_LOG=1`)
+
+- At start, in this order:
+  1. `CameraFacing` calls `srand(0)` at 14005e737.
+  2. About 36,700 crowd `rand()` calls follow.
+  3. `srand(0)` at 14005f78a.
+  4. `ksRandomize(22)`.
+  5. **60 `rand()`: `KGLYebisParticle::initialize` 0x140024600, called from the set
+     constructor 0x1400247f0 (returns to 140024867).** That is 10 particles × 6.
+  6. `srand(21)` for the car.
+  7. One `ksRand` call at 14003378a (from 1400e024c).
+  8. Track load adds 9 more `rand()` calls at 1401c9b7e…1401ca20f.
+- `initialize` makes **6** `rand()` calls, not 7. They are at 140024681, 1400246b6, 1400246e1,
+  14002470e, 140024751 and 14002477c.
+- No `rand()` runs in frames 0–5. A particle calls `initialize` again when its life (0.75 to
+  1.75 s) runs out, so the frames from about 45 on draw from the same stream.
+- So the port must:
+  - take the 60 calls from `graphics.crt_rand` after the track seed (22) and before the car
+    seed (21);
+  - re-initialise from that same stream inside the frame loop.
+- At start, the volumes are still zero. Particle 0 starts at (0,0,0) with radius 0. Its first
+  re-initialise puts it at the car: the volume is about (-188.39, 5.66, -253.17), 1.5 × 1.5 × 0.
+
+## What the game draws (frame 50 vs 44 of `spa_launch`)
+
+- The shimmer runs twice per frame, once per YEBIS pass.
+- Each time, right after the depth-copy draw (`ps:c3de4b0c…`), it adds 45 calls:
+  1. `Map`/`Unmap` of a 1,760-byte dynamic vertex buffer. That is 10 particles × 4 vertices ×
+     44 bytes, i.e. the `setupPfxParticles` result after culling.
+  2. **DrawIndexed 54, triangle list.** This is `HeatShimmerParticle_Sn`, `vs:72c95111…` and
+     `ps:1a99e234…`, from `GetHandle_tech_HeatShimmerParticle_Sn(octaves 1..4, blend)`.
+     - Index buffer: 120 bytes. 54 indices means 9 of the 10 particles passed the cull.
+     - Textures: the scene, the 256×256 Gaussian noise at `CTextureUtil` +0x21668, and the 64×64
+       radius fade at +0x21678.
+     - Samplers: 20/21/21.
+  3. The MadT1 copy into the second target comes first. It is one of the existing quad draws.
+- `PFX_PARTICLE_HEATSHIMMER` buffers: `InitializeDevice` 0x1403e6890 makes the array from
+  `+0x21680` (the `m_uiMaxParticles` of `PFX_INITPARAM`). The game's is
+  `SetsNumber × MaxNumberPerSet` = 1 × 10, not the 256 in `yebis.rs:646`.
+
+## The port, in order (estimate)
+
+The CPU half is about 250 lines and can be proved alone with `RENDER_ORACLE_HEAT_DUMP=1`, which
+prints volume 0 and particle 0 each frame:
+
+1. `PostProcessEffectsUpdater::update` 0x1400abc20.
+   - Car volumes: body matrix × (0,0,-2,1)/w, +0.5 on y, 1.5 × 1.5 × 0.
+   - Off above 25 km/h for the focused car.
+   - Stops at the first car that is not connected.
+2. `KGLYebisParticle::initialize` 0x140024600 and `KGLYebisParticleSet::update` 0x140024950.
+   - Use the machine's float order: check the disassembly, not the pseudo-C.
+3. `CameraForwardYebis::setPostProcessing` 0x140025080: the shimmer setters, then
+   `setupPfxParticles` 0x140024bb0. The `PFX_PARTICLE_HEATSHIMMER` element is 0x38 bytes.
+4. Reading [HEAT_SHIMMER] in `readPPSetOptions` 0x140026150: the 15 keys listed in the Y3d-3
+   notes of the prompt.
+
+The YEBIS half is about 500–600 lines (the pseudo-C of `DrawIndicesGPU_HeatShimmerParticles`
+alone is 581 lines):
+
+5. `UpdateParameters_EffectiveHeatShimmerParticleEnable` 0x1403ba2e0 (the frustum).
+6. `SetupHeatShimmerParticles` 0x1403fd860.
+   - View-space cull with `GPUMath_MatrixToFrustumParameters`.
+   - The MSVC `qsort` by z (`Callback_QSort_CompareParticleZ_S`). The order of ties must match
+     msvcr120's qsort.
+7. `HeatShimmerParticles` 0x1403fdc70 (MadT1 copy, then the depth-write toggles at device +0x158
+   and +0x160) and `DrawIndicesGPU_HeatShimmerParticles` 0x1403fc950.
+   - Matrix work: `MatrixToYawPitchRoll` and `RotationYawPitchRoll`, 8 matrix products, and
+     `MatrixToFrustumTangent`.
+   - A 4,096-byte cbuffer upload and the 44-byte vertices.
+8. The init flags `| 0x40200`, the particle count from `m_uiMaxParticles`, and dropping
+   `HEAT_SHIMMER` from the refusal list at `yebis_cb.rs:110`.
+
+Then come the proof, the planted change, the 16 `--post` rows, `run_all.sh --quick` and the
+release. Altogether this is about 1.5 more sessions.
+
+## Not done (Y3d-3 step 2 onward)
+
+- All of the port above. With `HEAT_SHIMMER=1`, `rustyac.exe` and the port side still refuse the
+  filter: `yebis: [POST_PROCESS] HEAT_SHIMMER is on`.
+- No screenshot of the shimmer from `rustyac.exe`, because the port does not draw it yet.
+
+## Open questions
+
+- The game's `heatParticleSetsNumber` comes from race.ini [RACE] CARS (`Sim::createCamera`
+  0x1401982e0). The oracle passes 1. With more cars, each set adds 10 particles and 60 `rand()`
+  calls at start. Should multi-car rows be part of the Y3d-3 proof, or wait for Y3d-3b?
+- 9 of the 10 particles passed the cull in frame 50. The z of the one that failed may depend on
+  `pos.z = (r·depth − cz) − depth·0.5`. That needs checking against the disassembly of
+  `initialize`.
+
+# Task Y3d-2b: YEBIS's sizes from the game's code, and its two flakes (v0.48.6)
+
+## Resume here (Y3d-2b)
 
 - **Released as v0.48.6.** The four fitted values are now rules read from the game's code. Both
   flakes had one cause, a heap byte the game never sets, and the oracle now zeroes it.
