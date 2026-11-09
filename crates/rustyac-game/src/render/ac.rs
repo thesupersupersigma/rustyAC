@@ -1966,6 +1966,7 @@ FILTER=default
     /// The window changed its size: the swap chain and the picture follow.
     #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn resize_swap_chain(&mut self, chain: &IDXGISwapChain1, width: u32, height: u32) -> Result<(), String> {
+        self.camera.before_resize(&self.graphics);
         // SAFETY: nothing holds the back buffers between two frames.
         unsafe {
             self.graphics.kgl.context.OMSetRenderTargets(None, None);

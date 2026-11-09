@@ -103,6 +103,80 @@ pub fn luminance_sizes(w: i32, h: i32) -> ((u32, u32), Vec<(u32, u32)>) {
     ((lw, lh), chain)
 }
 
+/// The glare target of a `w` x `h` YEBIS (`CPostEffect::Initialize` 0x1403bbb80): a sixteenth of
+/// 1280 (PFX_INITPARAM's flag bit 9 fixes the base width), at least 16 on each side.
+pub fn glare_size(w: i32, h: i32) -> (u32, u32) {
+    let aspect = w as f32 / h as f32;
+    let mut a = ((1280.0f32 * (1.0 / 16.0) + 0.99) as i64).min(1280).min(w as i64);
+    let mut gh = (a as f32 / aspect + 0.499999) as i64;
+    if a < 16 || gh < 16 {
+        if a < gh {
+            a = 16;
+            gh = (16.0 / aspect + 0.499999) as i64;
+        } else {
+            gh = 16;
+            a = (aspect * a as f32 + 0.499999) as i64;
+        }
+    }
+    (a as u32, gh as u32)
+}
+
+/// The depth of field's two levels: a 320-wide base at the frame's aspect, its half first.
+/// shortcut: as measured, not `CDepthOfField::CreateSystemObjects` 0x1404200a0's rule.
+pub fn dof_sizes(w: i32, h: i32) -> [(u32, u32); 2] {
+    let dh = (320.0 * h as f32 / w as f32 + 0.5) as u32;
+    [(160, (dh as f32 * 0.5 + 0.99) as u32), (320, dh)]
+}
+
+/// The pool's R16G16B16A16 textures: the depth of field's sizes, then halvings of the frame
+/// (`ceil(log(16 / (w / 8)) / log 0.5) - 1` of them), a size already there made once.
+/// shortcut: fits the rszfx, trirsz and tri5760 logs; the pool's sharing (0x140411900) is not ported.
+pub fn half_pool(w: i32, h: i32) -> Vec<(u32, u32)> {
+    let mut out = dof_sizes(w, h).to_vec();
+    for s in halvings(w, h) {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+fn halvings(w: i32, h: i32) -> Vec<(u32, u32)> {
+    let n = ((16.0 / (w as f32 / 8.0)).ln() / 0.5f32.ln()).ceil() as i32 - 1;
+    let (mut pw, mut ph) = (w as u32, h as u32);
+    (0..n.max(0))
+        .map(|_| {
+            (pw, ph) = ((pw as f32 * 0.5 + 0.99) as u32, (ph as f32 * 0.5 + 0.99) as u32);
+            (pw, ph)
+        })
+        .collect()
+}
+
+/// The sizes the clear pass clears in the pool's pairs: the depth of field's half, every halving
+/// but the half's size (the base's size twice when a halving has it), the depth of field's base.
+/// shortcut: as measured.
+pub fn half_pairs(w: i32, h: i32) -> Vec<(u32, u32)> {
+    let [d0, d1] = dof_sizes(w, h);
+    let mut out = vec![d0];
+    out.extend(halvings(w, h).into_iter().filter(|&s| s != d0));
+    out.push(d1);
+    out
+}
+
+/// The glare pool's halvings of the frame: enough to come down to the glare's size.
+pub fn glare_pool(w: i32, h: i32) -> Vec<(u32, u32)> {
+    let (a, gh) = glare_size(w, h);
+    let r = ((a + 1) as f32 / w as f32).max((gh + 1) as f32 / h as f32);
+    let n = ((r.ln() / 0.5f32.ln()).ceil() as i32 - 1).max(0);
+    let (mut pw, mut ph) = (w as u32, h as u32);
+    (0..n)
+        .map(|_| {
+            (pw, ph) = ((pw as f32 * 0.5 + 0.99) as u32, (ph as f32 * 0.5 + 0.99) as u32);
+            (pw, ph)
+        })
+        .collect()
+}
+
 /// The vertices of draw `d` (0-based) of a `w` x `h` frame. `noise` is the draw's noise (draws
 /// 3, 4 and 7); `vignette` is the half-height of the vignette rectangle.
 pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32, row: u32) -> Vec<f32> {
@@ -268,6 +342,10 @@ mod device {
         pub vignette: f32,
         width: i32,
         height: i32,
+        /// the target bound when YEBIS was made, and how many targets the teardown releases
+        /// (only the size: a kept view of the back buffer would make `ResizeBuffers` fail)
+        screen: Option<(u32, u32)>,
+        released: usize,
     }
 
     fn err<T>(what: &str, r: windows::core::Result<T>) -> Result<T, String> {
@@ -309,15 +387,16 @@ mod device {
     }
 
     unsafe fn target_texture(device: &ID3D11Device, w: u32, h: u32, typeless: DXGI_FORMAT, format: DXGI_FORMAT, with_srv: bool) -> Result<(Target, ID3D11Texture2D), String> {
+        // the game's order: texture, shader view, target view (an R11G11B10 target view's format is 0)
         let t = texture(device, w, h, typeless, D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0, None)?;
+        let srv = if with_srv { Some(srv(device, &t, format)?) } else { None };
         let desc = D3D11_RENDER_TARGET_VIEW_DESC {
-            Format: format,
+            Format: if format == DXGI_FORMAT_R11G11B10_FLOAT { DXGI_FORMAT_UNKNOWN } else { format },
             ViewDimension: D3D11_RTV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_RENDER_TARGET_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_RTV { MipSlice: 0 } },
         };
         let mut rtv = None;
         err("CreateRenderTargetView", device.CreateRenderTargetView(&t, Some(&desc), Some(&mut rtv)))?;
-        let srv = if with_srv { Some(srv(device, &t, format)?) } else { None };
         Ok((Target { rtv: rtv.ok_or("yebis: no view")?, srv }, t))
     }
 
@@ -352,7 +431,7 @@ mod device {
     impl Yebis {
         /// Everything YEBIS makes before its first frame. `filter` is the ppfilter of video.ini's
         /// `[POST_PROCESS] FILTER`; `root` holds the player's acs.exe.
-        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32) -> Result<Yebis, String> {
+        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
             let exe = std::fs::read(root.join("acs.exe")).map_err(|e| format!("yebis: acs.exe: {e}"))?;
             let tfxo = crate::yebis_tfxo::Tfxo::from_exe(&exe)?;
             let filmic = filmic_table(&exe)?;
@@ -415,16 +494,14 @@ mod device {
                 let mut raster = None;
                 err("CreateRasterizerState", device.CreateRasterizerState(&raster_desc(false), Some(&mut raster)))?;
                 let keep = D3D11_DEPTH_STENCILOP_DESC { StencilFailOp: D3D11_STENCIL_OP_KEEP, StencilDepthFailOp: D3D11_STENCIL_OP_KEEP, StencilPassOp: D3D11_STENCIL_OP_KEEP, StencilFunc: D3D11_COMPARISON_ALWAYS };
-                let dd = D3D11_DEPTH_STENCIL_DESC {
-                    DepthEnable: false.into(),
-                    DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ZERO,
-                    DepthFunc: D3D11_COMPARISON_ALWAYS,
-                    StencilEnable: false.into(),
-                    StencilReadMask: 0xff,
-                    StencilWriteMask: 0xff,
-                    FrontFace: keep,
-                    BackFace: keep,
-                };
+                // zeroed first: a struct literal leaves the two padding bytes after the masks as stack garbage,
+                // which the call log shows
+                let mut dd: D3D11_DEPTH_STENCIL_DESC = std::mem::zeroed();
+                dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+                dd.StencilReadMask = 0xff;
+                dd.StencilWriteMask = 0xff;
+                dd.FrontFace = keep;
+                dd.BackFace = keep;
                 let mut depth = None;
                 err("CreateDepthStencilState", device.CreateDepthStencilState(&dd, Some(&mut depth)))?;
                 let mut blend = None;
@@ -463,15 +540,21 @@ mod device {
                     samplers.push(s.ok_or("yebis: no sampler")?);
                 }
                 // `InitializeDeviceBuffers` 0x1403d4330: the bound target again, with a viewport of its size
+                // (this+0x20, the target given at the start: on a remake the caller's destination, unbound)
                 let mut bound: [Option<ID3D11RenderTargetView>; 1] = [None];
                 let mut bound_depth = None;
-                context.OMGetRenderTargets(Some(&mut bound), Some(&mut bound_depth));
+                match screen {
+                    Some(rtv) => bound[0] = Some(rtv),
+                    None => context.OMGetRenderTargets(Some(&mut bound), Some(&mut bound_depth)),
+                }
+                let mut screen = None;
                 if let Some(rtv) = &bound[0] {
                     let t: ID3D11Texture2D = err("GetResource", rtv.GetResource().and_then(|r| windows::core::Interface::cast(&r)))?;
                     let mut d = D3D11_TEXTURE2D_DESC::default();
                     t.GetDesc(&mut d);
                     context.OMSetRenderTargets(Some(&bound), bound_depth.as_ref());
                     context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: d.Width as f32, Height: d.Height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
+                    screen = Some((rtv.clone(), d.Width, d.Height));
                 }
                 // CTextureUtil::InitializeDevice 0x1403e6890: each texture made empty, its view, then filled
                 let made = |w: u32, h: u32, mips: u32, format: DXGI_FORMAT, bind: i32| -> Result<ID3D11Texture2D, String> {
@@ -548,7 +631,22 @@ mod device {
                 }
                 let quads: Vec<u8> = (0..PARTICLES as u16).flat_map(|i| [4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 2, 4 * i + 1, 4 * i + 3]).flat_map(|i| i.to_le_bytes()).collect();
                 kept.push(buffer(device, PARTICLES * 12, D3D11_BIND_INDEX_BUFFER.0, false, Some(&quads))?.into());
+                // the frame's targets in the game's order (its f10 remake log, Task Y3d-2); those YEBIS
+                // draws use we keep by name, the rest only to make what the game makes
                 let (w, h) = (width as u32, height as u32);
+                let f9 = (DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT);
+                let f27 = (DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM);
+                let f26 = (DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R11G11B10_FLOAT);
+                // `keep` also lists the target view with its size for the clear pass below
+                type Views = Vec<(ID3D11RenderTargetView, u32, u32)>;
+                let keep = |kept: &mut Vec<windows::core::IUnknown>, list: &mut Views, t: Target, tw: u32, th: u32| {
+                    list.push((t.rtv.clone(), tw, th));
+                    kept.push(t.rtv.into());
+                    kept.extend(t.srv.map(|s| s.into()));
+                };
+                let effect = [target(device, w, h, f9.0, f9.1, true)?, target(device, w, h, f9.0, f9.1, true)?];
+                let mut frame: Views = effect.iter().map(|t| (t.rtv.clone(), w, h)).collect();
+                keep(&mut kept, &mut frame, target(device, w, h, f9.0, f9.1, true)?, w, h);
                 let depth_tex = texture(device, w, h, DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_DEPTH_STENCIL.0, None)?;
                 let dsv_desc = D3D11_DEPTH_STENCIL_VIEW_DESC {
                     Format: DXGI_FORMAT_D24_UNORM_S8_UINT,
@@ -558,13 +656,22 @@ mod device {
                 };
                 let mut dsv = None;
                 err("CreateDepthStencilView", device.CreateDepthStencilView(&depth_tex, Some(&dsv_desc), Some(&mut dsv)))?;
-                let (luminance_size, chain) = super::luminance_sizes(width, height);
-                let mut analysis = Vec::new();
-                for (aw, ah) in chain {
-                    let (t, tex) = target_texture(device, aw, ah, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?;
-                    analysis.push((t, tex, (aw, ah)));
+                let tonemap = [target(device, w, h, f27.0, f27.1, true)?, target(device, w, h, f27.0, f27.1, true)?];
+                // glare: 4 targets, one twice the size, 20 more
+                let (ga, gh) = super::glare_size(width, height);
+                let mut glare = Views::new();
+                for i in 0..25 {
+                    let (gw, gg) = if i == 4 { (2 * ga, 2 * gh) } else { (ga, gh) };
+                    keep(&mut kept, &mut glare, target(device, gw, gg, f26.0, f26.1, true)?, gw, gg);
                 }
-                // the CPU copy of the 1x1 result
+                kept.push(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?.into());
+                for (dw, dh) in super::dof_sizes(width, height) {
+                    keep(&mut kept, &mut Views::new(), target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
+                }
+                let (luminance_size, chain) = super::luminance_sizes(width, height);
+                let luminance = target(device, luminance_size.0, luminance_size.1, f27.0, f27.1, true)?;
+                // auto exposure's 1x1 result and its CPU copy; then the auto focus's pair and copy
+                let one = target_texture(device, 1, 1, f27.0, f27.1, true)?;
                 let rd = D3D11_TEXTURE2D_DESC {
                     Width: 1,
                     Height: 1,
@@ -579,6 +686,72 @@ mod device {
                 };
                 let mut readback = None;
                 err("CreateTexture2D", device.CreateTexture2D(&rd, None, Some(&mut readback)))?;
+                keep(&mut kept, &mut Views::new(), target(device, 1, 1, f27.0, f27.1, true)?, 1, 1);
+                keep(&mut kept, &mut Views::new(), target(device, 1, 1, f27.0, f27.1, true)?, 1, 1);
+                let mut focus = None;
+                err("CreateTexture2D", device.CreateTexture2D(&rd, None, Some(&mut focus)))?;
+                kept.push(focus.ok_or("yebis: no texture")?.into());
+                // the texture pool: the glare's halvings, the R16G16B16A16 ones, the luminance chain above the 1x1
+                let mut glare_pool = Views::new();
+                for (pw, ph) in super::glare_pool(width, height) {
+                    keep(&mut kept, &mut glare_pool, target(device, pw, ph, f26.0, f26.1, true)?, pw, ph);
+                }
+                let mut half_pool = Views::new();
+                for (pw, ph) in super::half_pool(width, height) {
+                    keep(&mut kept, &mut half_pool, target(device, pw, ph, f9.0, f9.1, true)?, pw, ph);
+                }
+                let mut analysis = Vec::new();
+                for &(aw, ah) in &chain[..chain.len() - 1] {
+                    let (t, tex) = target_texture(device, aw, ah, f27.0, f27.1, true)?;
+                    analysis.push((t, tex, (aw, ah)));
+                }
+                analysis.push((one.0, one.1, (1, 1)));
+                let effect_depth = dsv.ok_or("yebis: no view")?;
+                // the clear pass (`CPostEffect::Initialize` 0x1403bbb80, its end): each target bound alone with a
+                // viewport of its size and cleared to 0, the bound target put back (no depth) after each group
+                let clear_group = |views: &[(ID3D11RenderTargetView, u32, u32)], with_depth: bool| {
+                    for (rtv, cw, ch) in views {
+                        context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), if with_depth { Some(&effect_depth) } else { None });
+                        context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: *cw as f32, Height: *ch as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
+                        context.ClearRenderTargetView(rtv, &[0.0; 4]);
+                        if with_depth {
+                            context.ClearDepthStencilView(&effect_depth, D3D11_CLEAR_DEPTH.0, 1.0, 0);
+                        }
+                    }
+                    if let Some((rtv, sw, sh)) = &screen {
+                        context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+                        context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: *sw as f32, Height: *sh as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
+                    }
+                };
+                let chain_views: Views = analysis[..analysis.len() - 1].iter().map(|(t, _, (aw, ah))| (t.rtv.clone(), *aw, *ah)).collect();
+                // 1. the pool, one texture a group
+                for v in glare_pool.iter().chain(&half_pool).chain(&chain_views) {
+                    clear_group(std::slice::from_ref(v), false);
+                }
+                // 2. the frame's three with the depth
+                clear_group(&frame, true);
+                // 3. 24 of the glare's 25 in the game's groups, the double-size one alone as the 20th
+                let mut order: Views = glare.iter().enumerate().filter(|(i, _)| *i != 4).map(|(_, v)| v.clone()).collect();
+                order.insert(19, glare[4].clone());
+                let mut at = 0;
+                for n in [1, 10, 2, 1, 3, 1, 1, 1, 2, 2] {
+                    clear_group(&order[at..at + n], false);
+                    at += n;
+                }
+                // 4. the glare's pool again; 5. the pool's pairs, by size (shortcut: as measured)
+                for v in &glare_pool {
+                    clear_group(std::slice::from_ref(v), false);
+                }
+                for size in super::half_pairs(width, height) {
+                    if let Some(v) = half_pool.iter().find(|v| (v.1, v.2) == size) {
+                        clear_group(std::slice::from_ref(v), false);
+                    }
+                }
+                // 6. the luminance target and the exposure's 1x1; the bound target once more
+                let last = &analysis[analysis.len() - 1];
+                clear_group(&[(luminance.rtv.clone(), luminance_size.0, luminance_size.1)], false);
+                clear_group(&[(last.0.rtv.clone(), 1, 1)], false);
+                clear_group(&[], false);
                 Ok(Yebis {
                     device: device.clone(),
                     context: context.clone(),
@@ -600,15 +773,15 @@ mod device {
                     grey,
                     white,
                     dither,
-                    effect: [target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?, target(device, w, h, DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_FLOAT, true)?],
+                    effect,
                     current: 0,
-                    effect_depth: dsv.ok_or("yebis: no view")?,
-                    luminance: target(device, luminance_size.0, luminance_size.1, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?,
+                    effect_depth,
+                    luminance,
                     luminance_size,
                     analysis,
                     readback: readback.ok_or("yebis: no texture")?,
                     auto_exposure: AutoExposure::default(),
-                    tonemap: [target(device, w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?, target(device, w, h, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM, true)?],
+                    tonemap,
                     samplers,
                     raster: raster.ok_or("yebis: no state")?,
                     depth: depth.ok_or("yebis: no state")?,
@@ -623,14 +796,34 @@ mod device {
                     vignette,
                     width,
                     height,
+                    // shortcut: the count the game's RT_LOG teardowns show (Task Y3d-2): 38 fixed targets
+                    // (with a full-size R16G16B16A16 and a depth surface the remake does not make), the pools
+                    // and the luminance chain
+                    released: 38 + super::glare_pool(width, height).len() + super::half_pool(width, height).len() + chain.len(),
+                    screen: screen.map(|(_, w, h)| (w, h)),
                 })
+            }
+        }
+
+        /// `CPostEffect::Uninitialize` 0x1403c08a0: the screen bound with its viewport once at the start,
+        /// once per released target (`CRenderTexture::UninitializeDevice` 0x1403d29f0) and once at the end
+        /// `screen` is the caller's destination (this+0x20), not kept here: a kept view of the back buffer
+        /// would make `ResizeBuffers` fail.
+        pub fn teardown(&self, screen: Option<ID3D11RenderTargetView>) {
+            if let (Some((w, h)), Some(rtv)) = (&self.screen, &screen) {
+                for _ in 0..self.released + 2 {
+                    unsafe {
+                        self.context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+                        self.context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: *w as f32, Height: *h as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
+                    }
+                }
             }
         }
 
         /// `CameraForwardYebis::onResize` 0x140029da0: the game destroys YEBIS and makes it again
         /// at the new size, so every carried-over value (parameter store, exposure) starts over; the noise goes on
-        pub fn remade(&self, width: i32, height: i32) -> Result<Yebis, String> {
-            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height)?;
+        pub fn remade(&self, width: i32, height: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
+            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, screen)?;
             yebis.noise = self.noise; // process-wide in the game, it outlives the context (resize log, Task Y2c)
             Ok(yebis)
         }
@@ -952,6 +1145,30 @@ mod tests {
         assert_eq!(luminance_sizes(1024, 576), ((128, 64), chain));
         // triple screens: 128 wide at the frame's aspect (the game's tri log, Task Y3)
         assert_eq!(luminance_sizes(5760, 1080).0, (128, 24));
+    }
+
+    /// The game's f10 remake logs (Task Y3d-2): rszfx at 1280x720, trirsz at 3840x720.
+    #[test]
+    fn glare_sizes_follow_the_game() {
+        assert_eq!(glare_size(1280, 720), (80, 45));
+        assert_eq!(glare_size(3840, 720), (427, 16));
+        assert_eq!(glare_size(5760, 1080), (427, 16));
+        assert_eq!(glare_pool(1280, 720), vec![(640, 360), (320, 180), (160, 90)]);
+        assert_eq!(glare_pool(3840, 720), vec![(1920, 360), (960, 180), (480, 90)]);
+        assert_eq!(half_pool(1280, 720), vec![(160, 90), (320, 180), (640, 360)]);
+        assert_eq!(half_pool(3840, 720), vec![(160, 30), (320, 60), (1920, 360), (960, 180), (480, 90), (240, 45)]);
+        assert_eq!(half_pool(5760, 1080), vec![(160, 30), (320, 60), (2880, 540), (1440, 270), (720, 135), (360, 68), (180, 34)]);
+        assert_eq!(half_pairs(1280, 720), vec![(160, 90), (640, 360), (320, 180), (320, 180)]);
+        assert_eq!(half_pairs(3840, 720), vec![(160, 30), (1920, 360), (960, 180), (480, 90), (240, 45), (320, 60)]);
+    }
+
+    /// The TrimCircle's hash after its upload in the game's logs (the gpulog texture hash: level 0, then the rows).
+    #[test]
+    fn trim_circle_equals_the_games() {
+        let mut h = crate::gpulog::Fnv::new();
+        h.u32(0);
+        h.bytes(&crate::yebis_tex::trim_circle());
+        assert_eq!(h.0, 0x5ab5_db75_01af_4869);
     }
 
     /// The payloads of the 8 vertex uploads of the r23_09 game frame (the second YEBIS frame).

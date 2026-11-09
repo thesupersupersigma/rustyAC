@@ -175,3 +175,22 @@ pub fn gaussian() -> Vec<Vec<u8>> {
         })
         .collect()
 }
+
+/// The glare's 64x64 A8 "TrimCircle": `CRenderGlare::CreateDeviceResources` 0x140415520 fills it
+/// with `GPUFillTexture_RadiusFade` 0x1403de070 at radius 0.5.
+pub fn trim_circle() -> Vec<u8> {
+    let s = 1.0f32 / 64.0;
+    let fade = |p: f32| ((((p - s * 0.5) * (1.0 / s)) / (1.0 / s - 1.0)) * 2.0) - 1.0;
+    let mut out = Vec::with_capacity(64 * 64);
+    for y in 0..64 {
+        for x in 0..64 {
+            let (fx, fy) = (fade((x as f32 + 0.5) * s), fade((y as f32 + 0.5) * s));
+            let mut d = fy * fy + fx * fx;
+            if d != 0.0 && d != 1.0 {
+                d = sqrtf(d);
+            }
+            out.push(byte(if d <= 0.5 { 1.0 } else if d < 1.0 { (1.0 - d) / (1.0 - 0.5) } else { 0.0 }));
+        }
+    }
+    out
+}

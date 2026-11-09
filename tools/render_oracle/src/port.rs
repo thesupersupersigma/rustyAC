@@ -575,6 +575,7 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             rustyac_render::gpulog::begin_capture(&frame.name);
         }
         if let Some((_, w, h)) = crate::resize().filter(|r| r.0 == index) {
+            camera.before_resize(&graphics);
             if let Some(chain) = &graphics.kgl.swap_chain {
                 unsafe { crate::ac::size_window(chain, w, h)? };
             }
