@@ -142,6 +142,7 @@ const SIZE_CAMERA_FORWARD_YEBIS: usize = 0xe80;
 const SIZE_CAMERA_TRIPLE_SCREEN: usize = 0x10c0;
 const VA_CAMERA_TRIPLE_SCREEN_CTOR: usize = 0x1_4022_48e0; // CameraTripleScreen::CameraTripleScreen(const std::wstring&, GraphicsManager*, int)
 const VA_CAMERA_FORWARD_YEBIS_CTOR: usize = 0x1_4002_5db0; // CameraForwardYebis::CameraForwardYebis(const std::wstring&, GraphicsManager*, bool, bool, int)
+const VA_PP_EFFECTS_UPDATER_UPDATE: usize = 0x1_400a_bc20; // PostProcessEffectsUpdater::update(float)
 const VA_CAMERA_FORWARD_YEBIS_LOAD_PP_SET: usize = 0x1_4002_9960; // CameraForwardYebis::loadPPSet(std::wstring)
 const VA_YEBIS_INIT_POST_PROCESSING: usize = 0x1_4002_4ca0; // CameraForwardYebis::initPostProcessing()
 const VA_YEBIS_APPLY_POST_PROCESSING: usize = 0x1_4002_5c30; // CameraForwardYebis::applyPostProcessing()
@@ -296,6 +297,27 @@ unsafe extern "C" fn rt_dev_hook(this: *mut u8, device: *mut u8) -> i32 {
     eprintln!("RTD {:p} {}x{} f{} {}", this, rd32(0x5c), rd32(0x60), rd32(0x44), calls.join(" "));
     let original: unsafe extern "C" fn(*mut u8, *mut u8) -> i32 = std::mem::transmute(RT_DEV.load(Ordering::SeqCst));
     original(this, device)
+}
+// RENDER_ORACLE_RAND_LOG=1: every msvcr120 rand()/srand() the game calls, with its value and two
+// return addresses as Ghidra addresses ("RND"/"SRN"), and each frame's start ("RNF"): Task Y3d-3
+static CRT_RAND: AtomicUsize = AtomicUsize::new(0);
+static CRT_SRAND: AtomicUsize = AtomicUsize::new(0);
+unsafe fn rand_callers() -> String {
+    let mut frames = [std::ptr::null_mut::<c_void>(); 2];
+    let n = RtlCaptureStackBackTrace(2, 2, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
+    let base = RT_BASE.load(Ordering::SeqCst);
+    frames[..n].iter().map(|&f| format!("{:x}", (f as usize).wrapping_sub(base).wrapping_add(0x1_4000_0000))).collect::<Vec<_>>().join(" ")
+}
+unsafe extern "C" fn rand_hook() -> i32 {
+    let original: extern "C" fn() -> i32 = std::mem::transmute(CRT_RAND.load(Ordering::SeqCst));
+    let value = original();
+    eprintln!("RND {value} {:?} {}", std::thread::current().id(), rand_callers());
+    value
+}
+unsafe extern "C" fn srand_hook(seed: u32) {
+    let original: extern "C" fn(u32) = std::mem::transmute(CRT_SRAND.load(Ordering::SeqCst));
+    eprintln!("SRN {seed} {:?} {}", std::thread::current().id(), rand_callers());
+    original(seed)
 }
 // CPostEffect::CPostEffect 0x1403bb820 never writes the ambient-occlusion flag at +0x131 and
 // Initialize only ever sets it, so on a heap block with a non-zero byte there the game makes an
@@ -571,8 +593,18 @@ impl Game {
             crate::openvr_fake::set_size(args.width / 2, args.height);
             overrides.extend(crate::openvr_fake::overrides());
         }
+        if std::env::var_os("RENDER_ORACLE_RAND_LOG").is_some() {
+            unsafe {
+                let crt = LoadLibraryW(w!("msvcr120.dll")).expect("msvcr120.dll");
+                CRT_RAND.store(GetProcAddress(crt, windows::core::s!("rand")).expect("rand") as usize, Ordering::SeqCst);
+                CRT_SRAND.store(GetProcAddress(crt, windows::core::s!("srand")).expect("srand") as usize, Ordering::SeqCst);
+            }
+            overrides.push(("msvcr120.dll", "rand", rand_hook as *const () as usize));
+            overrides.push(("msvcr120.dll", "srand", srand_hook as *const () as usize));
+        }
         crate::acs::set_extra_overrides(overrides);
         let acs = Acs::load(&args.acs)?;
+        RT_BASE.store(acs.va(0x1_4000_0000), Ordering::SeqCst);
         if args.verbose {
             acs.unbuffer_game_stdout();
         } else {
@@ -1231,6 +1263,16 @@ impl Game {
             wr(track_sim, 0x208, list);
             wr(track_sim, 0x210, list.add(8 * count));
         }
+        // Sim::createCamera: the PostProcessEffectsUpdater (0x88 bytes; sim +0x78, camera +0x80) whose
+        // update 0x1400abc20 places the heat shimmer's volumes behind the cars: Task Y3d-3
+        let pp_updater = if crate::root::heat_shimmer() && crate::root::profile().post && !crate::root::profile().triple && car.is_some() {
+            let updater = acs.alloc(0x88);
+            wr(updater, 0x78, track_sim);
+            wr(updater, 0x80, camera);
+            updater
+        } else {
+            std::ptr::null_mut()
+        };
         // Sim::Sim: TrackAvatar::initPitCrew (the lollipop men, the track's crew meshes), the
         // game's own; then the pit box marker of PitStop::PitStop, its model by hand
         let mut lollipops: Vec<*mut u8> = Vec::new();
@@ -1366,6 +1408,9 @@ impl Game {
         let mut last_console = [(0u8, 0.0f32); 4];
         for (index, step) in frame.steps.iter().enumerate() {
             *crate::ac_car::WINGS_FRAME.lock().unwrap() = index;
+            if std::env::var_os("RENDER_ORACLE_RAND_LOG").is_some() {
+                eprintln!("RNF {index}");
+            }
             // Task 43c: the console's sets (the game's message loop, before the frame)
             if step.extra.console != last_console {
                 last_console = step.extra.console;
@@ -1456,6 +1501,11 @@ impl Game {
                 update(crew, crate::frames::DT);
             }
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
+            // Sim::update: the PostProcessEffectsUpdater (made in createCamera, before the cars)
+            if !pp_updater.is_null() {
+                let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_PP_EFFECTS_UPDATER_UPDATE));
+                update(pp_updater, crate::frames::DT);
+            }
             if let Some(car) = &car {
                 // Sim::update: CarNodeSorter::sort, then the cars in the order they were made
                 if count > 1 {
@@ -1565,6 +1615,16 @@ impl Game {
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
             self.hdr_flag(true);
             render(camera, blurred, unblurred, root, 1.0 / 60.0);
+            if std::env::var_os("RENDER_ORACLE_HEAT_DUMP").is_some() && !pp_updater.is_null() {
+                // the heat shimmer's first volume and first particle after each frame (Task Y3d-3)
+                let pp = camera.add(0x828);
+                let set: [f32; 7] = rd(pp, 0x94);
+                let manager: *mut u8 = rd(camera, 0x7f0);
+                let sets: *mut u8 = rd(manager, 0);
+                let first: *mut u8 = rd(sets, 0);
+                let p0: [f32; 11] = rd(first, 0);
+                eprintln!("HEAT {index} enabled {} active {} set {:?} p0 {:?} car {:?}", rd::<i32>(pp, 0x40), rd::<i32>(pp, 0x44), set, p0, car.as_ref().map(|c| c.body_position()));
+            }
             if profile.triple {
                 // TripleScreenData: currentViewProj at +0xf38, currentCameraMatrix at +0xff8
                 let read = |base: usize| std::array::from_fn(|i| rd::<[f32; 16]>(camera, base + i * 0x40));
