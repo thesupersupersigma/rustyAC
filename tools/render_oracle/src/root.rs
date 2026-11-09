@@ -97,6 +97,16 @@ pub fn profile() -> Profile {
 /// `cfg/video.ini` of the proof: no post-processing, no motion blur, no MSAA, no mirror, no
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
+/// RENDER_ORACLE_PP_QUALITY: `[POST_PROCESS] QUALITY`, YEBIS's base width (Task Y3d-3)
+pub fn pp_quality() -> i32 {
+    std::env::var("RENDER_ORACLE_PP_QUALITY").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+/// RENDER_ORACLE_HEAT_SHIMMER=1: `[POST_PROCESS] HEAT_SHIMMER` (Task Y3d-3)
+pub fn heat_shimmer() -> bool {
+    std::env::var("RENDER_ORACLE_HEAT_SHIMMER").is_ok_and(|v| v == "1")
+}
+
 pub fn video_ini(width: u32, height: u32) -> String {
     let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple, vr, oculus, vr_room, vr_tracker: _, ppfilter } = profile();
     let (POST, PP_FXAA) = (post as i32, fxaa as i32);
@@ -136,12 +146,12 @@ pub fn video_ini(width: u32, height: u32) -> String {
         String::new(),
         "[POST_PROCESS]".into(),
         format!("ENABLED={POST}"),
-        "QUALITY=0".into(),
+        format!("QUALITY={}", pp_quality()),
         format!("FILTER={ppfilter}"),
         "GLARE=0".into(),
         "DOF=0".into(),
         "RAYS_OF_GOD=0".into(),
-        "HEAT_SHIMMER=0".into(),
+        format!("HEAT_SHIMMER={}", heat_shimmer() as i32),
         format!("FXAA={PP_FXAA}"),
         String::new(),
         if vr_room { "[VR_ROOM]

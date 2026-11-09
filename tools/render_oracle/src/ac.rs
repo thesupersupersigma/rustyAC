@@ -607,8 +607,9 @@ impl Game {
             wr(settings, 0x30, 0i32); // dxgiModeIndex
             wr(settings, 0x34, crate::root::profile().world_detail); // worldDetail
             wr(settings, 0x38, crate::root::profile().post as u8); // ppHDREnabled
+            wr(settings, 0x39, crate::root::heat_shimmer() as u8); // ppHeatShimmer
             wr(settings, 0x3a, (crate::root::profile().post && crate::root::profile().fxaa) as u8); // ppFXAA
-            wr(settings, 0x3c, 0i32); // ppQuality
+            wr(settings, 0x3c, crate::root::pp_quality()); // ppQuality
             wr(settings, 0x40, 0i32); // ppGlare
             wr(settings, 0x44, 0i32); // ppDof
             wr(settings, 0x48, 0u8); // tripleBuffer
