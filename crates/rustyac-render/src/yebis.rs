@@ -103,11 +103,25 @@ pub fn luminance_sizes(w: i32, h: i32) -> ((u32, u32), Vec<(u32, u32)>) {
     ((lw, lh), chain)
 }
 
-/// The glare target of a `w` x `h` YEBIS (`CPostEffect::Initialize` 0x1403bbb80): a sixteenth of
-/// 1280 (PFX_INITPARAM's flag bit 9 fixes the base width), at least 16 on each side.
-pub fn glare_size(w: i32, h: i32) -> (u32, u32) {
+/// YEBIS's base width, `m_uiEffectBufferCriterionWidth` (`CameraForwardYebis::initRenderTargets`
+/// 0x140029a90): `[POST_PROCESS] QUALITY` fifths of the frame's width, or 640 (at most the width) at 0.
+pub fn base_width(quality: i32, w: i32) -> i32 {
+    match (quality as f32 / 5.0 * w as f32) as i32 {
+        0 => w.min(640),
+        b => b,
+    }
+}
+
+/// The glare target (`CPostEffect::Initialize` 0x1403bbb80): GLARE=0's 0.125 of the base width.
+pub fn glare_size(base: i32, w: i32, h: i32) -> (u32, u32) {
+    effect_size(base, 0.125, w, h)
+}
+
+/// A `factor` of the base width (at most the base and the frame's width) at the frame's aspect,
+/// at least 16 on each side (`CPostEffect::Initialize` 0x1403bbb80, the glare and the depth of field).
+fn effect_size(base: i32, factor: f32, w: i32, h: i32) -> (u32, u32) {
     let aspect = w as f32 / h as f32;
-    let mut a = ((1280.0f32 * (1.0 / 16.0) + 0.99) as i64).min(1280).min(w as i64);
+    let mut a = ((base as f32 * factor + 0.99) as i64).min(base as i64).min(w as i64);
     let mut gh = (a as f32 / aspect + 0.499999) as i64;
     if a < 16 || gh < 16 {
         if a < gh {
@@ -121,19 +135,28 @@ pub fn glare_size(w: i32, h: i32) -> (u32, u32) {
     (a as u32, gh as u32)
 }
 
-/// The depth of field's two levels: a 320-wide base at the frame's aspect, its half first.
-/// shortcut: as measured, not `CDepthOfField::CreateSystemObjects` 0x1404200a0's rule.
-pub fn dof_sizes(w: i32, h: i32) -> [(u32, u32); 2] {
-    let dh = (320.0 * h as f32 / w as f32 + 0.5) as u32;
-    [(160, (dh as f32 * 0.5 + 0.99) as u32), (320, dh)]
+/// The depth of field's two levels: DOF=0's 0.25 of the base width (`CPostEffect::Initialize`
+/// 0x1403bbb80), then its double, at most the frame, only when the first is at most 128 wide or
+/// an eighth of the frame (`CreateApertureFilterLevelParams` 0x14041f750, the DOF table's +0x14
+/// and +0x18), else the same size again.
+pub fn dof_sizes(base: i32, w: i32, h: i32) -> [(u32, u32); 2] {
+    let (a, dh) = effect_size(base, 0.25, w, h);
+    if a <= 128 || a as f32 <= w as f32 * 0.125 {
+        [(a, dh), ((2 * a).min(w as u32), (2 * dh).min(h as u32))]
+    } else {
+        [(a, dh), (a, dh)]
+    }
 }
 
-/// The pool's R16G16B16A16 textures: the depth of field's sizes, then halvings of the frame
-/// (`ceil(log(16 / (w / 8)) / log 0.5) - 1` of them), a size already there made once.
-/// shortcut: fits the rszfx, trirsz and tri5760 logs; the pool's sharing (0x140411900) is not ported.
-pub fn half_pool(w: i32, h: i32) -> Vec<(u32, u32)> {
-    let mut out = dof_sizes(w, h).to_vec();
-    for s in halvings(w, h) {
+/// The pool's R16G16B16A16 textures in the order the pool (0x140411900) gets them: the depth of
+/// field's two levels, then its halvings of the frame (`CDepthOfField::CreateSystemObjects`
+/// 0x1404200a0), a size already there shared. The level asks for its two only when doubled
+/// (`DOFLEVELPARAM::Initialize` 0x14041e420: +0x60 counts up when the sizes differ, +0x70 is the
+/// doubled flag +0x28).
+pub fn half_pool(base: i32, w: i32, h: i32) -> Vec<(u32, u32)> {
+    let [d0, d1] = dof_sizes(base, w, h);
+    let mut out = if d0 == d1 { vec![] } else { vec![d0, d1] };
+    for s in halvings(d0, w, h) {
         if !out.contains(&s) {
             out.push(s);
         }
@@ -141,32 +164,9 @@ pub fn half_pool(w: i32, h: i32) -> Vec<(u32, u32)> {
     out
 }
 
-fn halvings(w: i32, h: i32) -> Vec<(u32, u32)> {
-    let n = ((16.0 / (w as f32 / 8.0)).ln() / 0.5f32.ln()).ceil() as i32 - 1;
-    let (mut pw, mut ph) = (w as u32, h as u32);
-    (0..n.max(0))
-        .map(|_| {
-            (pw, ph) = ((pw as f32 * 0.5 + 0.99) as u32, (ph as f32 * 0.5 + 0.99) as u32);
-            (pw, ph)
-        })
-        .collect()
-}
-
-/// The sizes the clear pass clears in the pool's pairs: the depth of field's half, every halving
-/// but the half's size (the base's size twice when a halving has it), the depth of field's base.
-/// shortcut: as measured.
-pub fn half_pairs(w: i32, h: i32) -> Vec<(u32, u32)> {
-    let [d0, d1] = dof_sizes(w, h);
-    let mut out = vec![d0];
-    out.extend(halvings(w, h).into_iter().filter(|&s| s != d0));
-    out.push(d1);
-    out
-}
-
-/// The glare pool's halvings of the frame: enough to come down to the glare's size.
-pub fn glare_pool(w: i32, h: i32) -> Vec<(u32, u32)> {
-    let (a, gh) = glare_size(w, h);
-    let r = ((a + 1) as f32 / w as f32).max((gh + 1) as f32 / h as f32);
+/// Halvings of the frame, enough to come down to `to` (`ceil(log(max((to + 1) / frame)) / log 0.5) - 1`).
+fn halvings(to: (u32, u32), w: i32, h: i32) -> Vec<(u32, u32)> {
+    let r = ((to.0 + 1) as f32 / w as f32).max((to.1 + 1) as f32 / h as f32);
     let n = ((r.ln() / 0.5f32.ln()).ceil() as i32 - 1).max(0);
     let (mut pw, mut ph) = (w as u32, h as u32);
     (0..n)
@@ -175,6 +175,22 @@ pub fn glare_pool(w: i32, h: i32) -> Vec<(u32, u32)> {
             (pw, ph)
         })
         .collect()
+}
+
+/// The sizes `CDepthOfField::ClearAllGPUResources` 0x14042b930 clears: its own pool's level 0
+/// (this+0x468), its halvings (this+0x458), level 0's double (the level's +0xa0); a halving the
+/// double shares is cleared twice.
+pub fn half_pairs(base: i32, w: i32, h: i32) -> Vec<(u32, u32)> {
+    let [d0, d1] = dof_sizes(base, w, h);
+    let mut out = vec![d0];
+    out.extend(halvings(d0, w, h));
+    out.push(d1);
+    out
+}
+
+/// The glare pool's halvings of the frame: enough to come down to the glare's size.
+pub fn glare_pool(base: i32, w: i32, h: i32) -> Vec<(u32, u32)> {
+    halvings(glare_size(base, w, h), w, h)
 }
 
 /// The vertices of draw `d` (0-based) of a `w` x `h` frame. `noise` is the draw's noise (draws
@@ -437,6 +453,7 @@ mod device {
             let filmic = filmic_table(&exe)?;
             let used = used_all(&tfxo)?;
             let vignette = vignette(&filter)?;
+            let base = super::base_width(video.get_int("POST_PROCESS", "QUALITY").unwrap_or(0), width);
             unsafe {
                 // every program is made on its first draw (see draw)
                 let (mut code, mut inputs, mut strides) = (Vec::new(), Vec::new(), Vec::new());
@@ -658,15 +675,16 @@ mod device {
                 err("CreateDepthStencilView", device.CreateDepthStencilView(&depth_tex, Some(&dsv_desc), Some(&mut dsv)))?;
                 let tonemap = [target(device, w, h, f27.0, f27.1, true)?, target(device, w, h, f27.0, f27.1, true)?];
                 // glare: 4 targets, one twice the size, 20 more
-                let (ga, gh) = super::glare_size(width, height);
+                let (ga, gh) = super::glare_size(base, width, height);
                 let mut glare = Views::new();
                 for i in 0..25 {
                     let (gw, gg) = if i == 4 { (2 * ga, 2 * gh) } else { (ga, gh) };
                     keep(&mut kept, &mut glare, target(device, gw, gg, f26.0, f26.1, true)?, gw, gg);
                 }
                 kept.push(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?.into());
-                for (dw, dh) in super::dof_sizes(width, height) {
-                    keep(&mut kept, &mut Views::new(), target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
+                let mut dof = Views::new();
+                for (dw, dh) in super::dof_sizes(base, width, height) {
+                    keep(&mut kept, &mut dof, target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
                 }
                 let (luminance_size, chain) = super::luminance_sizes(width, height);
                 let luminance = target(device, luminance_size.0, luminance_size.1, f27.0, f27.1, true)?;
@@ -693,11 +711,11 @@ mod device {
                 kept.push(focus.ok_or("yebis: no texture")?.into());
                 // the texture pool: the glare's halvings, the R16G16B16A16 ones, the luminance chain above the 1x1
                 let mut glare_pool = Views::new();
-                for (pw, ph) in super::glare_pool(width, height) {
+                for (pw, ph) in super::glare_pool(base, width, height) {
                     keep(&mut kept, &mut glare_pool, target(device, pw, ph, f26.0, f26.1, true)?, pw, ph);
                 }
                 let mut half_pool = Views::new();
-                for (pw, ph) in super::half_pool(width, height) {
+                for (pw, ph) in super::half_pool(base, width, height) {
                     keep(&mut kept, &mut half_pool, target(device, pw, ph, f9.0, f9.1, true)?, pw, ph);
                 }
                 let mut analysis = Vec::new();
@@ -738,12 +756,13 @@ mod device {
                     clear_group(&order[at..at + n], false);
                     at += n;
                 }
-                // 4. the glare's pool again; 5. the pool's pairs, by size (shortcut: as measured)
+                // 4. the glare's pool again; 5. the depth of field's, by size (see half_pairs)
                 for v in &glare_pool {
                     clear_group(std::slice::from_ref(v), false);
                 }
-                for size in super::half_pairs(width, height) {
-                    if let Some(v) = half_pool.iter().find(|v| (v.1, v.2) == size) {
+                for size in super::half_pairs(base, width, height) {
+                    // the levels' own targets when the pool has no pair (no double: DOFLEVELPARAM::Initialize)
+                    if let Some(v) = half_pool.iter().chain(&dof).find(|v| (v.1, v.2) == size) {
                         clear_group(std::slice::from_ref(v), false);
                     }
                 }
@@ -796,10 +815,11 @@ mod device {
                     vignette,
                     width,
                     height,
-                    // shortcut: the count the game's RT_LOG teardowns show (Task Y3d-2): 38 fixed targets
-                    // (with a full-size R16G16B16A16 and a depth surface the remake does not make), the pools
-                    // and the luminance chain
-                    released: 38 + super::glare_pool(width, height).len() + super::half_pool(width, height).len() + chain.len(),
+                    // `CRenderTexture::UninitializeDevice` 0x1403d29f0 puts the screen back once for each texture
+                    // holding a GPU texture (+0x28): 38 at every size (7 full-size, with an R16G16B16A16 and a
+                    // depth surface the remake does not make; 25 glare; 2 DOF levels; the 128x64 luminance
+                    // target; the 16x16 analyser; the AE/AF 1x1 pair), the pools and the luminance chain
+                    released: 38 + super::glare_pool(base, width, height).len() + super::half_pool(base, width, height).len() + chain.len(),
                     screen: screen.map(|(_, w, h)| (w, h)),
                 })
             }
@@ -985,6 +1005,8 @@ mod device {
         /// `CPostEffect::ApplyEffects` for AC's chain: `depth` and `scene` are the game's
         /// (resolved) depth and colour, `destination` the back buffer or the FXAA target.
         pub fn render(&mut self, depth: &ID3D11ShaderResourceView, scene: &ID3D11ShaderResourceView, destination: &ID3D11RenderTargetView, camera: &Camera) -> Result<(), String> {
+            // CPostEffect+0x2fc: the aspect is set once at Initialize, so a resized frame keeps the made size's
+            let camera = &Camera { width: self.width as u32, height: self.height as u32, ..*camera };
             let mut pe = PostEffect::new(&self.filter, &self.video, camera)?;
             let (w, h) = (self.width as f32, self.height as f32);
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
@@ -1153,16 +1175,20 @@ mod tests {
     /// The game's f10 remake logs (Task Y3d-2): rszfx at 1280x720, trirsz at 3840x720.
     #[test]
     fn glare_sizes_follow_the_game() {
-        assert_eq!(glare_size(1280, 720), (80, 45));
-        assert_eq!(glare_size(3840, 720), (427, 16));
-        assert_eq!(glare_size(5760, 1080), (427, 16));
-        assert_eq!(glare_pool(1280, 720), vec![(640, 360), (320, 180), (160, 90)]);
-        assert_eq!(glare_pool(3840, 720), vec![(1920, 360), (960, 180), (480, 90)]);
-        assert_eq!(half_pool(1280, 720), vec![(160, 90), (320, 180), (640, 360)]);
-        assert_eq!(half_pool(3840, 720), vec![(160, 30), (320, 60), (1920, 360), (960, 180), (480, 90), (240, 45)]);
-        assert_eq!(half_pool(5760, 1080), vec![(160, 30), (320, 60), (2880, 540), (1440, 270), (720, 135), (360, 68), (180, 34)]);
-        assert_eq!(half_pairs(1280, 720), vec![(160, 90), (640, 360), (320, 180), (320, 180)]);
-        assert_eq!(half_pairs(3840, 720), vec![(160, 30), (1920, 360), (960, 180), (480, 90), (240, 45), (320, 60)]);
+        assert_eq!((base_width(0, 1280), base_width(0, 600), base_width(1, 1280)), (640, 600, 256));
+        assert_eq!(glare_size(base_width(0, 1280), 1280, 720), (80, 45));
+        assert_eq!(glare_size(base_width(0, 3840), 3840, 720), (427, 16));
+        assert_eq!(glare_size(base_width(0, 5760), 5760, 1080), (427, 16));
+        assert_eq!(glare_pool(base_width(0, 1280), 1280, 720), vec![(640, 360), (320, 180), (160, 90)]);
+        assert_eq!(glare_pool(base_width(0, 3840), 3840, 720), vec![(1920, 360), (960, 180), (480, 90)]);
+        assert_eq!(half_pool(base_width(0, 1280), 1280, 720), vec![(160, 90), (320, 180), (640, 360)]);
+        assert_eq!(half_pool(base_width(0, 3840), 3840, 720), vec![(160, 30), (320, 60), (1920, 360), (960, 180), (480, 90), (240, 45)]);
+        assert_eq!(half_pool(base_width(0, 5760), 5760, 1080), vec![(160, 30), (320, 60), (2880, 540), (1440, 270), (720, 135), (360, 68), (180, 34)]);
+        assert_eq!(half_pairs(base_width(0, 1280), 1280, 720), vec![(160, 90), (640, 360), (320, 180), (320, 180)]);
+        assert_eq!(half_pairs(base_width(0, 3840), 3840, 720), vec![(160, 30), (1920, 360), (960, 180), (480, 90), (240, 45), (320, 60)]);
+        // 160 > 128 and > 1024/8: the game's second level stays 160x120
+        assert_eq!(half_pool(base_width(0, 1024), 1024, 770), vec![(512, 385), (256, 193)]);
+        assert_eq!(half_pairs(base_width(0, 1024), 1024, 770), vec![(160, 120), (512, 385), (256, 193), (160, 120)]);
     }
 
     /// The TrimCircle's hash after its upload in the game's logs (the gpulog texture hash: level 0, then the rows).
