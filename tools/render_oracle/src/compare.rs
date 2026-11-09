@@ -204,6 +204,11 @@ pub fn compare(args: &Args) -> Result<(), String> {
         let index: usize = la.get(first).or(lp.get(first)).and_then(|l| l.split(' ').next()).and_then(|w| w.parse().ok()).unwrap_or(first);
         println!("sequence: {different_logs} frames with a different command log, {different_pixels} with different pixels; the first is frame {index}:");
         if !args.dump.contains(&index) {
+            // the redraw rewrites the hashes: keep the first pass's for a frame that differs only once
+            for side in ["ac", "port"] {
+                let seq = args.out.join(format!("{}.{side}.seq", frame.name));
+                std::fs::copy(&seq, seq.with_extension("first.seq")).map_err(|e| format!("{}: {e}", seq.display()))?;
+            }
             run_sides(args, &[index])?;
         }
         kind = (format!("f{index}.gpulog"), format!("f{index}.rgba"));

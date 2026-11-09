@@ -107,6 +107,11 @@ does something else on purpose, each with its reason and the report that has the
 - YEBIS's composite (draw 8) uploads an alpha weight of zero. The game's is -0 while its
   `CRenderGlare`+0x108 is set and rustyAC's is +0. The oracle's game side zeroes that field, so
   the logs match with no ignored bit. The picture is the same either way. (yebis.md, Task Y2b)
+- YEBIS's `CPostEffect` constructor never writes its ambient-occlusion flag (+0x131) and its
+  start-up only ever sets it, so on some runs the game makes, and later frees, an extra full-size
+  normal-depth target from a non-zero heap byte. The oracle's game side zeroes the flag after
+  the constructor; rustyAC never makes that target. The picture is the same either way.
+  (yebis.md, Task Y3d-2b)
 
 ## Online
 

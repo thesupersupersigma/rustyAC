@@ -260,6 +260,53 @@ unsafe extern "C" fn rt_uninit_hook(this: *mut u8) -> i32 {
     let original: unsafe extern "C" fn(*mut u8) -> i32 = std::mem::transmute(RT_UNINIT.load(Ordering::SeqCst));
     original(this)
 }
+// and CRenderTexturePool::AllocateTextures 0x140411900 ("RTA": the pool's list before the call,
+// the request, what it returned)
+static RT_ALLOC: AtomicUsize = AtomicUsize::new(0);
+unsafe extern "C" fn rt_alloc_hook(this: *mut u8, n: i32, out: *mut *mut u8, w: u32, h: u32, fmt: u32, share: u8, flags: u32, mask: u32) -> i32 {
+    let tex = |t: *mut u8| {
+        let rd32 = |o: usize| std::ptr::read_unaligned(t.add(o) as *const u32);
+        format!("{:p}:{}x{}f{}s{}c{}fl{:x}", t, rd32(0x5c), rd32(0x60), rd32(0x44), *t.add(0x10), rd32(8), rd32(0x38))
+    };
+    let head = std::ptr::read_unaligned(this.add(0x38) as *const *mut *mut u8);
+    let mut list = Vec::new();
+    let mut node = *head;
+    while node as *mut *mut u8 != head && list.len() < 64 {
+        list.push(tex(*(*node.cast::<*mut *mut u8>().add(2)).cast::<*mut u8>().add(1)));
+        node = *(node as *mut *mut u8);
+    }
+    let mut frames = [std::ptr::null_mut::<c_void>(); 2];
+    let k = RtlCaptureStackBackTrace(1, 2, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
+    let base = RT_BASE.load(Ordering::SeqCst);
+    let calls: Vec<String> = frames[..k].iter().map(|&f| format!("{:x}", (f as usize).wrapping_sub(base) + 0x1_4000_0000)).collect();
+    let original: unsafe extern "C" fn(*mut u8, i32, *mut *mut u8, u32, u32, u32, u8, u32, u32) -> i32 = std::mem::transmute(RT_ALLOC.load(Ordering::SeqCst));
+    let made = original(this, n, out, w, h, fmt, share, flags, mask);
+    let got: Vec<String> = (0..n.max(0) as usize).map(|i| tex(*out.add(i))).collect();
+    eprintln!("RTA {:p} n{n} {w}x{h} f{fmt} share{share} fl{flags:x} m{mask:x} made{made} {} got [{}] list [{}]", this, calls.join(" "), got.join(" "), list.join(" "));
+    made
+}
+// and CRenderTexture::InitializeDevice 0x1403d23b0 ("RTD": the texture, six return addresses)
+static RT_DEV: AtomicUsize = AtomicUsize::new(0);
+unsafe extern "C" fn rt_dev_hook(this: *mut u8, device: *mut u8) -> i32 {
+    let rd32 = |o: usize| std::ptr::read_unaligned(this.add(o) as *const u32);
+    let mut frames = [std::ptr::null_mut::<c_void>(); 6];
+    let k = RtlCaptureStackBackTrace(1, 6, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
+    let base = RT_BASE.load(Ordering::SeqCst);
+    let calls: Vec<String> = frames[..k].iter().map(|&f| format!("{:x}", (f as usize).wrapping_sub(base) + 0x1_4000_0000)).collect();
+    eprintln!("RTD {:p} {}x{} f{} {}", this, rd32(0x5c), rd32(0x60), rd32(0x44), calls.join(" "));
+    let original: unsafe extern "C" fn(*mut u8, *mut u8) -> i32 = std::mem::transmute(RT_DEV.load(Ordering::SeqCst));
+    original(this, device)
+}
+// CPostEffect::CPostEffect 0x1403bb820 never writes the ambient-occlusion flag at +0x131 and
+// Initialize only ever sets it, so on a heap block with a non-zero byte there the game makes an
+// extra full-size target (and frees it at teardown): the oracle zeroes it (differences.md)
+static PFX_CTOR: AtomicUsize = AtomicUsize::new(0);
+unsafe extern "C" fn pfx_ctor_hook(this: *mut u8) -> *mut u8 {
+    let original: unsafe extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(PFX_CTOR.load(Ordering::SeqCst));
+    let made = original(this);
+    *this.add(0x131) = 0;
+    made
+}
 static DEVICE: AtomicUsize = AtomicUsize::new(0);
 static CONTEXT: AtomicUsize = AtomicUsize::new(0);
 static SWAP_CHAIN: AtomicUsize = AtomicUsize::new(0);
@@ -971,6 +1018,14 @@ impl Game {
                 let set = [0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40];
                 RT_SET.store(acs.detour(0x1_403d_5410, 15, &set, rt_set_hook as *const () as usize), Ordering::SeqCst);
                 RT_UNINIT.store(acs.detour(0x1_403d_29f0, 12, &expected, rt_uninit_hook as *const () as usize), Ordering::SeqCst);
+                let alloc = [0x48, 0x8b, 0xc4, 0x44, 0x89, 0x48, 0x20, 0x4c, 0x89, 0x40, 0x18, 0x55];
+                RT_ALLOC.store(acs.detour(0x1_4041_1900, 12, &alloc, rt_alloc_hook as *const () as usize), Ordering::SeqCst);
+                let dev = [0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20];
+                RT_DEV.store(acs.detour(0x1_403d_23b0, 15, &dev, rt_dev_hook as *const () as usize), Ordering::SeqCst);
+            }
+            if std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
+                let ctor = [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff];
+                PFX_CTOR.store(acs.detour(0x1_403b_b820, 15, &ctor, pfx_ctor_hook as *const () as usize), Ordering::SeqCst);
             }
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_none() {
                 acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);
