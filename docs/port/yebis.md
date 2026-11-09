@@ -1,35 +1,37 @@
-# Task Y3d-2: YEBIS's render targets, clears and teardown (part 1, no release)
+# Task Y3d-2: YEBIS's render targets, clears and teardown (v0.48.5)
 
 ## Resume here
 
-- **Not released; resume at step 5.** Done so far:
+- **Released as v0.48.5.** Frame 10 is IDENTICAL on both resize cases, and every step-5 proof passed.
   - step 0: the launcher's fixed display-mode list (d089bd0);
   - step 1: frame 0 compared on the `--post` rows (25b0317);
-  - steps 2 and 3: the targets, the clear pass and the teardown (cd6506c). rszfx frame 10 is IDENTICAL
-    (call log and pixels, all 19 frames).
+  - steps 2 and 3: the targets, the clear pass and the teardown (cd6506c);
   - step 4: answered by measurement, no code change (see below);
-  - the `RENDER_ORACLE_RT_LOG=1` tool in render_oracle.
-- **Next (step 5):**
-  1. The 16 `--post` rows with `RENDER_ORACLE_TEXTURE_DATA=1` gave 7 DIFFERENT, all in the **static
-     cube map** (r23_10/12/15/18/20/22/24; same call counts both sides). Rerun one row, e.g.
-     `RENDER_ONLY='r23_10' RENDER_ORACLE_TEXTURE_DATA=1 sh tools/proofs/render.sh`, with and without
-     `TEXTURE_DATA`, and diff `*.cube.gpulog`. This session's change does not touch the cube map; the
-     likely cause is a cube-map texture renamed by its contents. That is not proven.
-  2. trirsz at 20 frames printed "command log: IDENTICAL / pixels: IDENTICAL" but rc=1, and its cube
-     logs are identical. Run render_oracle directly (no grep) to see what failed.
-  3. `run_all.sh --quick` was stopped by low memory (Chrome held ~10 GB; 3.4 GB free). Before it
-     stopped, 9 lanes were all IDENTICAL: physics, render, net, dumps, shaders, fresh, browser, sound,
-     replays. Run it again with memory free, then release v0.48.5.
+  - step 5: the `--aa` fix (dcbf1ab), then all proofs;
+  - the `RENDER_ORACLE_RT_LOG=1` tool in render_oracle (7173e03).
+- **Next: Y3d-2b** turns the fitted shortcuts into rules read from the game code: `half_pool`,
+  `half_pairs`, `dof_sizes`, and the teardown count (38 + pools + chain). It should also explain the
+  run-dependent extra W×H f9 and extra teardown pair (see the open questions). **Heat shimmer stays in
+  Y3d-3.**
 - Check:
   - `RENDER_ORACLE_RESIZE=10:1024x576 bash re/scratch/taskY3d2/cmp.sh rszfx <name> --track spa --view chase --post --fxaa $T`
   - `RENDER_ORACLE_RESIZE=10:3840x720 bash re/scratch/taskY3d2/cmp.sh trirsz <name> --track spa --view chase --triple --size 5760x1080 --post $T`
   - with `T="--car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 20"`.
-  - Then run `python re/scratch/taskY3d2/startup.py re/scratch/taskY3d2/runs/<label>` (frame-10 diff).
-  - `re/scratch/taskY3d2/end.sh` runs all of step 5 in order.
-- **trirsz is run-dependent:** some game runs make an extra W×H f9 in the remake, or in the old
-  YEBIS's teardown (one more pair). runs/tr4 matched every game line, but runs/tr5 did not. See the
-  open questions.
-- Disk: C: had 37 GB free at this stop.
+  - Then `python re/scratch/taskY3d2/startup.py re/scratch/taskY3d2/runs/<label>` (frame-10 diff).
+  - `re/scratch/taskY3d2/end.sh` runs the post rows. `end2.sh` runs both resize compares and then
+    `run_all.sh --quick`.
+- `render_oracle compare` returns rc=1 on a sequence when any frame differed on its first pass, even
+  if the redraw matched. The trirsz20 rc=1 did not come back in two reruns.
+
+## What step 5 fixed (dcbf1ab)
+
+The 7 `--aa` rows had a DIFFERENT static cube map (`start.viewport` 1x1 vs 1280x720). Two causes:
+- At startup, `Yebis::new` got no destination. With MSAA nothing is bound there, so the clear pass
+  skipped its restores. post.rs `start_yebis` now passes the FXAA target or the screen, and leaves it
+  bound without depth, as `initPostProcessing` does.
+- The game picks a source view by bind flags (0x1404340b0): an RTV if the texture binds as a render
+  target, else a DSV. With MSAA the resolved depth is a colour target (f41), so the game makes an RTV.
+  `Yebis::render` now follows the same rule.
 
 ## What steps 2 and 3 changed (cd6506c)
 
@@ -49,17 +51,17 @@
 - YEBIS's depth-stencil desc is zeroed first. A struct literal left stack garbage in its padding, and
   the call log showed it.
 
-## Results so far
+## Results (after dcbf1ab)
 
-| case | frames | call log | pixels |
-|---|---|---|---|
-| launcher (step 0) | — | 12/12 IDENTICAL | — |
-| f0b (`--post`, frame 0 captured) | 0, 1 | IDENTICAL | IDENTICAL |
-| tri0 / tri10 (no resize) | 1 / 9 | IDENTICAL | IDENTICAL |
-| rszfx (rszfx20, after cd6506c) | 20 | IDENTICAL (all 19) | IDENTICAL |
-| trirsz (tr4 / trirsz20, after cd6506c) | 12 / 20 | IDENTICAL frame 10 (rc=1 unexplained on trirsz20) | IDENTICAL |
-| 16 `--post` rows, `TEXTURE_DATA=1` | — | 9 IDENTICAL, 7 static cube map DIFFERENT | — |
-| `run_all.sh --quick` | — | 9 lanes IDENTICAL, then stopped (low memory) | — |
+| case | frames | call log | pixels | textures |
+|---|---|---|---|---|
+| launcher (step 0) | — | 12/12 IDENTICAL | — | — |
+| f0b (`--post`, frame 0 captured) | 0, 1 | IDENTICAL | IDENTICAL | — |
+| tri0 / tri10 (no resize) | 1 / 9 | IDENTICAL | IDENTICAL | — |
+| rszfx20b (1024x576 resize, FXAA) | 19 (112,954 game calls) | IDENTICAL in all 19 | IDENTICAL | — |
+| trirsz20b (5760x1080 → 3840x720, triple) | 19 (229,894 game calls) | IDENTICAL in all 19 | IDENTICAL | — |
+| 16 `--post` rows, `TEXTURE_DATA=1` | frame 0 + frame | 16/16 IDENTICAL, cube map included | IDENTICAL | identical |
+| `run_all.sh --quick` (0h50m, rc=0) | — | 13/13 areas IDENTICAL; 0 ERROR, 0 skipped, 0 vanished | — | — |
 
 ## Step 4: the extra blend / A2C set
 
