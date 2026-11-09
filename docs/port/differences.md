@@ -105,8 +105,10 @@ does something else on purpose, each with its reason and the report that has the
 - Online: the pong carries the physics clock, not the wall clock (sessions replay from tapes).
   (multiplayer.md)
 - YEBIS's composite (draw 8) uploads an alpha weight of zero. The game's is -0 while its
-  `CRenderGlare`+0x108 is set and rustyAC's is +0. The oracle's game side zeroes that field, so
-  the logs match with no ignored bit. The picture is the same either way. (yebis.md, Task Y2b)
+  `CRenderGlare`+0x108 is negative and rustyAC's is +0. Only `GenerateGlare` writes that field (never
+  with GLARE=0), not the constructor, so it is a heap value in every `CRenderGlare`, the start-up
+  one and each remake's. The oracle's game side zeroes it after the constructor, so the logs match
+  with no ignored bit. The picture is the same either way. (yebis.md, Tasks Y2b and Y3d-3)
 - YEBIS's `CPostEffect` constructor never writes its ambient-occlusion flag (+0x131) and its
   start-up only ever sets it, so on some runs the game makes, and later frees, an extra full-size
   normal-depth target from a non-zero heap byte. The oracle's game side zeroes the flag after

@@ -307,6 +307,16 @@ unsafe extern "C" fn pfx_ctor_hook(this: *mut u8) -> *mut u8 {
     *this.add(0x131) = 0;
     made
 }
+// CRenderGlare::CRenderGlare 0x14041c100 never writes the glare scale at +0x108 (only GenerateGlare
+// does), yet EndPostEffectScene_Process multiplies it into the composite's +0x9ac word every frame:
+// a negative heap value there makes that word -0, at start-up and in each remake. The oracle zeroes it (differences.md)
+static GLARE_CTOR: AtomicUsize = AtomicUsize::new(0);
+unsafe extern "C" fn glare_ctor_hook(this: *mut u8, name: *const u8) -> *mut u8 {
+    let original: unsafe extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(GLARE_CTOR.load(Ordering::SeqCst));
+    let made = original(this, name);
+    std::ptr::write_unaligned(this.add(0x108) as *mut f32, 0.0);
+    made
+}
 static DEVICE: AtomicUsize = AtomicUsize::new(0);
 static CONTEXT: AtomicUsize = AtomicUsize::new(0);
 static SWAP_CHAIN: AtomicUsize = AtomicUsize::new(0);
@@ -1026,6 +1036,8 @@ impl Game {
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
                 let ctor = [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff];
                 PFX_CTOR.store(acs.detour(0x1_403b_b820, 15, &ctor, pfx_ctor_hook as *const () as usize), Ordering::SeqCst);
+                let glare = [0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40];
+                GLARE_CTOR.store(acs.detour(0x1_4041_c100, 12, &glare, glare_ctor_hook as *const () as usize), Ordering::SeqCst);
             }
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_none() {
                 acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);
@@ -1073,16 +1085,6 @@ impl Game {
                 camera
             };
             self.hdr_flag(false);
-            if std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
-                // CRenderGlare+0x108 (PPFX::GetRenderGlare 0x14039e960) is never set with GLARE=0, so
-                // draw 8's alpha (GenerateGlare_GetGlareResultScale) is ±0 by chance: make it +0
-                let system = *(acs.va(VA_PFX_SYSTEM) as *const *mut u8);
-                let glare = if system.is_null() { std::ptr::null_mut() } else { *(system.add(0x108) as *const *mut u8) };
-                if glare.is_null() {
-                    return Err("YEBIS: no CRenderGlare after initPostProcessing".into());
-                }
-                wr(glare, 0x108, 0.0f32);
-            }
             wr(camera, 0x2a0, profile.motion_blur as f32 * 2.0); // blurQuality (Sim::Sim)
             camera
         } else if profile.oculus {
