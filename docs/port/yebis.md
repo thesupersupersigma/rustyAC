@@ -2,23 +2,52 @@
 
 ## Resume here
 
-- **Not released; resume at step 2.** Done so far:
+- **Not released; resume at step 5.** Done so far:
   - step 0: the launcher's fixed display-mode list (d089bd0);
   - step 1: frame 0 compared on the `--post` rows (25b0317);
+  - steps 2 and 3: the targets, the clear pass and the teardown (cd6506c). rszfx frame 10 is IDENTICAL
+    (call log and pixels, all 19 frames).
   - step 4: answered by measurement, no code change (see below);
   - the `RENDER_ORACLE_RT_LOG=1` tool in render_oracle.
-- **Next:** step 2 (the target list and the clear pass in `Yebis::new`), then step 3 (the teardown), then
-  step 5 (all proofs, release v0.48.5). The game's rules for each target group are below; the
-  per-size lists to match are in `re/scratch/taskY3d2/made_{rszfx,trirsz,tri5760}_ac.txt`.
+- **Next (step 5):**
+  1. The 16 `--post` rows with `RENDER_ORACLE_TEXTURE_DATA=1` gave 7 DIFFERENT, all in the **static
+     cube map** (r23_10/12/15/18/20/22/24; same call counts both sides). Rerun one row, e.g.
+     `RENDER_ONLY='r23_10' RENDER_ORACLE_TEXTURE_DATA=1 sh tools/proofs/render.sh`, with and without
+     `TEXTURE_DATA`, and diff `*.cube.gpulog`. This session's change does not touch the cube map; the
+     likely cause is a cube-map texture renamed by its contents. That is not proven.
+  2. trirsz at 20 frames printed "command log: IDENTICAL / pixels: IDENTICAL" but rc=1, and its cube
+     logs are identical. Run render_oracle directly (no grep) to see what failed.
+  3. `run_all.sh --quick` was stopped by low memory (Chrome held ~10 GB; 3.4 GB free). Before it
+     stopped, 9 lanes were all IDENTICAL: physics, render, net, dumps, shaders, fresh, browser, sound,
+     replays. Run it again with memory free, then release v0.48.5.
 - Check:
   - `RENDER_ORACLE_RESIZE=10:1024x576 bash re/scratch/taskY3d2/cmp.sh rszfx <name> --track spa --view chase --post --fxaa $T`
   - `RENDER_ORACLE_RESIZE=10:3840x720 bash re/scratch/taskY3d2/cmp.sh trirsz <name> --track spa --view chase --triple --size 5760x1080 --post $T`
   - with `T="--car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 20"`.
   - Then run `python re/scratch/taskY3d2/startup.py re/scratch/taskY3d2/runs/<label>` (frame-10 diff).
-  - `made.py` / `compact.py` give the created-target list; `clears.py` gives the clear pass.
-- Today frame 10 of rszfx matches through game line 1822 (28 uploads, 1,641 creates). The first difference
-  is the render-target creation at game 1823 vs port 1719. Pixels are IDENTICAL.
-- Disk: C: had 19.2 GB free at the start and 18.9 GB at this stop.
+  - `re/scratch/taskY3d2/end.sh` runs all of step 5 in order.
+- **trirsz is run-dependent:** some game runs make an extra W×H f9 in the remake, or in the old
+  YEBIS's teardown (one more pair). runs/tr4 matched every game line, but runs/tr5 did not. See the
+  open questions.
+- Disk: C: had 37 GB free at this stop.
+
+## What steps 2 and 3 changed (cd6506c)
+
+- `Yebis::new` makes the targets in the game's order: each texture, then its SRV, then its RTV. The
+  R11G11B10 RTVs use a format-0 desc. The game's targets that the port does not draw with (the glare's
+  25, TrimCircle, DOF, AE/AF 1x1s, the pool) are made and kept in `_kept`.
+- Sizes: `glare_size` (rule above), `glare_pool` (from the rule), `dof_sizes` / `half_pool` /
+  `half_pairs` (**shortcuts** fitted to the 1280x720, 3840x720 and 5760x1080 measurements).
+- The clear pass in the game's order and groups. Only 24 of the 25 glare targets are cleared, and the
+  double-size one is cleared alone as the 20th.
+- `teardown(screen)` binds the screen once per released target, plus two more. The count
+  38 + pools + chain is a **shortcut** fitted to the RT_LOG runs. post.rs `before_resize` calls it
+  before the swap chain is resized (render_oracle and rustyac.exe).
+- Both `remade` and `teardown` take YEBIS's destination (the FXAA target, or the screen) from the
+  caller, the way the game uses this+0x20, rather than reading the bound target. A kept back-buffer
+  view would make `ResizeBuffers` fail.
+- YEBIS's depth-stencil desc is zeroed first. A struct literal left stack garbage in its padding, and
+  the call log showed it.
 
 ## Results so far
 
@@ -27,8 +56,10 @@
 | launcher (step 0) | — | 12/12 IDENTICAL | — |
 | f0b (`--post`, frame 0 captured) | 0, 1 | IDENTICAL | IDENTICAL |
 | tri0 / tri10 (no resize) | 1 / 9 | IDENTICAL | IDENTICAL |
-| rszfx (rszfx0, tdrsz) | 20 | DIFFERENT, 6,617 lines from line 35 (frame-10 remake) | IDENTICAL |
-| trirsz (tri1) | 20 | DIFFERENT, 5,638 lines from line 32 (frame-10 remake) | IDENTICAL |
+| rszfx (rszfx20, after cd6506c) | 20 | IDENTICAL (all 19) | IDENTICAL |
+| trirsz (tr4 / trirsz20, after cd6506c) | 12 / 20 | IDENTICAL frame 10 (rc=1 unexplained on trirsz20) | IDENTICAL |
+| 16 `--post` rows, `TEXTURE_DATA=1` | — | 9 IDENTICAL, 7 static cube map DIFFERENT | — |
+| `run_all.sh --quick` | — | 9 lanes IDENTICAL, then stopped (low memory) | — |
 
 ## Step 4: the extra blend / A2C set
 
@@ -64,7 +95,8 @@ The Y3d-1 counts (4 vs 5, 3 vs 4) do not reproduce on today's logs.
 - f44 + DSV f45
 - 2× f27 1280x720 (f28 views)
 - 25× f26 glare targets: 80x45 ×4, 160x90, 80x45 ×20
-- 64x64 A8 SRV-only with one upload (data source not found yet)
+- 64x64 A8 SRV-only with one upload: `CRenderGlare::CreateDeviceResources` 0x140415520's "TrimCircle",
+  `GPUFillTexture_RadiusFade` with radius 0.5 (port: `yebis_tex::trim_circle`, hash 0x5ab5db7501af4869)
 - DOF f9 160x90 and 320x180
 - 128x64 f27
 - 1x1 f27, staging 1x1 f28, 1x1 f27, 1x1 f27, staging 1x1 f28
@@ -83,11 +115,12 @@ The Y3d-1 counts (4 vs 5, 3 vs 4) do not reproduce on today's logs.
 
 **Size rules:**
 - **Glare** (:1516-1550):
-  - s = sqrt((this+0x2fc / this+0x324) / aspect)
-  - a = (long)(w · DAT_141521650[q·8] · s + 0.99), clamped to ≤ w
+  - s = sqrt((this+0x2fc / this+0x324) / aspect) = 1
+  - a = (long)(w' · DAT_141521650[q·8] · s + 0.99), clamped to ≤ w' and ≤ w; w' is 1280 (flag bit 9 of
+    this+0x1dc) in every measured case, and k = 1/16
   - h = (long)(a / ratio + 0.499999)
-  - If either a or h is < 16, the smaller one becomes 16 and the other is (long)(16 · aspect + 0.499999)
-    or (long)(16 / aspect + 0.499999).
+  - If either a or h is < 16: when a < h, a = 16 and h = (long)(16 / aspect + 0.499999); otherwise
+    h = 16 and a = (long)(aspect · a + 0.499999) with the old a (3840x720: 5.333 · 80 → 427).
   - This is why 3840x720 gives 427x16 and not 80x45: Y3c's question is answered.
 - **DOF levels** (`CDepthOfField::CreateSystemObjects` 0x1404200a0 :412-459):
   - halve with (float)x · 0.5 + 0.99 per level from the DOF base size;
@@ -140,9 +173,12 @@ is in `clears.py`'s output for `runs/rszfx` and `runs/rtlogtri`.
 
 ## Open questions
 
-- The 64x64 A8 upload's data source (it is not the `CTextureUtil` gaussian).
-- Y3d-1's rszfx game log had an extra 1280x720 f9 after the DOF levels; today's runs don't. It may
-  depend on `RENDER_ORACLE_TEXTURE_DATA=1`. Retest in step 5.
+- The 64x64 A8 upload's data source: answered (TrimCircle, above).
+- Some game runs make an extra W×H f9 after the DOF levels (runs/rs3, runs/trirsz, Y3d-1's rszfx) and
+  others do not (runs/rszfx, runs/rtlogtri), with the same arguments and no `TEXTURE_DATA`. The port
+  never makes it. What decides it is not known (the per-thread `rand()` is a guess).
+- The pool's f9 list and the pairs' clear order are measured shortcuts (`half_pool`, `half_pairs`);
+  `CRenderTexturePool` sharing was not derived.
 
 # Task Y3d-1: YEBIS's device states, generated textures and buffers in the game's order
 
