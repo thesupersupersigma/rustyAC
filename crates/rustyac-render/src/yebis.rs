@@ -816,10 +816,13 @@ mod device {
                     width,
                     height,
                     // `CRenderTexture::UninitializeDevice` 0x1403d29f0 puts the screen back once for each texture
-                    // holding a GPU texture (+0x28): 38 at every size (7 full-size, with an R16G16B16A16 and a
-                    // depth surface the remake does not make; 25 glare; 2 DOF levels; the 128x64 luminance
-                    // target; the 16x16 analyser; the AE/AF 1x1 pair), the pools and the luminance chain
-                    released: 38 + super::glare_pool(base, width, height).len() + super::half_pool(base, width, height).len() + chain.len(),
+                    // holding a GPU texture (+0x28), in `CPostEffect::Uninitialize` 0x1403c08a0's order:
+                    // the wrapped scene colour and depth (+0xc0 map), CRenderGlare (+0x108: +0x248 ×3, +0x270,
+                    // +0x2b8, +0x2c0, +0x2d0, +0x268 ×4, +0x280 ×10, +0x288, +0x290, +0x298 ×2, then its pool),
+                    // the DOF's two levels (+0x110, then its pool), the render buffers (+0x100 ×3), the colour
+                    // alpha dest (+0x118 ×2), the AE query (+0x1c8: 128x64, then the chain), the AF query
+                    // (+0x1d0: two 1x1) and CTextureUtil's 16x16 analyser
+                    released: 2 + 25 + 2 + 3 + 2 + 1 + 2 + 1 + super::glare_pool(base, width, height).len() + super::half_pool(base, width, height).len() + chain.len(),
                     screen: screen.map(|(_, w, h)| (w, h)),
                 })
             }
