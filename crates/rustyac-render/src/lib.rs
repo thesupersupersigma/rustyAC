@@ -89,6 +89,7 @@ pub mod vr;
 pub mod wings;
 pub mod yebis;
 pub mod yebis_cb;
+pub mod yebis_heat;
 pub mod yebis_tex;
 pub mod yebis_tfxo;
 pub mod texture_fallback;

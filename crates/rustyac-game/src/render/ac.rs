@@ -1063,9 +1063,8 @@ FILTER=default
         // shortcut: the game makes race.ini CARS sets in Sim::createCamera, here they are made again
         // once the count is known (more rand() draws than acs.exe); upgrade if live runs are compared
         #[cfg(all(windows, not(feature = "wgpu")))]
-        if let Some(heat) = self.camera.heat.as_mut().filter(|h| h.sets_number != count) {
-            heat.sets_number = count;
-            heat.remake(&mut self.graphics.crt_rand);
+        if let Err(e) = self.camera.set_heat_sets(count, &mut self.graphics.crt_rand) {
+            self.notes.push(e);
         }
     }
 

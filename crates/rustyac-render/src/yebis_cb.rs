@@ -24,8 +24,9 @@ use rustyac_math::{logf, powf};
 use rustyac_physics::data::ini::IniReader;
 
 /// Program pair of each draw, in order: round one 1-4, round two 5-7, composite 8, then the
-/// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step.
-pub const TECHNIQUES: [&str; 13] = [
+/// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step, then the heat shimmer's
+/// particles with 1-4 octaves (13-16).
+pub const TECHNIQUES: [&str; 17] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -39,18 +40,24 @@ pub const TECHNIQUES: [&str; 13] = [
     "MadT1_S5",
     "TonemapHDR_PreMatrix_Dither_Gamma",
     "TonemapHDR_Dither_Exposure_LINEARSAT",
+    "HeatShimmerParticle_S1",
+    "HeatShimmerParticle_S2",
+    "HeatShimmerParticle_S3",
+    "HeatShimmerParticle_S4",
 ];
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
 const SCREEN_SPACE_SCALE: usize = 80;
 const CONVERT_DEPTH: usize = 272;
+const TEX_OFFSET: usize = 800;
 const TAPS: usize = 544;
 const MODULATE: usize = 2464;
 const OFFSET: usize = 2976;
 const GAMMA: usize = 3232;
 const DITHER: usize = 3236;
 const MAX_MAPPING_LUM: usize = 3328;
+const COLOR_TRANSFORM: usize = 3360;
 const PRE_TONEMAP: usize = 3424;
 const PRE_TONEMAP_GLARE: usize = 3488;
 const TRANSFORM: usize = 3584;
@@ -222,7 +229,7 @@ impl PostEffect {
     }
 
     /// GetDepthConversionFactor 0x1403c3600 from CURRENT (0) to EFFECTFACTOR_OPTIMIZED (2).
-    fn depth_factor(&self) -> [f32; 4] {
+    pub(crate) fn depth_factor(&self) -> [f32; 4] {
         let [b8c, b90, _, _, b9c] = self.depth;
         let (near, far) = (self.near, self.far);
         let mut l = ((far - near) * b9c) / (far * near);
@@ -244,12 +251,12 @@ pub fn filmic_table(exe: &[u8]) -> Result<[f32; 21], String> {
     Ok(t)
 }
 
-fn diag(x: f32, y: f32, z: f32) -> [f32; 16] {
+pub(crate) fn diag(x: f32, y: f32, z: f32) -> [f32; 16] {
     [x, 0., 0., 0., 0., y, 0., 0., 0., 0., z, 0., 0., 0., 0., 1.]
 }
 
 /// MATRIXT44_MatrixMultiply: a x b, row-major.
-fn mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+pub(crate) fn mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     std::array::from_fn(|k| {
         let (i, j) = (k / 4, k % 4);
         ((a[i * 4] * b[j] + a[i * 4 + 1] * b[4 + j]) + a[i * 4 + 2] * b[8 + j]) + a[i * 4 + 3] * b[12 + j]
@@ -257,7 +264,7 @@ fn mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 }
 
 /// GPUMath_MatrixInverse<float> 0x1403cc630: Gauss-Jordan on columns with a column permutation.
-fn inverse(m: &[f32; 16]) -> [f32; 16] {
+pub(crate) fn inverse(m: &[f32; 16]) -> [f32; 16] {
     let mut a = *m;
     let mut inv = IDENTITY;
     let mut p = [0usize, 1, 2, 3];
@@ -423,7 +430,7 @@ impl Cbuffer {
     }
 
     /// The puts and the upload of one draw of `TECHNIQUES[t]`; `used[t]` are its variable ranges.
-    pub fn draw(&mut self, t: usize, pe: &PostEffect, filmic: &[f32; 21], used: &[Vec<(usize, usize)>; 13]) -> [u8; 4096] {
+    pub fn draw(&mut self, t: usize, pe: &PostEffect, filmic: &[f32; 21], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
         match t {
             0 => {
                 self.put(SCREEN_SPACE_SCALE, &[1.0, -1.0]);
@@ -446,6 +453,25 @@ impl Cbuffer {
             _ => unreachable!("no technique {t}"),
         }
         self.upload(&used[t])
+    }
+
+    /// The heat shimmer's copy of the effect surface: `DrawRectGPU_MadT1_Sn` with one tap at
+    /// zero and a white modulate (`TECHNIQUES[8]`).
+    pub fn copy(&mut self, used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        self.put(SCREEN_SPACE_SCALE, &[1.0, -1.0]);
+        self.put(TAPS, &[0.0; 4]);
+        self.put(MODULATE, &[1.0; 4]);
+        self.upload(&used[8])
+    }
+
+    /// `DrawIndicesGPU_HeatShimmerParticles` 0x1403fc950's variables.
+    pub fn heat(&mut self, d: &crate::yebis_heat::Draw, used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        self.put_matrix(TRANSFORM, &d.transform[0]);
+        self.put_matrix(TRANSFORM + 64, &d.transform[1]);
+        self.put(TEX_OFFSET, &d.offset);
+        self.put_matrix(COLOR_TRANSFORM, &d.matrix);
+        self.put(MODULATE, &d.modulate);
+        self.upload(&used[d.technique])
     }
 
     /// Draw 1: DrawRectGPU_DepthOfField_FromBlurFactorTexture 0x1403f48b0 (depth into alpha).
@@ -715,8 +741,8 @@ pub fn box_taps(src: (u32, u32), dst: (u32, u32)) -> Vec<[f32; 2]> {
 }
 
 /// `used` for every technique.
-pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<[Vec<(usize, usize)>; 13], String> {
-    let mut out: [Vec<(usize, usize)>; 13] = Default::default();
+pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<Vec<Vec<(usize, usize)>>, String> {
+    let mut out = vec![Vec::new(); TECHNIQUES.len()];
     for (o, name) in out.iter_mut().zip(TECHNIQUES) {
         let (vs, ps) = tfxo.technique(name).ok_or_else(|| format!("no technique {name}"))?;
         *o = used(vs, ps)?;

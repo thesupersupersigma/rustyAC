@@ -315,7 +315,7 @@ mod device {
         inputs: Vec<Vec<(std::ffi::CString, u32, DXGI_FORMAT)>>,
         layouts: Vec<Option<ID3D11InputLayout>>,
         strides: Vec<u32>,
-        used: [Vec<(usize, usize)>; 13],
+        used: Vec<Vec<(usize, usize)>>,
         filmic: [f32; 21],
         /// Made with the first program.
         cb: Option<ID3D11Buffer>,
@@ -329,8 +329,19 @@ mod device {
         grey: ID3D11ShaderResourceView,
         white: ID3D11ShaderResourceView,
         dither: ID3D11ShaderResourceView,
-        /// Two surfaces, as YEBIS's render-texture array: a draw never reads the one it writes.
-        effect: [Target; 2],
+        /// Three surfaces, as YEBIS's render-texture array: a draw never reads the one it writes
+        /// (the third holds the heat shimmer's copy).
+        effect: [Target; 3],
+        /// The heat shimmer: the film grain and gaussian textures, three vertex buffers of
+        /// `particles` quads used in turn (`heat_at` the last one mapped) and their index buffer.
+        grain: ID3D11ShaderResourceView,
+        gaussian: ID3D11ShaderResourceView,
+        heat_vb: Vec<ID3D11Buffer>,
+        heat_ib: ID3D11Buffer,
+        heat_at: usize,
+        particles: u32,
+        /// The copy's sampler: the source texture's own sampler mode (`DrawRectGPU_MadT1_Sn`).
+        copy_sampler: usize,
         /// The effect surface bound as the target.
         current: usize,
         effect_depth: ID3D11DepthStencilView,
@@ -362,6 +373,26 @@ mod device {
         /// (only the size: a kept view of the back buffer would make `ResizeBuffers` fail)
         screen: Option<(u32, u32)>,
         released: usize,
+    }
+
+    /// The bytes of one input element.
+    fn format_bytes(f: DXGI_FORMAT) -> u32 {
+        match f {
+            DXGI_FORMAT_R32_FLOAT => 4,
+            DXGI_FORMAT_R32G32_FLOAT => 8,
+            DXGI_FORMAT_R32G32B32_FLOAT => 12,
+            _ => 16,
+        }
+    }
+
+    /// The heat shimmer's three vertex buffers and its quads' index buffer.
+    unsafe fn heat_buffers(device: &ID3D11Device, particles: u32) -> Result<(Vec<ID3D11Buffer>, ID3D11Buffer), String> {
+        let mut vb = Vec::with_capacity(3);
+        for _ in 0..3 {
+            vb.push(buffer(device, particles * 0xb0, D3D11_BIND_VERTEX_BUFFER.0, true, None)?);
+        }
+        let quads: Vec<u8> = (0..particles as u16).flat_map(|i| [4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 2, 4 * i + 1, 4 * i + 3]).flat_map(|i| i.to_le_bytes()).collect();
+        Ok((vb, buffer(device, particles * 12, D3D11_BIND_INDEX_BUFFER.0, false, Some(&quads))?))
     }
 
     fn err<T>(what: &str, r: windows::core::Result<T>) -> Result<T, String> {
@@ -448,7 +479,7 @@ mod device {
         /// Everything YEBIS makes before its first frame. `filter` is the ppfilter of video.ini's
         /// `[POST_PROCESS] FILTER`; `root` holds the player's acs.exe. `width` x `height` is the
         /// destination's size; `camera_width` the camera's, which the base width comes from.
-        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
+        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>, particles: u32) -> Result<Yebis, String> {
             let exe = std::fs::read(root.join("acs.exe")).map_err(|e| format!("yebis: acs.exe: {e}"))?;
             let tfxo = crate::yebis_tfxo::Tfxo::from_exe(&exe)?;
             let filmic = filmic_table(&exe)?;
@@ -460,7 +491,7 @@ mod device {
                 let (mut code, mut inputs, mut strides) = (Vec::new(), Vec::new(), Vec::new());
                 for name in TECHNIQUES {
                     let (v, p) = tfxo.technique(name).ok_or_else(|| format!("yebis: no technique {name}"))?;
-                    // the input layout from the program's input signature: float2s, packed
+                    // the input layout from the program's input signature, packed
                     let elements: Vec<(std::ffi::CString, u32, DXGI_FORMAT)> = rustyac_dxbc::parse(v)?
                         .inputs
                         .iter()
@@ -469,7 +500,7 @@ mod device {
                             (std::ffi::CString::new(e.name.as_str()).unwrap_or_default(), e.index, format)
                         })
                         .collect();
-                    strides.push(8 * elements.len() as u32);
+                    strides.push(elements.iter().map(|e| format_bytes(e.2)).sum());
                     inputs.push(elements);
                     code.push((v.to_vec(), p.to_vec()));
                 }
@@ -611,10 +642,10 @@ mod device {
                 let dither = filled(4, 4, 1, rgba, &[dither_texels().to_vec()], 4)?;
                 // film grain (PFX_INITPARAM always asks for it), spectrum, radius fade: full mip chains but the fade's 5
                 let grain = crate::yebis_tex::mipmaps(256, 256, crate::yebis_tex::grain(&exe)?, true, true);
-                kept.push(filled(256, 256, 0, rgba, &grain, 4)?.into());
+                let grain = filled(256, 256, 0, rgba, &grain, 4)?;
                 let spectrum = crate::yebis_tex::mipmaps(256, 1, &crate::yebis_tex::spectrum(&crate::yebis_tex::Cie::from_exe(&exe)?), true, true);
                 kept.push(filled(256, 1, 0, rgba, &spectrum, 4)?.into());
-                kept.push(filled(64, 64, 5, DXGI_FORMAT_A8_UNORM, &crate::yebis_tex::gaussian(), 1)?.into());
+                let gaussian = filled(64, 64, 5, DXGI_FORMAT_A8_UNORM, &crate::yebis_tex::gaussian(), 1)?;
                 let black = filled(1, 1, 1, rgba, &[vec![0; 4]], 4)?;
                 let grey = filled(1, 1, 1, rgba, &[vec![0x7f; 4]], 4)?;
                 let white = filled(1, 1, 1, rgba, &[vec![0xff; 4]], 4)?;
@@ -632,7 +663,7 @@ mod device {
                 // 16x16 ramp: texel i is byte i four times
                 let ramp: Vec<u8> = (0..256u32).flat_map(|i| [i as u8; 4]).collect();
                 kept.push(filled(16, 16, 1, rgba, &[ramp], 4)?.into());
-                // vertex rings and index buffers; the heat-shimmer buffers for PFX_INITPARAM's 256 particles, 1 view
+                // vertex rings and index buffers; the heat-shimmer buffers for PFX_INITPARAM's particles, 1 view
                 let mut ring = Vec::with_capacity(RING_COUNT);
                 for _ in 0..RING_COUNT {
                     ring.push(buffer(device, RING_BYTES, D3D11_BIND_VERTEX_BUFFER.0, true, None)?);
@@ -643,12 +674,7 @@ mod device {
                 for _ in 0..RING_COUNT {
                     kept.push(buffer(device, 32, D3D11_BIND_INDEX_BUFFER.0, true, None)?.into());
                 }
-                const PARTICLES: u32 = 256;
-                for _ in 0..3 {
-                    kept.push(buffer(device, PARTICLES * 0xb0, D3D11_BIND_VERTEX_BUFFER.0, true, None)?.into());
-                }
-                let quads: Vec<u8> = (0..PARTICLES as u16).flat_map(|i| [4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 2, 4 * i + 1, 4 * i + 3]).flat_map(|i| i.to_le_bytes()).collect();
-                kept.push(buffer(device, PARTICLES * 12, D3D11_BIND_INDEX_BUFFER.0, false, Some(&quads))?.into());
+                let (heat_vb, heat_ib) = heat_buffers(device, particles)?;
                 // the frame's targets in the game's order (its f10 remake log, Task Y3d-2); those YEBIS
                 // draws use we keep by name, the rest only to make what the game makes
                 let (w, h) = (width as u32, height as u32);
@@ -662,9 +688,8 @@ mod device {
                     kept.push(t.rtv.into());
                     kept.extend(t.srv.map(|s| s.into()));
                 };
-                let effect = [target(device, w, h, f9.0, f9.1, true)?, target(device, w, h, f9.0, f9.1, true)?];
-                let mut frame: Views = effect.iter().map(|t| (t.rtv.clone(), w, h)).collect();
-                keep(&mut kept, &mut frame, target(device, w, h, f9.0, f9.1, true)?, w, h);
+                let effect = [target(device, w, h, f9.0, f9.1, true)?, target(device, w, h, f9.0, f9.1, true)?, target(device, w, h, f9.0, f9.1, true)?];
+                let frame: Views = effect.iter().map(|t| (t.rtv.clone(), w, h)).collect();
                 let depth_tex = texture(device, w, h, DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_DEPTH_STENCIL.0, None)?;
                 let dsv_desc = D3D11_DEPTH_STENCIL_VIEW_DESC {
                     Format: DXGI_FORMAT_D24_UNORM_S8_UINT,
@@ -794,6 +819,14 @@ mod device {
                     white,
                     dither,
                     effect,
+                    grain,
+                    gaussian,
+                    heat_vb,
+                    heat_ib,
+                    // the first map is the discard of buffer 0
+                    heat_at: 2,
+                    particles,
+                    copy_sampler: SLB,
                     current: 0,
                     effect_depth,
                     luminance,
@@ -847,9 +880,18 @@ mod device {
         /// `CameraForwardYebis::onResize` 0x140029da0: the game destroys YEBIS and makes it again
         /// at the new size, so every carried-over value (parameter store, exposure) starts over; the noise goes on
         pub fn remade(&self, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
-            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, camera_width, screen)?;
+            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, camera_width, screen, self.particles)?;
             yebis.noise = self.noise; // process-wide in the game, it outlives the context (resize log, Task Y2c)
             Ok(yebis)
+        }
+
+        /// rustyac.exe learns the car count after YEBIS is made: the shimmer's buffers again for it.
+        pub fn set_particles(&mut self, particles: u32) -> Result<(), String> {
+            if particles != self.particles {
+                (self.heat_vb, self.heat_ib) = unsafe { heat_buffers(&self.device, particles)? };
+                self.particles = particles;
+            }
+            Ok(())
         }
 
         unsafe fn viewport(&self, x: f32, y: f32, w: f32, h: f32) {
@@ -900,7 +942,7 @@ mod device {
                     SemanticIndex: *index,
                     Format: *format,
                     InputSlot: 0,
-                    AlignedByteOffset: 8 * i as u32,
+                    AlignedByteOffset: self.inputs[d][..i].iter().map(|e| format_bytes(e.2)).sum(),
                     InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
                     InstanceDataStepRate: 0,
                 })
@@ -912,6 +954,29 @@ mod device {
 
         /// One draw: `samplers` are (slot, sampler) and only the changed ones are set.
         unsafe fn draw(&mut self, d: usize, upload: &[u8; 4096], samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>], vertices: &[f32]) -> Result<(), String> {
+            self.pass(d, upload, samplers, srvs)?;
+            let c = self.context.clone();
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            let bytes: Vec<u8> = vertices.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let (index, offset, discard) = self.ring_at.alloc(bytes.len() as u32);
+            let vb = self.ring[index].clone();
+            let kind = if discard { D3D11_MAP_WRITE_DISCARD } else { D3D11_MAP_WRITE_NO_OVERWRITE };
+            err("Map", c.Map(&vb, 0, kind, 0, Some(&mut m)))?;
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), m.pData.cast::<u8>().add(offset as usize), bytes.len());
+            c.Unmap(&vb, 0);
+            c.IASetInputLayout(self.layouts[d].as_ref());
+            let stride = self.strides[d];
+            c.IASetVertexBuffers(0, 1, Some(&Some(vb)), Some(&stride), Some(&offset));
+            c.IASetIndexBuffer(&self.ib, DXGI_FORMAT_R16_UINT, 0);
+            c.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            c.DrawIndexed(3, 0, 0);
+            let none: Vec<Option<ID3D11ShaderResourceView>> = vec![None; srvs.len()];
+            c.PSSetShaderResources(0, Some(&none));
+            Ok(())
+        }
+
+        /// `CTinyEffect::SetPassState` and the variables' upload: states, programs, samplers, textures, layout.
+        unsafe fn pass(&mut self, d: usize, upload: &[u8; 4096], samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>]) -> Result<(), String> {
             let c = self.context.clone();
             if !self.cache.blend {
                 c.OMSetBlendState(&self.blend, Some(&[0.0; 4]), 0xffff_ffff);
@@ -978,21 +1043,45 @@ mod device {
                     None => Some(self.layout(d)?),
                 };
             }
-            let bytes: Vec<u8> = vertices.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let (index, offset, discard) = self.ring_at.alloc(bytes.len() as u32);
-            let vb = self.ring[index].clone();
-            let kind = if discard { D3D11_MAP_WRITE_DISCARD } else { D3D11_MAP_WRITE_NO_OVERWRITE };
+            Ok(())
+        }
+
+        /// `CTextureUtil::HeatShimmerParticles` 0x1403fdc70 after a round's first draw: the effect
+        /// surface copied into the third one, then the particles drawn over the copy.
+        unsafe fn shimmer(&mut self, pe: &PostEffect, heat: &crate::yebis_heat::Shimmer, e0: &Option<ID3D11ShaderResourceView>) -> Result<(), String> {
+            let (w, h) = (self.width as f32, self.height as f32);
+            self.current = 2;
+            self.effect_with_depth();
+            self.full_viewport();
+            let u = self.cbuffer.copy(&self.used);
+            self.draw(8, &u, &[self.copy_sampler], std::slice::from_ref(e0), &draw_vertices(8, w, h, [0.0; 4], 0.0, 0))?;
+            // shortcut: the source's mode is the texture's first one (linear, border) only for the
+            // first shimmer; the game's later draws leave it at point/clamp (seen in its f45/f46 logs),
+            // the draw that does it is not traced
+            self.copy_sampler = SP;
+            let depth = pe.depth_factor();
+            let d = crate::yebis_heat::draw(&heat.particles, &heat.view, &heat.frustum, [depth[2], depth[3]], [w, h], [1.0, 1.0], &heat.params);
+            let c = self.context.clone();
+            // three buffers in turn, the first map of each round of three a discard
+            self.heat_at = (self.heat_at + 1) % 3;
+            let kind = if self.heat_at == 0 { D3D11_MAP_WRITE_DISCARD } else { D3D11_MAP_WRITE_NO_OVERWRITE };
+            let vb = self.heat_vb[self.heat_at].clone();
+            let bytes: Vec<u8> = d.vertices.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
             err("Map", c.Map(&vb, 0, kind, 0, Some(&mut m)))?;
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), m.pData.cast::<u8>().add(offset as usize), bytes.len());
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), m.pData.cast::<u8>(), bytes.len());
             c.Unmap(&vb, 0);
-            c.IASetInputLayout(self.layouts[d].as_ref());
-            let stride = self.strides[d];
-            c.IASetVertexBuffers(0, 1, Some(&Some(vb)), Some(&stride), Some(&offset));
-            c.IASetIndexBuffer(&self.ib, DXGI_FORMAT_R16_UINT, 0);
-            c.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            c.DrawIndexed(3, 0, 0);
-            let none: Vec<Option<ID3D11ShaderResourceView>> = vec![None; srvs.len()];
-            c.PSSetShaderResources(0, Some(&none));
+            let u = self.cbuffer.heat(&d, &self.used);
+            let srvs = [e0.clone(), Some(self.grain.clone()), Some(self.gaussian.clone())];
+            self.pass(d.technique, &u, &[8, 15, 3], &srvs)?;
+            c.IASetInputLayout(self.layouts[d.technique].as_ref());
+            let stride = self.strides[d.technique];
+            c.IASetVertexBuffers(0, 1, Some(&Some(vb)), Some(&stride), Some(&0));
+            c.IASetIndexBuffer(&self.heat_ib, DXGI_FORMAT_R16_UINT, 0);
+            c.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            c.DrawIndexed(heat.particles.len() as u32 * 6, 0, 0);
+            c.PSSetShaderResources(0, Some(&[None, None, None]));
+            self.effect_of_eight();
             Ok(())
         }
 
@@ -1008,12 +1097,16 @@ mod device {
 
         /// `CPostEffect::ApplyEffects` for AC's chain: `depth` and `scene` are the game's
         /// (resolved) depth and colour, `destination` the back buffer or the FXAA target.
-        pub fn render(&mut self, depth: &ID3D11ShaderResourceView, scene: &ID3D11ShaderResourceView, destination: &ID3D11RenderTargetView, camera: &Camera) -> Result<(), String> {
+        /// `heat` is the shimmer's particles with video.ini's HEAT_SHIMMER on and the shimmer active.
+        pub fn render(&mut self, depth: &ID3D11ShaderResourceView, scene: &ID3D11ShaderResourceView, destination: &ID3D11RenderTargetView, camera: &Camera, heat: Option<&crate::yebis_heat::Input>) -> Result<(), String> {
             // CPostEffect+0x2fc: the aspect is set once at Initialize, so a resized frame keeps the made size's
             let camera = &Camera { width: self.width as u32, height: self.height as u32, ..*camera };
             let mut pe = PostEffect::new(&self.filter, &self.video, camera)?;
             let (w, h) = (self.width as f32, self.height as f32);
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
+            let shimmer = heat.and_then(|h| h.shimmer(&pe, self.particles as usize));
+            // with the shimmer, round one's and two's second draws read its copy
+            let e0s = if shimmer.is_some() { self.effect[2].srv.clone() } else { e0.clone() };
             let (t0, t1) = (self.tonemap[0].srv.clone(), self.tonemap[1].srv.clone());
             let (black, grey, white, dither) = (Some(self.black.clone()), Some(self.grey.clone()), Some(self.white.clone()), Some(self.dither.clone()));
             let plain = |d: usize| draw_vertices(d, w, h, [0.0; 4], 0.0, 0);
@@ -1067,11 +1160,14 @@ mod device {
                 self.effect_of_eight();
                 let u = self.cbuffer.draw(0, &pe, &self.filmic, &self.used);
                 self.draw(0, &u, &[SB, ss], &[depth.clone(), scene.clone()], &plain(0))?;
+                if let Some(s) = &shimmer {
+                    self.shimmer(&pe, s, &e0)?;
+                }
                 self.current = 1;
                 self.effect_with_depth();
                 self.full_viewport();
                 let u = self.cbuffer.draw(1, &pe, &self.filmic, &self.used);
-                self.draw(1, &u, &[SL], std::slice::from_ref(&e0), &plain(1))?;
+                self.draw(1, &u, &[SL], std::slice::from_ref(&e0s), &plain(1))?;
                 // UpdateAutoExposure: last analysis's result if the GPU has it, then this frame's step
                 let readback = if self.auto_exposure.waiting() { self.read_back() } else { None };
                 let step = pe.auto_exposure.map(|ae| {
@@ -1138,11 +1234,14 @@ mod device {
                 self.effect_of_eight();
                 let u = self.cbuffer.draw(4, &pe, &self.filmic, &self.used);
                 self.draw(4, &u, &[SB, ss], &[depth, scene], &plain(4))?;
+                if let Some(s) = &shimmer {
+                    self.shimmer(&pe, s, &e0)?;
+                }
                 self.current = 1;
                 self.effect_with_depth();
                 self.full_viewport();
                 let u = self.cbuffer.draw(5, &pe, &self.filmic, &self.used);
-                self.draw(5, &u, &[SL], &[e0], &plain(5))?;
+                self.draw(5, &u, &[SL], &[e0s], &plain(5))?;
                 self.reset();
                 self.effect_of_eight();
                 self.target_only(&self.tonemap[1].rtv.clone());

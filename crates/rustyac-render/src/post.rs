@@ -211,6 +211,19 @@ impl CameraForwardYebis {
 
     /// Reads YEBIS from `root`'s acs.exe and makes its objects: call after [`Self::new`], outside
     /// a logged frame. `video` is video.ini; its `[POST_PROCESS] FILTER` names the ppfilter in
+    /// The heat shimmer's sets (and YEBIS's particle buffers) for `count` cars.
+    #[cfg(all(windows, not(feature = "backend-wgpu")))]
+    pub fn set_heat_sets(&mut self, count: usize, rand: &mut rustyac_physics::session::MsvcRand) -> Result<(), String> {
+        if let Some(heat) = self.heat.as_mut().filter(|h| h.sets_number != count) {
+            heat.sets_number = count;
+            heat.remake(rand);
+            if let Some(yebis) = self.yebis.as_mut() {
+                yebis.set_particles(heat.sets.iter().map(Vec::len).sum::<usize>().max(1) as u32)?;
+            }
+        }
+        Ok(())
+    }
+
     /// `data`'s `system/cfg/ppfilters` (the game's working folder). `heat_sets` is race.ini's
     /// [RACE] CARS (Sim::createCamera 0x1401982e0): the heat shimmer's sets.
     #[cfg(all(windows, not(feature = "backend-wgpu")))]
@@ -228,7 +241,9 @@ impl CameraForwardYebis {
             self.heat = Some(heat);
         }
         let filter = load(&name)?;
-        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, self.width, Self::destination(&self.fxaa_temp_rt, graphics))?);
+        // PFX_INITPARAM's particle count: m_uiMaxParticles with the shimmer, else YEBIS's 256
+        let particles = self.heat.as_ref().map_or(256, |h| h.sets.iter().map(Vec::len).sum::<usize>().max(1) as u32);
+        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, self.width, Self::destination(&self.fxaa_temp_rt, graphics), particles)?);
         // YEBIS's initPostProcessing leaves its destination bound without depth (and kgl's cache unaware)
         unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
         Ok(())
@@ -280,12 +295,17 @@ impl CameraForwardYebis {
                 exposure_multiplier: graphics.exposure_multiplier,
                 dt,
             };
-            // setPostProcessing 0x140025080: the particles move (the shimmer's draws: Y3d-3 part 2)
+            // setPostProcessing 0x140025080: the particles move, then setupPfxParticles hands them to YEBIS
+            let mut shimmer = None;
             if let Some(heat) = &mut self.heat {
                 heat.update(dt, &mut graphics.crt_rand);
+                if heat.active && heat.volumes.iter().take(heat.sets.len()).any(|v| v.0 != 0) {
+                    let m = self.forward.base.camera.get_view_matrix().m;
+                    shimmer = Some(crate::yebis_heat::Input { elements: crate::yebis_heat::elements(heat), view: std::array::from_fn(|k| m[k / 4][k % 4]), params: crate::yebis_heat::Params::new(heat) });
+                }
             }
             if let (Some(depth), Some(scene), Some(destination)) = (depth.and_then(|t| t.shader_resource_view.as_ref()), scene.and_then(|t| t.shader_resource_view.as_ref()), destination) {
-                if let Err(e) = yebis.render(depth, scene, &destination, &camera) {
+                if let Err(e) = yebis.render(depth, scene, &destination, &camera, shimmer.as_ref()) {
                     eprintln!("{e}");
                 }
             }

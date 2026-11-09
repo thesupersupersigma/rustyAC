@@ -2,19 +2,18 @@
 
 ## Resume here
 
-- **Not released.** Steps 0 and 1 are done. Step 2 part 1 (the particles move as the game's) is
-  committed and proven. **Next: step 2 part 2, the YEBIS draws** ("The port, in order", items 6-8).
+- **Not released.** Steps 0-2 are done: the particles move as the game's (part 1) and YEBIS
+  draws them as the game does (part 2, `crates/rustyac-render/src/yebis_heat.rs`).
+  **Next: step 3** (planted change, the 16 `--post` rows, `run_all.sh --quick`, release).
+- Part 2 check: `LABEL=c2 bash re/scratch/taskY3d3/cmp.sh` (52 frames of `spa_launch`,
+  `RENDER_ORACLE_HEAT_SHIMMER=1`, dumps 44/46/50): command log and pixels IDENTICAL in all 51
+  frames. `LABEL=c3 FRAMES=100 DUMP=50,99 CARS="--tapes oracle/t24b/field/mc_field --max-cars 2"
+  bash re/scratch/taskY3d3/cmp.sh` is the 2-car row: IDENTICAL in all 99 frames (17 of 20
+  particles drawn twice a frame).
 - Part 1 check: `bash re/scratch/taskY3d3/heat2.sh` (100 frames of `spa_launch`, both sides,
   `RENDER_ORACLE_HEAT_DUMP=1`) writes `h.both`: the per-frame `HEAT` lines are SAME.
-  `LABEL=h2 CARS="--tapes oracle/t24b/field/mc_field --max-cars 2" bash re/scratch/taskY3d3/heat2.sh`
-  is the 2-car run (200 lines, SAME; car 1's set is active and moves).
-- Game side only:
-  - `bash re/scratch/taskY3d3/gameonly.sh` runs 100 frames of `spa_launch` from frame 0 with
-    `RENDER_ORACLE_HEAT_SHIMMER=1`. The shimmer adds 90 calls and 4 draws per frame from frame 45.
-  - `LABEL=gd FRAMES=52 EXTRA="--dump 44,46,50" bash re/scratch/taskY3d3/gameonly.sh` keeps one
-    frame without the shimmer (44) and two with it.
-  - `bash re/scratch/taskY3d3/quality.sh` is the step 0.3 check (QUALITY 5 and 3, resized at
-    frame 10).
+- Game side only: `bash re/scratch/taskY3d3/gameonly.sh` (the shimmer adds 90 calls and 4 draws
+  per frame from frame 45).
 
 ## Step 2 part 1: the particles (done)
 
