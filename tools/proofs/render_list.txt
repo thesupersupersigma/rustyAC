@@ -150,3 +150,8 @@ r47c_04 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_
 r47c_05 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --vr-tracker TRACKER --size 1280x720
 # -- Task Y3e: the heat shimmer that moves pixels: render_oracle's own test filter (default.ini, HEAT_PARTICLE_SHIMMER 100 times, made in the root; turns HEAT_SHIMMER on), the shimmer from frame 45
 ry3e_01 | --track spa --view chase --post --fxaa --size 1280x720 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/spa_launch.audiotape --frames 52 --ppfilter rustyac_heat_x100
+# -- Task Y3e: VR with YEBIS (one YebisPP for both eyes, no shimmer, no chromatic aberration): plain, MSAA, FXAA
+ry3e_02 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --vr --post --size 1280x720
+ry3e_03 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --vr --post --aa 4 --size 1280x720
+ry3e_04 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --oculus --post --size 1280x720
+ry3e_05 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --oculus --post --fxaa --size 1280x720
