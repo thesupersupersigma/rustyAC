@@ -1066,7 +1066,7 @@ impl Game {
         }
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
         let profile = crate::root::profile();
-        let camera = if profile.post || profile.triple {
+        if profile.post || profile.triple {
             // the game's own post-processing camera, without YEBIS: its start-up returns at once
             // (g_pPfxContext stays null, so every YEBIS call of the frame is skipped by the game's
             // own tests) and applyPostProcessing is the stand-in the port draws too;
@@ -1114,6 +1114,12 @@ impl Game {
                 set_texture_rt: acs.va(VA_KGL_SET_TEXTURE_RT),
                 full_screen_quad: acs.va(VA_GL_FULL_SCREEN_QUAD),
             })), std::sync::atomic::Ordering::SeqCst);
+        }
+        if profile.post && (profile.vr || profile.oculus) && std::env::var_os("RENDER_ORACLE_YEBIS").is_none() {
+            return Err("--post in VR runs the real YEBIS only: RENDER_ORACLE_YEBIS=1".into());
+        }
+        // Task Y3e: in VR the stereo camera makes its own YebisPP (StereoCameraVive / StereoCameraForward ctors)
+        let camera = if profile.triple || profile.post && !profile.vr && !profile.oculus {
             self.hdr_flag(true);
             let camera = if profile.triple {
                 // Sim::createCamera: CameraTripleScreen (its constructor asks for no blur); it reads

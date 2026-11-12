@@ -276,11 +276,9 @@ in both runtime logs.
 
 ### Post-processing in VR
 
-It waits for the YEBIS tasks. It plugs in where the game's `StereoCameraVive::render` 0x140223720
-calls `StereoCameraVive::renderYebis` 0x140223f60 and `StereoCameraForward::render` 0x1402135c0
-calls `StereoCameraForward::renderYebis` 0x140213b10 (each eye through YEBIS before it is
-submitted): `vr.rs` / `oculus.rs` `render`, which today refuse a video.ini with post-processing
-on (their constructors return "VR with post-processing is not done").
+Done in Task Y3e (docs/port/yebis.md): `StereoCameraVive::renderYebis` 0x140223f60 and
+`StereoCameraForward::renderYebis` 0x140213b10, each eye through the headset's one YEBIS before
+it is submitted (`vr.rs` / `oculus.rs` `render_yebis`).
 
 ### What still needs real hardware
 
@@ -426,8 +424,7 @@ eyes (no g forces, no shake) unless the game's system/cfg/assetto_corsa.ini `[VR
 ENABLE_CAMERA_SHAKE` is set, and has no glance (`CameraOnBoard::update`). Not tried live: this
 PC has no SteamVR and no headset.
 
-Not done here: post-processing in VR (`renderYebis`; the port refuses `MODE=OPENVR` with
-post-processing on), openvr.ini `MOTION_TRACKER`, room scale (`SetTrackingSpace(1)` and
+Not done here: post-processing in VR (done in Task Y3e), openvr.ini `MOTION_TRACKER`, room scale (`SetTrackingSpace(1)` and
 video.ini `[VR_ROOM] ROTATION`: ported, not proven, the game only asks for them with the
 virtual mirror forced).
 
@@ -467,7 +464,7 @@ left plus look right or Ctrl+Space to recentre, and the runtime's own recentring
 honoured after each swap. The game never closes the Oculus runtime and neither does the port.
 Not tried live: this PC has no Oculus runtime and no headset.
 
-Not done here: post-processing in VR (`renderYebis`; refused as for OpenVR), OculusManager's
+Not done here: post-processing in VR (done in Task Y3e), OculusManager's
 Rift audio device choice (oculus.ini `AUTOSELECT_RIFT_AUDIO_DEVICE`).
 
 ### Step 4: the HUD and apps in the headset

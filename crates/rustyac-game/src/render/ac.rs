@@ -797,13 +797,13 @@ impl AcRenderer {
         // (CameraTripleScreen's constructor asks for no blur)
         let triple_mode = video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "TRIPLE");
         let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled && !triple_mode;
-        let mut camera = CameraForwardYebis::new(&mut graphics, use_blur)?;
+        let mut camera = CameraForwardYebis::new(&mut graphics, use_blur, false)?; // shortcut: flat targets made even for a headset, so a failed headset falls back to the plain camera; unused in VR
         // Task 47b: MODE=OPENVR makes the StereoCameraVive (seated) when the game's
         // openvr_api.dll starts a runtime, else the plain camera
         #[cfg(all(windows, not(feature = "wgpu")))]
         if video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "OPENVR") {
             let api = rustyac_render::vr::load(&options.game).ok_or_else(|| "no system/x64/openvr_api.dll".to_string());
-            match api.and_then(|api| rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, rustyac_render::vr::OpenVr::new(api), false)) {
+            match api.and_then(|api| rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, rustyac_render::vr::OpenVr::new(api), false, video_ini.clone().map(|video| rustyac_render::vr::YebisFrom { root: &options.game, data: &options.game, video }))) {
                 Ok(vr) => camera.forward.vr = Some(Box::new(vr)),
                 Err(e) => notes.push(format!("VR: {e}; the plain camera")),
             }
@@ -812,7 +812,7 @@ impl AcRenderer {
         #[cfg(all(windows, not(feature = "wgpu")))]
         if video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "OCULUS") {
             let api = rustyac_render::oculus::load();
-            match api.and_then(|api| rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, rustyac_render::oculus::Ovr::new(api))) {
+            match api.and_then(|api| rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, rustyac_render::oculus::Ovr::new(api), video_ini.clone().map(|video| rustyac_render::vr::YebisFrom { root: &options.game, data: &options.game, video }))) {
                 Ok(vr) => camera.forward.oculus = Some(Box::new(vr)),
                 Err(e) => notes.push(format!("VR: {e}; the plain camera")),
             }
@@ -830,7 +830,10 @@ impl AcRenderer {
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
         // Task Y2b: YEBIS from the player's acs.exe; with its tone mapper the light levels are the game's
         #[cfg(all(windows, not(feature = "wgpu")))]
-        if graphics.video.pp_hdr_enabled {
+        if graphics.video.pp_hdr_enabled && vr {
+            // (the headset's camera made its own)
+            graphics.video.ldr_levels = false;
+        } else if graphics.video.pp_hdr_enabled {
             let video = video_ini.clone().unwrap_or_else(|| IniReader::from_text(std::path::Path::new("video.ini"), "[POST_PROCESS]
 FILTER=default
 "));

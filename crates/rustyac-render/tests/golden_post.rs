@@ -144,7 +144,7 @@ fn magione_post_frame_is_the_games() {
     // StartingLights: two numbers of rand(), the lamps' picture
     graphics.crt_rand = rustyac_physics::session::MsvcRand(21);
     let mut lights = rustyac_render::start_lights::StartingLights::new(&mut graphics, &mut scene, track_node, &folder).expect("the start lights");
-    let mut camera = CameraForwardYebis::new(&mut graphics, true).expect("the camera");
+    let mut camera = CameraForwardYebis::new(&mut graphics, true, false).expect("the camera");
     camera.blur_quality = 12.0;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = 5.0;

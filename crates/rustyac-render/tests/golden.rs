@@ -169,7 +169,7 @@ fn magione_frame_is_the_games() {
     // the first frame goes by unlogged, as in the oracle: the logged one starts from its state
     graphics.begin_scene();
     scene.traverse(root);
-    camera.render(&mut graphics, &mut scene, Some(blurred), root).expect("the first frame");
+    camera.render(&mut graphics, &mut scene, Some(blurred), root, 1.0 / 60.0).expect("the first frame");
     graphics.set_screen_space_mode();
     graphics.end_scene();
 
@@ -177,7 +177,7 @@ fn magione_frame_is_the_games() {
     gpulog::begin_capture("magione_chase");
     graphics.begin_scene();
     scene.traverse(root);
-    camera.render(&mut graphics, &mut scene, Some(blurred), root).expect("the frame");
+    camera.render(&mut graphics, &mut scene, Some(blurred), root, 1.0 / 60.0).expect("the frame");
     graphics.set_screen_space_mode();
     let capture = gpulog::end_capture();
     let (width, height, pixels) = graphics.kgl.read_screen().expect("the picture");

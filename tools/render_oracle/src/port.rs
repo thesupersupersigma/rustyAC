@@ -224,10 +224,13 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     // plain one when post-processing is off); blur only with post-processing
     let profile = crate::root::profile();
     // (CameraTripleScreen's constructor asks for no blur)
-    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur > 0 && !profile.triple)?;
+    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur > 0 && !profile.triple, profile.vr || profile.oculus)?;
     // Task Y2b: YEBIS on the port's side too when the game's side runs it
-    if profile.post && std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
-        let video = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("video.ini"), &crate::root::video_ini(args.width, args.height));
+    // (Task Y3e: a headset's camera makes its own)
+    let yebis = profile.post && std::env::var_os("RENDER_ORACLE_YEBIS").is_some();
+    let video = || rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("video.ini"), &crate::root::video_ini(args.width, args.height));
+    if yebis && !profile.vr && !profile.oculus {
+        let video = video();
         // the filter from the game's working folder, the oracle root
         // (the heat shimmer's sets: the game's race.ini CARS, one for CameraTripleScreen)
         camera.start_yebis(&mut graphics, &args.game, &args.root, video, if profile.triple { 1 } else { 1 + frame.others.len() })?;
@@ -245,7 +248,8 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         if !ovr.init() {
             return Err("initOculus failed on the stand-in runtime".into());
         }
-        let mut stereo = rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, ovr)?;
+        let from = yebis.then(|| rustyac_render::vr::YebisFrom { root: &args.game, data: &args.root, video: video() });
+        let mut stereo = rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, ovr, from)?;
         stereo.reset_head_position();
         camera.forward.oculus = Some(Box::new(stereo));
     } else if profile.vr {
@@ -257,7 +261,8 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         if !vr.init() {
             return Err("initOpenVR failed on the stand-in runtime".into());
         }
-        let mut stereo = rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, vr, crate::root::profile().vr_room)?;
+        let from = yebis.then(|| rustyac_render::vr::YebisFrom { root: &args.game, data: &args.root, video: video() });
+        let mut stereo = rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, vr, crate::root::profile().vr_room, from)?;
         stereo.reset_head_position();
         camera.forward.vr = Some(Box::new(stereo));
     }

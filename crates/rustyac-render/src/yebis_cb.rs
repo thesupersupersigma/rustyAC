@@ -79,6 +79,11 @@ pub struct Camera {
     pub exposure_multiplier: f32,
     /// The frame time auto exposure moves by.
     pub dt: f32,
+    /// `chromabActive`: draws 2 and 6, off in VR (`YebisPP::updatePPCameraValues` 0x14002bcc0)
+    pub chromatic_aberration: bool,
+    /// The tone map takes auto exposure's current value (`YebisPP::updatePP` 0x14002c270 does
+    /// for the first eye only: the second eye keeps the first's)
+    pub new_exposure: bool,
 }
 
 /// The `CPostEffect` fields of this chain; the comments name their offsets.
@@ -603,11 +608,12 @@ pub struct AutoExposure {
     value: f32,         // +0x54
     rows: i32,          // +0x48
     current: f32,       // the manager's +0x64
+    tonemap: f32,       // CPostEffect+0x6f4, the tone map's exposure
 }
 
 impl Default for AutoExposure {
     fn default() -> AutoExposure {
-        AutoExposure { frames: [1; 17], lum: [0.18; 17], exposure: [1.0; 17], at: 0, pending: false, since: 0, adjust: 0.0, value: 1.0, rows: 0, current: 0.0 }
+        AutoExposure { frames: [1; 17], lum: [0.18; 17], exposure: [1.0; 17], at: 0, pending: false, since: 0, adjust: 0.0, value: 1.0, rows: 0, current: 0.0, tonemap: 1.0 }
     }
 }
 
@@ -628,10 +634,14 @@ impl AutoExposure {
     }
 
     /// One frame: `readback` is the 1x1 RGBA of the last analysis once it is there, `ae` is
-    /// `PostEffect::auto_exposure`. Returns this frame's tone-map exposure and luminance step.
-    pub fn frame(&mut self, readback: Option<[u8; 4]>, ae: [f32; 3], dt: f32) -> (f32, Luminance) {
+    /// `PostEffect::auto_exposure`, `new_exposure` `Camera::new_exposure`. Returns this frame's
+    /// tone-map exposure and luminance step.
+    pub fn frame(&mut self, readback: Option<[u8; 4]>, ae: [f32; 3], dt: f32, new_exposure: bool) -> (f32, Luminance) {
         let [min, max, grey] = ae;
-        let e_now = self.value;
+        if new_exposure {
+            self.tonemap = self.value;
+        }
+        let e_now = self.tonemap;
         let rate = 1.0 - powf(0.050000012, (dt * 6.0) / 0.1);
         self.since += 1;
         if let (true, Some(b)) = (self.pending, readback) {
@@ -791,7 +801,7 @@ mod tests {
             None => IniReader::load(&path).unwrap(),
         };
         let video = IniReader::from_text(Path::new("video.ini"), "[POST_PROCESS]\nENABLED=1\nFILTER=default\nQUALITY=0\nGLARE=0\nDOF=0\n");
-        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668 };
+        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668, chromatic_aberration: true, new_exposure: true };
         let mut pe = PostEffect::new(&filter, &video, &cam).unwrap();
         // the logged frame is the second, after one auto exposure step from 1 to MAX
         pe.exposure = 0.5;
@@ -883,7 +893,7 @@ mod tests {
                 12 => Some([158, 155, 149, 0]),
                 _ => None,
             };
-            let (e, step) = ae.frame(readback, [0.2, 0.5, grey], 0.016666668);
+            let (e, step) = ae.frame(readback, [0.2, 0.5, grey], 0.016666668, true);
             steps.push(step);
             // the tone map of frame n uses the exposure after frame n-1
             if n != 1 {

@@ -12,8 +12,7 @@
 //! vtable slots. Whoever makes the camera hands over the functions ([`OpenVrApi`]): the
 //! player's own `openvr_api.dll`, or a stand-in runtime in a proof.
 //!
-//! Not done: post-processing in VR (`StereoCameraVive::renderYebis` 0x140223f60, the eyes
-//! through YEBIS; it waits for YEBIS, and the constructor refuses it until then).
+//! Post-processing (Task Y3e): one YEBIS for both eyes, `StereoCameraVive::renderYebis` 0x140223f60.
 
 use std::ffi::{c_char, c_void, CStr};
 
@@ -28,7 +27,8 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 use crate::camera::Camera;
 use crate::forward::CameraForward;
 use crate::graphics::{Graphics, RenderTarget, CULL_FRONT, DEPTH_NORMAL, DEPTH_NO_WRITE, DEPTH_OFF};
-use crate::kgl::FORMAT_RGBA8;
+use crate::kgl::{FORMAT_R32F, FORMAT_RGBA16F, FORMAT_RGBA8};
+use crate::shader::ShaderId;
 use crate::material::{MaterialFilter, PASS_OPAQUE, PASS_TRANSPARENT};
 use crate::scene::{NodeId, RenderContext, Scene};
 
@@ -291,6 +291,14 @@ pub(crate) fn normal_rendering(forward: &mut CameraForward, graphics: &mut Graph
     graphics.set_depth_mode(DEPTH_NORMAL);
 }
 
+/// Where a headset's YEBIS comes from: `root` holds the player's acs.exe, `data` the game's
+/// working folder (its `system/cfg/ppfilters/default.ini`), `video` video.ini.
+pub struct YebisFrom<'a> {
+    pub root: &'a std::path::Path,
+    pub data: &'a std::path::Path,
+    pub video: IniReader,
+}
+
 /// What `StereoCameraVive` (0x1418 bytes) adds to its `CameraForward`.
 pub struct StereoCameraVive {
     pub vr: OpenVr,
@@ -320,8 +328,16 @@ pub struct StereoCameraVive {
     pub render_width: u32,
     pub render_height: u32,
     rt_temp: RenderTarget,
-    /// `rtFXAA_Temp`: made as the game does, used only by its post-processing path
-    _fxaa_temp: Vec<RenderTarget>,
+    /// `rtFXAA_Temp`: YEBIS's destinations when FXAA is on
+    fxaa_temp: Vec<RenderTarget>,
+    fxaa_shader: Option<ShaderId>,
+    depth_resolve_shader: Option<ShaderId>,
+    /// `yebisPP` (video.ini ppHDREnabled): one YEBIS for both eyes
+    yebis: Option<crate::yebis::Yebis>,
+    /// `rtYebisTarget` (multisampled with AA), `rtYebisResolved`, `rtYebisResolvedDepth`
+    rt_yebis_target: RenderTarget,
+    rt_yebis_resolved: Option<RenderTarget>,
+    rt_yebis_resolved_depth: Option<RenderTarget>,
     /// `mirrorTextureBuffers[0]`: a view of the left eye's texture
     mirror_texture: Option<ID3D11ShaderResourceView>,
     /// video.ini `[VR_ROOM] ROTATION` (radians), room scale only
@@ -335,12 +351,10 @@ pub struct StereoCameraVive {
 impl StereoCameraVive {
     /// `StereoCameraVive::StereoCameraVive` 0x140220b80, after `forward`'s own constructor.
     /// `room_scale`: the constructor's last flag, the compositor's tracking space (false:
-    /// seated) and whether video.ini `[VR_ROOM] ROTATION` turns the room.
-    pub fn new(graphics: &mut Graphics, forward: &mut CameraForward, mut vr: OpenVr, room_scale: bool) -> Result<StereoCameraVive, String> {
+    /// seated) and whether video.ini `[VR_ROOM] ROTATION` turns the room. `yebis`: where YEBIS
+    /// comes from when post-processing is on.
+    pub fn new(graphics: &mut Graphics, forward: &mut CameraForward, mut vr: OpenVr, room_scale: bool, yebis: Option<YebisFrom>) -> Result<StereoCameraVive, String> {
         forward.base.camera.lod_multiplier = 0.5;
-        if graphics.video.pp_hdr_enabled {
-            return Err("VR with post-processing is not done".into());
-        }
         if !vr.initialized && !vr.init() {
             return Err("Could not initialize the vive".into());
         }
@@ -364,7 +378,13 @@ impl StereoCameraVive {
             render_width: 0,
             render_height: 0,
             rt_temp: empty(),
-            _fxaa_temp: Vec::new(),
+            fxaa_temp: Vec::new(),
+            fxaa_shader: None,
+            depth_resolve_shader: None,
+            yebis: None,
+            rt_yebis_target: empty(),
+            rt_yebis_resolved: None,
+            rt_yebis_resolved_depth: None,
             mirror_texture: None,
             rotation_offset: 0.0,
             motion_tracker: 0,
@@ -377,18 +397,39 @@ impl StereoCameraVive {
         (camera.render_width, camera.render_height) = (width, height);
         let compositor = camera.vr.compositor();
         unsafe { slot::<unsafe extern "C" fn(Interface, i32)>(compositor, 0)(compositor, room_scale as i32) };
-        graphics.shaders.get_shader(&graphics.kgl, "ksMSDepthResolve")?;
+        camera.depth_resolve_shader = Some(graphics.shaders.get_shader(&graphics.kgl, "ksMSDepthResolve")?);
         let (w, h, aa) = (width as i32, height as i32, graphics.video.aa_samples);
         for eye in &mut camera.render_eye {
             *eye = RenderTarget { kid_color: Some(graphics.kgl.create_render_target(FORMAT_RGBA8, w, h, 1, 1)), kid_depth: None, width: w, height: h };
         }
-        let color = graphics.kgl.create_render_target(FORMAT_RGBA8, w, h, aa, 1);
-        camera.rt_temp = RenderTarget { kid_color: Some(color), kid_depth: Some(graphics.kgl.create_render_target_depth(w, h, aa)?), width: w, height: h };
+        let target = |graphics: &Graphics, format, samples: i32, depth: bool| -> Result<RenderTarget, String> {
+            let color = graphics.kgl.create_render_target(format, w, h, samples, 1);
+            let depth = if depth { Some(graphics.kgl.create_render_target_depth(w, h, samples)?) } else { None };
+            Ok(RenderTarget { kid_color: Some(color), kid_depth: depth, width: w, height: h })
+        };
+        if !graphics.video.pp_hdr_enabled {
+            camera.rt_temp = target(graphics, FORMAT_RGBA8, aa, true)?;
+        } else {
+            // (the constructor turns videoSettings.ppHeatShimmer off: no shimmer in VR)
+            let YebisFrom { root, data, video } = yebis.ok_or("VR with post-processing needs YEBIS")?;
+            // YebisPP(graphics, w, h, renderEye[0]'s view) 0x14002ba30, loadPPSet("default") 0x14002cc80:
+            // initPP 0x140030540 takes the eye's width as the base width, whatever [POST_PROCESS] QUALITY
+            let filter = IniReader::load(&data.join("system/cfg/ppfilters/default.ini"))?;
+            let screen = camera.render_eye[0].kid_color.as_ref().and_then(|c| c.render_target_view.clone());
+            camera.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, w, h, w, screen.clone(), 256)?);
+            // YEBIS's initialisation leaves its destination bound without depth (and kgl's cache unaware)
+            unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[screen]), None) };
+            camera.rt_yebis_target = target(graphics, FORMAT_RGBA16F, aa, true)?;
+            if aa != 1 {
+                camera.rt_yebis_resolved = Some(target(graphics, FORMAT_RGBA16F, 1, false)?);
+                camera.rt_yebis_resolved_depth = Some(target(graphics, FORMAT_R32F, 1, false)?);
+            }
+        }
         if graphics.video.pp_fxaa && aa == 1 {
             for _ in 0..2 {
-                camera._fxaa_temp.push(RenderTarget { kid_color: Some(graphics.kgl.create_render_target(FORMAT_RGBA8, w, h, 1, 1)), kid_depth: None, width: w, height: h });
+                camera.fxaa_temp.push(target(graphics, FORMAT_RGBA8, 1, false)?);
             }
-            graphics.shaders.get_shader(&graphics.kgl, "ksFXAA")?;
+            camera.fxaa_shader = Some(graphics.shaders.get_shader(&graphics.kgl, "ksFXAA")?);
         }
         for eye in 0..2 {
             camera.eye_projection[eye] = camera.projection_eye(&forward.base.camera, eye as i32);
@@ -605,7 +646,7 @@ impl StereoCameraVive {
 
     /// `StereoCameraVive::render` 0x140223720: the poses, the window's picture, Ctrl+Space
     /// (recentre), the shadows and the cube map from the left eye, then both eyes.
-    pub fn render(&mut self, forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, cube_node: Option<NodeId>, root: NodeId) -> Result<(), String> {
+    pub fn render(&mut self, forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, cube_node: Option<NodeId>, root: NodeId, dt: f32) -> Result<(), String> {
         self.update_hmd_matrix_pose();
         self.render_mirror_texture(graphics);
         unsafe {
@@ -627,11 +668,86 @@ impl StereoCameraVive {
         forward.base.camera.matrix = saved;
         forward.base.camera.fov = 55.0;
         graphics.stats.is_in_main_render_pass = true;
-        self.render_no_pp(forward, graphics, scene, root);
+        if self.yebis.is_some() {
+            self.render_yebis(forward, graphics, scene, root, dt);
+        } else {
+            self.render_no_pp(forward, graphics, scene, root);
+        }
         graphics.stats.is_in_main_render_pass = false;
         graphics.set_viewport(0, 0, graphics.video.width, graphics.video.height);
         forward.base.camera.exposure = exposure;
         Ok(())
+    }
+
+    /// `StereoCameraVive::viveRenderPass` 0x140224620: the eye from the head's pose, into the
+    /// bound target.
+    fn vive_render_pass(&mut self, eye: usize, forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, root: NodeId) {
+        let m = xm_matrix_multiply(&self.eye_pose[eye], &self.hmd_matrix);
+        let saved = forward.base.camera.matrix;
+        forward.base.camera.matrix = compute_camera_matrix(&saved, &m);
+        self.view_matrix = forward.base.camera.get_view_matrix();
+        self.eye_projection[eye] = self.projection_eye(&forward.base.camera, eye as i32);
+        self.proj_matrix = self.eye_projection[eye];
+        graphics.set_viewport(0, 0, self.render_width as i32, self.render_height as i32);
+        normal_rendering(forward, graphics, scene, root, self.render_scene, self.proj_matrix, self.view_matrix);
+        forward.base.camera.matrix = saved;
+    }
+
+    /// `StereoCameraVive::renderYebis` 0x140223f60: each eye into the HDR target, then the one
+    /// YEBIS into the eye's texture (through FXAA's target when FXAA is on).
+    fn render_yebis(&mut self, forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, root: NodeId, dt: f32) {
+        let (w, h) = (self.render_width as i32, self.render_height as i32);
+        for eye in 0..2 {
+            let target = &self.rt_yebis_target;
+            graphics.kgl.set_render_targets(target.kid_color.as_ref(), target.kid_depth.as_ref());
+            self.vive_render_pass(eye, forward, graphics, scene, root);
+            graphics.kgl.set_render_targets(None, None);
+            // updatePPCameraValues 0x14002bcc0 and updatePP 0x14002c270 (no depth of field, no shimmer in VR)
+            let c = &forward.base.camera;
+            let camera = crate::yebis_cb::Camera { near: c.near_plane, far: c.far_plane, fov_deg: c.fov, width: w as u32, height: h as u32, exposure: c.exposure, exposure_multiplier: graphics.exposure_multiplier, dt, chromatic_aberration: false, new_exposure: eye == 0 };
+            let target = &self.rt_yebis_target;
+            let (scene_srv, depth_srv) = match (&self.rt_yebis_resolved, &self.rt_yebis_resolved_depth) {
+                (Some(color), Some(depth)) => {
+                    if let (Some(from), Some(to)) = (&target.kid_color, &color.kid_color) {
+                        graphics.kgl.resolve_render_target(from, to, 1);
+                    }
+                    graphics.set_blend_mode(crate::graphics::BLEND_OPAQUE);
+                    graphics.kgl.set_render_targets(depth.kid_color.as_ref(), None);
+                    graphics.kgl.set_texture(1, &target.kid_depth.as_ref().and_then(|t| t.shader_resource_view.clone()));
+                    graphics.set_viewport(0, 0, target.width, target.height);
+                    crate::gl::full_screen_quad(graphics, self.depth_resolve_shader);
+                    graphics.kgl.set_render_targets(None, None);
+                    (color.kid_color.as_ref(), depth.kid_color.as_ref())
+                }
+                _ => (target.kid_color.as_ref(), target.kid_depth.as_ref()),
+            };
+            let (scene_srv, depth_srv) = (scene_srv.and_then(|t| t.shader_resource_view.clone()), depth_srv.and_then(|t| t.shader_resource_view.clone()));
+            let fxaa = self.fxaa_temp.get(eye);
+            let destination = fxaa.unwrap_or(&self.render_eye[eye]).kid_color.as_ref().and_then(|c| c.render_target_view.clone());
+            if let (Some(yebis), Some(scene_srv), Some(depth_srv), Some(destination)) = (&mut self.yebis, scene_srv, depth_srv, destination) {
+                if let Err(e) = yebis.render(&depth_srv, &scene_srv, &destination, &camera, None) {
+                    eprintln!("{e}");
+                }
+            }
+            if let Some(fxaa) = fxaa {
+                graphics.kgl.set_default_state();
+                graphics.set_sampler_state();
+                graphics.reset_render_states();
+                graphics.set_render_target(Some(&self.render_eye[eye]));
+                graphics.set_viewport(0, 0, w, h);
+                graphics.set_depth_mode(DEPTH_OFF);
+                graphics.kgl.set_texture(5, &fxaa.kid_color.as_ref().and_then(|c| c.shader_resource_view.clone()));
+                crate::gl::full_screen_quad(graphics, self.fxaa_shader);
+            }
+            graphics.kgl.set_default_state();
+            graphics.set_sampler_state();
+            graphics.reset_render_states();
+            graphics.kgl.set_texture_cube_map(Some(&forward.cube_map), 10);
+            for i in 0..3 {
+                graphics.set_shadow_map_texture(i as i32, Some(&forward.base.shadow_rt[i]));
+                graphics.set_shadow_map_matrix(i as i32, &forward.base.shadow_matrices[i]);
+            }
+        }
     }
 
     /// `StereoCameraVive::renderNoPP` 0x140223aa0: each eye from the head's pose into the
@@ -639,15 +755,7 @@ impl StereoCameraVive {
     fn render_no_pp(&mut self, forward: &mut CameraForward, graphics: &mut Graphics, scene: &mut Scene, root: NodeId) {
         for eye in 0..2 {
             graphics.set_render_target(Some(&self.rt_temp));
-            let m = xm_matrix_multiply(&self.eye_pose[eye], &self.hmd_matrix);
-            let saved = forward.base.camera.matrix;
-            forward.base.camera.matrix = compute_camera_matrix(&saved, &m);
-            self.view_matrix = forward.base.camera.get_view_matrix();
-            self.eye_projection[eye] = self.projection_eye(&forward.base.camera, eye as i32);
-            self.proj_matrix = self.eye_projection[eye];
-            graphics.set_viewport(0, 0, self.render_width as i32, self.render_height as i32);
-            normal_rendering(forward, graphics, scene, root, self.render_scene, self.proj_matrix, self.view_matrix);
-            forward.base.camera.matrix = saved;
+            self.vive_render_pass(eye, forward, graphics, scene, root);
             let texture = |rt: &RenderTarget| rt.kid_color.as_ref().and_then(|c| c.texture.clone());
             if let (Some(to), Some(from)) = (texture(&self.render_eye[eye]), texture(&self.rt_temp)) {
                 unsafe {

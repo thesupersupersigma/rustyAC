@@ -226,7 +226,7 @@ fn the_scene_at_magione_is_the_games() {
             let s = MirrorScene { root, particles, before_cars, ideal_line: None, body_transform: car.body_transform, car_nodes: &nodes, mirror_position: car.mirror_position };
             mirror.render(graphics, scene, camera.base.sky_box.as_mut(), &s);
         }
-        camera.render(graphics, scene, Some(blurred), root).expect("the frame");
+        camera.render(graphics, scene, Some(blurred), root, 1.0 / 60.0).expect("the frame");
         graphics.set_screen_space_mode();
     };
     frame(&mut graphics, &mut scene, &mut camera, 0, false);

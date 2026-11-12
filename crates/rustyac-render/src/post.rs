@@ -71,8 +71,10 @@ impl std::ops::DerefMut for CameraForwardYebis {
 
 impl CameraForwardYebis {
     /// `CameraForwardYebis::CameraForwardYebis` 0x140025db0 (and `loadPPSet` 0x140029960 as far
-    /// as `initRenderTargets`; the filter file itself is YEBIS' business).
-    pub fn new(graphics: &mut Graphics, use_blur: bool) -> Result<CameraForwardYebis, String> {
+    /// as `initRenderTargets`; the filter file itself is YEBIS' business). `stereo`: the camera
+    /// is a headset's (Sim::createCamera makes no CameraForwardYebis then, the stereo camera has
+    /// its own YEBIS), so none of the post-processing targets.
+    pub fn new(graphics: &mut Graphics, use_blur: bool, stereo: bool) -> Result<CameraForwardYebis, String> {
         let forward = CameraForward::new(graphics, use_blur)?;
         let mut camera = CameraForwardYebis {
             forward,
@@ -92,7 +94,7 @@ impl CameraForwardYebis {
             parameters_updated: false,
             heat: None,
         };
-        if graphics.video.pp_hdr_enabled {
+        if graphics.video.pp_hdr_enabled && !stereo {
             camera.depth_resolve_shader = Some(graphics.shaders.get_shader(&graphics.kgl, "ksMSDepthResolve")?);
             camera.width = graphics.video.width;
             camera.height = graphics.video.height;
@@ -166,8 +168,13 @@ impl CameraForwardYebis {
 
     /// `CameraForwardYebis::render` 0x14002a450.
     pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, unblurred: NodeId, root: NodeId, dt: f32) -> Result<(), String> {
-        if !graphics.video.pp_hdr_enabled {
-            return self.forward.render(graphics, scene, blurred, root);
+        // a headset's camera does its own post-processing
+        #[cfg(not(feature = "backend-wgpu"))]
+        let stereo = self.forward.vr.is_some() || self.forward.oculus.is_some();
+        #[cfg(feature = "backend-wgpu")]
+        let stereo = false;
+        if !graphics.video.pp_hdr_enabled || stereo {
+            return self.forward.render(graphics, scene, blurred, root, dt);
         }
         self.forward.base.shadow_map_pass(graphics, scene, root)?;
         graphics.trigger_query("SHADOW_MAP");
@@ -230,7 +237,8 @@ impl CameraForwardYebis {
         let filter = load(&name)?;
         // PFX_INITPARAM's particle count: m_uiMaxParticles with the shimmer, else YEBIS's 256
         let particles = self.heat.as_ref().map_or(256, |h| h.sets.iter().map(Vec::len).sum::<usize>().max(1) as u32);
-        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, self.width, Self::destination(&self.fxaa_temp_rt, graphics), particles)?);
+        let base = crate::yebis::base_width(video.get_int("POST_PROCESS", "QUALITY").unwrap_or(0), self.width);
+        self.yebis = Some(crate::yebis::Yebis::new(&graphics.kgl.device, &graphics.kgl.context, root, filter, video, self.width, self.height, base, Self::destination(&self.fxaa_temp_rt, graphics), particles)?);
         // YEBIS's initPostProcessing leaves its destination bound without depth (and kgl's cache unaware)
         unsafe { graphics.kgl.context.OMSetRenderTargets(Some(&[Self::destination(&self.fxaa_temp_rt, graphics)]), None) };
         Ok(())
@@ -281,6 +289,8 @@ impl CameraForwardYebis {
                 exposure: camera.exposure,
                 exposure_multiplier: graphics.exposure_multiplier,
                 dt,
+                chromatic_aberration: true,
+                new_exposure: true,
             };
             // setPostProcessing 0x140025080: the particles move, then setupPfxParticles hands them to YEBIS
             let mut shimmer = None;

@@ -166,7 +166,7 @@ fn three_cars_at_magione_are_the_games() {
     let _crowds = rustyac_render::crowds::camera_facing(&mut graphics, &mut scene, &folder, track_node, blurred, 22).expect("the crowds");
 
     // Sim::createCamera, RaceManager::initLighting, TrackAvatar::TrackAvatar, the weather
-    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, false).expect("the camera");
+    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, false, false).expect("the camera");
     camera.blur_quality = 0.0;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = 5.0;

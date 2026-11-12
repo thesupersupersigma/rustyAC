@@ -2,8 +2,9 @@
 
 ## Resume here
 
-- **In progress.** Step 0 is done; next is step 1 (VR's own `YebisPP` 0x14002ba30, one per
-  stereo camera, `renderYebis` 0x140223f60 per eye).
+- **In progress.** Steps 0 and 1 are done (VR with YEBIS on OpenVR and Oculus, proven on the
+  stand-ins); next is step 2's end: VR `--post` rows in `render_list.txt`, the 16 `--post` rows,
+  `run_all.sh --quick`, clippy on both wasm targets, the release.
 - Check step 0.1: `bash re/scratch/taskY3e/rand2.sh` (game side, 2 cars, `RENDER_ORACLE_RAND_LOG=1`)
   and `cargo test --release -p rustyac-render --lib heat_shimmer`.
 - Check step 0.2: `LABEL=s2 bash re/scratch/taskY3e/cmp.sh` (the Y3d-3 compare, 52 frames,
@@ -13,6 +14,49 @@
   `RENDER_ONLY=ry3e_01 PROOF_OUT=re/scratch/taskY3e/proof sh tools/proofs/render.sh`.
 - Check step 0.4: `RENDER_ORACLE_RESIZE=48:1024x576 LABEL=r1 FRAMES=56 DUMP=49,55 bash
   re/scratch/taskY3e/heat.sh` (dump only frames after the resize).
+- Check step 1: `MODE=--vr LABEL=v3 FRAMES=20 bash re/scratch/taskY3e/vrcmp.sh` and
+  `MODE=--oculus LABEL=o1 bash re/scratch/taskY3e/vrcmp.sh` (`EXTRA="--aa 4"` or `"--fxaa"` for
+  the other two paths; the game's side alone: `re/scratch/taskY3e/vrgame.sh`).
+
+## Step 1: YEBIS in VR (`YebisPP`, both headsets)
+
+- The game: with video.ini `ppHDREnabled` the stereo camera's constructor
+  (`StereoCameraVive` 0x140220b80, `StereoCameraForward` 0x140211370) turns `ppHeatShimmer`
+  off, makes one `YebisPP` 0x14002ba30 for both eyes (the eye's size, the left eye's texture as
+  its frame buffer), `loadPPSet("default")` (never video.ini's FILTER), turns chromatic
+  aberration off (+0x4b4), and makes `rtYebisTarget` (multisampled with AA, then
+  `rtYebisResolved` and `rtYebisResolvedDepth`) and, with FXAA and no AA, `rtFXAA_Temp` per eye.
+  `createCamera` makes no `CameraForwardYebis` and no `PostProcessEffectsUpdater` in VR.
+- `initPP` 0x140030540 computes the base width from QUALITY and then overwrites it with the
+  eye's width: `Yebis::new` now takes the base width, the callers compute it.
+- `renderYebis` (0x140223f60, 0x140213b10) per eye: the eye into `rtYebisTarget`,
+  `updatePPCameraValues` 0x14002bcc0 (chromatic aberration off, no depth of field),
+  `updatePP(eye == 0)` 0x14002c270, the MS resolve and depth resolve, YEBIS into the eye's
+  texture or into `rtFXAA_Temp` then FXAA into the eye; Oculus asks `ovr_GetHmdDesc` first and
+  commits each eye's chain after its YEBIS.
+- Two things the flat camera never shows:
+  - Without chromatic aberration YEBIS skips its two CA draws
+    (`DrawRectGPU_ChromaticAberration` 0x1403f0120; the Y2 notes called draw 1 camera motion
+    blur) and the luminance and tonemaps read the scene directly: `Camera::chromatic_aberration`.
+  - `updatePP` sets the tonemap exposure (`SetTonemapParameters`, CPostEffect +0x6f4) only for
+    the first eye, so the second eye's auto exposure works from the first eye's value:
+    `Camera::new_exposure` and `AutoExposure::tonemap`. Without it frame 0's second eye differs
+    (cbuffer +0x9a0 1.0 against 0.5).
+- The oracle's game side makes the stereo camera instead of `CameraForwardYebis` when VR and
+  `--post` meet (it crashed in `finishRendering` before), and needs `RENDER_ORACLE_YEBIS=1`.
+- Live `rustyac.exe` keeps making the flat camera's targets (a headset that fails falls back to
+  the screen), marked `shortcut:` in `render/ac.rs`.
+
+| Case (`vrcmp.sh`, Spa dash, trk_lap, 1280x720) | Frames | Call log | Pixels | Runtime calls |
+|---|---|---|---|---|
+| `--vr --post` (v3) | 20 | IDENTICAL | IDENTICAL | 390 the same |
+| `--vr --post --aa 4` (v4) | 8 | IDENTICAL | IDENTICAL | 174 the same |
+| `--vr --post --fxaa` (v5) | 8 | IDENTICAL | IDENTICAL | 174 the same |
+| `--oculus --post` (o1) | 8 | IDENTICAL | IDENTICAL | 168 the same |
+| `--oculus --post --aa 4` (o2) | 8 | IDENTICAL | IDENTICAL | 168 the same |
+| `--oculus --post --fxaa` (o3) | 8 | IDENTICAL | IDENTICAL | 168 the same |
+| plant: both eyes take a new exposure, `--vr` (vp) | 4 | frame 0 DIFFERENT, 8 lines | 460,685 of 1,843,200, max 85 | the same |
+| the same plant, `--oculus` (op) | 4 | frame 0 DIFFERENT, 8 lines | 460,632 of 1,843,200, max 85 | the same |
 
 ## Step 0.4: the first shimmer after a YEBIS remake (proof only, no change)
 

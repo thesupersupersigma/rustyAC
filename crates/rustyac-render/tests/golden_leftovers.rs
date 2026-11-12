@@ -274,7 +274,7 @@ fn the_leftovers_at_magione_are_the_games() {
             let s = MirrorScene { root, particles, before_cars, ideal_line: Some(ideal_line), body_transform: car.body_transform, car_nodes: &nodes, mirror_position: car.mirror_position };
             mirror.render(graphics, scene, camera.base.sky_box.as_mut(), &s);
         }
-        camera.render(graphics, scene, Some(blurred), root).expect("the frame");
+        camera.render(graphics, scene, Some(blurred), root, 1.0 / 60.0).expect("the frame");
         graphics.set_screen_space_mode();
         if logged {
             return;

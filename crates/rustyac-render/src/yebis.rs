@@ -478,14 +478,13 @@ mod device {
     impl Yebis {
         /// Everything YEBIS makes before its first frame. `filter` is the ppfilter of video.ini's
         /// `[POST_PROCESS] FILTER`; `root` holds the player's acs.exe. `width` x `height` is the
-        /// destination's size; `camera_width` the camera's, which the base width comes from.
-        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>, particles: u32) -> Result<Yebis, String> {
+        /// destination's size; `base` YEBIS's base width (`m_uiEffectBufferCriterionWidth`).
+        pub fn new(device: &ID3D11Device, context: &ID3D11DeviceContext, root: &Path, filter: IniReader, video: IniReader, width: i32, height: i32, base: i32, screen: Option<ID3D11RenderTargetView>, particles: u32) -> Result<Yebis, String> {
             let exe = std::fs::read(root.join("acs.exe")).map_err(|e| format!("yebis: acs.exe: {e}"))?;
             let tfxo = crate::yebis_tfxo::Tfxo::from_exe(&exe)?;
             let filmic = filmic_table(&exe)?;
             let used = used_all(&tfxo)?;
             let vignette = vignette(&filter)?;
-            let base = super::base_width(video.get_int("POST_PROCESS", "QUALITY").unwrap_or(0), camera_width);
             unsafe {
                 // every program is made on its first draw (see draw)
                 let (mut code, mut inputs, mut strides) = (Vec::new(), Vec::new(), Vec::new());
@@ -880,7 +879,8 @@ mod device {
         /// `CameraForwardYebis::onResize` 0x140029da0: the game destroys YEBIS and makes it again
         /// at the new size, so every carried-over value (parameter store, exposure) starts over; the noise goes on
         pub fn remade(&self, width: i32, height: i32, camera_width: i32, screen: Option<ID3D11RenderTargetView>) -> Result<Yebis, String> {
-            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, camera_width, screen, self.particles)?;
+            let base = super::base_width(self.video.get_int("POST_PROCESS", "QUALITY").unwrap_or(0), camera_width);
+            let mut yebis = Yebis::new(&self.device, &self.context, &self.root, self.filter.clone(), self.video.clone(), width, height, base, screen, self.particles)?;
             yebis.noise = self.noise; // process-wide in the game, it outlives the context (resize log, Task Y2c)
             Ok(yebis)
         }
@@ -1092,6 +1092,11 @@ mod device {
             let (w, h) = (self.width as f32, self.height as f32);
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
             let shimmer = heat.and_then(|h| h.shimmer(&pe, self.particles as usize));
+            // without chromatic aberration (VR) draws 2 and 6 go and the effect stays in its first surface
+            let ca = camera.chromatic_aberration;
+            if shimmer.is_some() && !ca {
+                return Err("yebis: the heat shimmer without chromatic aberration: not ported".into());
+            }
             // with the shimmer, round one's and two's second draws read its copy
             let e0s = if shimmer.is_some() { self.effect[2].srv.clone() } else { e0.clone() };
             let (t0, t1) = (self.tonemap[0].srv.clone(), self.tonemap[1].srv.clone());
@@ -1150,21 +1155,27 @@ mod device {
                 if let Some(s) = &shimmer {
                     self.shimmer(&pe, s, &e0)?;
                 }
-                self.current = 1;
-                self.effect_with_depth();
-                self.full_viewport();
-                let u = self.cbuffer.draw(1, &pe, &self.filmic, &self.used);
-                self.draw(1, &u, &[SL], std::slice::from_ref(&e0s), &plain(1))?;
+                if ca {
+                    self.current = 1;
+                    self.effect_with_depth();
+                    self.full_viewport();
+                    let u = self.cbuffer.draw(1, &pe, &self.filmic, &self.used);
+                    self.draw(1, &u, &[SL], std::slice::from_ref(&e0s), &plain(1))?;
+                }
+                let src = if ca { e1.clone() } else { e0.clone() };
                 // UpdateAutoExposure: last analysis's result if the GPU has it, then this frame's step
                 let readback = if self.auto_exposure.waiting() { self.read_back() } else { None };
                 let step = pe.auto_exposure.map(|ae| {
-                    let (e, step) = self.auto_exposure.frame(readback, ae, camera.dt);
+                    let (e, step) = self.auto_exposure.frame(readback, ae, camera.dt, camera.new_exposure);
                     pe.exposure = e;
                     step
                 });
                 match step {
                     Some(Luminance::Row(row)) => {
-                        self.effect_of_eight();
+                        // (the game's VR log: without chromatic aberration the effect surface is not bound again)
+                        if ca {
+                            self.effect_of_eight();
+                        }
                         self.target_only(&self.luminance.rtv.clone());
                         let (lw, lh) = (self.luminance_size.0 as f32, self.luminance_size.1 as f32);
                         self.viewport(0.0, 0.0, lw, lh);
@@ -1172,11 +1183,13 @@ mod device {
                         self.viewport(0.0, row_y(row, lh).trunc(), lw, (lh * 0.2).trunc());
                         let n = self.noise.next(false);
                         let u = self.cbuffer.draw(2, &pe, &self.filmic, &self.used);
-                        self.draw(2, &u, &[SL, SP, SP], &[e1.clone(), black.clone(), grey.clone()], &draw_vertices(2, lw, lh, n, self.vignette, row))?;
+                        self.draw(2, &u, &[SL, SP, SP], &[src.clone(), black.clone(), grey.clone()], &draw_vertices(2, lw, lh, n, self.vignette, row))?;
                     }
                     Some(Luminance::Analyze) => {
                         // CTextureLuminance::Analyze: the luminance target down to 1x1, then the CPU copy
-                        self.effect_of_eight();
+                        if ca {
+                            self.effect_of_eight();
+                        }
                         let mut src = self.luminance.srv.clone();
                         let last = self.analysis.len() - 1;
                         for k in 0..=last {
@@ -1212,7 +1225,7 @@ mod device {
                 let (t3, t6) = if self.vignette == 0.0 { (11, 12) } else { (3, 6) };
                 let tonemap_vertices = draw_vertices(3, w, h, n, self.vignette, 0);
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
-                self.draw(t3, &u, &[SP, SP, SP, SW], &[e1.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
+                self.draw(t3, &u, &[SP, SP, SP, SW], &[src.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
                 if shimmer.is_some() {
                     // in a shimmer frame the tonemap's source is the texture the shimmer copies from, and
                     // DrawRectGPU_TonemapHDR 0x1403f1b10 ends by giving it black's mode (point, clamp):
@@ -1230,18 +1243,22 @@ mod device {
                 if let Some(s) = &shimmer {
                     self.shimmer(&pe, s, &e0)?;
                 }
-                self.current = 1;
-                self.effect_with_depth();
-                self.full_viewport();
-                let u = self.cbuffer.draw(5, &pe, &self.filmic, &self.used);
-                self.draw(5, &u, &[SL], &[e0s], &plain(5))?;
+                if ca {
+                    self.current = 1;
+                    self.effect_with_depth();
+                    self.full_viewport();
+                    let u = self.cbuffer.draw(5, &pe, &self.filmic, &self.used);
+                    self.draw(5, &u, &[SL], &[e0s], &plain(5))?;
+                }
                 self.reset();
-                self.effect_of_eight();
+                if ca {
+                    self.effect_of_eight();
+                }
                 self.target_only(&self.tonemap[1].rtv.clone());
                 self.full_viewport();
                 self.full_viewport();
                 let u = self.cbuffer.draw(t6, &pe, &self.filmic, &self.used);
-                self.draw(t6, &u, &[SP, SP, SP, SW], &[e1, black.clone(), grey, dither], &draw_vertices(6, w, h, n, self.vignette, 0))?;
+                self.draw(t6, &u, &[SP, SP, SP, SW], &[src, black.clone(), grey, dither], &draw_vertices(6, w, h, n, self.vignette, 0))?;
                 // the composite into the destination
                 self.target_only(destination);
                 self.full_viewport();

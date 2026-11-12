@@ -155,16 +155,16 @@ impl CameraForward {
     }
 
     /// `CameraForward::render` 0x14021fc40.
-    pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, root: NodeId) -> Result<(), String> {
+    pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, root: NodeId, dt: f32) -> Result<(), String> {
         #[cfg(not(feature = "backend-wgpu"))]
         if let Some(mut vr) = self.vr.take() {
-            let done = vr.render(self, graphics, scene, blurred, root);
+            let done = vr.render(self, graphics, scene, blurred, root, dt);
             self.vr = Some(vr);
             return done;
         }
         #[cfg(not(feature = "backend-wgpu"))]
         if let Some(mut oculus) = self.oculus.take() {
-            let done = oculus.render(self, graphics, scene, blurred, root);
+            let done = oculus.render(self, graphics, scene, blurred, root, dt);
             self.oculus = Some(oculus);
             return done;
         }
