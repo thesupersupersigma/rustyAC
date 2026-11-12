@@ -1,10 +1,82 @@
-# Task Y5: YEBIS's glare and light shafts (and Y3e's leftovers) (stopped at step 1, no release)
+# Task Y5a: the glare's bloom and the glare quality levels (no release)
 
 ## Resume here
 
+- **Y5a done**: the bloom part of YEBIS's glare is ported and proven; no release until Y5d
+  (v0.49.0). **Next: Task Y5b**, the star streaks and the `GPUGlareDef` shapes (game draws
+  873-896 of the measured frame), then Y5c (ghost, afterimage, anamorphic flare) and Y5d (light
+  shafts, rows, release).
+- Every shipped ppfilter is still refused with `[POST_PROCESS] GLARE` > 0: they all have a
+  ghost and a star (`yebis: the glare's ghost and star not ported (Y5b)`). With GLARE=0 nothing
+  changed. The test filter `rustyac_bloom` (`render_oracle --ppfilter rustyac_bloom`, made by
+  `tools/render_oracle/src/root.rs` from the game's `default.ini` with `SHAPE_GHOST_LUMINANCE=0`
+  and `SHAPE_STAR_LUMINANCE=0`) is the glare with only its bloom.
+- Proof rows `ry5a_01`..`05` in `tools/proofs/render_list.txt` (`ry5a_01` also in the quick list);
+  rows take `GLARE:<n>` and `PP_QUALITY:<n>` like `RESIZE:` (`render.sh` sets `RENDER_ORACLE_*`).
+- Before any work: `run_all.sh --quick` 170 of 170 IDENTICAL, 0 errors or skips, 0h50m
+  (`re/scratch/taskY5/quick.log`).
+
+## What the port does now (`crates/rustyac-render/src/yebis.rs` `bloom`, `yebis_cb.rs` `Glare`)
+
+All from the game's code (`re/decomp/GPURenderGlare`, `GPUTextureUtil`, `GPUMath`,
+`CameraForwardYebis`), checked against its call logs:
+
+- Quality: `CameraForwardYebis::initPostProcessing` 0x140024ca0 hands YEBIS
+  `(int)(min(7,5) x GLARE / 5)`; `CPostEffect::Initialize`'s table at 0x141521650 gives the glare
+  target's share of the base width and the bloom's level count, (0.125, 2) .. (1, 9);
+  `GLAREPARAM::FillDefaults` caps the count at `log2(glare width)`. Levels 0 and 1 are at the
+  glare size, each later one halved with its own three targets, the small ones (`w>>4` or the
+  last) with a double they are resampled up to (`glare_levels`).
+- Targets: `CRenderGlare::CreateSystemObjects` 0x140413c00 order (bright pass x3, composite,
+  its double at most half the frame wide, the sum, levels 0/1, each later level, 15 more), the
+  clear pass adds each later level as its own group (`yebis.rs` `Yebis::new`).
+- Draws (`GenerateGlare` 0x14041d470 with no star, ghost, afterimage, light shaft): the frame
+  halved through the glare pool (MadT1_S1), the bright pass (BrightPassT1_Vignette_THRESHOLD_S1:
+  exposure, 1/(64 x GENERATION_RANGE_SCALE), THRESHOLD, the vignette rectangle), per level a
+  two-pass gaussian (MadT1_S7 / S11, `GetColorWeight7_Gauss7` / `11_Gauss11` per channel at
+  615/540/465 nm, tap count from `GetGaussianArray` and BLOOM_FILTER_THRESHOLD), the doubles
+  (MadT1_S4, 2x2 taps at 0.375 texel), the sum (MadLumGammaT3..T7: luminance scale, the
+  diffraction tint from SHAPE_BLOOM_DISPERSION_BASE_LEVEL on, gamma 1/BLOOM_LUMINANCE_GAMMA),
+  a copy and the double at BLUR x 0.5. The tone map reads the double (glare factor 1,
+  PRE_TONEMAP_GLARE), the composite gets LUMINANCE.
+- Rules found by the compares (each a call-log difference first):
+  - the bright pass's exposure is CPostEffect+0x6f4 as the camera set it: GenerateGlare runs
+    before `ApplyEffects_UpdateAutoExposure` (`EndPostEffectScene_InternalProcess` 0x1403b5f40),
+    whose read-back Map comes after the glare's draws;
+  - the frame texture's own sampler mode: Resample keeps its address, which is clamp once a
+    tone map has read it (the Y3e `copy_sampler` mechanism), border on the first frame;
+  - a draw's source rectangle is `size x (1/size) + 0` from the texture (+0x88/+0x8c/+0x90),
+    0.99999994 at 47 or 307 wide (only seen after a resize to 1024x576);
+  - YEBIS makes a program once per number in its container, not per bytecode (MadT1 and MadT1_S1
+    have the same pixel bytecode and two programs).
+- Refused (Y5b and on): ghost or star luminance > 0, GHOST other than 1, AFTER_IMAGE, ANAMORPHIC,
+  BRIGHT_PASS, BLOOM_NUM_LEVELS, BLUR other than 1, PRECISION, THRESHOLD=0, a gaussian that is
+  not the 7- or 11-tap one, the glare without chromatic aberration (VR), without vignette or
+  without auto exposure (orders not measured).
+
+## Results
+
+| case | frames | call log | pixels |
+|---|---|---|---|
+| GLARE=3 QUALITY=3 (`c5`) | 11 | IDENTICAL | IDENTICAL |
+| GLARE=1 QUALITY=3 (`q1`) | 7 | IDENTICAL | IDENTICAL |
+| GLARE=5 QUALITY=3 (`q5`) | 7 | IDENTICAL | IDENTICAL |
+| GLARE=3 QUALITY=0 (`p0`) | 5 | IDENTICAL | IDENTICAL |
+| resize to 1024x576 at frame 3, GLARE=1/3/5 (`rz1`, `rz3`, `rz5`) | 5 each | IDENTICAL | IDENTICAL |
+
+| rows `ry5a_01`..`05` (from frame 0, where YEBIS makes its programs; `05` with FXAA) | 12, 8, 8, 8, 8 | IDENTICAL | IDENTICAL |
+| planted: the diffraction tint 1% stronger (`plant`) | 4 | DIFFERENT in all 4 from frame 0 | DIFFERENT in 1 (2 pixels) |
+
+(`re/scratch/taskY5/<case>/out.txt`, made by `re/scratch/taskY5/cmp.sh`; the rows:
+`RENDER_ONLY='ry5a_0[1-5]' PROOF_OUT=re/scratch/taskY5/proof2 sh tools/proofs/render.sh`.)
+
+# Task Y5: YEBIS's glare and light shafts (and Y3e's leftovers) (stopped at step 1, no release)
+
+## Resume here (Y5)
+
 - **Step 0 done** (Y3e-b's leftovers): steps 0.1, 0.2, 0.3 committed. **Step 1 stopped (rule 7):
-  much bigger than the task said**; no release, no tag. Next: decide the split below, then
-  Task Y5a.
+  much bigger than the task said**; no release, no tag. Split accepted: Y5a (above), Y5b, Y5c,
+  Y5d.
 - Step 1 measured (game side only, `re/scratch/taskY5/g3` against `g0`: Spa chase, f2004
   `trk_lap` from 480, 1280x720, QUALITY=3, `RENDER_ORACLE_GLARE=3 RENDER_ORACLE_RAYS=1`, the
   shipped `default` filter): glare and light shafts add **43 draws and ~960 calls a frame**
