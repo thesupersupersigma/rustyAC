@@ -3,6 +3,7 @@
 # batch scripts were lost with re/scratch. One case per line: name | render_oracle compare arguments.
 # POSE:<tape>:<frame> is replaced by a .pose cut from that tape frame (render_oracle pose-of).
 # RESIZE:<frame>:<W>x<H> resizes the window before that frame (RENDER_ORACLE_RESIZE).
+# GLARE:<0-5> and PP_QUALITY:<0-5> set video.ini's [POST_PROCESS] GLARE and QUALITY (RENDER_ORACLE_GLARE, _PP_QUALITY).
 # Which tape frame, --tape-from and --set frames each row used was in the lost scripts: those are
 # chosen anew here, so the call counts differ from the reports' while the proof (game = port) is the same.
 # Rows needing the reports' made-up car data files (22: 8, 18-20; 22c: 5, 16) are left out.
@@ -162,3 +163,9 @@ ry5_02 | --track spa --view chase --triple --size 5760x1080 --post --car ks_ferr
 ry5_03 | --track spa --view chase --post --fxaa --size 1280x720 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/spa_launch.audiotape --frames 56 --ppfilter rustyac_heat_x100 RESIZE:48:1024x576
 ry5_04 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --vr --post --size 1280x720 RESIZE:4:1024x576
 ry5_05 | --track spa --view dash --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 8 --oculus --post --fxaa --size 1280x720 RESIZE:4:1024x576
+# -- Task Y5a: the glare's bloom (test filter rustyac_bloom: the default filter without star and ghost), by quality
+ry5a_01 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_bloom --frames 12 GLARE:3 PP_QUALITY:3
+ry5a_02 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_bloom --frames 8 GLARE:1
+ry5a_03 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_bloom --frames 8 GLARE:5 PP_QUALITY:3 RESIZE:3:1024x576
+ry5a_04 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_bloom --frames 8 GLARE:1 PP_QUALITY:3 RESIZE:3:1024x576
+ry5a_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_bloom --frames 8 --fxaa GLARE:3 PP_QUALITY:3

@@ -119,6 +119,13 @@ pub fn heat_shimmer() -> bool {
 /// HEAT_PARTICLE_SHIMMER 0.4, 100 times its own, which moves no pixel (a shimmer row that does)
 pub const HEAT_TEST: &str = "rustyac_heat_x100";
 
+/// The test filters `prepare` makes from the game's default.ini: (name, [(from, to)]).
+/// Task Y5a: `rustyac_bloom`, glare with only the bloom (no star or ghost; light shafts are video.ini's RAYS_OF_GOD).
+const TEST_FILTERS: [(&str, &[(&str, &str)]); 2] = [
+    (HEAT_TEST, &[("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4")]),
+    ("rustyac_bloom", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0"), ("SHAPE_STAR_LUMINANCE=0.025", "SHAPE_STAR_LUMINANCE=0")]),
+];
+
 pub fn video_ini(width: u32, height: u32) -> String {
     let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple, vr, oculus, vr_room, vr_tracker: _, ppfilter } = profile();
     let (POST, PP_FXAA) = (post as i32, fxaa as i32);
@@ -219,15 +226,17 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     copy_dir(&game.join("system/cfg"), &root.join("system/cfg"), false)?;
     // CameraForwardYebis::readPPSetOptions reads the default filter
     copy_dir(&game.join("system/cfg/ppfilters"), &root.join("system/cfg/ppfilters"), false)?;
-    if profile().ppfilter == HEAT_TEST {
+    if let Some((name, edits)) = TEST_FILTERS.iter().find(|(n, _)| *n == profile().ppfilter) {
         let dir = root.join("system/cfg/ppfilters");
-        let default = std::fs::read_to_string(dir.join("default.ini")).map_err(|e| format!("default.ini: {e}"))?;
-        let text = default.replacen("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4", 1);
-        if text == default {
-            return Err("default.ini has no HEAT_PARTICLE_SHIMMER=0.004 to make the test filter from".into());
+        let mut text = std::fs::read_to_string(dir.join("default.ini")).map_err(|e| format!("default.ini: {e}"))?;
+        for (from, to) in edits.iter() {
+            if !text.contains(from) {
+                return Err(format!("default.ini has no {from:?} to make the test filter {name} from"));
+            }
+            text = text.replacen(from, to, 1);
         }
-        if std::fs::read_to_string(dir.join(format!("{HEAT_TEST}.ini"))).ok() != Some(text.clone()) {
-            std::fs::write(dir.join(format!("{HEAT_TEST}.ini")), text).map_err(|e| e.to_string())?;
+        if std::fs::read_to_string(dir.join(format!("{name}.ini"))).ok() != Some(text.clone()) {
+            std::fs::write(dir.join(format!("{name}.ini")), text).map_err(|e| e.to_string())?;
         }
     }
     copy_dir(&game.join("system/shaders/win"), &root.join("system/shaders/win"), false)?;
