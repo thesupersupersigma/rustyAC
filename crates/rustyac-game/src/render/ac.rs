@@ -797,24 +797,57 @@ impl AcRenderer {
         // (CameraTripleScreen's constructor asks for no blur)
         let triple_mode = video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "TRIPLE");
         let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled && !triple_mode;
-        let mut camera = CameraForwardYebis::new(&mut graphics, use_blur, false)?; // shortcut: flat targets made even for a headset, so a failed headset falls back to the plain camera; unused in VR
+        // Sim::createCamera: initOpenVR / initOculus first; a headset that starts gets the stereo
+        // camera (no flat YEBIS targets), else MODE becomes DEFAULT and the flat camera is made
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        let (mut open_vr, mut ovr) = (None, None);
         // Task 47b: MODE=OPENVR makes the StereoCameraVive (seated) when the game's
-        // openvr_api.dll starts a runtime, else the plain camera
+        // openvr_api.dll starts a runtime
         #[cfg(all(windows, not(feature = "wgpu")))]
         if video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "OPENVR") {
-            let api = rustyac_render::vr::load(&options.game).ok_or_else(|| "no system/x64/openvr_api.dll".to_string());
-            match api.and_then(|api| rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, rustyac_render::vr::OpenVr::new(api), false, video_ini.clone().map(|video| rustyac_render::vr::YebisFrom { root: &options.game, data: &options.game, video }))) {
-                Ok(vr) => camera.forward.vr = Some(Box::new(vr)),
-                Err(e) => notes.push(format!("VR: {e}; the plain camera")),
+            match rustyac_render::vr::load(&options.game).map(rustyac_render::vr::OpenVr::new) {
+                Some(mut vr) => match vr.init() {
+                    true => open_vr = Some(vr),
+                    false => notes.push("VR: Could not initialize the vive; the plain camera".to_string()),
+                },
+                None => notes.push("VR: no system/x64/openvr_api.dll; the plain camera".to_string()),
             }
         }
         // MODE=OCULUS: the StereoCameraForward when a signed LibOVRRT64_1.dll starts a session
         #[cfg(all(windows, not(feature = "wgpu")))]
         if video_ini.as_ref().is_some_and(|i| i.get_string("CAMERA", "MODE") == "OCULUS") {
-            let api = rustyac_render::oculus::load();
-            match api.and_then(|api| rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, rustyac_render::oculus::Ovr::new(api), video_ini.clone().map(|video| rustyac_render::vr::YebisFrom { root: &options.game, data: &options.game, video }))) {
-                Ok(vr) => camera.forward.oculus = Some(Box::new(vr)),
+            match rustyac_render::oculus::load().map(rustyac_render::oculus::Ovr::new) {
+                Ok(mut o) => match o.init() {
+                    true => ovr = Some(o),
+                    false => notes.push("VR: Could not initialize oculus; the plain camera".to_string()),
+                },
                 Err(e) => notes.push(format!("VR: {e}; the plain camera")),
+            }
+        }
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        let stereo = open_vr.is_some() || ovr.is_some();
+        #[cfg(not(all(windows, not(feature = "wgpu"))))]
+        let stereo = false;
+        let mut camera = CameraForwardYebis::new(&mut graphics, use_blur, stereo)?;
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(vr) = open_vr {
+            match rustyac_render::vr::StereoCameraVive::new(&mut graphics, &mut camera.forward, vr, false, video_ini.clone().map(|video| rustyac_render::vr::YebisFrom { root: &options.game, data: &options.game, video })) {
+                Ok(vr) => camera.forward.vr = Some(Box::new(vr)),
+                Err(e) => {
+                    // (the game has no fallback past initOpenVR; the plain camera rather than none)
+                    notes.push(format!("VR: {e}; the plain camera"));
+                    camera = CameraForwardYebis::new(&mut graphics, use_blur, false)?;
+                }
+            }
+        }
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        if let Some(o) = ovr {
+            match rustyac_render::oculus::StereoCameraForward::new(&mut graphics, &mut camera.forward, o, video_ini.clone().map(|video| rustyac_render::vr::YebisFrom { root: &options.game, data: &options.game, video })) {
+                Ok(vr) => camera.forward.oculus = Some(Box::new(vr)),
+                Err(e) => {
+                    notes.push(format!("VR: {e}; the plain camera"));
+                    camera = CameraForwardYebis::new(&mut graphics, use_blur, false)?;
+                }
             }
         }
         #[cfg(all(windows, not(feature = "wgpu")))]
