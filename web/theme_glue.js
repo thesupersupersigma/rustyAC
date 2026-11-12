@@ -251,11 +251,11 @@
       item.querySelectorAll('input, select').forEach((i) => (i.disabled = true));
       note(item, 'your browser decides this');
     }
-    // what Full mode does not draw yet (post-processing: YEBIS), as the rustyAC tab's list says
+    // what the page never draws (YEBIS post-processing is desktop only), as the rustyAC tab's list says
     for (const key of T.unused || []) {
       for (const el of document.querySelectorAll(`#options [data-bind="video?${key}"]`)) {
         const item = el.closest('.item');
-        if (item && !item.classList.contains('rustyac-browser') && !item.querySelector('.rustyac-note')) note(item, '(not used)');
+        if (item && !item.classList.contains('rustyac-browser') && !item.querySelector('.rustyac-note')) note(item, '(desktop only)');
       }
     }
     const tabs = document.querySelector('#options > .tabs');

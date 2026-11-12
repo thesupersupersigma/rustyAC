@@ -22,7 +22,8 @@ in the bottom-right corner. Now the launcher has AC's real Settings tile too. It
 theme's own and save through the same bridge as on desktop, into the page's own copy of
 `Documents\Assetto Corsa\cfg\*.ini`. What a browser decides for itself (resolution, full
 screen, vertical sync, frame-rate limit) is greyed out with "your browser decides this". What
-the Full mode does not draw yet (the YEBIS post-processing settings) says "(not used)".
+the page never draws (the YEBIS post-processing settings: YEBIS is desktop only, Task Y5) says
+"(desktop only)".
 
 A tab called "rustyAC" at the bottom of Settings' tabs holds what only the page has: full
 screen, sound volume and mute, your controls.ini (keyboard and pad speed sensitivity and the
@@ -47,7 +48,7 @@ All in the page's glue, none in Kunos' theme files:
   leave `data-panel=options` alone besides Drive); every other tile stays hidden and blocked.
   On load it marks the browser-decided settings (`#screenres`, `#fullscreen`, `#vsync`, the
   `launcher?SAVED/FPS_CAP` slider: disabled, faded, "your browser decides this") and the video.ini
-  keys Full mode does not draw (`T.unused`, from `GFX`'s `used` column in app.js: "(not used)"),
+  keys Full mode does not draw (`T.unused`, from `GFX`'s `used` column in app.js: "(desktop only)"),
   and adds the `rustyAC` tab (`<div data-mode="rustyac" class="nonpanel">`) to
   `#options > .tabs`. After every theme `screenChanged` it tells the page whether Settings with
   the rustyAC tab is showing (the body's `data-panel` and `rel`, which the theme sets on every

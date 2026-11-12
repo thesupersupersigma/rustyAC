@@ -1,3 +1,28 @@
+# Task Y5: YEBIS's glare and light shafts (and Y3e's leftovers) (v0.49.0, in progress)
+
+## Resume here
+
+- **Step 0 done** (Y3e-b's leftovers): steps 0.1, 0.2, 0.3 committed. Next: step 1 (glare).
+- Decision (2026-11-12): YEBIS stays desktop only; Task Y4 (the page) is dropped (plan table
+  below, README's browser row, the page's settings say "(desktop only)").
+- Step 0.1: live `rustyac.exe` opens the headset first and makes its `CameraForwardYebis` with
+  `stereo` = a headset opened, as `Sim::createCamera` 0x1401982e0 (`initOculus`/`initOpenVR`
+  before the camera; on failure MODE=DEFAULT and the flat YEBIS camera). The `shortcut:` in
+  `crates/rustyac-game/src/render/ac.rs` is gone. Checked live: OpenVR stand-in root
+  (`re/scratch/taskY5/vr01`, eyes drawn, post-processing on, only eye-size targets bound) and
+  the real root without a runtime (`vr02`, note "VR: Could not initialize the vive; the plain
+  camera", flat YEBIS).
+- Step 0.2: `render_list.txt` rows take `RESIZE:<frame>:<W>x<H>` (`render.sh` sets
+  `RENDER_ORACLE_RESIZE`); the old resize scripts are rows `ry5_01` (FXAA, Y3), `ry5_02`
+  (triple, Y3d-2), `ry5_03` (first shimmer after a remake, Y3e step 0.4).
+- Step 0.3: resize in VR with post-processing, rows `ry5_04` (`--vr --post`) and `ry5_05`
+  (`--oculus --post --fxaa`). The first run found a real difference (pixels IDENTICAL, call log
+  not on the resize frame): `CameraForwardYebis::on_resize` remade the flat YEBIS targets in VR,
+  which the game, having no `CameraForwardYebis` there, never makes. Fixed in
+  `crates/rustyac-render/src/post.rs` (`stereo()`); now `ry5_01`..`05` 5 of 5 IDENTICAL
+  (`re/scratch/taskY5/proof0.txt`, `proof1.txt`).
+- Check step 0: `RENDER_ONLY='ry5_0[1-5]' PROOF_OUT=re/scratch/taskY5/proof sh tools/proofs/render.sh`.
+
 # Task Y3e: YEBIS in VR, and the Y3d-3 shortcuts (v0.48.8)
 
 ## Resume here
@@ -1246,12 +1271,12 @@ of `tools/proofs/render_list.txt` (spa, monza, imola, cockpit / chase / gate, MS
 |---|---|---|---|
 | **Y2** Container + the default chain, desktop | read the `.tfxo` container out of the player's `acs.exe` at run time (magic `.tfxo file`, `hlsl` at +0x38, `docs/atlas/yebis.md` s4); name the 10 logged programs; port the parameter block (video.ini + `ppfilters/default.ini` -> `CPostEffect` state) and the 8 draws with their constant buffers, exposure fixed by the filter; oracle: `compare --post` takes `RENDER_ORACLE_YEBIS` on both sides | 1 task (~4-5 h) | log + pixels, r23_09, r23_10, r23_16, one tape |
 | **Y3** Auto exposure over time + the second round | the luminance read-back (one frame late), exposure adaptation, the 1x1 history textures, whatever round 5-8 is; the exposure apps and per-view exposure then change the picture | 1 task | 60-frame sequences, r23_11..r23_14 |
-| **Y4** The page | the same chain on wgpu: programs read from the player's `acs.exe` at load and translated by the existing DXBC path (`rustyac-dxbc`, `shader_table`, `shader_proof` on SwiftShader); `frameProof` with post on | 1 task | shader_proof on the 10 programs, page frame vs desktop |
+| ~~**Y4** The page~~ (dropped 2026-11-12: YEBIS stays desktop only; the browser draws without post-processing and its settings say "(desktop only)". Why: a scope choice, not something the game forces (so not a `differences.md` entry). YEBIS's code and bytecode never go into the web pack, so the page would have to read every program out of the player's `acs.exe` and translate it at load, and then every Y5-Y7 draw again on wgpu) | the same chain on wgpu: programs read from the player's `acs.exe` at load and translated by the existing DXBC path (`rustyac-dxbc`, `shader_table`, `shader_proof` on SwiftShader); `frameProof` with post on | 1 task | shader_proof on the 10 programs, page frame vs desktop |
 | **Y5** Glare and light shafts | `GLARE` 1..5, `RAYS_OF_GOD`, `[GLARE]` / `[GODRAYS]` sections | 1-2 tasks | log + pixels with GLARE on, sun views |
 | **Y6** Depth of field | `DOF`, `[DOF]`, auto focus, photo mode and the cinematic camera | 1-2 tasks | log + pixels with DOF on, photo views |
 | **Y7** The rest | heat shimmer (volumes from `PostProcessEffectsUpdater`), lens distortion, chromatic aberration, vignette, film grain, switching filters at run time (`PostProcessFilterSelector`), every shipped `ppfilters/*.ini` once | 1 task | log + pixels per filter |
 
-Total: 7-9 tasks. Desktop first in each, the page follows inside the same task from Y4 on.
+Total: 7-9 tasks. Desktop only (Y4, the page, dropped 2026-11-12).
 
 **VR and triple screen.** `StereoCameraForward::renderYebis` 0x140213b10 calls `YebisPP::applyPostProcessing`
 0x14002bb70, the same library with the same context, once per eye; `YebisPP::readPPSet` is a near copy of

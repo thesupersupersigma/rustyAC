@@ -33,13 +33,13 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 |---|---|
 | **Physics** | Bit-exact with the original: tyres, suspension, drivetrain, aero, electronics (TC, ABS, ERS/KERS, DRS), damage. **119 of 123 cars** and **44 track layouts** load. |
 | **Collisions** | ODE 0.13.1 ported to Rust; car-vs-car and car-vs-track contacts, the original's thread pool (same result at any thread count). |
-| **Renderer** | Assetto Corsa's own D3D11 renderer with its own shaders: lighting, shadows, sky, cars, dashboards, mirrors, smoke, skid marks, MSAA / FXAA / motion blur. Post-processing (YEBIS) is not done yet. |
+| **Renderer** | Assetto Corsa's own D3D11 renderer with its own shaders: lighting, shadows, sky, cars, dashboards, mirrors, smoke, skid marks, MSAA / FXAA / motion blur, and YEBIS post-processing (filters, tone mapping, eye adaptation, heat shimmer) on desktop. |
 | **Sound** | AC's own FMOD sound banks, every car. |
 | **Racing** | AI drivers, sessions, flags, penalties, results, pit stops and pit crew, replays (your real `.acreplay` files), ghost car. |
 | **UI** | The in-game HUD, menus, setup editor, pit strategy, telemetry and the player apps, pixel-identical to the game. |
 | **Launcher** | AC's own launcher, with Kunos' theme from your install. |
 | **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
-| **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
+| **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view; post-processing (YEBIS) is not available in the browser), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
 
 Not supported: Custom Shaders Patch (CSP) features. Cars that need CSP won't load, and cars handle like **vanilla** Assetto Corsa (CSP changes the physics).
 

@@ -983,7 +983,7 @@ function showGraphics() {
     const name = document.createElement('label');
     name.append(`${label} `, ...parts);
     row.append(name);
-    if (!used) row.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: ' (not used)' }));
+    if (!used) row.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: ' (desktop only)' }));
     rows.push(row);
   };
   // (with AC's launcher its Video tab edits these: only the render scale here)
