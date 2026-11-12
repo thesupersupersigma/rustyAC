@@ -27,8 +27,9 @@ use rustyac_physics::data::ini::IniReader;
 /// Program pair of each draw, in order: round one 1-4, round two 5-7, composite 8, then the
 /// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step, then the heat shimmer's
 /// particles with 1-4 octaves (13-16), then the glare's bloom (17-27, Task Y5a: bright pass,
-/// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels).
-pub const TECHNIQUES: [&str; 27] = [
+/// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels), then
+/// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum).
+pub const TECHNIQUES: [&str; 37] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -56,6 +57,16 @@ pub const TECHNIQUES: [&str; 27] = [
     "MadLumGammaT5",
     "MadLumGammaT6",
     "MadLumGammaT7",
+    "MadT1_S3",
+    "MadT2",
+    "MadT3",
+    "MaxColorT2",
+    "MaxColorT3",
+    "MaxColorT4",
+    "MaxColorT5",
+    "MaxColorT6",
+    "MaxColorT7",
+    "MaxColorT8",
 ];
 
 /// The glare's techniques by name (`TECHNIQUES` index).
@@ -66,6 +77,11 @@ pub const T_UP: usize = 20;
 pub const T_COPY: usize = 21;
 /// `MadLumGammaT<n>` is `T_SUM + n - 3`.
 pub const T_SUM: usize = 22;
+/// `MadT1_S<n>` (n taps) is `T_TAPS[n - 1]`; `MadT<n>` is `T_MAD2 + n - 2` (`T_COPY` for one);
+/// `MaxColorT<n>` is `T_MAX2 + n - 2`.
+pub const T_TAPS: [usize; 4] = [8, 9, 27, 20];
+pub const T_MAD2: usize = 28;
+pub const T_MAX2: usize = 30;
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
@@ -159,6 +175,27 @@ const GLARE_LIB: [[f32; 5]; 14] = [
     [1.0, 1.5, 1.0, 0.5, 0.5],
 ];
 
+/// Each glare shape's star (`ms_pGlareLib` +0x1c, +0x20: its `CStarDef` library entry and its
+/// inclination) and that entry's streak length (+0x10) and odd streaks' length (+0x14) from the
+/// STARDEF table at 0x141521bb0 (every entry's +0xc is 1).
+const GLARE_STAR: [(usize, f32); 14] = [
+    (0, 0.0),
+    (0, 0.0),
+    (0, 0.0),
+    (1, 0.0),
+    (1, 0.0),
+    (1, 0.0),
+    (2, 0.6544985),
+    (2, -0.6544985),
+    (3, 0.0872665),
+    (3, -0.0872665),
+    (4, 0.0),
+    (4, std::f32::consts::FRAC_PI_4),
+    (5, 1.5707964),
+    (5, 0.0),
+];
+const STAR_LIB: [(f32, f32); 7] = [(0.0, 0.0), (1.25, 0.0), (2.4, 0.0), (2.4, 0.0), (2.4, 1.3), (4.0, 0.0), (3.0, 0.0)];
+
 /// `CPostEffect::Initialize` 0x1403bbb80's glare table (0x141521650): the glare target's share
 /// of the base width and its bloom level count, by quality.
 pub const GLARE_QUALITY: [(f32, usize); 8] = [(0.125, 2), (0.15, 3), (0.2, 4), (0.25, 5), (0.375, 6), (0.5, 7), (0.75, 8), (1.0, 9)];
@@ -189,6 +226,43 @@ pub struct Glare {
     pub bloom_lum: f32,
     pub dispersion: f32,
     pub base_level: i32,
+    pub star: Option<Star>,
+}
+
+/// The star (Task Y5b): the custom shape's `CStarDef` and the star settings `setPostProcessing` hands YEBIS.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Star {
+    /// SHAPE_STAR_STREAKS_NUMBER, the even and odd streaks' length, the first streak's angle, and
+    /// whether the diaphragm turns it
+    pub lines: usize,
+    pub length: f32,
+    pub secondary: f32,
+    pub inclination: f32,
+    pub rotation: bool,
+    /// the glare definition's star luminance (+0x28), CRenderGlare+0x31c (STAR_SOFTNESS) and +0x318 (STAR_FILTER_THRESHOLD)
+    pub lum: f32,
+    pub softness: f32,
+    pub threshold: f32,
+    /// `[DIAPHRAGM]` TYPE, ROTATE_SCALE and ROTATE_OFFSET (CPostEffect+0xb64, +0xb68, +0xb6c)
+    pub diaphragm: (i32, f32, f32),
+}
+
+/// `CPostEffect::GetDiaphragmRotateAngle` 0x1403bb140 at the field of view `fov` (+0x534).
+// shortcut: its depth of field aperture term is left out (no aperture with DOF off, as the logs show), port it with DOF
+pub fn diaphragm_angle(d: (i32, f32, f32), fov: f32) -> f32 {
+    use rustyac_math::{logf, tanf};
+    let (mode, scale, offset) = d;
+    let mut r = match mode {
+        0 => tanf(fov * 0.5) * -1.0 + (std::f32::consts::FRAC_PI_4 - tanf(0.39269876) * -1.0),
+        1 => logf(tanf(fov * 0.5)) * -1.0 + (std::f32::consts::FRAC_PI_4 - logf(tanf(0.39269876)) * -1.0),
+        2 => (1.0 / tanf(fov * 0.5)) * 0.2 + (std::f32::consts::FRAC_PI_4 - (1.0 / tanf(0.39269876)) * 0.2),
+        3 => scale,
+        _ => 0.0,
+    };
+    if mode != 3 {
+        r *= scale;
+    }
+    r + offset
 }
 
 impl Glare {
@@ -211,7 +285,8 @@ impl Glare {
         }
         let (mut glare_lum, mut bloom_lum, mut ghost, mut star, mut base_level) = (lib[0], lib[1], lib[2], lib[3], 4);
         // setPostProcessing 0x140025080: USE_CUSTOM_SHAPE scales the library shape
-        if i("USE_CUSTOM_SHAPE")? != 0 {
+        let custom = i("USE_CUSTOM_SHAPE")? != 0;
+        if custom {
             glare_lum *= f("SHAPE_LUMINANCE")?;
             bloom_lum *= f("SHAPE_BLOOM_LUMINANCE")?;
             dispersion *= f("SHAPE_BLOOM_DISPERSION")?;
@@ -219,16 +294,54 @@ impl Glare {
             ghost *= f("SHAPE_GHOST_LUMINANCE")?;
             star *= f("SHAPE_STAR_LUMINANCE")?;
         }
-        if ghost > 0.0 || star > 0.0 {
-            return Err("yebis: the glare's ghost and star not ported (Y5b)".into());
+        if ghost > 0.0 {
+            return Err("yebis: the glare's ghost not ported (Y5c)".into());
         }
+        let luminance = f("LUMINANCE")?;
+        // CRenderGlare::GenerateGlare_Star 0x140417200 draws with a star luminance, streaks, a length, a glare luminance
+        // and LUMINANCE (+0x108); every library star has a dispersion (its colours: not ported)
+        let star = match (star > 0.0, custom) {
+            (false, _) => None,
+            (true, false) => return Err("yebis: a library glare shape's star (its dispersion) not ported".into()),
+            (true, true) => {
+                for key in ["SHAPE_STAR_DISPERSION", "SHAPE_STAR_FORCE_DISPERSION", "STAR_LENGTH_FOV_DEPENDENCE"] {
+                    if f(key)? != 0.0 {
+                        return Err(format!("yebis: [GLARE] {key} other than 0 not ported"));
+                    }
+                }
+                let (entry, inclination) = GLARE_STAR[shape as usize];
+                let (length, secondary) = STAR_LIB[entry];
+                let lines = i("SHAPE_STAR_STREAKS_NUMBER")?;
+                let length = length * f("SHAPE_STAR_LENGTH")?;
+                let (secondary, inclination) = (secondary * f("SHAPE_STAR_SECONDARY_LENGTH")?, inclination * f("SHAPE_STAR_INCLINATION_ANGLE")?);
+                let rotation = i("SHAPE_STAR_ROTATION")? != 0;
+                // SetGlareStarSoftness 0x1403cb460 (+0xe0 is 0.25), SetGlareStarFilterThreshold 0x1403cb570
+                let softness = f("STAR_SOFTNESS")?;
+                let threshold = f("STAR_FILTER_THRESHOLD")?;
+                // setPostProcessing calls SetDiaphragmRotate only with a scale or an offset (CPostEffect::Initialize: 1, 1, 0)
+                let d = |k: &str| filter.get_float("DIAPHRAGM", k);
+                let (scale, offset) = (d("ROTATE_SCALE")?, d("ROTATE_OFFSET")? * 0.017453);
+                let diaphragm = if scale != 0.0 || offset != 0.0 { (filter.get_int("DIAPHRAGM", "TYPE")?, scale, offset) } else { (1, 1.0, 0.0) };
+                (lines > 0 && length > 0.0 && glare_lum > 0.0 && luminance > 0.0).then_some(Star {
+                    lines: lines as usize,
+                    length,
+                    secondary,
+                    inclination,
+                    rotation,
+                    lum: star,
+                    softness: if softness > 0.0 { softness } else { 0.25 },
+                    threshold: threshold.clamp(1e-05, 0.9999),
+                    diaphragm,
+                })
+            }
+        };
         let threshold = f("THRESHOLD")?;
         if threshold == 0.0 {
             return Err("yebis: [GLARE] THRESHOLD=0 (no bright pass threshold) not ported".into());
         }
         Ok(Glare {
             quality,
-            luminance: f("LUMINANCE")?,
+            luminance,
             threshold,
             range: f("GENERATION_RANGE_SCALE")? * 64.0,
             radius_scale: f("BLOOM_GAUSSIAN_RADIUS_SCALE")?,
@@ -238,6 +351,7 @@ impl Glare {
             bloom_lum,
             dispersion,
             base_level,
+            star,
         })
     }
 }
@@ -611,6 +725,14 @@ impl Cbuffer {
         if let Some(g) = gamma {
             self.put(GAMMA, &[g]);
         }
+        self.upload(&used[t])
+    }
+
+    /// `DrawRectGPU_MaxColorTn` 0x1403ee580: each source's weight in all four channels and one colour (+0x10c).
+    pub fn max_color(&mut self, t: usize, weights: &[f32], colour: [f32; 4], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        let w: Vec<f32> = weights.iter().flat_map(|&w| [w; 4]).collect();
+        self.put(MODULATE, &w);
+        self.put(OFFSET, &colour);
         self.upload(&used[t])
     }
 

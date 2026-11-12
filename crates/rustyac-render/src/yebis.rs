@@ -329,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_SUM, T_UP};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -436,6 +436,8 @@ mod device {
         glare: Vec<(Target, u32, u32)>,
         glare_levels: Vec<(super::GlareLevel, [usize; 3], Option<usize>)>,
         glare_pool: Vec<(Target, u32, u32)>,
+        /// the star's first target (Task Y5b): 8 streaks, the two passes' pair, then the streaks' maximum
+        star_at: usize,
     }
 
     /// The bytes of one input element.
@@ -796,6 +798,7 @@ mod device {
                     });
                     glare_levels.push((l, idx, up));
                 }
+                let star_at = sizes.len();
                 sizes.extend([(ga, gh); 15]);
                 let mut glare = Vec::new();
                 let mut glare_views = Views::new();
@@ -969,6 +972,7 @@ mod device {
                     glare,
                     glare_levels,
                     glare_pool: glare_pool_targets,
+                    star_at,
                 })
             }
         }
@@ -1161,12 +1165,132 @@ mod device {
             // (the source rectangle is the first level's, at the sum's size)
             let v = rect_vertices([sw as f32, sh as f32], [0.0, 0.0, sw as f32, sh as f32], &[src_rect(gw, gh)]);
             self.glare_draw(T_SUM + n - 3, 5, &[], &colours, Some(1.0 / g.gamma), &samplers, &srvs, Some(v))?;
-            // GenerateGlare_Composite 0x14041afb0: a copy, then doubled with the result blur's spread
-            let sum = srv(&self.glare[5].0);
-            let v = rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(gw, gh)]);
-            self.glare_draw(T_COPY, 3, &[], &[[1.0; 4]], None, &[SP], &[sum], Some(v))?;
+            // GenerateGlare_Composite 0x14041afb0: the sum (and the star), then doubled with the result blur's spread
+            let mut parts = vec![5];
+            if let Some(s) = &g.star {
+                parts.push(self.star(pe, g, s)?);
+            }
+            self.mad(3, &parts, &vec![[1.0; 4]; parts.len()])?;
             self.resample((srv(&self.glare[3].0), gw, gh), 4, 1.0 * 0.5)?;
             Ok(srv(&self.glare[4].0))
+        }
+
+        /// `CTextureUtil::MadTn` 0x140400be0 of glare targets `from` into `to`: the first one's rectangle, each read
+        /// through the point sampler at the target's size, else the linear one.
+        unsafe fn mad(&mut self, to: usize, from: &[usize], colours: &[[f32; 4]]) -> Result<(), String> {
+            let t = if from.len() == 1 { T_COPY } else { T_MAD2 + from.len() - 2 };
+            let (samplers, srvs, v) = self.sources(to, from);
+            self.glare_draw(t, to, &[], colours, None, &samplers, &srvs, Some(v))
+        }
+
+        /// The samplers, views and vertices of a draw of glare targets `from` into `to` (see `mad`).
+        fn sources(&self, to: usize, from: &[usize]) -> (Vec<usize>, Vec<Option<ID3D11ShaderResourceView>>, Vec<f32>) {
+            let (_, tw, th) = self.glare[to].clone();
+            let samplers = from.iter().map(|&i| if (self.glare[i].1, self.glare[i].2) == (tw, th) { SP } else { SL }).collect();
+            let srvs = from.iter().map(|&i| self.glare[i].0.srv.clone()).collect();
+            let (_, w, h) = self.glare[from[0]].clone();
+            (samplers, srvs, rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]))
+        }
+
+        /// The star (`GenerateGlare_Star` 0x140417200, `GenerateGlare_StarStreaks` 0x140417570 with no dispersion,
+        /// so every streak colour is white): the bright pass softened with the first two levels' results, each
+        /// streak in passes of up to four taps, each pass four times longer, then the streaks' maximum. Returns the
+        /// target the composite adds.
+        unsafe fn star(&mut self, pe: &PostEffect, g: &Glare, s: &Star) -> Result<usize, String> {
+            use rustyac_math::{cosf, logf, powf, sinf};
+            // the softened source, L[3] (+0x248's fourth: glare[1], which nothing else draws)
+            let f = s.softness;
+            let levels = self.glare_levels.clone();
+            let two = levels.len() > 1;
+            let mut from = vec![2, levels[0].1[1]];
+            let mut colours = vec![[1.0 - f; 4], [f * if two { 1.0 - f } else { 1.0 }; 4]];
+            if two {
+                from.push(levels[1].1[1]);
+                colours.push([f * f; 4]);
+            }
+            self.mad(1, &from, &colours)?;
+            let n = s.lines.min(8);
+            let (lines, work, dst) = (self.star_at, [self.star_at + 8, self.star_at + 9], self.star_at + 10);
+            let (_, ww, wh) = self.glare[work[0]].clone();
+            let (w, h) = (ww as f32, wh as f32);
+            let maxdim = if w <= h { h } else { w };
+            let mut base = s.inclination;
+            if 6.2831855 <= base.abs() {
+                base = (6.2831855 / n as f32) * -0.5;
+            }
+            if s.rotation {
+                base -= crate::yebis_cb::diaphragm_angle(s.diaphragm, pe.fov);
+            }
+            // CRenderGlare+0xa8/+0xac: the glare size
+            let (_, ga, gh) = self.glare[2].clone();
+            let aspect = (ga as f32 / gh as f32) / (w / h);
+            // GetStarCompositeLuminanceScale 0x14041bcd0 (CRenderGlare+0xe6 is always 0: 0.04)
+            let lum = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * 0.04 * s.lum;
+            let k = powf(lum, 0.2);
+            // GetStarRadiusScale 0x14041baa0 with no FOV dependence; the glare's R11G11B10 keeps the threshold unclamped
+            let radius = 1.0 * ga as f32 * 0.003125;
+            let mut weights = vec![1.0f32; n];
+            for (line, weight) in weights.iter_mut().enumerate() {
+                let len = 1.0f32;
+                let mut atten = if s.secondary > 0.0 && line % 2 == 1 { s.secondary } else { s.length };
+                if atten <= 1e-05 {
+                    atten = 1e-05;
+                }
+                let angle = (((360.0 / s.lines as f32) * std::f32::consts::PI) / 180.0) * line as f32;
+                let mut dir = [sinf(base - angle) * (len / w), cosf(base - angle) * (len / h) * aspect];
+                let mut a = ((len / radius) / 6.0) / atten;
+                let x = (logf(s.threshold) / logf(0.5)) / a;
+                let passes = (logf(x) / logf(4.0)).ceil() as i32;
+                let last_taps = match ((x * 4.0) / powf(4.0, passes as f32)).ceil() as i32 {
+                    0 => 4,
+                    t => t.min(4),
+                };
+                let (mut src, mut ping) = (1, 0);
+                let mut p = 0;
+                while p < passes {
+                    let last = p as f32 == (passes - 1) as f32;
+                    let b = if p == 0 { 0.1875 } else { k };
+                    if p > 0 {
+                        *weight *= 1.0 / k;
+                    }
+                    let ws: Vec<f32> = (0..4).map(|j| powf(0.5, j as f32 * a) * b).collect();
+                    let q = powf(4.0, p as f32);
+                    let nt = ((((q * len - 1.0) + maxdim) / (q * len)).ceil() as i32).min(4);
+                    let taps = nt.min(if last { last_taps } else { 4 }) as usize;
+                    let to = if !last && taps > 3 { work[ping] } else { lines + line };
+                    let (_, tw, th) = self.glare[to].clone();
+                    let (_, sw, sh) = self.glare[src].clone();
+                    let [_, _, su, sv] = src_rect(sw, sh);
+                    let offsets: Vec<[f32; 2]> = (0..taps).map(|j| [(j as f32 * dir[0] + 0.0) * su, (j as f32 * dir[1] + 0.0) * sv]).collect();
+                    let colours: Vec<[f32; 4]> = ws[..taps].iter().map(|&w| [w; 4]).collect();
+                    let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[[0.0, 0.0, su, sv]]);
+                    let view = self.glare[src].0.srv.clone();
+                    self.glare_draw(T_TAPS[taps - 1], to, &offsets, &colours, None, &[SLB], &[view], Some(v))?;
+                    dir = [dir[0] * 4.0, dir[1] * 4.0];
+                    a *= 4.0;
+                    src = to;
+                    ping = (ping + 1) % 2;
+                    if taps < 4 {
+                        break;
+                    }
+                    p += 1;
+                }
+            }
+            // MaxColorTn 0x1404010a0 at gamma +0x1ac (1): one streak is MadTn of its weighted colour
+            let c = lum * 5.3333335;
+            let from: Vec<usize> = (lines..lines + n).collect();
+            if n == 1 {
+                self.mad(dst, &from, &[[c * weights[0]; 4]])?;
+            } else {
+                let t = T_MAX2 + n - 2;
+                let (samplers, srvs, v) = self.sources(dst, &from);
+                let (target, tw, th) = self.glare[dst].clone();
+                self.target_only(&target.rtv);
+                self.viewport(0.0, 0.0, tw as f32, th as f32);
+                let u = self.cbuffer.max_color(t, &weights, [c; 4], &self.used);
+                self.draw(t, &u, &samplers, &srvs, &v)?;
+            }
+            Ok(dst)
         }
 
         /// Technique `d`'s input layout: its inputs packed one after another.
