@@ -1046,10 +1046,6 @@ mod device {
             self.full_viewport();
             let u = self.cbuffer.copy(&self.used);
             self.draw(8, &u, &[self.copy_sampler], std::slice::from_ref(e0), &draw_vertices(8, w, h, [0.0; 4], 0.0, 0))?;
-            // shortcut: the source's mode is the texture's first one (linear, border) only for the
-            // first shimmer; the game's later draws leave it at point/clamp (seen in its f45/f46 logs),
-            // the draw that does it is not traced
-            self.copy_sampler = SP;
             let depth = pe.depth_factor();
             let d = crate::yebis_heat::draw(&heat.particles, &heat.view, &heat.frustum, [depth[2], depth[3]], [w, h], [1.0, 1.0], &heat.params);
             let c = self.context.clone();
@@ -1217,6 +1213,12 @@ mod device {
                 let tonemap_vertices = draw_vertices(3, w, h, n, self.vignette, 0);
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
                 self.draw(t3, &u, &[SP, SP, SP, SW], &[e1.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
+                if shimmer.is_some() {
+                    // in a shimmer frame the tonemap's source is the texture the shimmer copies from, and
+                    // DrawRectGPU_TonemapHDR 0x1403f1b10 ends by giving it black's mode (point, clamp):
+                    // it restores its second texture's saved mode into the first (RENDER_ORACLE_SAMPLER_LOG)
+                    self.copy_sampler = SP;
+                }
                 // round two
                 self.reset();
                 self.current = 0;

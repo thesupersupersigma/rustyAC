@@ -238,6 +238,22 @@ extern "system" {
     fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
 }
 static RT_SET: AtomicUsize = AtomicUsize::new(0);
+// RENDER_ORACLE_SAMPLER_LOG=1: every IGPUBaseTexture::SetSamplerStateMode 0x140436580 (its _Filter and
+// _Address tail-call it) to stderr as "SSM texture old new callers"; the game's 20-byte body is
+// replaced by this copy of it (its `ja` is relative, so no detour)
+unsafe extern "C" fn sampler_mode_hook(texture: *mut u8, mode: u32) -> u32 {
+    if mode > 0xf {
+        return 0x8007_0057;
+    }
+    let at = texture.add(0xe0) as *mut u32;
+    let mut frames = [std::ptr::null_mut::<c_void>(); 3];
+    let n = RtlCaptureStackBackTrace(1, 3, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
+    let base = RT_BASE.load(Ordering::SeqCst);
+    let calls: Vec<String> = frames[..n].iter().map(|&f| format!("{:x}", (f as usize).wrapping_sub(base) + 0x1_4000_0000)).collect();
+    eprintln!("SSM {:p} {} {} {}", texture, at.read_unaligned(), mode, calls.join(" "));
+    at.write_unaligned(mode);
+    0
+}
 unsafe extern "C" fn rt_set_hook(this: *mut u8, slot: u32, surface: *mut u8, flags: u32) -> i32 {
     let mut frames = [std::ptr::null_mut::<c_void>(); 3];
     let n = RtlCaptureStackBackTrace(1, 3, frames.as_mut_ptr(), std::ptr::null_mut()) as usize;
@@ -1066,8 +1082,15 @@ impl Game {
                 let dev = [0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x20];
                 RT_DEV.store(acs.detour(0x1_403d_23b0, 15, &dev, rt_dev_hook as *const () as usize), Ordering::SeqCst);
             }
+            if std::env::var_os("RENDER_ORACLE_SAMPLER_LOG").is_some() {
+                RT_BASE.store(acs.va(0x1_4000_0000), Ordering::SeqCst);
+                let mut jump = vec![0x48u8, 0xb8];
+                jump.extend_from_slice(&(sampler_mode_hook as *const () as usize).to_le_bytes());
+                jump.extend_from_slice(&[0xff, 0xe0]);
+                acs.patch(acs.va(0x1_4043_6580), &jump);
+            }
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_some() {
-                let ctor = [0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff];
+                let ctor =[0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff];
                 PFX_CTOR.store(acs.detour(0x1_403b_b820, 15, &ctor, pfx_ctor_hook as *const () as usize), Ordering::SeqCst);
                 let glare = [0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40];
                 GLARE_CTOR.store(acs.detour(0x1_4041_c100, 12, &glare, glare_ctor_hook as *const () as usize), Ordering::SeqCst);

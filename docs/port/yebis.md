@@ -2,10 +2,33 @@
 
 ## Resume here
 
-- **In progress.** Step 0.1 is done; next is step 0.2 (the copy draw's sampler,
-  `copy_sampler` shortcut).
+- **In progress.** Steps 0.1 and 0.2 are done; next is step 0.3 (a shimmer row that moves
+  pixels, test-only ppfilter in a fake install).
 - Check step 0.1: `bash re/scratch/taskY3e/rand2.sh` (game side, 2 cars, `RENDER_ORACLE_RAND_LOG=1`)
   and `cargo test --release -p rustyac-render --lib heat_shimmer`.
+- Check step 0.2: `LABEL=s2 bash re/scratch/taskY3e/cmp.sh` (the Y3d-3 compare, 52 frames,
+  writes `re/scratch/taskY3e/s2.log`); the game's sampler modes: `bash re/scratch/taskY3e/samp.sh`
+  (`RENDER_ORACLE_SAMPLER_LOG=1`, `SSM` lines in `samp.log`).
+
+## Step 0.2: the copy draw's sampler (the `copy_sampler` shortcut is gone)
+
+- New hook `RENDER_ORACLE_SAMPLER_LOG=1`: every `IGPUBaseTexture::SetSamplerStateMode`
+  0x140436580 (its `_Filter` and `_Address` tail-call it) as `SSM texture old new` and three
+  return addresses. Mode = address * 4 + filter (filter 0 linear, 1 point; address 0 border, 1
+  clamp, 3 wrap).
+- `DrawRectGPU_TonemapHDR` 0x1403f1b10 saves its two textures' modes, sets filter and clamp, and
+  at the end (machine code at 0x1403f29bd to 0x1403f29d1) restores the first texture's mode, then
+  stores the **second** texture's saved mode into the **first** again. The second texture is
+  the black one (`CRenderGlare::TonemapToSurface` 0x14041d7f0), mode 5 (point, clamp) from the
+  start. So every tonemap leaves its source at point/clamp.
+- In a shimmer frame the tonemap's source is the same texture object the shimmer copies from
+  (game log, frame 45: copy at mode 0, tonemap 0 to 5, the next copy at 5). Before frame 45 the
+  tonemap reads another texture and the copy source stays at mode 0.
+- The port now switches `copy_sampler` to point/clamp after round one's tonemap in a shimmer
+  frame, not in `shimmer()`.
+- Proof: call log and pixels IDENTICAL in all 51 frames (`s2`). Planted change (no switch):
+  call log DIFFERENT in frames 45 to 47, first at line 5472; pixels IDENTICAL (a same-size copy
+  gives the same pixels with either sampler).
 
 ## Step 0.1: the shimmer sets are made once, from race.ini's cars
 
