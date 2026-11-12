@@ -125,6 +125,14 @@ impl CameraForwardYebis {
         Ok(())
     }
 
+    /// A headset's camera does its own post-processing: the game has no CameraForwardYebis then.
+    fn stereo(&self) -> bool {
+        #[cfg(not(feature = "backend-wgpu"))]
+        return self.forward.vr.is_some() || self.forward.oculus.is_some();
+        #[cfg(feature = "backend-wgpu")]
+        false
+    }
+
     /// The old YEBIS's teardown, which the game does before the screen is resized.
     pub fn before_resize(&self, graphics: &Graphics) {
         #[cfg(all(windows, not(feature = "backend-wgpu")))]
@@ -141,7 +149,7 @@ impl CameraForwardYebis {
         self.forward.on_resize(graphics)?;
         self.width = graphics.video.width;
         self.height = graphics.video.height;
-        if graphics.video.pp_hdr_enabled {
+        if graphics.video.pp_hdr_enabled && !self.stereo() {
             self.init_render_targets(graphics)?;
             // initPostProcessing 0x140024ca0: a new particle manager
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
@@ -168,12 +176,7 @@ impl CameraForwardYebis {
 
     /// `CameraForwardYebis::render` 0x14002a450.
     pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, unblurred: NodeId, root: NodeId, dt: f32) -> Result<(), String> {
-        // a headset's camera does its own post-processing
-        #[cfg(not(feature = "backend-wgpu"))]
-        let stereo = self.forward.vr.is_some() || self.forward.oculus.is_some();
-        #[cfg(feature = "backend-wgpu")]
-        let stereo = false;
-        if !graphics.video.pp_hdr_enabled || stereo {
+        if !graphics.video.pp_hdr_enabled || self.stereo() {
             return self.forward.render(graphics, scene, blurred, root, dt);
         }
         self.forward.base.shadow_map_pass(graphics, scene, root)?;
