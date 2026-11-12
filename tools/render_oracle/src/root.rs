@@ -102,10 +102,14 @@ pub fn pp_quality() -> i32 {
     std::env::var("RENDER_ORACLE_PP_QUALITY").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
-/// RENDER_ORACLE_HEAT_SHIMMER=1: `[POST_PROCESS] HEAT_SHIMMER` (Task Y3d-3)
+/// RENDER_ORACLE_HEAT_SHIMMER=1: `[POST_PROCESS] HEAT_SHIMMER` (Task Y3d-3); always on with the test filter
 pub fn heat_shimmer() -> bool {
-    std::env::var("RENDER_ORACLE_HEAT_SHIMMER").is_ok_and(|v| v == "1")
+    std::env::var("RENDER_ORACLE_HEAT_SHIMMER").is_ok_and(|v| v == "1") || profile().ppfilter == HEAT_TEST
 }
+
+/// Task Y3e: `--ppfilter rustyac_heat_x100`, made by `prepare` in the root: the game's default.ini with
+/// HEAT_PARTICLE_SHIMMER 0.4, 100 times its own, which moves no pixel (a shimmer row that does)
+pub const HEAT_TEST: &str = "rustyac_heat_x100";
 
 pub fn video_ini(width: u32, height: u32) -> String {
     let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple, vr, oculus, vr_room, vr_tracker: _, ppfilter } = profile();
@@ -207,6 +211,17 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     copy_dir(&game.join("system/cfg"), &root.join("system/cfg"), false)?;
     // CameraForwardYebis::readPPSetOptions reads the default filter
     copy_dir(&game.join("system/cfg/ppfilters"), &root.join("system/cfg/ppfilters"), false)?;
+    if profile().ppfilter == HEAT_TEST {
+        let dir = root.join("system/cfg/ppfilters");
+        let default = std::fs::read_to_string(dir.join("default.ini")).map_err(|e| format!("default.ini: {e}"))?;
+        let text = default.replacen("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4", 1);
+        if text == default {
+            return Err("default.ini has no HEAT_PARTICLE_SHIMMER=0.004 to make the test filter from".into());
+        }
+        if std::fs::read_to_string(dir.join(format!("{HEAT_TEST}.ini"))).ok() != Some(text.clone()) {
+            std::fs::write(dir.join(format!("{HEAT_TEST}.ini")), text).map_err(|e| e.to_string())?;
+        }
+    }
     copy_dir(&game.join("system/shaders/win"), &root.join("system/shaders/win"), false)?;
     copy_dir(&game.join("content/weather"), &root.join("content/weather"), true)?;
     // the crowds' textures

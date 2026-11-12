@@ -2,13 +2,31 @@
 
 ## Resume here
 
-- **In progress.** Steps 0.1 and 0.2 are done; next is step 0.3 (a shimmer row that moves
-  pixels, test-only ppfilter in a fake install).
+- **In progress.** Steps 0.1 to 0.3 are done; next is step 0.4 (the first shimmer after a
+  YEBIS remake, `RENDER_ORACLE_RESIZE`).
 - Check step 0.1: `bash re/scratch/taskY3e/rand2.sh` (game side, 2 cars, `RENDER_ORACLE_RAND_LOG=1`)
   and `cargo test --release -p rustyac-render --lib heat_shimmer`.
 - Check step 0.2: `LABEL=s2 bash re/scratch/taskY3e/cmp.sh` (the Y3d-3 compare, 52 frames,
   writes `re/scratch/taskY3e/s2.log`); the game's sampler modes: `bash re/scratch/taskY3e/samp.sh`
   (`RENDER_ORACLE_SAMPLER_LOG=1`, `SSM` lines in `samp.log`).
+- Check step 0.3: `LABEL=h1 bash re/scratch/taskY3e/heat.sh` or the row:
+  `RENDER_ONLY=ry3e_01 PROOF_OUT=re/scratch/taskY3e/proof sh tools/proofs/render.sh`.
+
+## Step 0.3: a shimmer row that moves pixels (`ry3e_01`)
+
+- No fake install was needed: both sides of `render_oracle` read the filters from the oracle's
+  own scratch root (`root::prepare` copies the game's `system/cfg/ppfilters` there), never from
+  the install.
+- `--ppfilter rustyac_heat_x100`: `prepare` writes it into the root from the root's `default.ini`
+  with `HEAT_PARTICLE_SHIMMER=0.4` (100 times 0.004), and it turns `[POST_PROCESS] HEAT_SHIMMER`
+  on. Nothing of AC's goes into the repo.
+- New full row `ry3e_01` (not quick): `spa_launch`, 52 frames, `--post --fxaa`, the shimmer from
+  frame 45. IDENTICAL in `render.sh`.
+- `re/scratch/taskY3e/heat.sh` (`h1`): call log and pixels IDENTICAL in all 51 frames. The same run
+  with `default.ini` (`h0`, IDENTICAL too): the game's frame 50 differs from `h1` in 86,603 of
+  921,600 pixels, frame 44 (before the shimmer) in none.
+- Planted change (port's shimmer 1.25 times, `h1p`, 48 frames): frames 45 to 47 DIFFERENT, call
+  log 4 lines, pixels 83,029 of 921,600, largest channel difference 200.
 
 ## Step 0.2: the copy draw's sampler (the `copy_sampler` shortcut is gone)
 
