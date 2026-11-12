@@ -156,6 +156,8 @@ impl CameraForward {
 
     /// `CameraForward::render` 0x14021fc40.
     pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, root: NodeId, dt: f32) -> Result<(), String> {
+        #[cfg(feature = "backend-wgpu")]
+        let _ = dt; // (only the headsets use it)
         #[cfg(not(feature = "backend-wgpu"))]
         if let Some(mut vr) = self.vr.take() {
             let done = vr.render(self, graphics, scene, blurred, root, dt);
