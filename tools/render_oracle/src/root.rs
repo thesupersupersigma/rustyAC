@@ -121,9 +121,11 @@ pub const HEAT_TEST: &str = "rustyac_heat_x100";
 
 /// The test filters `prepare` makes from the game's default.ini: (name, [(from, to)]).
 /// Task Y5a: `rustyac_bloom`, glare with only the bloom (no star or ghost; light shafts are video.ini's RAYS_OF_GOD).
-const TEST_FILTERS: [(&str, &[(&str, &str)]); 2] = [
+/// Task Y5b: `rustyac_star`, the bloom and the star (no ghost).
+const TEST_FILTERS: [(&str, &[(&str, &str)]); 3] = [
     (HEAT_TEST, &[("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4")]),
     ("rustyac_bloom", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0"), ("SHAPE_STAR_LUMINANCE=0.025", "SHAPE_STAR_LUMINANCE=0")]),
+    ("rustyac_star", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0")]),
 ];
 
 pub fn video_ini(width: u32, height: u32) -> String {
