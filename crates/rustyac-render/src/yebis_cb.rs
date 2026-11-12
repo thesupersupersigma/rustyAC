@@ -13,20 +13,22 @@
 //! declared size). Leftovers carry over between draws and frames, so a frame from a fresh
 //! store differs from the game's; the second frame is the steady state the game logs.
 //!
-//! Not ported (not on this chain): glare, DOF, light shafts, the heat shimmer's draws, lens distortion,
-//! feedback, vignette simulation, HUE / SEPIA, tone-map functions other than 0, 1 and the filmic
-//! default, auto exposure with a delay, a metering window, glare or another tone map.
+//! Not ported (not on this chain): the glare's star, ghost, afterimage and anamorphic flare, DOF,
+//! light shafts, lens distortion, feedback, vignette simulation, HUE / SEPIA, tone-map functions
+//! other than 0, 1 and the filmic default, auto exposure with a delay, a metering window, glare
+//! or another tone map.
 //!
 //! Step 3 (Task Y2c), `AutoExposure`: the exposure over time from the luminance row draws, the
-//! analysis down to 1x1 and its readback.
+//! analysis down to 1x1 and its readback. Task Y5a, `Glare`: the glare's bloom.
 
-use rustyac_math::{logf, powf};
+use rustyac_math::{expf, logf, powf, sqrtf};
 use rustyac_physics::data::ini::IniReader;
 
 /// Program pair of each draw, in order: round one 1-4, round two 5-7, composite 8, then the
 /// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step, then the heat shimmer's
-/// particles with 1-4 octaves (13-16).
-pub const TECHNIQUES: [&str; 17] = [
+/// particles with 1-4 octaves (13-16), then the glare's bloom (17-27, Task Y5a: bright pass,
+/// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels).
+pub const TECHNIQUES: [&str; 27] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -44,7 +46,26 @@ pub const TECHNIQUES: [&str; 17] = [
     "HeatShimmerParticle_S2",
     "HeatShimmerParticle_S3",
     "HeatShimmerParticle_S4",
+    "BrightPassT1_Vignette_THRESHOLD_S1",
+    "MadT1_S7",
+    "MadT1_S11",
+    "MadT1_S4",
+    "MadT1",
+    "MadLumGammaT3",
+    "MadLumGammaT4",
+    "MadLumGammaT5",
+    "MadLumGammaT6",
+    "MadLumGammaT7",
 ];
+
+/// The glare's techniques by name (`TECHNIQUES` index).
+pub const T_BRIGHT: usize = 17;
+pub const T_GAUSS7: usize = 18;
+pub const T_GAUSS11: usize = 19;
+pub const T_UP: usize = 20;
+pub const T_COPY: usize = 21;
+/// `MadLumGammaT<n>` is `T_SUM + n - 3`.
+pub const T_SUM: usize = 22;
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
@@ -114,16 +135,126 @@ pub struct PostEffect {
     pub depth: [f32; 5],      // +0xb8c..+0xb9c
     /// `[AUTO_EXPOSURE]` on: MIN, MAX and the middle grey `updatePP` hands YEBIS.
     pub auto_exposure: Option<[f32; 3]>,
+    /// video.ini's GLARE on.
+    pub glare: Option<Glare>,
+}
+
+/// `CGlareDef::ms_pGlareLib` (`InitializeStaticGlareLibs` 0x140412eb0 from the GLAREDEF table at
+/// 0x141521c90): glare (+8), bloom (+0xc), ghost (+0x10) and star (+0x18) luminance and the
+/// dispersion parameter (+0x24) of the 14 `[GLARE] SHAPE`s.
+const GLARE_LIB: [[f32; 5]; 14] = [
+    [0.0, 0.0, 0.0, 0.0, 0.5],
+    [1.0, 1.0, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0, 0.5, 0.5],
+    [1.2, 1.2, 1.0, 1.0, 0.99],
+    [1.0, 1.0, 1.0, 0.5, 0.5],
+    [1.0, 1.5, 1.0, 1.0, -0.99],
+    [1.0, 1.5, 1.0, 1.0, -1.0],
+    [1.0, 1.5, 1.0, 1.0, -0.99],
+    [1.0, 1.5, 1.0, 1.0, -1.0],
+    [1.0, 1.5, 1.0, 1.0, -0.99],
+    [1.0, 1.5, 1.0, 1.0, -1.0],
+    [1.0, 1.5, 1.0, 0.5, 0.5],
+    [1.0, 1.5, 1.0, 0.5, 0.5],
+];
+
+/// `CPostEffect::Initialize` 0x1403bbb80's glare table (0x141521650): the glare target's share
+/// of the base width and its bloom level count, by quality.
+pub const GLARE_QUALITY: [(f32, usize); 8] = [(0.125, 2), (0.15, 3), (0.2, 4), (0.25, 5), (0.375, 6), (0.5, 7), (0.75, 8), (1.0, 9)];
+
+/// The glare quality YEBIS is made with: `CameraForwardYebis::initPostProcessing` 0x140024ca0
+/// scales video.ini's GLARE (0-5) to `min(GetMaxGlareQuality() (7), 5)`.
+pub fn glare_quality(video: &IniReader) -> usize {
+    let g = video.get_int("POST_PROCESS", "GLARE").unwrap_or(0);
+    ((5.0f32 * (g as f32 / 5.0)) as i32).clamp(0, 7) as usize
+}
+
+/// The glare's bloom (Task Y5a): the `[GLARE]` values `setPostProcessing` hands YEBIS and what
+/// `CRenderGlare::GenerateGlare` 0x14041d470 makes of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Glare {
+    pub quality: usize,
+    /// LUMINANCE (CPostEffect+0x66c) and THRESHOLD (+0x668)
+    pub luminance: f32,
+    pub threshold: f32,
+    /// CRenderGlare+0x104: the R11G11B10 range 64 x GENERATION_RANGE_SCALE
+    pub range: f32,
+    /// BLOOM_GAUSSIAN_RADIUS_SCALE (+0x314), BLOOM_FILTER_THRESHOLD (+0x310), BLOOM_LUMINANCE_GAMMA (+0x1a8)
+    pub radius_scale: f32,
+    pub cutoff: f32,
+    pub gamma: f32,
+    /// the glare definition's glare and bloom luminance, bloom dispersion and its first level
+    pub glare_lum: f32,
+    pub bloom_lum: f32,
+    pub dispersion: f32,
+    pub base_level: i32,
+}
+
+impl Glare {
+    fn new(filter: &IniReader, quality: usize) -> Result<Glare, String> {
+        let f = |k: &str| filter.get_float("GLARE", k);
+        let i = |k: &str| filter.get_int("GLARE", k);
+        // what changes the targets or adds draws: Task Y5b and on
+        for (key, want) in [("GHOST", 1), ("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BRIGHT_PASS", 0), ("BLOOM_NUM_LEVELS", 0), ("BLUR", 1), ("PRECISION", 0)] {
+            if i(key)? != want {
+                return Err(format!("yebis: [GLARE] {key} other than {want} not ported (Y5b)"));
+            }
+        }
+        let shape = i("SHAPE")?;
+        let lib = *GLARE_LIB.get(shape as usize).ok_or_else(|| format!("yebis: [GLARE] SHAPE={shape} is not a glare shape"))?;
+        // CGlareDef::Initialize 0x140412bf0: the dispersion from the table's +0x24
+        let p9 = lib[4];
+        let mut dispersion = p9.abs() * 0.8;
+        if p9.abs() < 1.0 && p9 < 0.0 && -1.0 < p9 {
+            dispersion = 0.4;
+        }
+        let (mut glare_lum, mut bloom_lum, mut ghost, mut star, mut base_level) = (lib[0], lib[1], lib[2], lib[3], 4);
+        // setPostProcessing 0x140025080: USE_CUSTOM_SHAPE scales the library shape
+        if i("USE_CUSTOM_SHAPE")? != 0 {
+            glare_lum *= f("SHAPE_LUMINANCE")?;
+            bloom_lum *= f("SHAPE_BLOOM_LUMINANCE")?;
+            dispersion *= f("SHAPE_BLOOM_DISPERSION")?;
+            base_level = i("SHAPE_BLOOM_DISPERSION_BASE_LEVEL")?;
+            ghost *= f("SHAPE_GHOST_LUMINANCE")?;
+            star *= f("SHAPE_STAR_LUMINANCE")?;
+        }
+        if ghost > 0.0 || star > 0.0 {
+            return Err("yebis: the glare's ghost and star not ported (Y5b)".into());
+        }
+        let threshold = f("THRESHOLD")?;
+        if threshold == 0.0 {
+            return Err("yebis: [GLARE] THRESHOLD=0 (no bright pass threshold) not ported".into());
+        }
+        Ok(Glare {
+            quality,
+            luminance: f("LUMINANCE")?,
+            threshold,
+            range: f("GENERATION_RANGE_SCALE")? * 64.0,
+            radius_scale: f("BLOOM_GAUSSIAN_RADIUS_SCALE")?,
+            cutoff: f("BLOOM_FILTER_THRESHOLD")?,
+            gamma: f("BLOOM_LUMINANCE_GAMMA")?,
+            glare_lum,
+            bloom_lum,
+            dispersion,
+            base_level,
+        })
+    }
 }
 
 impl PostEffect {
     /// `filter` is `system/cfg/ppfilters/<[POST_PROCESS] FILTER>.ini`.
     pub fn new(filter: &IniReader, video: &IniReader, cam: &Camera) -> Result<PostEffect, String> {
-        for key in ["DOF", "GLARE", "RAYS_OF_GOD"] {
+        for key in ["DOF", "RAYS_OF_GOD"] {
             if video.get_int("POST_PROCESS", key).unwrap_or(0) != 0 {
                 return Err(format!("yebis: [POST_PROCESS] {key} is on: not ported (Y5-Y7)"));
             }
         }
+        // CameraForwardYebis's constructor: glareEnabled = GLARE != 0
+        let glare = match glare_quality(video) {
+            0 => None,
+            q => Some(Glare::new(filter, q)?),
+        };
         let f = |s: &str, k: &str| filter.get_float(s, k);
         let i = |s: &str, k: &str| filter.get_int(s, k);
         if i("TONEMAPPING", "HDR")? != 1 {
@@ -195,6 +326,7 @@ impl PostEffect {
             fov: cam.fov_deg * 0.017453,
             aspect: cam.width as f32 / cam.height as f32,
             auto_exposure,
+            glare,
             exposure: exposure.max(f32::MIN_POSITIVE),
             exposure_scale: 1.0,
             gamma: f("TONEMAPPING", "GAMMA")?.max(0.0),
@@ -229,6 +361,8 @@ impl PostEffect {
             mapping: 1.0,
             mapping_div: 1.0,
             color_matrix: IDENTITY,
+            // the alpha round makes no glare (GetEffectiveTonemapParameters' glare factor 0)
+            glare: None,
             ..self.clone()
         }
     }
@@ -448,7 +582,12 @@ impl Cbuffer {
             3 | 11 => self.tonemap(pe, filmic, true),
             4 => self.depth_blur_factor(pe),
             6 | 12 => self.tonemap(&pe.round_two(), filmic, true),
-            7 => self.put(MODULATE, &[if pe.alpha_out == 2 { pe.alpha_out_scale } else { 1.0 }, 0.0, 0.0, 0.0]),
+            // EndPostEffectScene_Process 0x1403b84d0: the glare's share, GetEffectiveGlareLuminanceScale (1)
+            // x +0x704 x the glare's +0x108 x +0x45c (AC never calls SetAlphaOutputParameters: 1)
+            7 => {
+                let glare = pe.glare.as_ref().map_or(0.0, |g| 1.0 * pe.mapping_div * (g.luminance / pe.mapping_div) * 1.0);
+                self.put(MODULATE, &[if pe.alpha_out == 2 { pe.alpha_out_scale } else { 1.0 }, 0.0, 0.0, glare])
+            }
             // CTextureLuminance::Analyze's Resample steps: `taps` with equal weights
             8..=10 => {
                 let taps: Vec<f32> = self.taps.iter().flat_map(|&[u, v]| [u, v, 0.0, 0.0]).collect();
@@ -456,6 +595,21 @@ impl Cbuffer {
                 self.put(MODULATE, &vec![1.0 / self.taps.len() as f32; taps.len()]);
             }
             _ => unreachable!("no technique {t}"),
+        }
+        self.upload(&used[t])
+    }
+
+    /// A glare draw (Task Y5a): `DrawRectGPU_MadT1_Sn`'s taps (the first 8 in one array, the rest
+    /// in the next, as the game's S11 draw writes them), each tap's colour (or the bright pass's
+    /// three vectors), `DrawRectGPU_MadLumGammaTn`'s gamma.
+    pub fn glare(&mut self, t: usize, taps: &[[f32; 2]], colours: &[[f32; 4]], gamma: Option<f32>, used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        for (k, &[u, v]) in taps.iter().enumerate() {
+            let at = if k < 8 { TAPS + k * 16 } else { TEX_OFFSET + (k - 8) * 16 };
+            self.put(at, &[u, v, 0.0, 0.0]);
+        }
+        self.put(MODULATE, colours.as_flattened());
+        if let Some(g) = gamma {
+            self.put(GAMMA, &[g]);
         }
         self.upload(&used[t])
     }
@@ -551,7 +705,9 @@ impl Cbuffer {
         };
         self.put(MAX_MAPPING_LUM, &lum);
         let c = pe.color;
-        self.put(MODULATE, &[p6, 0.0, 1.0, c[3], c[0], c[1], c[2], c[3]]);
+        // GetEffectiveTonemapParameters 0x1403badc0: the glare's factor, 1 with the glare on (round one's tone map)
+        let g = if last && pe.glare.is_some() { 1.0 } else { 0.0 };
+        self.put(MODULATE, &[p6, g, 1.0, c[3], c[0], c[1], c[2], c[3]]);
         let (p28, p29) = if pe.vignette_optics { (pe.vignette[0], pe.vignette[1]) } else { (0.0, 0.0) };
         let (p30, p31) = if last { (pe.vignette[2], pe.vignette[3]) } else { (0.0, 0.0) };
         let tex = f32::from_bits((p29 * 0.1) as u32);
@@ -565,12 +721,52 @@ impl Cbuffer {
         // p16 (ColorTransformMatrix) is the identity in AC's frame: never written
         if pe.color_matrix != IDENTITY {
             self.put_matrix(PRE_TONEMAP, &mul(&diag(p6, p6, p6), &pe.color_matrix));
-            self.put_matrix(PRE_TONEMAP_GLARE, &mul(&diag(0.0, 0.0, 0.0), &pe.color_matrix));
+            self.put_matrix(PRE_TONEMAP_GLARE, &mul(&diag(g, g, g), &pe.color_matrix));
         }
         let f = if pe.dither == -f32::MAX { 0.003921569 } else { pe.dither };
         if f != f32::MAX && f != 0.0 {
             self.put(DITHER, &[f, f * -0.5]);
         }
+    }
+}
+
+/// `GetColorWeight7_Gauss7` 0x1403acf40 / `GetColorWeight11_Gauss11` 0x1403ad220: the offsets
+/// (texels of a texture `size` wide) and weights of `n` (7 or 11) taps of a gaussian of `radius`,
+/// the weights normalised by their sum (centre, then +1, -1, +2, -2, ...).
+pub fn gauss_weights(n: usize, size: u32, radius: f32) -> (Vec<f32>, Vec<f32>) {
+    let r = if radius <= 1e-8 { 1e-8 } else { radius };
+    let f = 1.0 / (r * 2.0 * r);
+    let inv = 1.0 / size as f32;
+    let x: Vec<f32> = (0..n / 2).map(|i| i as f32 + 1.0).collect();
+    let e: Vec<f32> = x.iter().map(|&x| expf(-((x * 1.0) * (x * 1.0) * f))).collect();
+    let c = expf(-(1.0 * 0.0 * 1.0 * 0.0 * f));
+    let mut sum = e[0] * 2.0 + c;
+    for v in &e[1..] {
+        sum += v * 2.0;
+    }
+    let w = 1.0 / sum;
+    let (mut offsets, mut weights) = (vec![0.0], vec![c * w]);
+    for (x, e) in x.iter().zip(&e) {
+        offsets.extend([x * inv, -(x * inv)]);
+        weights.extend([e * w, e * w]);
+    }
+    (offsets, weights)
+}
+
+/// `GaussianFilterMax29x29_2Pass` 0x14040a560's tap count for a largest radius `radius` and the
+/// bloom's cutoff: the first `GetGaussianArray` 0x1403a85f0 entry from 2 on below the cutoff; 4
+/// is the 7x7 filter, 6 the 11x11, the rest are not ported (the 3x3 and the filter's own path).
+pub fn gauss_taps(radius: f32, cutoff: f32) -> Result<usize, String> {
+    let norm = 1.0 / (sqrtf(6.2831855) * radius);
+    let k = 1.0 / (radius * 2.0 * radius);
+    let below = (2..15).find(|&i| {
+        let a = expf(-((i * i) as f32 * k)) * norm;
+        a <= cutoff && cutoff != a
+    });
+    match below {
+        Some(4) => Ok(7),
+        Some(6) => Ok(11),
+        b => Err(format!("yebis: a bloom gaussian of radius {radius} ({b:?}) not ported (Y5b)")),
     }
 }
 
@@ -636,6 +832,15 @@ impl AutoExposure {
     /// One frame: `readback` is the 1x1 RGBA of the last analysis once it is there, `ae` is
     /// `PostEffect::auto_exposure`, `new_exposure` `Camera::new_exposure`. Returns this frame's
     /// tone-map exposure and luminance step.
+    /// CPostEffect+0x6f4 as this frame starts (what `frame` returns): the camera's new exposure or the last one.
+    pub fn exposure(&self, new_exposure: bool) -> f32 {
+        if new_exposure {
+            self.value
+        } else {
+            self.tonemap
+        }
+    }
+
     pub fn frame(&mut self, readback: Option<[u8; 4]>, ae: [f32; 3], dt: f32, new_exposure: bool) -> (f32, Luminance) {
         let [min, max, grey] = ae;
         if new_exposure {
@@ -915,4 +1120,20 @@ mod tests {
         assert_eq!(mul(&s, &inverse(&s)), IDENTITY);
     }
 
+    /// The game's bloom gaussians at 1280x720, QUALITY=3, GLARE=3 (taskY5 b3 frame, draws 857-860).
+    #[test]
+    #[allow(clippy::excessive_precision)] // the game's logged digits
+    fn bloom_gaussians_follow_the_games() {
+        let r0 = 0.5f32 * 2.2 * 0.95;
+        let r1 = (2.0 * r0) * sqrtf(0.75);
+        assert_eq!((gauss_taps(r0, 0.002), gauss_taps(r1, 0.002)), (Ok(7), Ok(11)));
+        let ch = |r: f32, n| [(r * 6.15e-07) / 6.15e-07, (r * 5.4e-07) / 6.15e-07, (r * 4.65e-07) / 6.15e-07].map(|c| gauss_weights(n, 192, c).1);
+        let w = ch(r0, 7);
+        assert_eq!([w[0][0], w[1][0], w[2][0]], [0.381958097, 0.434813946, 0.504909158]);
+        assert_eq!([w[0][1], w[1][2], w[2][5]], [0.241639242, 0.240095347, 0.000373895833]);
+        let w = ch(r1, 11);
+        assert_eq!([w[0][0], w[1][0], w[2][0], w[0][9], w[2][10]], [0.220872134, 0.251133025, 0.29152301, 0.00486488082, 0.000368210458]);
+        let (o, w) = gauss_weights(11, 108, 0.0);
+        assert_eq!((o[1], o[10], w[0], w[1]), (1.0 / 108.0, -(5.0 * (1.0 / 108.0)), 1.0, 0.0));
+    }
 }

@@ -112,9 +112,38 @@ pub fn base_width(quality: i32, w: i32) -> i32 {
     }
 }
 
-/// The glare target (`CPostEffect::Initialize` 0x1403bbb80): GLARE=0's 0.125 of the base width.
-pub fn glare_size(base: i32, w: i32, h: i32) -> (u32, u32) {
-    effect_size(base, 0.125, w, h)
+/// The glare target (`CPostEffect::Initialize` 0x1403bbb80): the glare quality's share of the
+/// base width (`yebis_cb::GLARE_QUALITY`, 0.125 at GLARE=0).
+pub fn glare_size(base: i32, quality: usize, w: i32, h: i32) -> (u32, u32) {
+    effect_size(base, crate::yebis_cb::GLARE_QUALITY[quality].0, w, h)
+}
+
+/// One bloom level of the glare (`CRenderGlare::CreateSystemObjects` 0x140413c00, the +0x278
+/// list): its size, whether it has its own three targets (the levels past the first two, k > 0),
+/// the size it is resampled up to (+0x28) and its radius step (+8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlareLevel {
+    pub size: (u32, u32),
+    pub own: bool,
+    pub up: Option<(u32, u32)>,
+    pub step: f32,
+}
+
+/// The glare's bloom levels: the quality table's count, at most `log2(width)` (GLAREPARAM::FillDefaults,
+/// the +0x30 constant 2 levels at full glare size), each later one halved.
+pub fn glare_levels(base: i32, quality: usize, w: i32, h: i32) -> Vec<GlareLevel> {
+    let (gw, gh) = glare_size(base, quality, w, h);
+    let cc = 2;
+    let n = (crate::yebis_cb::GLARE_QUALITY[quality].1 as i32).min(cc - 2 + (rustyac_math::logf(gw as f32) / rustyac_math::logf(2.0)) as i32);
+    (0..n)
+        .map(|i| {
+            let k = i - cc + 1;
+            let scale = if k > 0 { rustyac_math::powf(2.0, -(k as f32)) } else { 1.0 };
+            let size = if k > 0 { ((gw as f32 * scale + 0.99) as u32, (gh as f32 * scale + 0.99) as u32) } else { (gw, gh) };
+            let up = (k >= 1 && ((w as u32 >> 4) >= size.0 || i == n - 1)).then_some((size.0 * 2, size.1 * 2));
+            GlareLevel { size, own: k > 0, up, step: rustyac_math::powf(2.0, i as f32) * scale }
+        })
+        .collect()
 }
 
 /// A `factor` of the base width (at most the base and the frame's width) at the frame's aspect,
@@ -189,8 +218,8 @@ pub fn half_pairs(base: i32, w: i32, h: i32) -> Vec<(u32, u32)> {
 }
 
 /// The glare pool's halvings of the frame: enough to come down to the glare's size.
-pub fn glare_pool(base: i32, w: i32, h: i32) -> Vec<(u32, u32)> {
-    halvings(glare_size(base, w, h), w, h)
+pub fn glare_pool(base: i32, quality: usize, w: i32, h: i32) -> Vec<(u32, u32)> {
+    halvings(glare_size(base, quality, w, h), w, h)
 }
 
 /// The vertices of draw `d` (0-based) of a `w` x `h` frame. `noise` is the draw's noise (draws
@@ -200,11 +229,7 @@ pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32, r
     let zero = [0.0; 4];
     // the noise offsets of the 1x1 noise texture; the luminance draw passes 0 for both scales,
     // which makes NaN and +inf (x86's default NaN: black_box keeps the compiler from folding it)
-    let noise_rect = |p32: f32, p33: f32| {
-        let (p32, p33) = (std::hint::black_box(p32), std::hint::black_box(p33));
-        let [n0, n1, s2, s3] = noise;
-        [n0, n1, n0 + s2 * (((1024.0 / 1.0) * 2.0 * p33) / p32), n1 + s3 * (((1024.0 / 1.0) * 2.0) / p32)]
-    };
+    let noise_rect = |p32: f32, p33: f32| noise_rect(noise, p32, p33);
     match d {
         // TonemapToSurface 0x14041d7f0: one of the five rows of the `w` x `h` luminance target
         2 => {
@@ -213,16 +238,43 @@ pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32, r
             rect_vertices([w, (h * 0.2).trunc()], [0.0, y - y.trunc(), w, h * 0.2], &[[0.0, v, 1.0, v + 0.2], zero, zero, noise_rect(0.0, 0.0), zero])
         }
         // DrawRectGPU_TonemapHDR 0x1403f1b10: vignette, noise and the 4x4 dither
-        3 | 6 => {
-            let aspect = w / h;
-            let a = vignette;
-            // no vignette: the rectangle is left zero (+0, not -0)
-            let rect = if a == 0.0 { zero } else { [-a * aspect, -a, a * aspect, a] };
-            rect_vertices([w, h], [0.0, 0.0, w, h], &[full, zero, rect, noise_rect(1.0, aspect), [0.0, 0.0, w / 4.0, h / 4.0]])
-        }
+        3 | 6 => tonemap_vertices(w, h, noise_rect(1.0, w / h), vignette, false),
         7 => rect_vertices([w, h], [0.0, 0.0, w, h], &[full, zero, zero, zero]),
         _ => rect_vertices([w, h], [0.0, 0.0, w, h], &[full]),
     }
+}
+
+/// The noise texture's rectangle from this frame's noise offsets and scales.
+pub fn noise_rect(noise: [f32; 4], p32: f32, p33: f32) -> [f32; 4] {
+    let (p32, p33) = (std::hint::black_box(p32), std::hint::black_box(p33));
+    let [n0, n1, s2, s3] = noise;
+    [n0, n1, n0 + s2 * (((1024.0 / 1.0) * 2.0 * p33) / p32), n1 + s3 * (((1024.0 / 1.0) * 2.0) / p32)]
+}
+
+/// A glare draw's source rectangle (`DrawRectGPU_*` callers in `CTextureUtil`): the source's size times
+/// its texture's inverse size (+0x88, +0x8c) plus its offset (0), so 0.99999994 rather than 1 at
+/// some sizes (47 x (1/47)).
+pub fn src_rect(w: u32, h: u32) -> [f32; 4] {
+    let (w, h) = (w as f32, h as f32);
+    [0.0, 0.0, w * (1.0 / w) + 0.0, h * (1.0 / h) + 0.0]
+}
+
+/// The vignette's rectangle (`DrawRectGPU_TonemapHDR`, `DrawRectGPU_BrightPass`): its half-height
+/// `vignette` at the frame's aspect; no vignette leaves it zero (+0, not -0).
+pub fn vignette_rect(w: f32, h: f32, vignette: f32) -> [f32; 4] {
+    let (aspect, a) = (w / h, vignette);
+    if a == 0.0 {
+        [0.0; 4]
+    } else {
+        [-a * aspect, -a, a * aspect, a]
+    }
+}
+
+/// The tone map's vertices: the whole source, the glare's coordinates (the whole glare texture
+/// when it is on, `DrawRectGPU_TonemapHDR` 0x1403f1b10), the vignette, the noise, the 4x4 dither.
+pub fn tonemap_vertices(w: f32, h: f32, noise: [f32; 4], vignette: f32, glare: bool) -> Vec<f32> {
+    let (full, zero) = ([0.0, 0.0, 1.0, 1.0], [0.0; 4]);
+    rect_vertices([w, h], [0.0, 0.0, w, h], &[full, if glare { full } else { zero }, vignette_rect(w, h, vignette), noise, [0.0, 0.0, w / 4.0, h / 4.0]])
 }
 
 /// The shared vertex buffer ring's bookkeeping: which buffer and offset a draw of `size` bytes
@@ -277,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Luminance, PostEffect, TECHNIQUES};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_SUM, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -291,6 +343,7 @@ mod device {
     const SW: usize = 13;
     const SLB: usize = 0;
 
+    #[derive(Clone)]
     struct Target {
         rtv: ID3D11RenderTargetView,
         srv: Option<ID3D11ShaderResourceView>,
@@ -311,6 +364,8 @@ mod device {
         ps: Vec<Option<ID3D11PixelShader>>,
         /// Every technique's bytecode: YEBIS makes a program on its first draw.
         code: Vec<(Vec<u8>, Vec<u8>)>,
+        /// Every technique's program numbers in the YEBIS container: a program is made once per number.
+        ids: Vec<(usize, usize)>,
         /// Each technique's input elements; a layout is shared by every program with the same ones.
         inputs: Vec<Vec<(std::ffi::CString, u32, DXGI_FORMAT)>>,
         layouts: Vec<Option<ID3D11InputLayout>>,
@@ -342,6 +397,8 @@ mod device {
         particles: u32,
         /// The copy's sampler: the source texture's own sampler mode (`DrawRectGPU_MadT1_Sn`).
         copy_sampler: usize,
+        /// The second effect surface's own mode: point/clamp once a tone map has read it (see `copy_sampler`).
+        frame_clamped: bool,
         /// The effect surface bound as the target.
         current: usize,
         effect_depth: ID3D11DepthStencilView,
@@ -373,6 +430,12 @@ mod device {
         /// (only the size: a kept view of the back buffer would make `ResizeBuffers` fail)
         screen: Option<(u32, u32)>,
         released: usize,
+        /// The glare (Task Y5a): its targets in the game's order with their sizes (0-2 the bright pass's,
+        /// 3 the composite, 4 its double, 5 the levels' sum), the bloom levels (source, result, temporary
+        /// and the double as indices into it) and the pool of halvings of the frame.
+        glare: Vec<(Target, u32, u32)>,
+        glare_levels: Vec<(super::GlareLevel, [usize; 3], Option<usize>)>,
+        glare_pool: Vec<(Target, u32, u32)>,
     }
 
     /// The bytes of one input element.
@@ -487,9 +550,11 @@ mod device {
             let vignette = vignette(&filter)?;
             unsafe {
                 // every program is made on its first draw (see draw)
-                let (mut code, mut inputs, mut strides) = (Vec::new(), Vec::new(), Vec::new());
+                let (mut code, mut inputs, mut strides, mut ids) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 for name in TECHNIQUES {
                     let (v, p) = tfxo.technique(name).ok_or_else(|| format!("yebis: no technique {name}"))?;
+                    let t = tfxo.techniques.iter().find(|t| t.name.strip_prefix("tech_") == Some(name)).ok_or("yebis: no technique")?;
+                    ids.push((t.vs, t.ps));
                     // the input layout from the program's input signature, packed
                     let elements: Vec<(std::ffi::CString, u32, DXGI_FORMAT)> = rustyac_dxbc::parse(v)?
                         .inputs
@@ -699,12 +764,45 @@ mod device {
                 let mut dsv = None;
                 err("CreateDepthStencilView", device.CreateDepthStencilView(&depth_tex, Some(&dsv_desc), Some(&mut dsv)))?;
                 let tonemap = [target(device, w, h, f27.0, f27.1, true)?, target(device, w, h, f27.0, f27.1, true)?];
-                // glare: 4 targets, one twice the size, 20 more
-                let (ga, gh) = super::glare_size(base, width, height);
-                let mut glare = Views::new();
-                for i in 0..25 {
-                    let (gw, gg) = if i == 4 { (2 * ga, 2 * gh) } else { (ga, gh) };
-                    keep(&mut kept, &mut glare, target(device, gw, gg, f26.0, f26.1, true)?, gw, gg);
+                // the glare (`CRenderGlare::CreateSystemObjects` 0x140413c00): the bright pass's three (+0x248), the
+                // composite (+0x2b8), its double (+0x2d0: at most half the frame wide, at the glare's aspect), the levels'
+                // sum (+0x270), the first two levels' result and temporary, each later level's three and its double
+                // (+0x28), then 15 more (+0x280 star x10, +0x288, +0x290, the ghost's +0x298 x2, +0x2c0)
+                let quality = crate::yebis_cb::glare_quality(&video);
+                let (ga, gh) = super::glare_size(base, quality, width, height);
+                let dw = (2 * ga).min(w >> 1);
+                let mut sizes = vec![(ga, gh); 4];
+                sizes.push((dw, (dw as f32 / (ga as f32 / gh as f32)) as u32));
+                sizes.extend([(ga, gh); 5]);
+                let mut glare_levels = Vec::new();
+                for (i, l) in super::glare_levels(base, quality, width, height).into_iter().enumerate() {
+                    let (s0, s1) = l.size;
+                    if s0 < 4 || s1 < 4 {
+                        // shortcut: the game's rule for levels under 4 texels is not read, never at AC's sizes
+                        return Err(format!("yebis: a glare level of {s0}x{s1} not ported"));
+                    }
+                    let at = sizes.len();
+                    let idx = match (i, l.own) {
+                        (0, _) => [2, 6, 7],
+                        (_, false) => [6, 8, 9],
+                        _ => {
+                            sizes.extend([l.size; 3]);
+                            [at + 2, at, at + 1]
+                        }
+                    };
+                    let up = l.up.map(|u| {
+                        sizes.push(u);
+                        sizes.len() - 1
+                    });
+                    glare_levels.push((l, idx, up));
+                }
+                sizes.extend([(ga, gh); 15]);
+                let mut glare = Vec::new();
+                let mut glare_views = Views::new();
+                for &(gw, gg) in &sizes {
+                    let t = target(device, gw, gg, f26.0, f26.1, true)?;
+                    glare.push((t.clone(), gw, gg));
+                    keep(&mut kept, &mut glare_views, t, gw, gg);
                 }
                 kept.push(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?.into());
                 let mut dof = Views::new();
@@ -736,8 +834,11 @@ mod device {
                 kept.push(focus.ok_or("yebis: no texture")?.into());
                 // the texture pool: the glare's halvings, the R16G16B16A16 ones, the luminance chain above the 1x1
                 let mut glare_pool = Views::new();
-                for (pw, ph) in super::glare_pool(base, width, height) {
-                    keep(&mut kept, &mut glare_pool, target(device, pw, ph, f26.0, f26.1, true)?, pw, ph);
+                let mut glare_pool_targets = Vec::new();
+                for (pw, ph) in super::glare_pool(base, quality, width, height) {
+                    let t = target(device, pw, ph, f26.0, f26.1, true)?;
+                    glare_pool_targets.push((t.clone(), pw, ph));
+                    keep(&mut kept, &mut glare_pool, t, pw, ph);
                 }
                 let mut half_pool = Views::new();
                 for (pw, ph) in super::half_pool(base, width, height) {
@@ -773,13 +874,19 @@ mod device {
                 }
                 // 2. the frame's three with the depth
                 clear_group(&frame, true);
-                // 3. 24 of the glare's 25 in the game's groups, the double-size one alone as the 20th
-                let mut order: Views = glare.iter().enumerate().filter(|(i, _)| *i != 4).map(|(_, v)| v.clone()).collect();
-                order.insert(19, glare[4].clone());
+                // 3. the glare's 24 of its size in the game's groups, the double alone as the 20th, then each later
+                // level's three and its double
+                let own: Vec<Vec<usize>> = glare_levels.iter().filter(|l| l.0.own).map(|l| [l.1[1], l.1[2], l.1[0]].into_iter().chain(l.2).collect()).collect();
+                let mut order: Views = glare_views.iter().enumerate().filter(|(i, _)| *i != 4 && !own.iter().flatten().any(|j| j == i)).map(|(_, v)| v.clone()).collect();
+                order.insert(19, glare_views[4].clone());
                 let mut at = 0;
                 for n in [1, 10, 2, 1, 3, 1, 1, 1, 2, 2] {
                     clear_group(&order[at..at + n], false);
                     at += n;
+                }
+                for group in &own {
+                    let views: Views = group.iter().map(|&i| glare_views[i].clone()).collect();
+                    clear_group(&views, false);
                 }
                 // 4. the glare's pool again; 5. the depth of field's, by size (see half_pairs)
                 for v in &glare_pool {
@@ -802,6 +909,7 @@ mod device {
                     vs: vec![None; n],
                     ps: vec![None; n],
                     code,
+                    ids,
                     inputs,
                     layouts: vec![None; n],
                     strides,
@@ -826,6 +934,7 @@ mod device {
                     heat_at: 2,
                     particles,
                     copy_sampler: SLB,
+                    frame_clamped: false,
                     current: 0,
                     effect_depth,
                     luminance,
@@ -855,8 +964,11 @@ mod device {
                     // the DOF's two levels (+0x110, then its pool), the render buffers (+0x100 ×3), the colour
                     // alpha dest (+0x118 ×2), the AE query (+0x1c8: 128x64, then the chain), the AF query
                     // (+0x1d0: two 1x1) and CTextureUtil's 16x16 analyser
-                    released: 2 + 25 + 2 + 3 + 2 + 1 + 2 + 1 + super::glare_pool(base, width, height).len() + super::half_pool(base, width, height).len() + chain.len(),
+                    released: 2 + glare.len() + 2 + 3 + 2 + 1 + 2 + 1 + glare_pool_targets.len() + super::half_pool(base, width, height).len() + chain.len(),
                     screen: screen.map(|(_, w, h)| (w, h)),
+                    glare,
+                    glare_levels,
+                    glare_pool: glare_pool_targets,
                 })
             }
         }
@@ -923,6 +1035,140 @@ mod device {
             self.cache = Cache::default();
         }
 
+        /// One glare draw into `to` (a viewport of its size): `taps`, `colours`, an optional gamma.
+        #[allow(clippy::too_many_arguments)]
+        unsafe fn glare_draw(&mut self, t: usize, to: usize, taps: &[[f32; 2]], colours: &[[f32; 4]], gamma: Option<f32>, samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>], vertices: Option<Vec<f32>>) -> Result<(), String> {
+            let (target, w, h) = self.glare[to].clone();
+            self.target_only(&target.rtv);
+            self.viewport(0.0, 0.0, w as f32, h as f32);
+            let u = self.cbuffer.glare(t, taps, colours, gamma, &self.used);
+            let v = vertices.unwrap_or_else(|| draw_vertices(t, w as f32, h as f32, [0.0; 4], 0.0, 0));
+            self.draw(t, &u, samplers, srvs, &v)
+        }
+
+        /// `CTextureUtil::Resample` 0x1403f6710 from `from` (`w` x `h`) into glare target `to`: one box tap
+        /// (MadT1_S1) or, with `spread`, `GetTexCoordOffset_Box` 0x1403a7e20's 2x2 taps that far apart
+        /// (MadT1_S4); a source of another size is read through the linear border sampler.
+        unsafe fn resample(&mut self, from: (Option<ID3D11ShaderResourceView>, u32, u32), to: usize, spread: f32) -> Result<(), String> {
+            let (src, w, h) = from;
+            let (_, tw, th) = self.glare[to].clone();
+            let sampler = if (w, h) == (tw, th) { SB } else { SLB };
+            if spread > 0.0 {
+                let (x, y) = ((1.0 / w as f32) * spread, (1.0 / h as f32) * spread);
+                let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]);
+                return self.glare_draw(T_UP, to, &[[-x, -y], [x, -y], [-x, y], [x, y]], &[[0.25; 4]; 4], None, &[sampler], &[src], Some(v));
+            }
+            let taps = crate::yebis_cb::box_taps((w, h), (tw, th));
+            if taps.len() != 1 {
+                return Err(format!("yebis: a glare resample of {w}x{h} to {tw}x{th} ({} taps) not ported", taps.len()));
+            }
+            let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]);
+            self.glare_draw(8, to, &[[taps[0][0], taps[0][1]]], &[[1.0; 4]], None, &[sampler], &[src], Some(v))
+        }
+
+        /// The glare's bloom (`CRenderGlare::GenerateGlare` 0x14041d470 with no star, ghost, afterimage or
+        /// light shafts): the frame halved to the glare size, its bright pass, each level's two-pass
+        /// gaussian, the levels summed and the result doubled; returns the double the tone map reads.
+        unsafe fn bloom(&mut self, pe: &PostEffect, g: &Glare, exposure: f32, frame: Option<ID3D11ShaderResourceView>) -> Result<Option<ID3D11ShaderResourceView>, String> {
+            let srv = |t: &Target| t.srv.clone();
+            let (fw, fh) = (self.width as u32, self.height as u32);
+            // GenerateGlare_Source 0x1404160f0: halvings while the pool's next texture is narrower; Resample keeps
+            // the frame texture's address (clamp after last frame's tone map) and makes it linear
+            let mut cur = (frame, fw, fh);
+            let mut sampler = if self.frame_clamped { SL } else { SLB };
+            for k in 0..self.glare_pool.len() {
+                let (t, pw, ph) = self.glare_pool[k].clone();
+                if pw >= cur.1 {
+                    break;
+                }
+                let (tw, th) = (pw, ph);
+                let taps = crate::yebis_cb::box_taps((cur.1, cur.2), (tw, th));
+                if taps.len() != 1 {
+                    return Err("yebis: a glare source halving with more than one tap not ported".into());
+                }
+                self.target_only(&t.rtv);
+                self.viewport(0.0, 0.0, tw as f32, th as f32);
+                let u = self.cbuffer.glare(8, &[[taps[0][0], taps[0][1]]], &[[1.0; 4]], None, &self.used);
+                let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(cur.1, cur.2)]);
+                self.draw(8, &u, &[sampler], &[cur.0.clone()], &v)?;
+                cur = (srv(&t), tw, th);
+                sampler = SLB;
+            }
+            // GenerateGlare_Source_BrightPass 0x140415a60 -> DrawRectGPU_BrightPass 0x1403ef1e0: exposure over
+            // its scale, the generation range and the threshold, the vignette's rectangle as the second coordinates
+            let (_, gw, gh) = self.glare[2].clone();
+            let e = exposure / pe.exposure_scale;
+            let r = 1.0 / g.range;
+            let v = rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2), vignette_rect(fw as f32, fh as f32, self.vignette)]);
+            let sampler = if (cur.1, cur.2) == (gw, gh) { SB } else { SLB };
+            self.glare_draw(T_BRIGHT, 2, &[[0.0, 0.0]], &[[e, e, e, 1.0], [r, r, r, 1.0], [g.threshold; 4]], None, &[sampler], &[cur.0.clone()], Some(v))?;
+            // GenerateGlare_Bloom 0x140416360: per level a gaussian of its radius (red, green and blue at their
+            // wavelengths), the first at full size, the later ones from the level before
+            let levels = self.glare_levels.clone();
+            let n = levels.len();
+            let base = rustyac_math::powf(2.0, -((2.min(n) as f32) - 1.0)) * 2.2 * g.radius_scale;
+            for (i, (l, [from, result, temp], up)) in levels.iter().enumerate() {
+                if l.own {
+                    let prev = levels[i - 1].1[1];
+                    let (t, w, h) = self.glare[prev].clone();
+                    self.resample((srv(&t), w, h), *from, 0.0)?;
+                }
+                let radius = if i > 0 { (l.step * base) * rustyac_math::sqrtf(0.75) } else { l.step * base };
+                let rgb = [(radius * 6.15e-07) / 6.15e-07, (radius * 5.4e-07) / 6.15e-07, (radius * 4.65e-07) / 6.15e-07, 0.0];
+                let taps = crate::yebis_cb::gauss_taps(rgb[0].max(rgb[1]).max(rgb[2]), g.cutoff)?;
+                let t = if taps == 7 { T_GAUSS7 } else { T_GAUSS11 };
+                let (w, h) = l.size;
+                for (pass, (src, to, size)) in [(*from, *temp, w), (*temp, *result, h)].into_iter().enumerate() {
+                    let ws: Vec<(Vec<f32>, Vec<f32>)> = rgb.iter().map(|&c| crate::yebis_cb::gauss_weights(taps, size, c)).collect();
+                    let offsets: Vec<[f32; 2]> = ws[0].0.iter().map(|&o| if pass == 0 { [o, 0.0] } else { [0.0, o] }).collect();
+                    let colours: Vec<[f32; 4]> = (0..taps).map(|k| [ws[0].1[k], ws[1].1[k], ws[2].1[k], ws[3].1[k]]).collect();
+                    let s = srv(&self.glare[src].0);
+                    // GaussianFilterMax7x7_2Pass 0x140408da0
+                    let v = rect_vertices([w as f32, h as f32], [0.0, 0.0, w as f32, h as f32], &[src_rect(w, h)]);
+                    self.glare_draw(t, to, &offsets, &colours, None, &[SB], &[s], Some(v))?;
+                }
+                if let Some(u) = up {
+                    self.resample((srv(&self.glare[*result].0), w, h), *u, 0.375)?;
+                }
+            }
+            // GenerateGlare_Bloom_CompositeSubLevels 0x140416be0: the levels summed with GetBloomCompositeLuminanceScale,
+            // tinted by the diffraction colours from the dispersion's base level on, then the gamma
+            let (_, sw, sh) = self.glare[5].clone();
+            let scale = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * g.bloom_lum;
+            let ratio = (rustyac_math::logf(gw as f32 / fw as f32) / rustyac_math::logf(2.0)) as i32 + 2;
+            let first = (ratio - 1 + g.base_level).min(n as i32 - 3);
+            const DIFFRACTION: [[f32; 4]; 3] = [[0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
+            let (mut srvs, mut samplers, mut colours) = (Vec::new(), Vec::new(), Vec::new());
+            for (i, (l, idx, up)) in levels.iter().enumerate() {
+                let (t, w, h) = self.glare[up.unwrap_or(idx[1])].clone();
+                srvs.push(srv(&t));
+                samplers.push(if (w, h) == (sw, sh) { SP } else { SL });
+                let _ = l;
+                let f = (1.0 / rustyac_math::powf(1.0, i as f32)) * scale;
+                let i = i as i32;
+                if g.dispersion <= 0.0 || i < first || first < 0 {
+                    colours.push([f; 4]);
+                } else {
+                    let d = DIFFRACTION[((i - first).max(0) % 3) as usize];
+                    let c = d.map(|d| (d - 1.0) * g.dispersion + 1.0);
+                    let f = (3.0 / (c[0].abs() + c[1].abs() + c[2].abs())) * f;
+                    colours.push(c.map(|c| c * f));
+                }
+            }
+            if !(3..=7).contains(&n) {
+                return Err(format!("yebis: a bloom of {n} levels not ported"));
+            }
+            // (the source rectangle is the first level's, at the sum's size)
+            let v = rect_vertices([sw as f32, sh as f32], [0.0, 0.0, sw as f32, sh as f32], &[src_rect(gw, gh)]);
+            self.glare_draw(T_SUM + n - 3, 5, &[], &colours, Some(1.0 / g.gamma), &samplers, &srvs, Some(v))?;
+            // GenerateGlare_Composite 0x14041afb0: a copy, then doubled with the result blur's spread
+            let sum = srv(&self.glare[5].0);
+            let v = rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(gw, gh)]);
+            self.glare_draw(T_COPY, 3, &[], &[[1.0; 4]], None, &[SP], &[sum], Some(v))?;
+            self.resample((srv(&self.glare[3].0), gw, gh), 4, 1.0 * 0.5)?;
+            Ok(srv(&self.glare[4].0))
+        }
+
         /// Technique `d`'s input layout: its inputs packed one after another.
         unsafe fn layout(&self, d: usize) -> Result<ID3D11InputLayout, String> {
             let elements: Vec<D3D11_INPUT_ELEMENT_DESC> = self.inputs[d]
@@ -981,9 +1227,10 @@ mod device {
             if self.srv_slots > 0 {
                 c.PSSetShaderResources(0, Some(&vec![None; self.srv_slots]));
             }
-            // a program is made on its first draw unless another technique made the same one
+            // a program is made on its first draw unless another technique made the same one: the same number in
+            // YEBIS's container (MadT1 and MadT1_S1 have equal pixel bytecode but two numbers, two programs)
             if self.vs[d].is_none() {
-                let same = (0..self.code.len()).find(|&j| self.vs[j].is_some() && self.code[j].0 == self.code[d].0);
+                let same = (0..self.code.len()).find(|&j| self.vs[j].is_some() && self.ids[j].0 == self.ids[d].0);
                 self.vs[d] = match same {
                     Some(j) => self.vs[j].clone(),
                     None => {
@@ -997,7 +1244,7 @@ mod device {
                 self.cb = Some(buffer(&self.device, 4096, D3D11_BIND_CONSTANT_BUFFER.0, true, None)?);
             }
             if self.ps[d].is_none() {
-                let same = (0..self.code.len()).find(|&j| self.ps[j].is_some() && self.code[j].1 == self.code[d].1);
+                let same = (0..self.code.len()).find(|&j| self.ps[j].is_some() && self.ids[j].1 == self.ids[d].1);
                 self.ps[d] = match same {
                     Some(j) => self.ps[j].clone(),
                     None => {
@@ -1163,6 +1410,20 @@ mod device {
                     self.draw(1, &u, &[SL], std::slice::from_ref(&e0s), &plain(1))?;
                 }
                 let src = if ca { e1.clone() } else { e0.clone() };
+                let glare = match pe.glare.clone() {
+                    Some(g) => {
+                        if !ca || self.vignette == 0.0 || pe.auto_exposure.is_none() {
+                            return Err("yebis: the glare without chromatic aberration, vignette or auto exposure not ported (Y5b)".into());
+                        }
+                        self.reset();
+                        self.effect_of_eight();
+                        // GenerateGlare (EndPostEffectScene_InternalProcess 0x1403b5f40) runs before ApplyEffects_UpdateAutoExposure:
+                        // CPostEffect+0x6f4 as the camera set it
+                        let exposure = self.auto_exposure.exposure(camera.new_exposure);
+                        Some(self.bloom(&pe, &g, exposure, src.clone())?)
+                    }
+                    None => None,
+                };
                 // UpdateAutoExposure: last analysis's result if the GPU has it, then this frame's step
                 let readback = if self.auto_exposure.waiting() { self.read_back() } else { None };
                 let step = pe.auto_exposure.map(|ae| {
@@ -1172,8 +1433,9 @@ mod device {
                 });
                 match step {
                     Some(Luminance::Row(row)) => {
-                        // (the game's VR log: without chromatic aberration the effect surface is not bound again)
-                        if ca {
+                        // (the game's VR log: without chromatic aberration the effect surface is not bound again;
+                        // with the glare it was bound before the glare's draws)
+                        if ca && glare.is_none() {
                             self.effect_of_eight();
                         }
                         self.target_only(&self.luminance.rtv.clone());
@@ -1187,7 +1449,7 @@ mod device {
                     }
                     Some(Luminance::Analyze) => {
                         // CTextureLuminance::Analyze: the luminance target down to 1x1, then the CPU copy
-                        if ca {
+                        if ca && glare.is_none() {
                             self.effect_of_eight();
                         }
                         let mut src = self.luminance.srv.clone();
@@ -1223,9 +1485,14 @@ mod device {
                 let n = self.noise.next(true);
                 // DrawRectGPU_TonemapHDR 0x1403f1b10 drops the vignette program when its rectangle is zero
                 let (t3, t6) = if self.vignette == 0.0 { (11, 12) } else { (3, 6) };
-                let tonemap_vertices = draw_vertices(3, w, h, n, self.vignette, 0);
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
-                self.draw(t3, &u, &[SP, SP, SP, SW], &[src.clone(), black.clone(), grey.clone(), dither.clone()], &tonemap_vertices)?;
+                if let Some(bloom) = &glare {
+                    let v = tonemap_vertices(w, h, noise_rect(n, 1.0, w / h), self.vignette, true);
+                    self.draw(t3, &u, &[SP, SL, SP, SW], &[src.clone(), bloom.clone(), grey.clone(), dither.clone()], &v)?;
+                } else {
+                    self.draw(t3, &u, &[SP, SP, SP, SW], &[src.clone(), black.clone(), grey.clone(), dither.clone()], &draw_vertices(3, w, h, n, self.vignette, 0))?;
+                }
+                self.frame_clamped = ca;
                 if shimmer.is_some() {
                     // in a shimmer frame the tonemap's source is the texture the shimmer copies from, and
                     // DrawRectGPU_TonemapHDR 0x1403f1b10 ends by giving it black's mode (point, clamp):
@@ -1264,7 +1531,10 @@ mod device {
                 self.full_viewport();
                 self.full_viewport();
                 let u = self.cbuffer.draw(7, &pe, &self.filmic, &self.used);
-                self.draw(7, &u, &[SP; 6], &[t0, black.clone(), white.clone(), t1, black, white], &plain(7))?;
+                match glare {
+                    Some(bloom) => self.draw(7, &u, &[SP, SP, SP, SP, SL, SP], &[t0, black, white.clone(), t1, bloom, white], &plain(7))?,
+                    None => self.draw(7, &u, &[SP; 6], &[t0, black.clone(), white.clone(), t1, black, white], &plain(7))?,
+                }
                 // (the shader reset after this is the caller's resetYebisStates)
             }
             Ok(())
@@ -1288,12 +1558,26 @@ mod tests {
     /// The game's f10 remake logs (Task Y3d-2): rszfx at 1280x720, trirsz at 3840x720.
     #[test]
     fn glare_sizes_follow_the_game() {
+        // the game's glare targets at 1024x576, QUALITY=3 (taskY5 resize logs) and 1280x720 (the b3 frame)
+        let b = base_width(3, 1024);
+        assert_eq!([0, 1, 3, 5].map(|q| glare_size(b, q, 1024, 576)), [(77, 43), (93, 52), (154, 87), (307, 173)]);
+        let own = |q| -> Vec<_> { glare_levels(b, q, 1024, 576).iter().filter(|l| l.own).map(|l| (l.size, l.up)).collect() };
+        assert_eq!(glare_levels(b, 0, 1024, 576).len(), 2);
+        assert_eq!(own(1), vec![((47, 26), Some((94, 52)))]);
+        assert_eq!(own(3), vec![((77, 44), None), ((39, 22), Some((78, 44))), ((20, 11), Some((40, 22)))]);
+        assert_eq!(own(5).len(), 5);
+        assert_eq!(own(5)[4], ((10, 6), Some((20, 12))));
+        assert_eq!(glare_pool(b, 3, 1024, 576), vec![(512, 288), (256, 144)]);
+        assert_eq!(glare_pool(b, 5, 1024, 576), vec![(512, 288)]);
+        let l = glare_levels(base_width(3, 1280), 3, 1280, 720);
+        assert_eq!(l.iter().map(|l| (l.size, l.up, l.step)).collect::<Vec<_>>()[2..], [((96, 54), None, 2.0), ((48, 27), Some((96, 54)), 2.0), ((24, 14), Some((48, 28)), 2.0)]);
+        assert_eq!((l[0].step, l[1].step), (1.0, 2.0));
         assert_eq!((base_width(0, 1280), base_width(0, 600), base_width(1, 1280)), (640, 600, 256));
-        assert_eq!(glare_size(base_width(0, 1280), 1280, 720), (80, 45));
-        assert_eq!(glare_size(base_width(0, 3840), 3840, 720), (427, 16));
-        assert_eq!(glare_size(base_width(0, 5760), 5760, 1080), (427, 16));
-        assert_eq!(glare_pool(base_width(0, 1280), 1280, 720), vec![(640, 360), (320, 180), (160, 90)]);
-        assert_eq!(glare_pool(base_width(0, 3840), 3840, 720), vec![(1920, 360), (960, 180), (480, 90)]);
+        assert_eq!(glare_size(base_width(0, 1280), 0, 1280, 720), (80, 45));
+        assert_eq!(glare_size(base_width(0, 3840), 0, 3840, 720), (427, 16));
+        assert_eq!(glare_size(base_width(0, 5760), 0, 5760, 1080), (427, 16));
+        assert_eq!(glare_pool(base_width(0, 1280), 0, 1280, 720), vec![(640, 360), (320, 180), (160, 90)]);
+        assert_eq!(glare_pool(base_width(0, 3840), 0, 3840, 720), vec![(1920, 360), (960, 180), (480, 90)]);
         assert_eq!(half_pool(base_width(0, 1280), 1280, 720), vec![(160, 90), (320, 180), (640, 360)]);
         assert_eq!(half_pool(base_width(0, 3840), 3840, 720), vec![(160, 30), (320, 60), (1920, 360), (960, 180), (480, 90), (240, 45)]);
         assert_eq!(half_pool(base_width(0, 5760), 5760, 1080), vec![(160, 30), (320, 60), (2880, 540), (1440, 270), (720, 135), (360, 68), (180, 34)]);
