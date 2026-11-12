@@ -166,9 +166,9 @@ because a `lib.sh` change makes `--changed` take every area.
 For Task 39b:
 
 - `tools/proofs/lib.sh`: `--ai-line` cases must not take a cached recording (above).
-- The settings Full mode does not draw yet ("not used" on the page): YEBIS's post-processing
-  look (Effect preset, Overall effect quality, Glare, Depth of field, Color saturation,
-  Crepuscular rays, Heat shimmer: Task 23b's open work, desktop does not draw them either),
+- The settings Full mode does not draw: YEBIS's post-processing look (Effect preset, Overall
+  effect quality, Glare, Depth of field, Color saturation, Crepuscular rays, Heat shimmer) is
+  desktop only, "(desktop only)" on the page (Task Y4 dropped 2026-11-12, `docs/port/yebis.md`);
   and Resolution / Rendering Mode / Fullscreen / Vertical Sync / Framerate limit, which are
   the browser's (the page draws at the canvas's size and the display's rate).
 - Options → View's settings outside `video.ini` (field of view, glancing, camera shake,
