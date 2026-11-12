@@ -1,6 +1,80 @@
-# Task Y5a: the glare's bloom and the glare quality levels (no release)
+# Task Y5b: the glare's star streaks (no release)
 
 ## Resume here
+
+- **Y5b done**: YEBIS's star streaks are ported and proven; no release until Y5d (v0.49.0).
+  **Next: Task Y5c**, the ghost, afterimage and anamorphic flare (game draw 897 of the measured
+  frame, `GenerateGlare_Ghost` 0x1404185b0, `_Afterimage` 0x140419fe0, `_AnamorphicFlare` 0x140417510; the anamorphic flare reuses the streak code with its own colours), then Y5d (light shafts, Y5a/Y5b refusals,
+  rows, release).
+- Every shipped ppfilter is still refused with `[POST_PROCESS] GLARE` > 0, now only for the
+  ghost (`yebis: the glare's ghost not ported (Y5c)`). The test filter `rustyac_star`
+  (`render_oracle --ppfilter rustyac_star`, made by `tools/render_oracle/src/root.rs` from the
+  game's `default.ini` with `SHAPE_GHOST_LUMINANCE=0`) is the glare with its bloom and star;
+  `rustyac_bloom` stays.
+- Proof rows `ry5b_01`..`05` in `tools/proofs/render_list.txt`; `ry5b_01` replaced `ry5a_01` in
+  the quick list (render stays 15 cases).
+- `run_all.sh --quick` 171 of 171 IDENTICAL in 13 areas, 0 errors or skips, render 15, 0h42m (`re/scratch/taskY5b/quick.log`; the one "vanished" case is `ry5a_01`, replaced by `ry5b_01`). Clippy `-D warnings --all-targets` clean natively, both wasm targets and wgpu (`re/scratch/taskY5b/clippy.sh`; render_oracle's 42 old clippy errors unchanged). The game's float literals pi/4, pi became `std::f32::consts` (same bits); the rows rerun after: 5 of 5 IDENTICAL (`proof3.log`).
+
+## What the port does now (`crates/rustyac-render/src/yebis.rs` `star`, `yebis_cb.rs` `Star`)
+
+All from the game's code (`re/decomp/GPURenderGlare`, `GPUTextureUtil`, `GPUPostEffect`,
+`CameraForwardYebis`), checked against its call logs (`re/scratch/taskY5b/g3`, decoded by
+`re/scratch/taskY5b/draws.py`; the streak function's body is `re/scratch/taskY5b/streaks.c`):
+
+- The star's settings (`setPostProcessing` 0x140025080 -> `CGlareDef::Initialize` 0x140412d80):
+  with `USE_CUSTOM_SHAPE` the library shape's star (`ms_pGlareLib` +0x1c its `CStarDef` entry,
+  +0x20 its inclination; the STARDEF table at 0x141521bb0: length, odd streaks' length)
+  times SHAPE_STAR_LENGTH / SECONDARY_LENGTH / INCLINATION_ANGLE, SHAPE_STAR_STREAKS_NUMBER
+  streaks (at most CRenderGlare+0xdc, 8), SHAPE_STAR_ROTATION, star luminance x
+  SHAPE_STAR_LUMINANCE. STAR_SOFTNESS (+0x31c: 0.25 when not > 0, `SetGlareStarSoftness`),
+  STAR_FILTER_THRESHOLD (+0x318, clamped to 1e-5..0.9999). The star draws only with a star
+  luminance, streaks, a length, a glare luminance and LUMINANCE.
+- The turn (`GetDiaphragmRotateAngle` 0x1403bb140, `[DIAPHRAGM]`): setPostProcessing sets
+  TYPE / ROTATE_SCALE / ROTATE_OFFSET x 0.017453 only when the scale or the offset isn't 0,
+  otherwise `CPostEffect::Initialize`'s 1 / 1 / 0 (a turn by the field of view: sepia, b&w).
+- Draws (`GenerateGlare_Star` 0x140417200, `GenerateGlare_StarStreaks` 0x140417570), after the
+  levels' sum:
+  - the softened source (MadT3): bright pass x (1-f), level 0's result x f(1-f), level 1's x f^2;
+  - per streak, passes of MadT1_S4 (the last S1..S4): angle inclination - turn - 360/n x i,
+    direction (sin, cos) / glare size, the odd streaks with the secondary length; taps j x
+    direction, weights 0.5^(j a) x (0.1875 first, then k = lum^0.2), a and the direction x4 each
+    pass; passes and the last tap count from the threshold (`log(thr)/log(0.5)/a`, base 4);
+    passes go to the pair of work targets, the last into the streak's own;
+  - the streaks' maximum (MaxColorT2..T8 -> +0x288): weights (1/k)^(passes-1), colour
+    `GetStarCompositeLuminanceScale` x 5.3333335 (CRenderGlare+0xe6 is never set: 0.04);
+  - the composite is MadT2 of the sum and the star (MadT1 without a star).
+- Refused (listed for Y5d/Y7): star dispersion or forced dispersion (the colour tables), a
+  library shape's star (`USE_CUSTOM_SHAPE=0`: every library star has a dispersion; only
+  `vintage.ini`), STAR_LENGTH_FOV_DEPENDENCE other than 0. Every shipped filter has dispersion 0,
+  forced dispersion 0 and FOV dependence 0.
+
+## Results
+
+| case | frames | call log | pixels |
+|---|---|---|---|
+| GLARE=3 QUALITY=3 (`c3`) | 2 | IDENTICAL | IDENTICAL |
+| `ry5b_01` GLARE=3 QUALITY=3 | 12 | IDENTICAL | IDENTICAL |
+| `ry5b_02` GLARE=1 QUALITY=0 | 8 | IDENTICAL | IDENTICAL |
+| `ry5b_03` GLARE=5 QUALITY=3, resize to 1024x576 at frame 3 | 8 | IDENTICAL | IDENTICAL |
+| `ry5b_04` GLARE=1 QUALITY=3, resize to 1024x576 at frame 3 | 8 | IDENTICAL | IDENTICAL |
+| `ry5b_05` GLARE=3 QUALITY=3, FXAA | 8 | IDENTICAL | IDENTICAL |
+| planted: the diaphragm's 2 degree turn left out (`plant`) | 3 | DIFFERENT in all 3 from frame 1 | IDENTICAL (under one 8-bit step) |
+
+(`re/scratch/taskY5b/<case>/out.txt` from `re/scratch/taskY5b/cmp.sh`; the rows:
+`RENDER_ONLY='ry5b_0[1-5]' PROOF_OUT=re/scratch/taskY5b/proof2 sh tools/proofs/render.sh`,
+`re/scratch/taskY5b/proof2.log`.)
+
+## Open questions
+
+- Which of the game's four +0x248 targets the port's `glare[1]` stands for (the logs name
+  textures by size, all equal): the softened source uses it, nothing else draws it.
+- The sepia / b&w turn (by the field of view) and other streak counts than 6 are ported from the
+  code but no row runs them (no shipped filter works before Y5c).
+- The diaphragm's depth of field aperture term is left out (`shortcut:` in `diaphragm_angle`).
+
+# Task Y5a: the glare's bloom and the glare quality levels (no release)
+
+## Resume here (Y5a)
 
 - **Y5a done**: the bloom part of YEBIS's glare is ported and proven; no release until Y5d
   (v0.49.0). **Next: Task Y5b**, the star streaks and the `GPUGlareDef` shapes (game draws
