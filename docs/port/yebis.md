@@ -2,8 +2,8 @@
 
 ## Resume here
 
-- **In progress.** Steps 0.1 to 0.3 are done; next is step 0.4 (the first shimmer after a
-  YEBIS remake, `RENDER_ORACLE_RESIZE`).
+- **In progress.** Step 0 is done; next is step 1 (VR's own `YebisPP` 0x14002ba30, one per
+  stereo camera, `renderYebis` 0x140223f60 per eye).
 - Check step 0.1: `bash re/scratch/taskY3e/rand2.sh` (game side, 2 cars, `RENDER_ORACLE_RAND_LOG=1`)
   and `cargo test --release -p rustyac-render --lib heat_shimmer`.
 - Check step 0.2: `LABEL=s2 bash re/scratch/taskY3e/cmp.sh` (the Y3d-3 compare, 52 frames,
@@ -11,6 +11,18 @@
   (`RENDER_ORACLE_SAMPLER_LOG=1`, `SSM` lines in `samp.log`).
 - Check step 0.3: `LABEL=h1 bash re/scratch/taskY3e/heat.sh` or the row:
   `RENDER_ONLY=ry3e_01 PROOF_OUT=re/scratch/taskY3e/proof sh tools/proofs/render.sh`.
+- Check step 0.4: `RENDER_ORACLE_RESIZE=48:1024x576 LABEL=r1 FRAMES=56 DUMP=49,55 bash
+  re/scratch/taskY3e/heat.sh` (dump only frames after the resize).
+
+## Step 0.4: the first shimmer after a YEBIS remake (proof only, no change)
+
+- The 100-times filter, the window resized to 1024x576 before frame 48 (three frames into the
+  shimmer): call log and pixels IDENTICAL in all 55 frames (`r1`).
+- Planted change: the remade YEBIS keeps the old copy sampler (point/clamp) instead of starting
+  again at linear/border (`r1p`): frame 48's call log DIFFERENT (1 line, at line 7448), pixels
+  the same there (the copy is texel to texel). So the game starts the copy's mode again with the
+  new textures, as the port's `Yebis::remade` does.
+- Not a render.sh row: `render_list.txt` rows cannot set `RENDER_ORACLE_RESIZE`.
 
 ## Step 0.3: a shimmer row that moves pixels (`ry3e_01`)
 
