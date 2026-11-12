@@ -329,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -888,9 +888,11 @@ mod device {
                 // level's three and its double
                 let own: Vec<Vec<usize>> = glare_levels.iter().filter(|l| l.0.own).map(|l| [l.1[1], l.1[2], l.1[0]].into_iter().chain(l.2).collect()).collect();
                 let mut order: Views = glare_views.iter().enumerate().filter(|(i, _)| *i != 4 && !own.iter().flatten().any(|j| j == i)).map(|(_, v)| v.clone()).collect();
-                order.insert(19, glare_views[4].clone());
+                // (CRenderGlare::ClearAllGPUResources 0x14041c400: +0x288, the star's ten, the ghost's pair if made, ...)
+                let groups: &[usize] = if ghost { &[1, 10, 2, 1, 3, 1, 1, 1, 2, 2] } else { &[1, 10, 1, 3, 1, 1, 1, 2, 2] };
+                order.insert(if ghost { 19 } else { 17 }, glare_views[4].clone());
                 let mut at = 0;
-                for n in [1, 10, 2, 1, 3, 1, 1, 1, 2, 2] {
+                for &n in groups {
                     clear_group(&order[at..at + n], false);
                     at += n;
                 }
@@ -1239,7 +1241,8 @@ mod device {
             let (_, ga, gh) = self.glare[2].clone();
             let aspect = (ga as f32 / gh as f32) / (w / h);
             // GetStarCompositeLuminanceScale 0x14041bcd0 (CRenderGlare+0xe6 is always 0: 0.04)
-            let lum = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * 0.04 * s.lum;
+            // GenerateGlare_StarStreaks 0x140417570's order: the definition's factor first (sepia's star tells)
+            let lum = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * (0.04 * s.lum);
             let k = powf(lum, 0.2);
             // GetStarRadiusScale 0x14041baa0 with no FOV dependence; the glare's R11G11B10 keeps the threshold unclamped
             let radius = 1.0 * ga as f32 * 0.003125;
@@ -1313,7 +1316,8 @@ mod device {
         unsafe fn ghost(&mut self, pe: &PostEffect, g: &Glare, h: &crate::yebis_cb::Ghost, ratio: i32) -> Result<usize, String> {
             let (dst, mid) = (self.star_at + 12, self.star_at + 13);
             let levels: Vec<usize> = self.glare_levels.iter().map(|l| l.1[1]).collect();
-            let f = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * h.lum * 0.05 * 20.0;
+            // GenerateGlare_Ghost 0x1404185b0's order
+            let f = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * ((h.lum * 0.05) * 20.0);
             let angle = crate::yebis_cb::diaphragm_angle(h.diaphragm, pe.fov);
             // (pass 2's first source, the ghost's second target, is the glare's size like the first level)
             let (_, w, hh) = self.glare[levels[ratio.clamp(0, levels.len() as i32 - 1) as usize]].clone();
@@ -1590,7 +1594,7 @@ mod device {
                 // UpdateAutoExposure: last analysis's result if the GPU has it, then this frame's step
                 let readback = if self.auto_exposure.waiting() { self.read_back() } else { None };
                 let step = pe.auto_exposure.map(|ae| {
-                    let (e, step) = self.auto_exposure.frame(readback, ae, camera.dt, camera.new_exposure);
+                    let (e, step) = self.auto_exposure.frame(readback, ae, camera.dt, camera.new_exposure, pe.tonemap == 2);
                     pe.exposure = e;
                     step
                 });
@@ -1607,8 +1611,9 @@ mod device {
                         self.reset();
                         self.viewport(0.0, row_y(row, lh).trunc(), lw, (lh * 0.2).trunc());
                         let n = self.noise.next(false);
-                        let u = self.cbuffer.draw(2, &pe, &self.filmic, &self.used);
-                        self.draw(2, &u, &[SL, SP, SP], &[src.clone(), black.clone(), grey.clone()], &draw_vertices(2, lw, lh, n, self.vignette, row))?;
+                        let t2 = if pe.tonemap == 1 { T_LINEARSAT[0] } else { 2 };
+                        let u = self.cbuffer.draw(t2, &pe, &self.filmic, &self.used);
+                        self.draw(t2, &u, &[SL, SP, SP], &[src.clone(), black.clone(), grey.clone()], &draw_vertices(2, lw, lh, n, self.vignette, row))?;
                     }
                     Some(Luminance::Analyze) => {
                         // CTextureLuminance::Analyze: the luminance target down to 1x1, then the CPU copy
@@ -1647,7 +1652,12 @@ mod device {
                 self.full_viewport();
                 let n = self.noise.next(true);
                 // DrawRectGPU_TonemapHDR 0x1403f1b10 drops the vignette program when its rectangle is zero
-                let (t3, t6) = if self.vignette == 0.0 { (11, 12) } else { (3, 6) };
+                let (t3, t6) = match (self.vignette == 0.0, pe.tonemap == 1) {
+                    (false, false) => (3, 6),
+                    (true, false) => (11, 12),
+                    (false, true) => (T_LINEARSAT[1], 6),
+                    (true, true) => (T_LINEARSAT[2], 12),
+                };
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
                 if let Some(bloom) = &glare {
                     let v = tonemap_vertices(w, h, noise_rect(n, 1.0, w / h), self.vignette, true);

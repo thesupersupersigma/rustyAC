@@ -28,8 +28,9 @@ use rustyac_physics::data::ini::IniReader;
 /// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step, then the heat shimmer's
 /// particles with 1-4 octaves (13-16), then the glare's bloom (17-27, Task Y5a: bright pass,
 /// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels), then
-/// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c).
-pub const TECHNIQUES: [&str; 39] = [
+/// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c),
+/// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`).
+pub const TECHNIQUES: [&str; 42] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -69,7 +70,14 @@ pub const TECHNIQUES: [&str; 39] = [
     "MaxColorT8",
     "GlareGhost_PointSymmetryDistScaleT4_S8_TrimT1_S8",
     "GlareGhost_PointSymmetryT3_S8",
+    "TonemapHDR_Exposure_LINEARSAT",
+    "TonemapHDR_PreMatrix_Dither_Vignette_Gamma_LINEARSAT",
+    "TonemapHDR_PreMatrix_Dither_Gamma_LINEARSAT",
 ];
+
+/// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
+/// from a table by EHDRTONEMAP, and the container names PFXTM_LINEARSAT's `_LINEARSAT` (filmic's have no suffix).
+pub const T_LINEARSAT: [usize; 3] = [39, 40, 41];
 
 /// The glare's techniques by name (`TECHNIQUES` index).
 pub const T_BRIGHT: usize = 17;
@@ -508,21 +516,19 @@ impl PostEffect {
         // UpdateParameters_ChangeFormat 0x1403b8f00: -1 becomes PFXTM_FILMIC (2) with AC's formats
         let tonemap = match i("TONEMAPPING", "FUNCTION")? {
             -1 => 2,
-            v @ 0..=2 => v,
+            v @ 1..=2 => v,
             v => return Err(format!("yebis: [TONEMAPPING] FUNCTION={v} not ported")),
         };
         if i("CHROMATIC_ABERRATION", "ENABLED")? == 0 {
             return Err("yebis: chromatic aberration off changes the draw list: not ported".into());
         }
         let auto_exposure = if i("AUTO_EXPOSURE", "ENABLED")? != 0 {
-            let checks = [("DELAY", 0.0), ("METERING_WIDTH", 100.0), ("METERING_HEIGHT", 100.0), ("METERING_OFFSET_X", 0.0), ("METERING_OFFSET_Y", 0.0), ("INFLUENCED_BY_GLARE", 0.0)];
+            // (the four METERING_* keys are read by nothing: b&w, sepia and vintage leave them out)
+            let checks = [("DELAY", 0.0), ("INFLUENCED_BY_GLARE", 0.0)];
             for (key, want) in checks {
                 if f("AUTO_EXPOSURE", key)? != want {
                     return Err(format!("yebis: [AUTO_EXPOSURE] {key} other than {want} not ported"));
                 }
-            }
-            if tonemap != 2 {
-                return Err("yebis: auto exposure with a tone map other than filmic not ported".into());
             }
             // YebisPP::updatePP 0x14002c270
             let grey = ((cam.exposure / 30.0) * f("AUTO_EXPOSURE", "TARGET")?) * cam.exposure_multiplier;
@@ -533,9 +539,11 @@ impl PostEffect {
         // with auto exposure on, the caller puts `AutoExposure::frame`'s exposure here
         let exposure = if auto_exposure.is_some() { 1.0 } else { f("TONEMAPPING", "EXPOSURE")? };
 
+        // YebisPP::updatePP 0x14002c270: hue, saturation, brightness, contrast, sepia, temperatures
         let mut m = IDENTITY;
-        if f("COLOR", "HUE")? != 0.0 || f("COLOR", "SEPIA")? != 0.0 {
-            return Err("yebis: [COLOR] HUE / SEPIA not ported".into());
+        let v = f("COLOR", "HUE")?;
+        if v != 0.0 {
+            m = mul(&m, &hue((v * std::f32::consts::PI) / 180.0));
         }
         let v = f("COLOR", "SATURATION")?;
         if v != 1.0 {
@@ -551,6 +559,12 @@ impl PostEffect {
             let t = (1.0 - v) * 0.5;
             c[12..15].copy_from_slice(&[t, t, t]);
             m = mul(&m, &c);
+        }
+        let v = f("COLOR", "SEPIA")?;
+        if v != 0.0 {
+            // MultiplyMatrixColorSepiaTone 0x1403ca980 -> GPUMath_ColorMatrixMonotone 0x1403cdc40 (colour 0.941, 0.784, 0.569)
+            let [r, g, b] = [0.941f32, 0.784, 0.569].map(|c| (c - 1.0) * v + 1.0);
+            m = mul(&m, &mul(&saturation(1.0 - v), &diag(r, g, b)));
         }
         for (key, invert) in [("COLOR_TEMP", false), ("WHITE_BALANCE", true)] {
             let k = f("COLOR", key)?;
@@ -683,6 +697,19 @@ pub(crate) fn inverse(m: &[f32; 16]) -> [f32; 16] {
         }
     }
     std::array::from_fn(|k| inv[(k / 4) * 4 + p[k % 4]])
+}
+
+/// GPUMath_ColorMatrixHue 0x1403af0a0 with its flag on (YebisPP passes true).
+fn hue(a: f32) -> [f32; 16] {
+    let (s, c) = (rustyac_math::sinf(a), rustyac_math::cosf(a));
+    let (r, g, b) = (c * -0.213 + 0.213, c * -0.715 + 0.715, c * -0.072 + 0.072);
+    let z = s * 0.0 + c * 0.0 + 0.0;
+    [
+        c * 0.787 + 0.213 + s * -0.213, r + s * 0.143, r + s * -0.787, z,
+        g + s * -0.715, c * 0.285 + 0.715 + s * 0.14, g + s * 0.715, z,
+        b + s * 0.928, b + s * -0.283, c * 0.928 + 0.072 + s * 0.072, z,
+        z, z, z, c * 0.0 + 1.0 + s * 0.0,
+    ]
 }
 
 /// MultiplyColorMatrixSaturation, luminance weights, not linear-preserving (param_5 false).
@@ -823,8 +850,8 @@ impl Cbuffer {
                 self.depth_alpha(pe)
             }
             1 | 5 => self.chromatic_aberration(pe),
-            2 => self.tonemap(pe, filmic, false),
-            3 | 11 => self.tonemap(pe, filmic, true),
+            2 | 39 => self.tonemap(pe, filmic, false),
+            3 | 11 | 40 | 41 => self.tonemap(pe, filmic, true),
             4 => self.depth_blur_factor(pe),
             6 | 12 => self.tonemap(&pe.round_two(), filmic, true),
             // EndPostEffectScene_Process 0x1403b84d0: the glare's share, GetEffectiveGlareLuminanceScale (1)
@@ -1076,8 +1103,11 @@ impl Default for AutoExposure {
     }
 }
 
-/// HDRTMAP_DecodeTonemap for the filmic tone map.
-fn decode(x: f32) -> f32 {
+/// HDRTMAP_DecodeTonemap 0x1403dfde0: the filmic tone map's inverse; PFXTM_* 0 and 1 (Reinhard) pass the value through.
+fn decode(x: f32, filmic: bool) -> f32 {
+    if !filmic {
+        return x;
+    }
     let r = -logf(1.0 - x.clamp(0.0, 1.0));
     if r > 0.0 {
         r
@@ -1104,7 +1134,7 @@ impl AutoExposure {
         }
     }
 
-    pub fn frame(&mut self, readback: Option<[u8; 4]>, ae: [f32; 3], dt: f32, new_exposure: bool) -> (f32, Luminance) {
+    pub fn frame(&mut self, readback: Option<[u8; 4]>, ae: [f32; 3], dt: f32, new_exposure: bool, filmic: bool) -> (f32, Luminance) {
         let [min, max, grey] = ae;
         if new_exposure {
             self.tonemap = self.value;
@@ -1126,7 +1156,7 @@ impl AutoExposure {
         let t = self.since as f32 / self.frames[b] as f32;
         let t = if !(t >= 0.0) { 0.0 } else if t > 1.0 { 1.0 } else { t };
         let mean = ((self.lum[b] - self.lum[a]) * t) + self.lum[a];
-        let current = decode(mean) / (((self.exposure[b] - self.exposure[a]) * t) + self.exposure[a]);
+        let current = decode(mean, filmic) / (((self.exposure[b] - self.exposure[a]) * t) + self.exposure[a]);
         let step = if self.rows > 4 {
             if self.pending {
                 Luminance::Skip
@@ -1142,7 +1172,7 @@ impl AutoExposure {
         // UpdateAutoExposure: move log2 exposure towards the target, at most 8 stops a second
         let l2 = logf(2.0);
         let e = logf(e_now + f32::MIN_POSITIVE) / l2;
-        let v = decode(grey) / (current + f32::MIN_POSITIVE);
+        let v = decode(grey, filmic) / (current + f32::MIN_POSITIVE);
         let lp = logf(1.0) / l2;
         let target = (((logf(v) / l2) - lp) * 0.85) + lp;
         let a = 1.0 - powf(0.5, dt / 0.3);
@@ -1392,7 +1422,7 @@ mod tests {
                 12 => Some([158, 155, 149, 0]),
                 _ => None,
             };
-            let (e, step) = ae.frame(readback, [0.2, 0.5, grey], 0.016666668, true);
+            let (e, step) = ae.frame(readback, [0.2, 0.5, grey], 0.016666668, true, true);
             steps.push(step);
             // the tone map of frame n uses the exposure after frame n-1
             if n != 1 {
