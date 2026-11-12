@@ -102,6 +102,14 @@ pub fn pp_quality() -> i32 {
     std::env::var("RENDER_ORACLE_PP_QUALITY").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
 }
 
+/// RENDER_ORACLE_GLARE=<0..5> and RENDER_ORACLE_RAYS=1: `[POST_PROCESS] GLARE` and `RAYS_OF_GOD` (Task Y5)
+pub fn pp_glare() -> i32 {
+    std::env::var("RENDER_ORACLE_GLARE").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+pub fn pp_rays() -> bool {
+    std::env::var("RENDER_ORACLE_RAYS").is_ok_and(|v| v == "1")
+}
+
 /// RENDER_ORACLE_HEAT_SHIMMER=1: `[POST_PROCESS] HEAT_SHIMMER` (Task Y3d-3); always on with the test filter
 pub fn heat_shimmer() -> bool {
     std::env::var("RENDER_ORACLE_HEAT_SHIMMER").is_ok_and(|v| v == "1") || profile().ppfilter == HEAT_TEST
@@ -152,9 +160,9 @@ pub fn video_ini(width: u32, height: u32) -> String {
         format!("ENABLED={POST}"),
         format!("QUALITY={}", pp_quality()),
         format!("FILTER={ppfilter}"),
-        "GLARE=0".into(),
+        format!("GLARE={}", pp_glare()),
         "DOF=0".into(),
-        "RAYS_OF_GOD=0".into(),
+        format!("RAYS_OF_GOD={}", pp_rays() as i32),
         format!("HEAT_SHIMMER={}", heat_shimmer() as i32),
         format!("FXAA={PP_FXAA}"),
         String::new(),

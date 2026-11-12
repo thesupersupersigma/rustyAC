@@ -658,7 +658,7 @@ impl Game {
             wr(settings, 0x39, crate::root::heat_shimmer() as u8); // ppHeatShimmer
             wr(settings, 0x3a, (crate::root::profile().post && crate::root::profile().fxaa) as u8); // ppFXAA
             wr(settings, 0x3c, crate::root::pp_quality()); // ppQuality
-            wr(settings, 0x40, 0i32); // ppGlare
+            wr(settings, 0x40, crate::root::pp_glare()); // ppGlare
             wr(settings, 0x44, 0i32); // ppDof
             wr(settings, 0x48, 0u8); // tripleBuffer
             wr(settings, 0x4c, 60f32); // refresh
