@@ -885,15 +885,6 @@ mod device {
             Ok(yebis)
         }
 
-        /// rustyac.exe learns the car count after YEBIS is made: the shimmer's buffers again for it.
-        pub fn set_particles(&mut self, particles: u32) -> Result<(), String> {
-            if particles != self.particles {
-                (self.heat_vb, self.heat_ib) = unsafe { heat_buffers(&self.device, particles)? };
-                self.particles = particles;
-            }
-            Ok(())
-        }
-
         unsafe fn viewport(&self, x: f32, y: f32, w: f32, h: f32) {
             self.context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: x, TopLeftY: y, Width: w, Height: h, MinDepth: 0.0, MaxDepth: 1.0 }]));
         }

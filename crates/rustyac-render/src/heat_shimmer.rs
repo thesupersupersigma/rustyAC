@@ -180,4 +180,15 @@ mod tests {
         let p = h.sets[0][0];
         assert!((9.25..=10.75).contains(&p.position[0]) && p.position[1] == 0.5 && (1.25..=2.75).contains(&p.position[2]), "{p:?}");
     }
+
+    #[test]
+    fn two_cars_take_120_rands_after_seed_22() {
+        // measured (Task Y3e, RAND_LOG, race.ini CARS=2): 120 rand() in 0x140024600 between srand(22) and srand(21)
+        let mut h = HeatShimmer { max_number_per_set: 10, ..HeatShimmer::new(2) };
+        let mut rand = MsvcRand(22);
+        h.remake(&mut rand);
+        let mut want = MsvcRand(22);
+        (0..120).for_each(|_| _ = want.next());
+        assert_eq!(rand, want);
+    }
 }

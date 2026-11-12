@@ -1,3 +1,25 @@
+# Task Y3e: YEBIS in VR, and the Y3d-3 shortcuts (v0.48.8, in progress)
+
+## Resume here
+
+- **In progress.** Step 0.1 is done; next is step 0.2 (the copy draw's sampler,
+  `copy_sampler` shortcut).
+- Check step 0.1: `bash re/scratch/taskY3e/rand2.sh` (game side, 2 cars, `RENDER_ORACLE_RAND_LOG=1`)
+  and `cargo test --release -p rustyac-render --lib heat_shimmer`.
+
+## Step 0.1: the shimmer sets are made once, from race.ini's cars
+
+- acs.exe: `Sim::createCamera` 0x1401982e0 reads race.ini `[RACE] CARS` and passes it to
+  `CameraForwardYebis::CameraForwardYebis`, which makes that many particle sets once.
+- rustyac.exe made 1 set at start, then remade them in `set_cars_to_be_loaded`. That drew 60
+  `rand()` more per extra car than the game.
+- Now `AcOptions::cars` carries the count into `start_yebis`, and the remake (`set_heat_sets`,
+  `Yebis::set_particles`) is gone. `render_oracle`'s port side already did this.
+- Proof (`re/scratch/taskY3e/rand2.sh`, 2 cars): between `srand(22)` and `srand(21)` the game
+  calls `rand()` 120 times, all from `KGLYebisParticle::initialize` 0x140024600 (return
+  140024867). Their values equal the MSVC stream seeded 22, the stream `remake` draws from. The
+  test `two_cars_take_120_rands_after_seed_22` checks that 2 sets take exactly those 120.
+
 # Task Y3d-3: YEBIS's heat shimmer (v0.48.7)
 
 ## Resume here

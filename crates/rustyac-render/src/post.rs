@@ -211,19 +211,6 @@ impl CameraForwardYebis {
 
     /// Reads YEBIS from `root`'s acs.exe and makes its objects: call after [`Self::new`], outside
     /// a logged frame. `video` is video.ini; its `[POST_PROCESS] FILTER` names the ppfilter in
-    /// The heat shimmer's sets (and YEBIS's particle buffers) for `count` cars.
-    #[cfg(all(windows, not(feature = "backend-wgpu")))]
-    pub fn set_heat_sets(&mut self, count: usize, rand: &mut rustyac_physics::session::MsvcRand) -> Result<(), String> {
-        if let Some(heat) = self.heat.as_mut().filter(|h| h.sets_number != count) {
-            heat.sets_number = count;
-            heat.remake(rand);
-            if let Some(yebis) = self.yebis.as_mut() {
-                yebis.set_particles(heat.sets.iter().map(Vec::len).sum::<usize>().max(1) as u32)?;
-            }
-        }
-        Ok(())
-    }
-
     /// `data`'s `system/cfg/ppfilters` (the game's working folder). `heat_sets` is race.ini's
     /// [RACE] CARS (Sim::createCamera 0x1401982e0): the heat shimmer's sets.
     #[cfg(all(windows, not(feature = "backend-wgpu")))]

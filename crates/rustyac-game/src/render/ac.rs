@@ -306,6 +306,8 @@ pub struct AcOptions {
     /// rustyAC's own folder (`conditions::own_dir`), where generated car shadows are kept;
     /// `None` (the page): they are not kept
     pub own_dir: Option<PathBuf>,
+    /// race.ini `[RACE] CARS`: the heat shimmer's sets, made once in `Sim::createCamera`
+    pub cars: usize,
 }
 
 /// What `race.ini` gives the renderer (rustyac.exe and the page's Full mode read it the same
@@ -832,8 +834,7 @@ impl AcRenderer {
             let video = video_ini.clone().unwrap_or_else(|| IniReader::from_text(std::path::Path::new("video.ini"), "[POST_PROCESS]
 FILTER=default
 "));
-            // (one heat shimmer set until set_cars_to_be_loaded says how many cars)
-            match camera.start_yebis(&mut graphics, &options.game, &options.game, video, 1) {
+            match camera.start_yebis(&mut graphics, &options.game, &options.game, video, options.cars) {
                 Ok(()) => graphics.video.ldr_levels = false,
                 Err(e) => notes.push(format!("{e}; post-processing without YEBIS")),
             }
@@ -1060,12 +1061,6 @@ FILTER=default
     /// first car is loaded (the tyre smoke's size depends on it).
     pub fn set_cars_to_be_loaded(&mut self, count: usize) {
         self.cars_to_be_loaded = count as i32;
-        // shortcut: the game makes race.ini CARS sets in Sim::createCamera, here they are made again
-        // once the count is known (more rand() draws than acs.exe); upgrade if live runs are compared
-        #[cfg(all(windows, not(feature = "wgpu")))]
-        if let Err(e) = self.camera.set_heat_sets(count, &mut self.graphics.crt_rand) {
-            self.notes.push(e);
-        }
     }
 
     /// How many cars are loaded.
