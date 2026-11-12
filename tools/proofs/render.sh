@@ -22,6 +22,9 @@ grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*
         "$RO" pose-of --tape "$tape" --tape-from "$frame" --pose "$pose" > /dev/null 2>&1 < /dev/null
         args=$(echo "$args" | sed "s#$p#$pose#")
     done
+    # Task Y5: RESIZE:<frame>:<W>x<H> -> RENDER_ORACLE_RESIZE (the window resized before that frame)
+    resize=$(echo "$args" | grep -oE 'RESIZE:[^ ]+')
+    if [ -n "$resize" ]; then export RENDER_ORACLE_RESIZE=${resize#RESIZE:}; args=$(echo "$args" | sed "s#$resize##"); else unset RENDER_ORACLE_RESIZE; fi
     # Task Y2c: a --post row is the real YEBIS on both sides (an empty value would still count as on)
     # Task Y3d-2: and from frame 0, where YEBIS makes its programs and wraps the scene's views
     case " $args " in *" --post "*) export RENDER_ORACLE_YEBIS=1; args="$args --capture 0" ;; *) unset RENDER_ORACLE_YEBIS ;; esac
