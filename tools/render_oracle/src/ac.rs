@@ -355,6 +355,23 @@ unsafe extern "C" fn glare_ctor_hook(this: *mut u8, name: *const u8) -> *mut u8 
     std::ptr::write_unaligned(this.add(0x108) as *mut f32, 0.0);
     made
 }
+// CTextureUtil::PointSymmetryT3_S8 0x1403fef10 uploads its eight scalers' .y from stack it never writes (the
+// ghost's second pass), so a byte of old stack reaches the constant buffer: the oracle clears the stack below
+// it first (differences.md)
+static GHOST_T3: AtomicUsize = AtomicUsize::new(0);
+#[inline(never)]
+fn clear_stack() {
+    // a local (a borrowed constant would be promoted to a static and never touch the stack)
+    let zeros = [0u8; 4096];
+    std::hint::black_box(&zeros);
+}
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn ghost_t3_hook(this: *mut u8, a: *mut u8, b: *mut u8, c: *mut u8, d: *mut u8, scale: *const f32, distortion: f32, colours: *const f32, format: u32, flags: u32) -> i32 {
+    type T3 = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, *mut u8, *const f32, f32, *const f32, u32, u32) -> i32;
+    let original: T3 = std::mem::transmute(GHOST_T3.load(Ordering::SeqCst));
+    clear_stack();
+    original(this, a, b, c, d, scale, distortion, colours, format, flags)
+}
 static DEVICE: AtomicUsize = AtomicUsize::new(0);
 static CONTEXT: AtomicUsize = AtomicUsize::new(0);
 static SWAP_CHAIN: AtomicUsize = AtomicUsize::new(0);
@@ -1094,6 +1111,8 @@ impl Game {
                 PFX_CTOR.store(acs.detour(0x1_403b_b820, 15, &ctor, pfx_ctor_hook as *const () as usize), Ordering::SeqCst);
                 let glare = [0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40];
                 GLARE_CTOR.store(acs.detour(0x1_4041_c100, 12, &glare, glare_ctor_hook as *const () as usize), Ordering::SeqCst);
+                let t3 = [0x48, 0x8b, 0xc4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57];
+                GHOST_T3.store(acs.detour(0x1_403f_ef10, 13, &t3, ghost_t3_hook as *const () as usize), Ordering::SeqCst);
             }
             if std::env::var_os("RENDER_ORACLE_YEBIS").is_none() {
                 acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);

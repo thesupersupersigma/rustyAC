@@ -114,6 +114,10 @@ does something else on purpose, each with its reason and the report that has the
   normal-depth target from a non-zero heap byte. The oracle's game side zeroes the flag after
   the constructor; rustyAC never makes that target. The picture is the same either way.
   (yebis.md, Task Y3d-2b)
+- The glare ghost's second pass (`CTextureUtil::PointSymmetryT3_S8`) uploads its eight scalers'
+  `.y` from stack it never writes, so the game's value changes from run to run; the shader never
+  reads it. rustyAC uploads 0, and the oracle's game side clears the stack before that call so
+  the logs match. (yebis.md, Task Y5c)
 
 ## Online
 

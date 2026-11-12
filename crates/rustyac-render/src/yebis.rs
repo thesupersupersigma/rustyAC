@@ -329,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -342,6 +342,7 @@ mod device {
     const SP: usize = 5;
     const SW: usize = 13;
     const SLB: usize = 0;
+    const SLBM: usize = 2;
 
     #[derive(Clone)]
     struct Target {
@@ -438,6 +439,8 @@ mod device {
         glare_pool: Vec<(Target, u32, u32)>,
         /// the star's first target (Task Y5b): 8 streaks, the two passes' pair, then the streaks' maximum
         star_at: usize,
+        /// the ghost's trim circle (Task Y5c), only with GHOST on; its two targets follow the star's maximum
+        trim: Option<ID3D11ShaderResourceView>,
     }
 
     /// The bytes of one input element.
@@ -769,7 +772,7 @@ mod device {
                 // the glare (`CRenderGlare::CreateSystemObjects` 0x140413c00): the bright pass's three (+0x248), the
                 // composite (+0x2b8), its double (+0x2d0: at most half the frame wide, at the glare's aspect), the levels'
                 // sum (+0x270), the first two levels' result and temporary, each later level's three and its double
-                // (+0x28), then 15 more (+0x280 star x10, +0x288, +0x290, the ghost's +0x298 x2, +0x2c0)
+                // (+0x28), then 15 more (+0x280 star x10, +0x288, +0x290, the ghost's +0x298 x2 with GHOST on, +0x2c0)
                 let quality = crate::yebis_cb::glare_quality(&video);
                 let (ga, gh) = super::glare_size(base, quality, width, height);
                 let dw = (2 * ga).min(w >> 1);
@@ -799,7 +802,9 @@ mod device {
                     glare_levels.push((l, idx, up));
                 }
                 let star_at = sizes.len();
-                sizes.extend([(ga, gh); 15]);
+                // initPostProcessing 0x140024ca0: m_bGlareGhost (readPPSetOptions' default is on)
+                let ghost = filter.get_int("GLARE", "GHOST").unwrap_or(1) != 0;
+                sizes.extend(vec![(ga, gh); if ghost { 15 } else { 13 }]);
                 let mut glare = Vec::new();
                 let mut glare_views = Views::new();
                 for &(gw, gg) in &sizes {
@@ -807,7 +812,9 @@ mod device {
                     glare.push((t.clone(), gw, gg));
                     keep(&mut kept, &mut glare_views, t, gw, gg);
                 }
-                kept.push(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?.into());
+                // the ghost's trim circle (+0x2a0, CreateDeviceResources 0x140415520: only with the ghost's targets)
+                let trim = if ghost { Some(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?) } else { None };
+                kept.extend(trim.clone().map(|t| t.into()));
                 let mut dof = Views::new();
                 for (dw, dh) in super::dof_sizes(base, width, height) {
                     keep(&mut kept, &mut dof, target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
@@ -973,6 +980,7 @@ mod device {
                     glare_levels,
                     glare_pool: glare_pool_targets,
                     star_at,
+                    trim,
                 })
             }
         }
@@ -1170,6 +1178,12 @@ mod device {
             if let Some(s) = &g.star {
                 parts.push(self.star(pe, g, s)?);
             }
+            if let Some(h) = &g.ghost {
+                // IsEnabledGhost 0x140413780
+                if g.luminance > 0.0 && g.glare_lum > 0.0 && h.lum > 0.0 {
+                    parts.push(self.ghost(pe, g, h, ratio)?);
+                }
+            }
             self.mad(3, &parts, &vec![[1.0; 4]; parts.len()])?;
             self.resample((srv(&self.glare[3].0), gw, gh), 4, 1.0 * 0.5)?;
             Ok(srv(&self.glare[4].0))
@@ -1293,6 +1307,30 @@ mod device {
             Ok(dst)
         }
 
+        /// The ghost (`GenerateGlare_Ghost` 0x1404185b0): three levels and the trim circle mirrored through the
+        /// centre into the ghost's second target, then that and two levels mirrored again into its first, which
+        /// the composite adds. Each pass is a four-vertex draw of its first source's rectangle.
+        unsafe fn ghost(&mut self, pe: &PostEffect, g: &Glare, h: &crate::yebis_cb::Ghost, ratio: i32) -> Result<usize, String> {
+            let (dst, mid) = (self.star_at + 12, self.star_at + 13);
+            let levels: Vec<usize> = self.glare_levels.iter().map(|l| l.1[1]).collect();
+            let f = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * h.lum * 0.05 * 20.0;
+            let angle = crate::yebis_cb::diaphragm_angle(h.diaphragm, pe.fov);
+            // (pass 2's first source, the ghost's second target, is the glare's size like the first level)
+            let (_, w, hh) = self.glare[levels[ratio.clamp(0, levels.len() as i32 - 1) as usize]].clone();
+            let [_, _, u, v] = src_rect(w, hh);
+            let ([one, two], at) = crate::yebis_cb::ghost_passes(h, f, ratio, levels.len(), angle, [u, v], w as f32 / hh as f32);
+            let [a, b, c] = at.map(|i| self.glare[levels[i]].0.srv.clone());
+            for (t, to, pass, srvs) in [(T_GHOST4, mid, one, vec![a.clone(), b, c.clone(), c.clone(), self.trim.clone()]), (T_GHOST3, dst, two, vec![self.glare[mid].0.srv.clone(), c, a])] {
+                let (target, tw, th) = self.glare[to].clone();
+                self.target_only(&target.rtv);
+                self.viewport(0.0, 0.0, tw as f32, th as f32);
+                let up = self.cbuffer.ghost(t, &pass.centres, &pass.p32, &pass.scaler, &pass.colours, &self.used);
+                let quad = [-1.0, 1.0, 0.0, v, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, u, v, 1.0, -1.0, u, 0.0];
+                self.draw(t, &up, &vec![SLBM; srvs.len()], &srvs, &quad)?;
+            }
+            Ok(dst)
+        }
+
         /// Technique `d`'s input layout: its inputs packed one after another.
         unsafe fn layout(&self, d: usize) -> Result<ID3D11InputLayout, String> {
             let elements: Vec<D3D11_INPUT_ELEMENT_DESC> = self.inputs[d]
@@ -1330,7 +1368,8 @@ mod device {
             c.IASetVertexBuffers(0, 1, Some(&Some(vb)), Some(&stride), Some(&offset));
             c.IASetIndexBuffer(&self.ib, DXGI_FORMAT_R16_UINT, 0);
             c.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            c.DrawIndexed(3, 0, 0);
+            // three vertices, or the ghost's four (DrawRectGPU_Effect_XY_TEX2D1)
+            c.DrawIndexed(vertices.len() as u32 * 4 / stride, 0, 0);
             let none: Vec<Option<ID3D11ShaderResourceView>> = vec![None; srvs.len()];
             c.PSSetShaderResources(0, Some(&none));
             Ok(())

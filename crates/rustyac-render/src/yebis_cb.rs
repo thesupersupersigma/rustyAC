@@ -28,8 +28,8 @@ use rustyac_physics::data::ini::IniReader;
 /// luminance analysis: the 2:1 steps and the 4x2 to 1x1 step, then the heat shimmer's
 /// particles with 1-4 octaves (13-16), then the glare's bloom (17-27, Task Y5a: bright pass,
 /// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels), then
-/// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum).
-pub const TECHNIQUES: [&str; 37] = [
+/// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c).
+pub const TECHNIQUES: [&str; 39] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -67,6 +67,8 @@ pub const TECHNIQUES: [&str; 37] = [
     "MaxColorT6",
     "MaxColorT7",
     "MaxColorT8",
+    "GlareGhost_PointSymmetryDistScaleT4_S8_TrimT1_S8",
+    "GlareGhost_PointSymmetryT3_S8",
 ];
 
 /// The glare's techniques by name (`TECHNIQUES` index).
@@ -82,6 +84,9 @@ pub const T_SUM: usize = 22;
 pub const T_TAPS: [usize; 4] = [8, 9, 27, 20];
 pub const T_MAD2: usize = 28;
 pub const T_MAX2: usize = 30;
+/// The ghost's two passes (Task Y5c).
+pub const T_GHOST4: usize = 37;
+pub const T_GHOST3: usize = 38;
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
@@ -91,6 +96,7 @@ const TEX_OFFSET: usize = 800;
 const TAPS: usize = 544;
 const MODULATE: usize = 2464;
 const OFFSET: usize = 2976;
+const SCALER: usize = 2336;
 const GAMMA: usize = 3232;
 const DITHER: usize = 3236;
 const MAX_MAPPING_LUM: usize = 3328;
@@ -227,6 +233,18 @@ pub struct Glare {
     pub dispersion: f32,
     pub base_level: i32,
     pub star: Option<Star>,
+    /// GHOST (CRenderGlare+0xe4: the ghost's two targets and the trim circle exist)
+    pub ghost: Option<Ghost>,
+}
+
+/// The ghost (Task Y5c): the custom shape's ghost luminance (CGlareDef+0x18) and halo (+0x1c),
+/// GHOST_CONCENTRIC_DISTORTION (CRenderGlare+0x198) and the diaphragm that turns it (+0x14c).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ghost {
+    pub lum: f32,
+    pub halo: f32,
+    pub concentric: f32,
+    pub diaphragm: (i32, f32, f32),
 }
 
 /// The star (Task Y5b): the custom shape's `CStarDef` and the star settings `setPostProcessing` hands YEBIS.
@@ -245,6 +263,108 @@ pub struct Star {
     pub threshold: f32,
     /// `[DIAPHRAGM]` TYPE, ROTATE_SCALE and ROTATE_OFFSET (CPostEffect+0xb64, +0xb68, +0xb6c)
     pub diaphragm: (i32, f32, f32),
+}
+
+/// One ghost pass's `$Globals` (see `Cbuffer::ghost`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GhostPass {
+    pub centres: [[f32; 4]; 16],
+    pub p32: Vec<[f32; 4]>,
+    pub scaler: [[f32; 4]; 8],
+    pub colours: [[f32; 4]; 8],
+}
+
+/// YEBIS's xorshift128 (with an arithmetic shift) as GenerateGlare_Ghost and `CTextureUtil::Construct` use it.
+fn xorshift(s: &mut [u32; 4]) -> f32 {
+    let [x, y, z, w] = *s;
+    let t = x << 11 ^ x;
+    let n = w ^ ((t as i32 >> 8) as u32) ^ (w >> 19) ^ t;
+    *s = [y, z, w, n];
+    (n & 0x7fff_ffff) as f32 * 4.656613e-10
+}
+
+/// `s_avGhostCenterDistortion` 0x14155ec40 (filled by `CTextureUtil::Construct` 0x1403e50b0).
+fn ghost_distortion() -> [[f32; 2]; 8] {
+    let mut s = [1, 0x6c07_8967, 0x714a_cb41, 0x4807_7044];
+    std::array::from_fn(|_| {
+        let a = xorshift(&mut s);
+        [xorshift(&mut s) * 2.0 - 1.0, a * 2.0 - 1.0]
+    })
+}
+
+/// `CRenderGlare::GenerateGlare_Ghost` 0x1404185b0 with no anamorphic flare, no distortion or sharpness and
+/// +0x1a0 = +0x30c = 1 (a float glare): the two passes' registers and the levels they read, (ratio, ratio + 1,
+/// ratio + 2) clamped to the `levels`. `f` is its luminance, `angle` the diaphragm's (+0x14c), `rect` the first
+/// source's rectangle (`src_rect`) and `aspect` its width over its height.
+pub fn ghost_passes(g: &Ghost, f: f32, ratio: i32, levels: usize, angle: f32, rect: [f32; 2], aspect: f32) -> ([GhostPass; 2], [usize; 3]) {
+    use rustyac_math::{cosf, powf};
+    let maxl = levels as i32 - 1;
+    let c = |i: i32| if -1 < i { i.min(maxl) } else { 0 };
+    let w = |i: i32| powf(4.0, (c(i) - i).min(0) as f32);
+    let tab = ghost_distortion();
+    let centre = [rect[0] * 0.5, rect[1] * 0.5, 0.0, 0.0];
+    let scaler = |x: [f32; 8]| std::array::from_fn(|k| [if x[k] == 0.0 { 1000.0 } else { 1.0 / x[k] }, 0.0, 0.0, 0.0]);
+    let tint = |c: [f32; 4], w: f32| c.map(|c| w * c);
+    // pass 1: the concentric scales from the generator, four of them turned by the diaphragm
+    let mut s = [0x47db_4eb0, 0x8979_c4d7, 0xa533_a50c, 0x3c16_9c8a];
+    let y: [f32; 8] = std::array::from_fn(|_| {
+        let v = xorshift(&mut s) * 2.0 - 1.0;
+        let sign = if 0.0 < v { 1.0 } else if 0.0 <= v { 0.0 } else { -1.0 };
+        let mut v = powf(v.abs(), 0.5) * sign;
+        if v < 0.0 {
+            v *= 0.5;
+        }
+        powf(2.5, g.concentric * v)
+    });
+    let mut x = [-0.33, -0.56, -0.75, -0.4, -0.85, -0.25, -0.5, -1.0f32];
+    x[1] *= cosf(0.0 - angle * 3.0) * 0.25 + 0.75;
+    x[3] *= cosf(angle * 0.7 - 0.0) * 0.5 + 1.5;
+    x[4] *= cosf((angle * 2.1 - 0.2) - 0.0) * 0.25 + 0.7;
+    x[6] *= cosf((0.4 - angle * 1.4) - 0.0) * 0.3 + 0.7;
+    let x = x.map(|x| if x <= -1.0 { -1.0 } else { x });
+    let (w0, w1, w2) = (w(ratio), w(ratio + 1), w(ratio + 2));
+    let mut colours = [
+        tint([0.05, 0.020000001, 0.030000001, 0.0], w0),
+        tint([0.015000001, 0.05, 0.030000001, 0.0], w0),
+        tint([0.030000001, 0.015000001, 0.05, 0.0], w0),
+        tint([0.05, 0.030000001, 0.015000001, 0.0], w1),
+        tint([0.015000001, 0.05, 0.035, 0.0], w1),
+        tint([0.0225, 0.045, 0.075, 0.0], w2),
+        tint([0.015000001, 0.05, 0.025, 0.0], w2),
+        [0.0; 4],
+    ];
+    colours[7] = [0.175, 0.125, 0.25, 0.0].map(|c| w2 * c * 0.3333);
+    // PointSymmetryT4_S8_TrimT1_S8's DistScale program: the scales' y, the aspect's mapping, the distortion x 0
+    let (fw, fh) = if aspect <= 1.0 { (rect[0], aspect * rect[1]) } else { (rect[0] / aspect, rect[1]) };
+    let (sx, sy) = (2.0 / fw, 2.0 / fh);
+    let mut p32: Vec<[f32; 4]> = y.iter().map(|&y| [y, 0.0, 0.0, 0.0]).collect();
+    p32.push([sx, sy, -1.0 / fw, -1.0 / fh]);
+    p32.push([1.0 / sx, 1.0 / sy, -((-1.0 / fw) / sx), -((-1.0 / fh) / sy)]);
+    p32.push([0.0, 0.0, rect[0], rect[1]]);
+    p32.extend(tab.iter().map(|t| [t[0] * 0.0, t[1] * 0.0, 0.0, 0.0]));
+    let mut centres = [[0.0; 4]; 16];
+    centres[..8].fill(centre);
+    let one = GhostPass { centres, p32, scaler: scaler(x), colours };
+    // pass 2 (PointSymmetryT3_S8): fixed scales (the generated ones go only to the unused .y), the halo
+    // weighted by its own power per level, the distortion x 0 in reverse order
+    let f2 = |c: [f32; 4], w: f32| c.map(|c| (f * c) * w);
+    let h = g.halo * 1.414;
+    let wh = w2 * if h != 1.0 { powf(h, (c(ratio + 2) - ratio) as f32) } else { 1.0 };
+    let colours = [
+        f2([0.15, 0.375, 1.5, 0.0], 1.0),
+        f2([1.0, 0.2, 0.5, 0.0], 1.0),
+        f2([0.6, 1.8, 1.6, 0.0], 1.0),
+        f2([1.44, 0.72, 4.0800004, 0.0], 1.0),
+        f2([0.032, 0.008, 0.16000001, 0.0], wh),
+        f2([0.014, 0.002, 0.020000001, 0.0], wh),
+        f2([0.001, 0.004, 0.020000001, 0.0], w0),
+        f2([0.010000001, 0.0005, 0.002, 0.0], w0),
+    ];
+    for (k, c) in centres[8..].iter_mut().enumerate() {
+        *c = [tab[7 - k][0] * 0.0, tab[7 - k][1] * 0.0, 0.0, 0.0];
+    }
+    let two = GhostPass { centres, p32: Vec::new(), scaler: scaler([1.0, 0.2, -0.3, -1.0, -7.0, 4.0, 2.0, -1.6]), colours };
+    ([one, two], [c(ratio) as usize, c(ratio + 1) as usize, c(ratio + 2) as usize])
 }
 
 /// `CPostEffect::GetDiaphragmRotateAngle` 0x1403bb140 at the field of view `fov` (+0x534).
@@ -270,9 +390,10 @@ impl Glare {
         let f = |k: &str| filter.get_float("GLARE", k);
         let i = |k: &str| filter.get_int("GLARE", k);
         // what changes the targets or adds draws: Task Y5b and on
-        for (key, want) in [("GHOST", 1), ("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BRIGHT_PASS", 0), ("BLOOM_NUM_LEVELS", 0), ("BLUR", 1), ("PRECISION", 0)] {
+        // (AFTER_IMAGE and ANAMORPHIC are 0 in every shipped filter)
+        for (key, want) in [("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BRIGHT_PASS", 0), ("BLOOM_NUM_LEVELS", 0), ("BLUR", 1), ("PRECISION", 0)] {
             if i(key)? != want {
-                return Err(format!("yebis: [GLARE] {key} other than {want} not ported (Y5b)"));
+                return Err(format!("yebis: [GLARE] {key} other than {want} not ported"));
             }
         }
         let shape = i("SHAPE")?;
@@ -294,10 +415,23 @@ impl Glare {
             ghost *= f("SHAPE_GHOST_LUMINANCE")?;
             star *= f("SHAPE_STAR_LUMINANCE")?;
         }
-        if ghost > 0.0 {
-            return Err("yebis: the glare's ghost not ported (Y5c)".into());
-        }
         let luminance = f("LUMINANCE")?;
+        // setPostProcessing calls SetDiaphragmRotate only with a scale or an offset (CPostEffect::Initialize: 1, 1, 0)
+        let d = |k: &str| filter.get_float("DIAPHRAGM", k);
+        let (scale, offset) = (d("ROTATE_SCALE")?, d("ROTATE_OFFSET")? * 0.017453);
+        let diaphragm = if scale != 0.0 || offset != 0.0 { (filter.get_int("DIAPHRAGM", "TYPE")?, scale, offset) } else { (1, 1.0, 0.0) };
+        // GenerateGlare_Ghost 0x1404185b0 with the custom shape's halo, no distortion and no sharpness; a
+        // concentric distortion of 0 picks the other program (no shipped filter does either)
+        let ghost = if i("GHOST")? == 0 {
+            None
+        } else {
+            let concentric = f("GHOST_CONCENTRIC_DISTORTION")?;
+            if ghost > 0.0 && (!custom || f("SHAPE_GHOST_DISTORTION")? != 0.0 || i("SHAPE_GHOST_SHARPENESS")? != 0 || concentric == 0.0) {
+                return Err("yebis: a library shape's ghost, a ghost distortion or sharpness, or GHOST_CONCENTRIC_DISTORTION=0 not ported".into());
+            }
+            let halo = if custom { f("SHAPE_GHOST_HALO_LUMINANCE")? } else { 1.0 };
+            Some(Ghost { lum: ghost, halo, concentric, diaphragm })
+        };
         // CRenderGlare::GenerateGlare_Star 0x140417200 draws with a star luminance, streaks, a length, a glare luminance
         // and LUMINANCE (+0x108); every library star has a dispersion (its colours: not ported)
         let star = match (star > 0.0, custom) {
@@ -318,10 +452,6 @@ impl Glare {
                 // SetGlareStarSoftness 0x1403cb460 (+0xe0 is 0.25), SetGlareStarFilterThreshold 0x1403cb570
                 let softness = f("STAR_SOFTNESS")?;
                 let threshold = f("STAR_FILTER_THRESHOLD")?;
-                // setPostProcessing calls SetDiaphragmRotate only with a scale or an offset (CPostEffect::Initialize: 1, 1, 0)
-                let d = |k: &str| filter.get_float("DIAPHRAGM", k);
-                let (scale, offset) = (d("ROTATE_SCALE")?, d("ROTATE_OFFSET")? * 0.017453);
-                let diaphragm = if scale != 0.0 || offset != 0.0 { (filter.get_int("DIAPHRAGM", "TYPE")?, scale, offset) } else { (1, 1.0, 0.0) };
                 (lines > 0 && length > 0.0 && glare_lum > 0.0 && luminance > 0.0).then_some(Star {
                     lines: lines as usize,
                     length,
@@ -352,6 +482,7 @@ impl Glare {
             dispersion,
             base_level,
             star,
+            ghost,
         })
     }
 }
@@ -736,6 +867,16 @@ impl Cbuffer {
         self.upload(&used[t])
     }
 
+    /// A ghost pass (`CTextureUtil::PointSymmetryT4_S8_TrimT1_S8` 0x1403fe210, `PointSymmetryT3_S8` 0x1403fef10):
+    /// the 8 centres and 8 centre distortions, the DistScale program's 19 registers, the 8 scalers, the 8 colours.
+    pub fn ghost(&mut self, t: usize, centres: &[[f32; 4]; 16], p32: &[[f32; 4]], scaler: &[[f32; 4]; 8], colours: &[[f32; 4]; 8], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        self.put(TAPS, centres.as_flattened());
+        self.put(TEX_OFFSET, p32.as_flattened());
+        self.put(SCALER, scaler.as_flattened());
+        self.put(MODULATE, colours.as_flattened());
+        self.upload(&used[t])
+    }
+
     /// The heat shimmer's copy of the effect surface: `DrawRectGPU_MadT1_Sn` with one tap at
     /// zero and a white modulate (`TECHNIQUES[8]`).
     pub fn copy(&mut self, used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
@@ -1092,6 +1233,37 @@ mod tests {
     use super::*;
     use crate::yebis_tfxo::Tfxo;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // the game's values as its log prints them
+    fn ghost_passes_follow_the_game() {
+        // the default filter's draws 897-898 of re/scratch/taskY5/g3 (192x108 glare, five levels, F 2.688)
+        let g = Ghost { lum: 0.15, halo: 0.005, concentric: 1.0, diaphragm: (1, 1.0, 0.0) };
+        let ([one, two], levels) = ghost_passes(&g, 2.6880002, 0, 5, 0.0349, [1.0, 1.0], 192.0 / 108.0);
+        assert_eq!(levels, [0, 1, 2]);
+        let y = [1.87552905, 0.700101078, 0.727419972, 1.71940994, 0.755011559, 0.793704391, 0.634749413, 2.33311915];
+        assert_eq!(one.p32[..8].iter().map(|r| r[0]).collect::<Vec<_>>(), y);
+        assert_eq!(one.p32[8..11], [[3.55555558, 2.0, -1.77777779, -1.0], [0.28125, 0.5, 0.5, 0.5], [0.0, 0.0, 1.0, 1.0]]);
+        // (the diaphragm angle is rounded here: pass 1's turned scalers to 1e-4)
+        let sx = [-3.030303, -1.78816319, -1.33333337, -1.25009334, -1.2410078, -4.0, -2.03729224, -1.0];
+        assert!(one.scaler.iter().zip(sx).all(|(s, x)| (s[0] - x).abs() < 1e-4), "{:?}", one.scaler);
+        assert_eq!(one.colours[7], [0.0583274998, 0.0416624993, 0.0833249986, 0.0]);
+        assert_eq!(two.scaler.map(|s| s[0]), [1.0, 5.0, -3.33333325, -1.0, -0.142857149, 0.25, 0.5, -0.625]);
+        let game = [
+            [0.40320006, 1.00800014, 4.03200054, 0.0],
+            [2.6880002, 0.53760004, 1.3440001, 0.0],
+            [1.61280024, 4.83840036, 4.30080032, 0.0],
+            [3.87072039, 1.93536019, 10.967042, 0.0],
+            [4.2995016e-06, 1.0748754e-06, 2.1497508e-05, 0.0],
+            [1.88103184e-06, 2.6871885e-07, 2.6871885e-06, 0.0],
+            [0.00268800044, 0.0107520018, 0.053760007, 0.0],
+            [0.0268800035, 0.00134400022, 0.00537600089, 0.0],
+        ];
+        assert_eq!(two.colours, game);
+        // the distortion's signs (as -0 / +0 bytes) in the game's order
+        let signs: Vec<bool> = ghost_distortion().iter().flat_map(|t| [t[0] < 0.0, t[1] < 0.0]).collect();
+        assert_eq!(signs, [true, false, false, true, true, true, true, false, false, true, true, false, true, true, true, false]);
+    }
 
     #[test]
     fn box_taps_follow_the_game() {
