@@ -1,10 +1,21 @@
-# Task Y3e: YEBIS in VR, and the Y3d-3 shortcuts (v0.48.8, in progress)
+# Task Y3e: YEBIS in VR, and the Y3d-3 shortcuts (v0.48.8)
 
 ## Resume here
 
-- **In progress.** Steps 0 and 1 are done (VR with YEBIS on OpenVR and Oculus, proven on the
-  stand-ins); next is step 2's end: VR `--post` rows in `render_list.txt`, the 16 `--post` rows,
-  `run_all.sh --quick`, clippy on both wasm targets, the release.
+- **Done (v0.48.8).** Steps 0, 1 and 2: the Y3d-3 shortcuts are gone, VR runs YEBIS on OpenVR
+  and Oculus, proven on the stand-ins. Next: Task Y4 (YEBIS in the page); leftovers go to Task
+  Y3e-b (below).
+- End checks: `render.sh` rows `r23_09`..`r23_24`, `r47b_01`..`08`, `r47c_01`..`05`, `ry3e_01`..`05`
+  34 of 34 IDENTICAL (`re/scratch/taskY3e/proof2.txt`); `run_all.sh --quick` 170 of 170
+  IDENTICAL (`quick.log`); clippy native `--all-targets`, both wasm targets and wgpu clean
+  (`re/scratch/taskY3e/clippy.sh`; render_oracle's own 42 old clippy errors unchanged).
+- Task Y3e-b (left): live `rustyac.exe` still makes the flat camera's YEBIS targets beside a
+  headset's (`shortcut:` in `crates/rustyac-game/src/render/ac.rs`); the YEBIS remake on a
+  resize in VR is not proven (`RENDER_ORACLE_RESIZE` with `--vr --post` not run); the
+  first-shimmer-after-remake case is a script (`heat.sh`), not a row, because rows cannot set
+  `RENDER_ORACLE_RESIZE`.
+- New files: none in the repo's code (the web zip gains nothing); scratch scripts in
+  `re/scratch/taskY3e`.
 - Check step 0.1: `bash re/scratch/taskY3e/rand2.sh` (game side, 2 cars, `RENDER_ORACLE_RAND_LOG=1`)
   and `cargo test --release -p rustyac-render --lib heat_shimmer`.
 - Check step 0.2: `LABEL=s2 bash re/scratch/taskY3e/cmp.sh` (the Y3d-3 compare, 52 frames,
