@@ -1,8 +1,37 @@
-# Task Y5: YEBIS's glare and light shafts (and Y3e's leftovers) (v0.49.0, in progress)
+# Task Y5: YEBIS's glare and light shafts (and Y3e's leftovers) (stopped at step 1, no release)
 
 ## Resume here
 
-- **Step 0 done** (Y3e-b's leftovers): steps 0.1, 0.2, 0.3 committed. Next: step 1 (glare).
+- **Step 0 done** (Y3e-b's leftovers): steps 0.1, 0.2, 0.3 committed. **Step 1 stopped (rule 7):
+  much bigger than the task said**; no release, no tag. Next: decide the split below, then
+  Task Y5a.
+- Step 1 measured (game side only, `re/scratch/taskY5/g3` against `g0`: Spa chase, f2004
+  `trk_lap` from 480, 1280x720, QUALITY=3, `RENDER_ORACLE_GLARE=3 RENDER_ORACLE_RAYS=1`, the
+  shipped `default` filter): glare and light shafts add **43 draws and ~960 calls a frame**
+  (903 draws against 860) and 16 new target sizes. Everything YEBIS draws so far (Y2a..Y3e,
+  eight tasks) is ~10 draws. In draw order (frame 0's `ac.f0.gpulog`): 853-854 bright pass
+  (1280x720), 855-872 downsample + bloom levels (640x360 .. 24x14, `GenerateGlare_Source` /
+  `_Bloom` / `_Bloom_CompositeSubLevels`), 873-896 star streaks (24 draws at 192x108,
+  `GenerateGlare_Star` / `_StarStreaks`), 897 ghost (384x216, `GenerateGlare_Ghost`, 27 KB of
+  pseudo-C alone), 898-899 light shaft (128x64, then 1280x720, `GenerateGlare_LightShaft`),
+  900-903 composite and the tonemap. `re/decomp/GPURenderGlare` is 92 functions, 156 KB of
+  pseudo-C, plus `GPUGlareDef` (the shape presets) and `setPostProcessing` 0x140025080's glare
+  and god-ray blocks. Every shipped filter has `[GLARE] ENABLED=1` and `[GODRAYS] ENABLED=1`
+  (`default.ini`: SHAPE=11, ghost 0.15, 6-streak star, afterimage), so `[POST_PROCESS] GLARE`
+  > 0 needs all of the chain before any filter works; none is ported, glare and light shafts
+  are still refused (`crates/rustyac-render/src/yebis_cb.rs:122`).
+- Estimate and proposed split (each about a Y2b-size task, ~1.5 sessions): **Y5a** bright pass,
+  downsample and bloom (draws 853-872), with `[POST_PROCESS] GLARE` levels and the QUALITY
+  tables; **Y5b** star streaks and the `GPUGlareDef` shapes (873-896); **Y5c** ghost,
+  afterimage, anamorphic flare and the composite (897, 900-903; first point where a shipped
+  filter with glare can be IDENTICAL end to end); **Y5d** light shafts (`[GODRAYS]`, sun in and
+  out of view, 898-899), then step 3's rows and v0.49.0. 4 tasks, ~6 sessions.
+- Oracle: `RENDER_ORACLE_GLARE=<0..5>` and `RENDER_ORACLE_RAYS=1` write `[POST_PROCESS] GLARE` /
+  `RAYS_OF_GOD` and set the game's `ppGlare` (settings +0x40). Re-measure: `RENDER_ORACLE_YEBIS=1
+  RENDER_ORACLE_GLARE=3 RENDER_ORACLE_RAYS=1 RENDER_ORACLE_PP_QUALITY=3 render_oracle compare
+  --track spa --view chase --post --car ks_ferrari_f2004 --tape
+  oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --capture 0`
+  (the port refuses, the game's side is kept).
 - Decision (2026-11-12): YEBIS stays desktop only; Task Y4 (the page) is dropped (plan table
   below, README's browser row, the page's settings say "(desktop only)").
 - Step 0.1: live `rustyac.exe` opens the headset first and makes its `CameraForwardYebis` with
