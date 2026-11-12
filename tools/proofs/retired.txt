@@ -2,3 +2,4 @@
 # Cases retired on purpose: run_all.sh does not print them as vanished. One a line:
 #   <area> <case> | why it was retired
 physics oracle/t34/mp_fault/pit_mouse.mcrec | a deliberate fault of Task 34 (a development recording), not a proof
+render ry5a_01 | left the quick list on purpose in Task Y5b (ry5b_01 took its place); still in the full set
