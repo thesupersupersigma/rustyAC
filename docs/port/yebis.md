@@ -14,7 +14,10 @@
 - Proof rows `ry5a_01`..`05` in `tools/proofs/render_list.txt` (`ry5a_01` also in the quick list);
   rows take `GLARE:<n>` and `PP_QUALITY:<n>` like `RESIZE:` (`render.sh` sets `RENDER_ORACLE_*`).
 - Before any work: `run_all.sh --quick` 170 of 170 IDENTICAL, 0 errors or skips, 0h50m
-  (`re/scratch/taskY5/quick.log`).
+  (`re/scratch/taskY5/quick.log`). After Y5a: 171 of 171 IDENTICAL (render 15 with `ry5a_01`),
+  0 errors or skips, 0h42m (`re/scratch/taskY5/quick2.log`). The 26 older `--post` rows
+  (`r23_09`..`24`, `ry3e_01`..`05`, `ry5_01`..`05`) and the overlays, run again: 41 of 41
+  IDENTICAL (`re/scratch/taskY5/proof3.txt`). Clippy clean native, both wasm targets and wgpu.
 
 ## What the port does now (`crates/rustyac-render/src/yebis.rs` `bloom`, `yebis_cb.rs` `Glare`)
 
