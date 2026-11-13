@@ -31,7 +31,7 @@ use rustyac_physics::data::ini::IniReader;
 /// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c),
 /// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46),
 /// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d).
-pub const TECHNIQUES: [&str; 54] = [
+pub const TECHNIQUES: [&str; 59] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -86,6 +86,11 @@ pub const TECHNIQUES: [&str; 54] = [
     "TexCoordMadT1_S4",
     "Corona",
     "MadT4",
+    "BrightPassT1_Vignette_THRESHOLD_LUMINANCE_S1",
+    "BrightPassT1_THRESHOLD_LUMINANCE_S1",
+    "MadT1_S9",
+    "MadT1_S13",
+    "MadT1_S15",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
@@ -108,6 +113,8 @@ pub const T_SUM: usize = 22;
 /// `MadT1_S<n>` (n taps) is `T_TAPS[n - 1]`; `MadT<n>` is `T_MAD2 + n - 2` (`T_COPY` for one);
 /// `MaxColorT<n>` is `T_MAX2 + n - 2`.
 pub const T_TAPS: [usize; 4] = [8, 9, 27, 20];
+/// `MadT1_S5`, `_S9`, `_S13`, `_S15`: the 29x29 gaussian's own path (Task Y5d).
+pub const T_TAPS_ODD: [usize; 4] = [10, 56, 57, 58];
 pub const T_MAD2: usize = 28;
 pub const T_MAX2: usize = 30;
 /// The ghost's two passes (Task Y5c).
@@ -118,6 +125,9 @@ pub const T_SHAFT_MASK: usize = 47;
 pub const T_RADIAL: usize = 48;
 pub const T_CORONA: usize = 52;
 pub const T_MAD4: usize = 53;
+/// `[GLARE] BRIGHT_PASS=1`'s bright pass (Task Y5d), with and without the vignette.
+pub const T_BRIGHT_LUM: usize = 54;
+pub const T_BRIGHT_LUM_PLAIN: usize = 55;
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
@@ -242,6 +252,8 @@ const GLARE_STAR: [(usize, f32); 14] = [
     (5, 0.0),
 ];
 const STAR_LIB: [(f32, f32); 7] = [(0.0, 0.0), (1.25, 0.0), (2.4, 0.0), (2.4, 0.0), (2.4, 1.3), (4.0, 0.0), (3.0, 0.0)];
+/// Each STARDEF entry's streak count (+0x8) and rotation flag (+0x18).
+const STAR_LINES: [(usize, bool); 7] = [(0, false), (4, true), (4, false), (6, false), (8, false), (2, false), (2, false)];
 
 /// `CPostEffect::Initialize` 0x1403bbb80's glare table (0x141521650): the glare target's share
 /// of the base width and its bloom level count, by quality.
@@ -262,6 +274,9 @@ pub struct Glare {
     /// LUMINANCE (CPostEffect+0x66c) and THRESHOLD (+0x668)
     pub luminance: f32,
     pub threshold: f32,
+    /// BRIGHT_PASS=1: EndPostEffectScene's EFX_BRIGHTPASSTYPE 3, which GenerateGlare_Source_BrightPass
+    /// 0x140415a60 turns into 2 with AC's remap of 1 (the luminance threshold programs, the same constants)
+    pub bright_luminance: bool,
     /// CRenderGlare+0x104: the R11G11B10 range 64 x GENERATION_RANGE_SCALE
     pub range: f32,
     /// BLOOM_GAUSSIAN_RADIUS_SCALE (+0x314), BLOOM_FILTER_THRESHOLD (+0x310), BLOOM_LUMINANCE_GAMMA (+0x1a8)
@@ -358,6 +373,30 @@ pub struct Star {
     pub threshold: f32,
     /// `[DIAPHRAGM]` TYPE, ROTATE_SCALE and ROTATE_OFFSET (CPostEffect+0xb64, +0xb68, +0xb6c)
     pub diaphragm: (i32, f32, f32),
+    /// The glare definition's star dispersion (+0x30) and its forced flag (+0x34: one or more,
+    /// the dispersion then times 0.36): a library shape's (Task Y5d), 0 with a custom shape
+    pub dispersion: f32,
+    pub force: bool,
+}
+
+/// `CStarDef::InitializeStaticStarLibs` 0x1404126c0: the diffraction colours (white, blue, green,
+/// red) and the dispersion colours (white, red, green, blue).
+pub const DIFFRACTION_COLOURS: [[f32; 4]; 4] = [[1.0; 4], [0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
+pub const DISPERSION_COLOURS: [[f32; 4]; 4] = [[1.0; 4], [1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
+
+impl Star {
+    /// `GenerateGlare_StarStreaks` 0x140417570's colour table: the definition's colours (diffraction
+    /// with a dispersion of 0 or more, else dispersion), and its eight rows, each colour moved from
+    /// white towards the table's by row/8 and back by the dispersion times 1.5 (row 0 is the last pass's).
+    pub fn colours(&self) -> ([[f32; 4]; 4], [[[f32; 4]; 4]; 8]) {
+        let table = if 0.0 <= self.dispersion { DIFFRACTION_COLOURS } else { DISPERSION_COLOURS };
+        let d = self.dispersion.abs() * 1.5;
+        let rows = std::array::from_fn(|r| {
+            let f = (r + 1) as f32 * 0.125;
+            std::array::from_fn(|k| if k == 0 { [1.0; 4] } else { table[k].map(|c| (((1.0 - c) * f + c) - 1.0) * d + 1.0) })
+        });
+        (table, rows)
+    }
 }
 
 /// One ghost pass's `$Globals` (see `Cbuffer::ghost`).
@@ -486,10 +525,17 @@ impl Glare {
         let i = |k: &str| filter.get_int("GLARE", k);
         // what changes the targets or adds draws: Task Y5b and on
         // (AFTER_IMAGE and ANAMORPHIC are 0 in every shipped filter)
-        for (key, want) in [("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BRIGHT_PASS", 0), ("BLOOM_NUM_LEVELS", 0), ("BLUR", 1), ("PRECISION", 0)] {
+        for (key, want) in [("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BLOOM_NUM_LEVELS", 0), ("BLUR", 1), ("PRECISION", 0)] {
             if i(key)? != want {
                 return Err(format!("yebis: [GLARE] {key} other than {want} not ported"));
             }
+        }
+        let bright = i("BRIGHT_PASS")?;
+        if !(0..=1).contains(&bright) {
+            return Err(format!("yebis: [GLARE] BRIGHT_PASS={bright} is not a bright pass"));
+        }
+        if f("STAR_LENGTH_FOV_DEPENDENCE")? != 0.0 {
+            return Err("yebis: [GLARE] STAR_LENGTH_FOV_DEPENDENCE other than 0 not ported".into());
         }
         let shape = i("SHAPE")?;
         let lib = *GLARE_LIB.get(shape as usize).ok_or_else(|| format!("yebis: [GLARE] SHAPE={shape} is not a glare shape"))?;
@@ -528,12 +574,33 @@ impl Glare {
             Some(Ghost { lum: ghost, halo, concentric, diaphragm })
         };
         // CRenderGlare::GenerateGlare_Star 0x140417200 draws with a star luminance, streaks, a length, a glare luminance
-        // and LUMINANCE (+0x108); every library star has a dispersion (its colours: not ported)
+        // and LUMINANCE (+0x108)
+        // SetGlareStarSoftness 0x1403cb460 (+0xe0 is 0.25), SetGlareStarFilterThreshold 0x1403cb570
+        let (softness, threshold) = (f("STAR_SOFTNESS")?, f("STAR_FILTER_THRESHOLD")?);
+        let (softness, threshold) = (if softness > 0.0 { softness } else { 0.25 }, threshold.clamp(1e-05, 0.9999));
         let star = match (star > 0.0, custom) {
             (false, _) => None,
-            (true, false) => return Err("yebis: a library glare shape's star (its dispersion) not ported".into()),
+            // the library's star (Task Y5d): its CStarDef as it is, the definition's dispersion (CGlareDef::Initialize)
+            (true, false) => {
+                let (entry, inclination) = GLARE_STAR[shape as usize];
+                let ((length, secondary), (lines, rotation)) = (STAR_LIB[entry], STAR_LINES[entry]);
+                let force = 1.0 <= p9.abs();
+                (lines > 0 && length > 0.0 && glare_lum > 0.0 && luminance > 0.0).then_some(Star {
+                    lines,
+                    length,
+                    secondary,
+                    inclination,
+                    rotation,
+                    lum: star,
+                    softness,
+                    threshold,
+                    diaphragm,
+                    dispersion: if force { p9 * 0.36 } else { p9 },
+                    force,
+                })
+            }
             (true, true) => {
-                for key in ["SHAPE_STAR_DISPERSION", "SHAPE_STAR_FORCE_DISPERSION", "STAR_LENGTH_FOV_DEPENDENCE"] {
+                for key in ["SHAPE_STAR_DISPERSION", "SHAPE_STAR_FORCE_DISPERSION"] {
                     if f(key)? != 0.0 {
                         return Err(format!("yebis: [GLARE] {key} other than 0 not ported"));
                     }
@@ -544,9 +611,6 @@ impl Glare {
                 let length = length * f("SHAPE_STAR_LENGTH")?;
                 let (secondary, inclination) = (secondary * f("SHAPE_STAR_SECONDARY_LENGTH")?, inclination * f("SHAPE_STAR_INCLINATION_ANGLE")?);
                 let rotation = i("SHAPE_STAR_ROTATION")? != 0;
-                // SetGlareStarSoftness 0x1403cb460 (+0xe0 is 0.25), SetGlareStarFilterThreshold 0x1403cb570
-                let softness = f("STAR_SOFTNESS")?;
-                let threshold = f("STAR_FILTER_THRESHOLD")?;
                 (lines > 0 && length > 0.0 && glare_lum > 0.0 && luminance > 0.0).then_some(Star {
                     lines: lines as usize,
                     length,
@@ -554,9 +618,11 @@ impl Glare {
                     inclination,
                     rotation,
                     lum: star,
-                    softness: if softness > 0.0 { softness } else { 0.25 },
-                    threshold: threshold.clamp(1e-05, 0.9999),
+                    softness,
+                    threshold,
                     diaphragm,
+                    dispersion: 0.0,
+                    force: false,
                 })
             }
         };
@@ -568,6 +634,7 @@ impl Glare {
             quality,
             luminance,
             threshold,
+            bright_luminance: bright == 1,
             range: f("GENERATION_RANGE_SCALE")? * 64.0,
             radius_scale: f("BLOOM_GAUSSIAN_RADIUS_SCALE")?,
             cutoff: f("BLOOM_FILTER_THRESHOLD")?,
@@ -1155,7 +1222,10 @@ pub fn gauss_weights(n: usize, size: u32, radius: f32) -> (Vec<f32>, Vec<f32>) {
 
 /// `GaussianFilterMax29x29_2Pass` 0x14040a560's tap count for a largest radius `radius` and the
 /// bloom's cutoff: the first `GetGaussianArray` 0x1403a85f0 entry from 2 on below the cutoff; 4
-/// is the 7x7 filter, 6 the 11x11, the rest are not ported (the 3x3 and the filter's own path).
+/// is the 7x7 filter, 6 the 11x11, the rest the filter's own path (Task Y5d) with twice that less
+/// one taps, 15 at most, of `GetColorWeight15_Gauss15` 0x1403ad710 (`gauss_weights(15, ..)`
+/// cut short: the bloom's channels differ, so the path takes the 15-tap weights); 2 (the 3x3) is
+/// not ported.
 pub fn gauss_taps(radius: f32, cutoff: f32) -> Result<usize, String> {
     let norm = 1.0 / (sqrtf(6.2831855) * radius);
     let k = 1.0 / (radius * 2.0 * radius);
@@ -1166,7 +1236,8 @@ pub fn gauss_taps(radius: f32, cutoff: f32) -> Result<usize, String> {
     match below {
         Some(4) => Ok(7),
         Some(6) => Ok(11),
-        b => Err(format!("yebis: a bloom gaussian of radius {radius} ({b:?}) not ported (Y5b)")),
+        Some(2) => Err(format!("yebis: a bloom gaussian of radius {radius} (the 3x3) not ported")),
+        b => Ok((b.unwrap_or(15) * 2 - 1).min(15)),
     }
 }
 
@@ -1561,6 +1632,8 @@ mod tests {
         let r0 = 0.5f32 * 2.2 * 0.95;
         let r1 = (2.0 * r0) * sqrtf(0.75);
         assert_eq!((gauss_taps(r0, 0.002), gauss_taps(r1, 0.002)), (Ok(7), Ok(11)));
+        // vintage's first level (Task Y5d): the filter's own path, nine taps
+        assert_eq!(gauss_taps(1.045, 0.0002), Ok(9));
         let ch = |r: f32, n| [(r * 6.15e-07) / 6.15e-07, (r * 5.4e-07) / 6.15e-07, (r * 4.65e-07) / 6.15e-07].map(|c| gauss_weights(n, 192, c).1);
         let w = ch(r0, 7);
         assert_eq!([w[0][0], w[1][0], w[2][0]], [0.381958097, 0.434813946, 0.504909158]);

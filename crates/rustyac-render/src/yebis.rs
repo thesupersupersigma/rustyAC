@@ -329,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Shafts, Star, TECHNIQUES, T_BRIGHT, T_BRIGHT_PLAIN, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_NO_GAMMA, T_CORONA, T_MAD2, T_MAD4, T_MAX2, T_RADIAL, T_SHAFT_MASK, T_SUM, T_TAPS, T_UP};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Shafts, Star, TECHNIQUES, T_BRIGHT, T_BRIGHT_LUM, T_BRIGHT_LUM_PLAIN, T_BRIGHT_PLAIN, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_NO_GAMMA, T_CORONA, T_MAD2, T_MAD4, T_MAX2, T_RADIAL, T_SHAFT_MASK, T_SUM, T_TAPS, T_TAPS_ODD, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -1130,10 +1130,11 @@ mod device {
             let e = exposure / pe.exposure_scale;
             let r = 1.0 / g.range;
             // GenerateGlare_Source_BrightPass 0x140415a60: the vignette program only with a vignette
+            let (plain, with) = if g.bright_luminance { (T_BRIGHT_LUM_PLAIN, T_BRIGHT_LUM) } else { (T_BRIGHT_PLAIN, T_BRIGHT) };
             let (t, v) = if self.vignette == 0.0 {
-                (T_BRIGHT_PLAIN, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2)]))
+                (plain, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2)]))
             } else {
-                (T_BRIGHT, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2), vignette_rect(fw as f32, fh as f32, self.vignette)]))
+                (with, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2), vignette_rect(fw as f32, fh as f32, self.vignette)]))
             };
             let sampler = if (cur.1, cur.2) == (gw, gh) { SB } else { SLB };
             self.glare_draw(t, 2, &[[0.0, 0.0]], &[[e, e, e, 1.0], [r, r, r, 1.0], [g.threshold; 4]], None, &[sampler], &[cur.0.clone()], Some(v))?;
@@ -1151,14 +1152,21 @@ mod device {
                 let radius = if i > 0 { (l.step * base) * rustyac_math::sqrtf(0.75) } else { l.step * base };
                 let rgb = [(radius * 6.15e-07) / 6.15e-07, (radius * 5.4e-07) / 6.15e-07, (radius * 4.65e-07) / 6.15e-07, 0.0];
                 let taps = crate::yebis_cb::gauss_taps(rgb[0].max(rgb[1]).max(rgb[2]), g.cutoff)?;
-                let t = if taps == 7 { T_GAUSS7 } else { T_GAUSS11 };
+                // GaussianFilterMax7x7_2Pass 0x140408da0, ..11x11.. 0x140409970, or the 29x29's own MadT1_Sn path
+                let (t, n) = match taps {
+                    7 => (T_GAUSS7, 7),
+                    11 => (T_GAUSS11, 11),
+                    5 => (T_TAPS_ODD[0], 15),
+                    9 => (T_TAPS_ODD[1], 15),
+                    13 => (T_TAPS_ODD[2], 15),
+                    _ => (T_TAPS_ODD[3], 15),
+                };
                 let (w, h) = l.size;
                 for (pass, (src, to, size)) in [(*from, *temp, w), (*temp, *result, h)].into_iter().enumerate() {
-                    let ws: Vec<(Vec<f32>, Vec<f32>)> = rgb.iter().map(|&c| crate::yebis_cb::gauss_weights(taps, size, c)).collect();
-                    let offsets: Vec<[f32; 2]> = ws[0].0.iter().map(|&o| if pass == 0 { [o, 0.0] } else { [0.0, o] }).collect();
+                    let ws: Vec<(Vec<f32>, Vec<f32>)> = rgb.iter().map(|&c| crate::yebis_cb::gauss_weights(n, size, c)).collect();
+                    let offsets: Vec<[f32; 2]> = ws[0].0[..taps].iter().map(|&o| if pass == 0 { [o, 0.0] } else { [0.0, o] }).collect();
                     let colours: Vec<[f32; 4]> = (0..taps).map(|k| [ws[0].1[k], ws[1].1[k], ws[2].1[k], ws[3].1[k]]).collect();
                     let s = srv(&self.glare[src].0);
-                    // GaussianFilterMax7x7_2Pass 0x140408da0
                     let v = rect_vertices([w as f32, h as f32], [0.0, 0.0, w as f32, h as f32], &[src_rect(w, h)]);
                     self.glare_draw(t, to, &offsets, &colours, None, &[SB], &[s], Some(v))?;
                 }
@@ -1238,8 +1246,9 @@ mod device {
             (samplers, srvs, rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]))
         }
 
-        /// The star (`GenerateGlare_Star` 0x140417200, `GenerateGlare_StarStreaks` 0x140417570 with no dispersion,
-        /// so every streak colour is white): the bright pass softened with the first two levels' results, each
+        /// The star (`GenerateGlare_Star` 0x140417200, `GenerateGlare_StarStreaks` 0x140417570; a custom shape has no
+        /// dispersion, so every streak colour is white, a library one colours pass p with row 7-p of `Star::colours`
+        /// and, forced, draws its last pass back at the first direction with the table's own colours): the bright pass softened with the first two levels' results, each
         /// streak in passes of up to four taps, each pass four times longer, then the streaks' maximum. Returns the
         /// target the composite adds.
         unsafe fn star(&mut self, pe: &PostEffect, g: &Glare, s: &Star) -> Result<usize, String> {
@@ -1276,6 +1285,7 @@ mod device {
             let k = powf(lum, 0.2);
             // GetStarRadiusScale 0x14041baa0 with no FOV dependence; the glare's R11G11B10 keeps the threshold unclamped
             let radius = 1.0 * ga as f32 * 0.003125;
+            let (table, rows) = s.colours();
             let mut weights = vec![1.0f32; n];
             for (line, weight) in weights.iter_mut().enumerate() {
                 let len = 1.0f32;
@@ -1284,32 +1294,62 @@ mod device {
                     atten = 1e-05;
                 }
                 let angle = (((360.0 / s.lines as f32) * std::f32::consts::PI) / 180.0) * line as f32;
-                let mut dir = [sinf(base - angle) * (len / w), cosf(base - angle) * (len / h) * aspect];
+                let first = [sinf(base - angle) * (len / w), cosf(base - angle) * (len / h) * aspect];
+                let mut dir = first;
                 let mut a = ((len / radius) / 6.0) / atten;
+                let spread = (1.0 / a) * 1.5;
+                if s.force {
+                    a /= 1.5;
+                }
                 let x = (logf(s.threshold) / logf(0.5)) / a;
-                let passes = (logf(x) / logf(4.0)).ceil() as i32;
-                let last_taps = match ((x * 4.0) / powf(4.0, passes as f32)).ceil() as i32 {
-                    0 => 4,
-                    t => t.min(4),
+                let (passes, last_taps) = if s.force {
+                    ((logf(x) / logf(4.0) + 1.0) as i32, 4)
+                } else {
+                    let passes = (logf(x) / logf(4.0)).ceil() as i32;
+                    let last_taps = match ((x * 4.0) / powf(4.0, passes as f32)).ceil() as i32 {
+                        0 => 4,
+                        t => t.min(4),
+                    };
+                    (passes, last_taps)
                 };
                 let (mut src, mut ping) = (1, 0);
                 let mut p = 0;
                 while p < passes {
                     let last = p as f32 == (passes - 1) as f32;
+                    let limit = if s.force { p as f32 == (passes - 2) as f32 } else { last };
                     let b = if p == 0 { 0.1875 } else { k };
                     if p > 0 {
                         *weight *= 1.0 / k;
                     }
-                    let ws: Vec<f32> = (0..4).map(|j| powf(0.5, j as f32 * a) * b).collect();
+                    let ws: Vec<f32> = (0..4)
+                        .map(|j| {
+                            let e = if !s.force {
+                                j as f32 * a
+                            } else if last {
+                                j as f32 * 0.25
+                            } else {
+                                j as f32 * a * 4.0
+                            };
+                            powf(0.5, e) * b
+                        })
+                        .collect();
                     let q = powf(4.0, p as f32);
-                    let nt = ((((q * len - 1.0) + maxdim) / (q * len)).ceil() as i32).min(4);
-                    let taps = nt.min(if last { last_taps } else { 4 }) as usize;
+                    let nt = if s.force { 4 } else { ((((q * len - 1.0) + maxdim) / (q * len)).ceil() as i32).min(4) };
+                    let taps = nt.min(if limit { last_taps } else { 4 }) as usize;
                     let to = if !last && taps > 3 { work[ping] } else { lines + line };
                     let (_, tw, th) = self.glare[to].clone();
                     let (_, sw, sh) = self.glare[src].clone();
                     let [_, _, su, sv] = src_rect(sw, sh);
-                    let offsets: Vec<[f32; 2]> = (0..taps).map(|j| [(j as f32 * dir[0] + 0.0) * su, (j as f32 * dir[1] + 0.0) * sv]).collect();
-                    let colours: Vec<[f32; 4]> = ws[..taps].iter().map(|&w| [w; 4]).collect();
+                    let forced = s.force && last;
+                    if forced {
+                        dir = first;
+                    }
+                    let offsets: Vec<[f32; 2]> = (0..taps)
+                        .map(|j| if forced { [((j as f32 * dir[0] + 0.0) * su) * spread, ((j as f32 * dir[1] + 0.0) * sv) * spread] } else { [(j as f32 * dir[0] + 0.0) * su, (j as f32 * dir[1] + 0.0) * sv] })
+                        .collect();
+                    // shortcut: rows past the eighth pass would read before the game's table, no shipped star gets there
+                    let row = rows[7usize.saturating_sub(p as usize)];
+                    let colours: Vec<[f32; 4]> = ws[..taps].iter().enumerate().map(|(j, &w)| (if forced { table[j] } else { row[j] }).map(|c| w * c)).collect();
                     let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[[0.0, 0.0, su, sv]]);
                     let view = self.glare[src].0.srv.clone();
                     self.glare_draw(T_TAPS[taps - 1], to, &offsets, &colours, None, &[SLB], &[view], Some(v))?;
