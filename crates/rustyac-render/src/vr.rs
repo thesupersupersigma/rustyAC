@@ -704,7 +704,7 @@ impl StereoCameraVive {
             graphics.kgl.set_render_targets(None, None);
             // updatePPCameraValues 0x14002bcc0 and updatePP 0x14002c270 (no depth of field, no shimmer in VR)
             let c = &forward.base.camera;
-            let camera = crate::yebis_cb::Camera { near: c.near_plane, far: c.far_plane, fov_deg: c.fov, width: w as u32, height: h as u32, exposure: c.exposure, exposure_multiplier: graphics.exposure_multiplier, dt, chromatic_aberration: false, new_exposure: eye == 0, sun: None };
+            let camera = crate::yebis_cb::Camera { near: c.near_plane, far: c.far_plane, fov_deg: c.fov, width: w as u32, height: h as u32, exposure: c.exposure, exposure_multiplier: graphics.exposure_multiplier, dt, chromatic_aberration: false, new_exposure: eye == 0, sun: crate::post::godrays(&c.matrix, &self.proj_matrix, graphics) };
             let target = &self.rt_yebis_target;
             let (scene_srv, depth_srv) = match (&self.rt_yebis_resolved, &self.rt_yebis_resolved_depth) {
                 (Some(color), Some(depth)) => {

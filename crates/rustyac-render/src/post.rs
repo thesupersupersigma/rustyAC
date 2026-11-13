@@ -294,7 +294,7 @@ impl CameraForwardYebis {
                 dt,
                 chromatic_aberration: true,
                 new_exposure: true,
-                sun: godrays(camera, graphics),
+                sun: godrays(&camera.matrix, &camera.get_perspective_matrix(graphics), graphics),
             };
             // setPostProcessing 0x140025080: the particles move, then setupPfxParticles hands them to YEBIS
             let mut shimmer = None;
@@ -388,8 +388,9 @@ pub fn init_hdr_levels(game_folder: &std::path::Path) -> HdrLevels {
 }
 
 /// `updateYebisParameters` 0x140029e30's light shafts: the sun's colour (low to high by its height,
-/// normalised) and, when it is in front of the camera, where 1000 m towards it lands on the screen.
-pub fn godrays(camera: &crate::camera::Camera, graphics: &Graphics) -> Option<([f32; 2], [f32; 3])> {
+/// normalised) and, when it is in front of the camera, where 1000 m towards it lands on the screen
+/// through `projection` (the camera's; an eye's in VR: `YebisPP::updatePPCameraValues` 0x14002bcc0).
+pub fn godrays(matrix: &rustyac_physics::vecmath::Mat44f, projection: &rustyac_physics::vecmath::Mat44f, graphics: &Graphics) -> Option<([f32; 2], [f32; 3])> {
     use rustyac_math::{powf, sqrtf};
     let ls = &graphics.lighting;
     let l = ls.light_direction;
@@ -402,7 +403,7 @@ pub fn godrays(camera: &crate::camera::Camera, graphics: &Graphics) -> Option<([
     if len != 0.0 {
         c = c.map(|v| v / len);
     }
-    let m = &camera.matrix.m;
+    let m = &matrix.m;
     let d = ((-m[2][1]) * (-l.y) + (-m[2][0]) * (-l.x)) + (-m[2][2]) * (-l.z);
     if d.is_nan() || d <= 0.0 {
         return None;
@@ -410,7 +411,7 @@ pub fn godrays(camera: &crate::camera::Camera, graphics: &Graphics) -> Option<([
     let s = [-l.x * 1000.0, -l.y * 1000.0, -l.z * 1000.0];
     let look = crate::camera::create_look_at(&rustyac_physics::vecmath::Vec3f::new(0.0, 0.0, 0.0), &rustyac_physics::vecmath::Vec3f::new(-m[2][0], -m[2][1], -m[2][2]), &rustyac_physics::vecmath::Vec3f::new(m[1][0], m[1][1], m[1][2])).m;
     let v: [f32; 3] = std::array::from_fn(|k| ((look[1][k] * s[1] + look[0][k] * s[0]) + look[2][k] * s[2]) + look[3][k]);
-    let p = camera.get_perspective_matrix(graphics).m;
+    let p = projection.m;
     let q: [f32; 4] = std::array::from_fn(|k| ((v[1] * p[1][k] + v[0] * p[0][k]) + v[2] * p[2][k]) + p[3][k]);
     let (x, y) = (q[0] / q[3], q[1] / q[3]);
     Some(([(x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5], c))

@@ -293,6 +293,9 @@ pub struct Glare {
     pub ghost: Option<Ghost>,
     /// video.ini's RAYS_OF_GOD (init flag 0x10000000: the shafts' two targets, R16G16B16A16 sources)
     pub shafts: Option<Shafts>,
+    /// BLUR (Task Y5d): the result blur, CRenderGlare+0xb4 at creation and +0x32c each frame
+    /// (`CPostEffect::SetGlareResultBlur` 0x1403cb410: at most 1; at 0 or under, no double target and no resample)
+    pub blur: f32,
 }
 
 /// The light shafts (Task Y5d): `[GODRAYS]` as `readPPSetOptions` 0x140026150 reads it and
@@ -429,8 +432,9 @@ fn ghost_distortion() -> [[f32; 2]; 8] {
 /// `CRenderGlare::GenerateGlare_Ghost` 0x1404185b0 with no anamorphic flare, no distortion or sharpness and
 /// +0x1a0 = +0x30c = 1 (a float glare): the two passes' registers and the levels they read, (ratio, ratio + 1,
 /// ratio + 2) clamped to the `levels`. `f` is its luminance, `angle` the diaphragm's (+0x14c), `rect` the first
-/// source's rectangle (`src_rect`) and `aspect` its width over its height.
-pub fn ghost_passes(g: &Ghost, f: f32, ratio: i32, levels: usize, angle: f32, rect: [f32; 2], aspect: f32) -> ([GhostPass; 2], [usize; 3]) {
+/// source's rectangle (`src_rect`), `rect2` pass two's first source's (the ghost's second target:
+/// `PointSymmetryT3_S8` 0x1403fef10 centres on it) and `aspect` the first's width over its height.
+pub fn ghost_passes(g: &Ghost, f: f32, ratio: i32, levels: usize, angle: f32, rect: [f32; 2], rect2: [f32; 2], aspect: f32) -> ([GhostPass; 2], [usize; 3]) {
     use rustyac_math::{cosf, powf};
     let maxl = levels as i32 - 1;
     let c = |i: i32| if -1 < i { i.min(maxl) } else { 0 };
@@ -494,6 +498,7 @@ pub fn ghost_passes(g: &Ghost, f: f32, ratio: i32, levels: usize, angle: f32, re
         f2([0.001, 0.004, 0.020000001, 0.0], w0),
         f2([0.010000001, 0.0005, 0.002, 0.0], w0),
     ];
+    centres[..8].fill([rect2[0] * 0.5, rect2[1] * 0.5, 0.0, 0.0]);
     for (k, c) in centres[8..].iter_mut().enumerate() {
         *c = [tab[7 - k][0] * 0.0, tab[7 - k][1] * 0.0, 0.0, 0.0];
     }
@@ -525,7 +530,7 @@ impl Glare {
         let i = |k: &str| filter.get_int("GLARE", k);
         // what changes the targets or adds draws: Task Y5b and on
         // (AFTER_IMAGE and ANAMORPHIC are 0 in every shipped filter)
-        for (key, want) in [("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BLOOM_NUM_LEVELS", 0), ("BLUR", 1), ("PRECISION", 0)] {
+        for (key, want) in [("AFTER_IMAGE", 0), ("ANAMORPHIC", 0), ("BLOOM_NUM_LEVELS", 0), ("PRECISION", 0)] {
             if i(key)? != want {
                 return Err(format!("yebis: [GLARE] {key} other than {want} not ported"));
             }
@@ -631,6 +636,7 @@ impl Glare {
             return Err("yebis: [GLARE] THRESHOLD=0 (no bright pass threshold) not ported".into());
         }
         Ok(Glare {
+            blur: f("BLUR")?,
             quality,
             luminance,
             threshold,
@@ -1450,7 +1456,7 @@ mod tests {
     fn ghost_passes_follow_the_game() {
         // the default filter's draws 897-898 of re/scratch/taskY5/g3 (192x108 glare, five levels, F 2.688)
         let g = Ghost { lum: 0.15, halo: 0.005, concentric: 1.0, diaphragm: (1, 1.0, 0.0) };
-        let ([one, two], levels) = ghost_passes(&g, 2.6880002, 0, 5, 0.0349, [1.0, 1.0], 192.0 / 108.0);
+        let ([one, two], levels) = ghost_passes(&g, 2.6880002, 0, 5, 0.0349, [1.0, 1.0], [1.0, 1.0], 192.0 / 108.0);
         assert_eq!(levels, [0, 1, 2]);
         let y = [1.87552905, 0.700101078, 0.727419972, 1.71940994, 0.755011559, 0.793704391, 0.634749413, 2.33311915];
         assert_eq!(one.p32[..8].iter().map(|r| r[0]).collect::<Vec<_>>(), y);

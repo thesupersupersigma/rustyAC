@@ -817,9 +817,15 @@ mod device {
                 if shafts {
                     sizes.extend([(ga, gh); 2]);
                 }
-                let mut glare = Vec::new();
+                let mut glare: Vec<(Target, u32, u32)> = Vec::new();
                 let mut glare_views = Views::new();
+                // (the double, +0x2d0, only with a result blur: CreateSystemObjects 0x140413c00; Task Y5d)
+                let blur = filter.get_float("GLARE", "BLUR").unwrap_or(1.0) > 0.0;
                 for (i, &(gw, gg)) in sizes.iter().enumerate() {
+                    if i == 4 && !blur {
+                        glare.push(glare[3].clone());
+                        continue;
+                    }
                     let f = if shafts && (i == 0 || i == 2) { f9 } else { f26 };
                     let t = target(device, gw, gg, f.0, f.1, true)?;
                     glare.push((t.clone(), gw, gg));
@@ -1221,7 +1227,10 @@ mod device {
                 }
             }
             self.mad(3, &parts, &vec![[1.0; 4]; parts.len()])?;
-            self.resample((srv(&self.glare[3].0), gw, gh), 4, 1.0 * 0.5)?;
+            if g.blur <= 0.0 {
+                return Ok(srv(&self.glare[3].0));
+            }
+            self.resample((srv(&self.glare[3].0), gw, gh), 4, g.blur.min(1.0) * 0.5)?;
             Ok(srv(&self.glare[4].0))
         }
 
@@ -1389,12 +1398,14 @@ mod device {
             // GenerateGlare_Ghost 0x1404185b0's order
             let f = g.range * 0.035 * g.glare_lum * (g.luminance / pe.mapping_div) * ((h.lum * 0.05) * 20.0);
             let angle = crate::yebis_cb::diaphragm_angle(h.diaphragm, pe.fov);
-            // (pass 2's first source, the ghost's second target, is the glare's size like the first level)
+            // pass 1 reads the level at the ratio first, pass 2 the ghost's second target (Task Y5d)
             let (_, w, hh) = self.glare[levels[ratio.clamp(0, levels.len() as i32 - 1) as usize]].clone();
             let [_, _, u, v] = src_rect(w, hh);
-            let ([one, two], at) = crate::yebis_cb::ghost_passes(h, f, ratio, levels.len(), angle, [u, v], w as f32 / hh as f32);
+            let (_, mw, mh) = self.glare[mid].clone();
+            let [_, _, u2, v2] = src_rect(mw, mh);
+            let ([one, two], at) = crate::yebis_cb::ghost_passes(h, f, ratio, levels.len(), angle, [u, v], [u2, v2], w as f32 / hh as f32);
             let [a, b, c] = at.map(|i| self.glare[levels[i]].0.srv.clone());
-            for (t, to, pass, srvs) in [(T_GHOST4, mid, one, vec![a.clone(), b, c.clone(), c.clone(), self.trim.clone()]), (T_GHOST3, dst, two, vec![self.glare[mid].0.srv.clone(), c, a])] {
+            for (t, to, pass, srvs, [u, v]) in [(T_GHOST4, mid, one, vec![a.clone(), b, c.clone(), c.clone(), self.trim.clone()], [u, v]), (T_GHOST3, dst, two, vec![self.glare[mid].0.srv.clone(), c, a], [u2, v2])] {
                 let (target, tw, th) = self.glare[to].clone();
                 self.target_only(&target.rtv);
                 self.viewport(0.0, 0.0, tw as f32, th as f32);
@@ -1442,7 +1453,7 @@ mod device {
             let srvs = [self.glare[2].0.srv.clone(), Some(self.grain.clone())];
             self.draw(T_SHAFT_MASK, &u, &[SLB, SW_TRI], &srvs, &v)?;
             // the radial passes: GetLightShaftRadiusScale 0x14041bb30 (GetStarRadiusScale(1.0), the FOV term in)
-            let radius = ((1.0 / (t128 * 2.0)) * bw as f32) * 0.003125;
+            let radius = (1.0 / (t128 * 2.0)) * (bw as f32 * 0.003125); // (machine order: the width term first)
             let mut a = (0.0625 / radius) / sh.length;
             let x = (logf(0.001) / logf(0.5)) / a;
             let passes = ((logf(x) / logf(4.0)).ceil() as i32).min(8);
@@ -1760,14 +1771,15 @@ mod device {
                 let src = if ca { e1.clone() } else { e0.clone() };
                 let glare = match pe.glare.clone() {
                     Some(g) => {
-                        if !ca || pe.auto_exposure.is_none() {
-                            return Err("yebis: the glare without chromatic aberration or auto exposure not ported".into());
-                        }
                         self.reset();
-                        self.effect_of_eight();
+                        // (without chromatic aberration (VR) the effect surface is not bound again, Task Y5d)
+                        if ca {
+                            self.effect_of_eight();
+                        }
                         // GenerateGlare (EndPostEffectScene_InternalProcess 0x1403b5f40) runs before ApplyEffects_UpdateAutoExposure:
                         // CPostEffect+0x6f4 as the camera set it
-                        let exposure = self.auto_exposure.exposure(camera.new_exposure);
+                        // (without auto exposure: the camera's own, Task Y5d)
+                        let exposure = if pe.auto_exposure.is_some() { self.auto_exposure.exposure(camera.new_exposure) } else { pe.exposure };
                         Some(self.bloom(&pe, &g, exposure, src.clone())?)
                     }
                     None => None,
@@ -1824,8 +1836,9 @@ mod device {
                     _ => {}
                 }
                 self.reset();
-                if step.is_none() {
-                    // with auto exposure off YEBIS binds the effect surface after the reset (Task Y3, ae_off filter)
+                if step.is_none() && glare.is_none() {
+                    // with auto exposure off YEBIS binds the effect surface after the reset (Task Y3, ae_off filter),
+                    // not again after the glare (Task Y5d)
                     self.effect_of_eight();
                 }
                 self.target_only(&self.tonemap[0].rtv.clone());
@@ -1847,7 +1860,7 @@ mod device {
                 } else {
                     self.draw(t3, &u, &[SP, SP, SP, SW], &[src.clone(), black.clone(), grey.clone(), dither.clone()], &draw_vertices(3, w, h, n, self.vignette, 0))?;
                 }
-                self.frame_clamped = ca;
+                self.frame_clamped = true; // the tone map read the glare's source (e1, or e0 without chromatic aberration)
                 if shimmer.is_some() {
                     // in a shimmer frame the tonemap's source is the texture the shimmer copies from, and
                     // DrawRectGPU_TonemapHDR 0x1403f1b10 ends by giving it black's mode (point, clamp):
