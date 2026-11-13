@@ -122,10 +122,19 @@ pub const HEAT_TEST: &str = "rustyac_heat_x100";
 /// The test filters `prepare` makes from the game's default.ini: (name, [(from, to)]).
 /// Task Y5a: `rustyac_bloom`, glare with only the bloom (no star or ghost; light shafts are video.ini's RAYS_OF_GOD).
 /// Task Y5b: `rustyac_star`, the bloom and the star (no ghost).
-const TEST_FILTERS: [(&str, &[(&str, &str)]); 3] = [
+/// Task Y5d: `rustyac_aeoff`, the default with auto exposure off (the glare without eye adaptation);
+/// `rustyac_star1` / `_star5` / `_star12`, other star streak counts (12 with half-length odd streaks);
+/// `rustyac_blur0` / `_blur05`, the glare's result blur off and halved.
+const TEST_FILTERS: [(&str, &[(&str, &str)]); 9] = [
     (HEAT_TEST, &[("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4")]),
     ("rustyac_bloom", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0"), ("SHAPE_STAR_LUMINANCE=0.025", "SHAPE_STAR_LUMINANCE=0")]),
     ("rustyac_star", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0")]),
+    ("rustyac_aeoff", &[("ENABLED=1\r\nDELAY=0", "ENABLED=0\r\nDELAY=0")]),
+    ("rustyac_star1", &[("SHAPE_STAR_STREAKS_NUMBER=6", "SHAPE_STAR_STREAKS_NUMBER=1")]),
+    ("rustyac_star5", &[("SHAPE_STAR_STREAKS_NUMBER=6", "SHAPE_STAR_STREAKS_NUMBER=5")]),
+    ("rustyac_star12", &[("SHAPE_STAR_STREAKS_NUMBER=6", "SHAPE_STAR_STREAKS_NUMBER=12"), ("SHAPE_STAR_SECONDARY_LENGTH=1", "SHAPE_STAR_SECONDARY_LENGTH=0.5")]),
+    ("rustyac_blur0", &[("\nBLUR=1", "\nBLUR=0")]),
+    ("rustyac_blur05", &[("\nBLUR=1", "\nBLUR=0.5")]),
 ];
 
 pub fn video_ini(width: u32, height: u32) -> String {
