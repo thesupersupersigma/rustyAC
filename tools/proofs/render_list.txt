@@ -175,3 +175,13 @@ ry5b_02 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry5b_03 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_star --frames 8 GLARE:5 PP_QUALITY:3 RESIZE:3:1024x576
 ry5b_04 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_star --frames 8 GLARE:1 PP_QUALITY:3 RESIZE:3:1024x576
 ry5b_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_star --frames 8 --fxaa GLARE:3 PP_QUALITY:3
+# -- Task Y5c: every shipped filter but vintage (its library-shape star: Y5d) with the glare on, light shafts off: the ghost, hue/sepia, LINEARSAT, GHOST=0, the diaphragm's FOV turn
+ry5c_01 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_02 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default_bright --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_03 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default_dark --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_04 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter blue_steel --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter natural --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_06 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter photographic --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_07 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter movie --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter sepia --frames 12 GLARE:3 PP_QUALITY:3
+ry5c_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter b&w --frames 12 GLARE:3 PP_QUALITY:3

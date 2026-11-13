@@ -13,8 +13,8 @@ r22c_18
 r23_01
 # Task Y2c: the one YEBIS row (a --post row, the real YEBIS on both sides)
 r23_09
-# Task Y5b: one glare row (the bloom and the star)
-ry5b_01
+# Task Y5c: one glare row (movie: bloom, star, ghost, sepia, LINEARSAT with auto exposure)
+ry5c_07
 r43c_01
 r43c_03
 # Task 45b: one layout the game makes gates for, one without gates
