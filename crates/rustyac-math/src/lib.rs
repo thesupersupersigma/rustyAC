@@ -31,6 +31,7 @@
 use std::sync::OnceLock;
 
 pub mod pure;
+mod powf4_table;
 mod pure_tables;
 
 /// Which implementation the runtime functions resolve to.
@@ -464,6 +465,23 @@ pub fn pow(x: f64, y: f64) -> f64 {
     unsafe { (crt().pow)(x, y) }
 }
 
+/// `__sse2_powf4` (0x140450650, the vector `powf` Visual C++ 2013 links into acs.exe for
+/// `__vdecl_powf4`) of 0.5 and `y`: the same on every target. With x = 0.5 its logarithm is
+/// exactly -ln 2 (no `rcpps`, a zero table entry), then 2^(j/2048) from its table times one
+/// linear term. shortcut: base 0.5 only and no rare path (y within +-100), the light shafts'
+/// one use; port the logarithm table and `__common_spow_cout_rare` for anything else.
+pub fn powf4_half(y: f32) -> f32 {
+    debug_assert!(y.abs() <= 100.0, "powf4_half({y}): outside the ported range");
+    const SHIFT: f64 = 6755399441055744.0; // 1.5 x 2^52
+    let z = -std::f64::consts::LN_2 * y as f64;
+    let zz = z * f64::from_bits(0x40a71547652b82fe); // 2048 / ln 2
+    let n = (zz - 0.5) + SHIFT;
+    let f = zz - (n - SHIFT);
+    let t = f64::from_bits(powf4_table::TWO_TO_JBY2048[(n.to_bits() & 0x7ff) as usize]);
+    let r = (f * f64::from_bits(0x3f362f3904051fa1)) * t + t; // ln 2 / 2048
+    f64::from_bits(r.to_bits().wrapping_add((n.to_bits() >> 11) << 52)) as f32
+}
+
 /// `sqrtf`: correctly rounded on both sides, so std is used.
 #[inline]
 pub fn sqrtf(x: f32) -> f32 {
@@ -742,5 +760,17 @@ mod std_vs_msvcr120 {
         for (name, count) in names.iter().zip(diff) {
             println!("{name}: {count} of {N} results differ between MSVCR120 and Rust std");
         }
+    }
+}
+
+/// `powf4_half` against values `__sse2_powf4` gave in acs.exe (Task Y5d's photographic light shafts:
+/// 0x3f58aedb where the correctly rounded result is 0x3f58aeda) and its exact cases.
+#[test]
+fn powf4_half_matches_the_game() {
+    let a = f32::from_bits(0x3c7654c2);
+    assert_eq!(powf4_half(a * 16.0).to_bits(), 0x3f58aedb);
+    assert_eq!(powf4_half(0.0).to_bits(), 0x3f800000);
+    for (k, want) in [(1.0f32, 0x3f758c42u32), (2.0, 0x3f6b85c3), (3.0, 0x3f61e80e)] {
+        assert_eq!(powf4_half(k * (a * 4.0)).to_bits(), want);
     }
 }
