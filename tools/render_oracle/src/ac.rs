@@ -674,6 +674,7 @@ impl Game {
             wr(settings, 0x38, crate::root::profile().post as u8); // ppHDREnabled
             wr(settings, 0x39, crate::root::heat_shimmer() as u8); // ppHeatShimmer
             wr(settings, 0x3a, (crate::root::profile().post && crate::root::profile().fxaa) as u8); // ppFXAA
+            wr(settings, 0x3b, crate::root::pp_rays() as u8); // ppRaysOfGod
             wr(settings, 0x3c, crate::root::pp_quality()); // ppQuality
             wr(settings, 0x40, crate::root::pp_glare()); // ppGlare
             wr(settings, 0x44, 0i32); // ppDof
