@@ -1,4 +1,4 @@
-# Task Y5d: YEBIS's light shafts (in progress, no release yet)
+# Task Y5d: YEBIS's light shafts, vintage and the refused glare cases (v0.49.0)
 
 ## Resume here
 
@@ -10,7 +10,10 @@
   counts 1, 5 and 12, and `BLUR` are ported and IDENTICAL (rows `ry5d_11`..`18`); the ghost's
   second pass reads its own source's rectangle now. See "Refused glare cases (step 3)".
 - **Step 4 done**: screenshot `re/scratch/taskY5d/shot/y5d_shafts.jpg` (see "Screenshot (step 4)").
-- **Next: step 5**: every glare row, `run_all.sh --quick`, release v0.49.0.
+- **Step 5 done**: every glare row (41: `ry3e_02`..`05`, `ry5a`, `ry5b`, `ry5c`, `ry5d`) IDENTICAL;
+  `run_all.sh --quick` 172/172 IDENTICAL, 0 ERROR, 0h46m. Released as v0.49.0.
+- **Next: Task Y5e**: PP_QUALITY 5 with GLARE 5 (the game skips the result-blur resample; cause not
+  found, see step 3), then the keys left for Y7 (list in step 3).
 - Proof rows `ry5d_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright, default_dark,
   blue_steel, natural, photographic, movie, sepia, b&w; tape from 3590, 175 frames, GLARE 3,
   QUALITY 3, `RAYS:1`, a new `render.sh` key). `ry5d_01` is in the quick list.
@@ -64,6 +67,14 @@ All from the game's code, checked against its call logs:
 | sepia | ry5d_08 | 175 | IDENTICAL | IDENTICAL |
 | b&w | ry5d_09 | 175 | IDENTICAL | IDENTICAL |
 | vintage | ry5d_10 | 175 | IDENTICAL | IDENTICAL |
+| default, Vive stand-in, camera at the sun | ry5d_11 | 4 | IDENTICAL | IDENTICAL |
+| default, Oculus stand-in, camera at the sun | ry5d_12 | 4 | IDENTICAL | IDENTICAL |
+| rustyac_aeoff (no eye adaptation) | ry5d_13 | 40 | IDENTICAL | IDENTICAL |
+| rustyac_star1 | ry5d_14 | 40 | IDENTICAL | IDENTICAL |
+| rustyac_star5 | ry5d_15 | 40 | IDENTICAL | IDENTICAL |
+| rustyac_star12 | ry5d_16 | 40 | IDENTICAL | IDENTICAL |
+| rustyac_blur0 | ry5d_17 | 20 | IDENTICAL | IDENTICAL |
+| rustyac_blur05 | ry5d_18 | 20 | IDENTICAL | IDENTICAL |
 
 Also IDENTICAL: the camera looking straight at the sun (`--view sun`, 2 frames).
 
