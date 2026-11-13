@@ -197,3 +197,12 @@ ry5d_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry5d_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter b&w --frames 175 GLARE:3 PP_QUALITY:3 RAYS:1
 # -- Task Y5d step 2: vintage, the library star (SunnyCross, eight lines, forced colour dispersion), BRIGHT_PASS=1 and a nine-tap bloom gaussian
 ry5d_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter vintage --frames 175 GLARE:3 PP_QUALITY:3 RAYS:1
+# -- Task Y5d step 3: the glare and light shafts in VR (both headset stand-ins, camera at the sun), the glare without eye adaptation, star streak counts 1, 5 and 12, the result blur off and halved
+ry5d_11 | --track spa --view sun --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 4 --vr --post --size 1280x720 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_12 | --track spa --view sun --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --frames 4 --oculus --post --size 1280x720 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_13 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_aeoff --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_14 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_star1 --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_15 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_star5 --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_16 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_star12 --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_17 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_blur0 --frames 20 GLARE:3 PP_QUALITY:3 RAYS:1
+ry5d_18 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_blur05 --frames 20 GLARE:3 PP_QUALITY:3 RAYS:1
