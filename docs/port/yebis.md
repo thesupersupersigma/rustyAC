@@ -6,9 +6,10 @@
   are ported and proven IDENTICAL (call log and pixels) with every shipped filter but vintage, the
   glare on, over a chase run where the sun comes into view at frame 10 and leaves it at frame 167.
 - **Step 2 done**: vintage IDENTICAL (row `ry5d_10`, same run, light shafts on).
-- **Next: step 3**, the refused glare cases (glare without chromatic aberration / in VR, without eye
-  adaptation, star counts other than 6, the ghost's second-pass source size, and the small keys);
-  then step 4 (screenshot), step 5 (every glare row, `run_all.sh --quick`, release v0.49.0).
+- **Step 3 done**: the glare and light shafts in VR, the glare without eye adaptation, star streak
+  counts 1, 5 and 12, and `BLUR` are ported and IDENTICAL (rows `ry5d_11`..`18`); the ghost's
+  second pass reads its own source's rectangle now. See "Refused glare cases (step 3)".
+- **Next: step 4** (screenshot), then step 5 (every glare row, `run_all.sh --quick`, release v0.49.0).
 - Proof rows `ry5d_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright, default_dark,
   blue_steel, natural, photographic, movie, sepia, b&w; tape from 3590, 175 frames, GLARE 3,
   QUALITY 3, `RAYS:1`, a new `render.sh` key). `ry5d_01` is in the quick list.
@@ -84,6 +85,46 @@ Also IDENTICAL: the camera looking straight at the sun (`--view sun`, 2 frames).
 - `STAR_LENGTH_FOV_DEPENDENCE` other than 0 still refuses, now for library shapes too.
 - Planted change (the dispersion factor 1.5 -> 1.51): caught, 48 call-log lines and 17 pixels in
   every frame of a 4-frame run.
+
+## Refused glare cases (step 3)
+
+- **The glare without chromatic aberration (VR)**: lifted. Two binding differences the game's VR
+  logs showed, both from the effect surface staying in its first slot without chromatic aberration:
+  the effect surface is not bound again before the glare, and the glare's first halving reads
+  through the clamped sampler after the tone map whichever surface the tone map read (the port
+  only clamped after chromatic aberration). The light shafts in VR take each eye's projection
+  (`YebisPP::updatePPCameraValues` 0x14002bcc0 calls the stereo camera's `getPerspectiveMatrix`,
+  its `projMatrix`): `post::godrays` takes the matrix and projection now. Proven on both headset
+  stand-ins, the camera at the sun (`ry5d_11` `--vr`, `ry5d_12` `--oculus`), and on 8- and
+  20-frame dash runs with the glare alone.
+- One more 1-ulp fix found there: `GetStarRadiusScale` 0x14041baa0 multiplies the width by
+  0.003125 first, then by the FOV term; the Oculus FOV showed it.
+- **The glare without eye adaptation**: lifted; with auto exposure off the effect surface is bound
+  again after the reset only without the glare. Test filter `rustyac_aeoff` (render_oracle writes
+  it: default with `[AUTO_EXPOSURE] ENABLED=0`), `ry5d_13`, 175 frames IDENTICAL in a run.
+- **Star streak counts other than 6**: nothing to change; test filters `rustyac_star1`,
+  `rustyac_star5`, `rustyac_star12` (12 streaks, odd ones half length; YEBIS draws at most 8),
+  `ry5d_14`..`16`.
+- **The ghost's second-pass source size** (was a shortcut): `PointSymmetryT3_S8` 0x1403fef10 takes
+  its centre and rectangle from its first source, the ghost's second target, so `ghost_passes`
+  takes that rectangle too. It differs from the first pass's only when the ghost's first level is
+  past the two full-size levels (ratio 2: the glare more than half the frame wide, only GLARE 5 with
+  PP_QUALITY 5 and an odd width) and `w * (1/w)` is not 1 in f32 for one of the sizes. That case
+  stays unproven: PP_QUALITY 5 with GLARE 5 differs for another reason (below).
+- **BLUR** (the result blur): ported. `CPostEffect::SetGlareResultBlur` 0x1403cb410 caps it at 1;
+  at 0 or under there is no double target (`CreateSystemObjects` 0x140413c00) and no resample.
+  Test filters `rustyac_blur0` / `rustyac_blur05`, `ry5d_17`..`18`.
+- **Left for Y7** (no shipped filter uses any; each changes targets or adds programs):
+  `BLOOM_NUM_LEVELS` (other level counts and their targets), `PRECISION` (other glare target
+  formats), `AFTER_IMAGE` (its own targets and draws every frame), `ANAMORPHIC` (the anamorphic
+  flare's draws), `[TONEMAPPING] FUNCTION` 0 and 3-8 (other tone map programs and constants), a
+  library shape's ghost (`USE_CUSTOM_SHAPE=0` with `GHOST=1`: the library ghost definitions and
+  programs), `STAR_LENGTH_FOV_DEPENDENCE` other than 0, the 3x3 bloom gaussian.
+- **New, for Y5e**: PP_QUALITY 5 with GLARE 5 (a real video.ini) differs in every frame: the game
+  draws no result-blur resample there (the composite, 640x360 at 1280x720, goes straight to the
+  tone map), though `GenerateGlare_Composite` 0x14041afb0 calls `Resample` whenever +0x32c > 0 and
+  the double target is made. Cause not found. GLARE 5 at PP_QUALITY 3 and GLARE 3 at PP_QUALITY 5
+  are IDENTICAL.
 
 # Task Y5c: the glare's ghost, and every shipped filter but vintage (no release)
 
