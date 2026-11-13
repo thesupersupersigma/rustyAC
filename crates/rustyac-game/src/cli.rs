@@ -825,8 +825,8 @@ for checks, without anybody at the controls:
                         with and the dots on trees, fences and crowds go
   --post <0|1>          the post-processing frame ([POST_PROCESS] ENABLED) whatever the video
                         settings say: the scene goes through a 16-bit target and YEBIS as in the
-                        game (filter, tone mapping, eye adaptation, glare; no depth of field or
-                        light shafts yet)
+                        game (filter, tone mapping, eye adaptation, glare, light shafts; no depth
+                        of field yet)
   --fxaa <0|1>          AC's FXAA pass ([POST_PROCESS] FXAA); 1 switches the post-processing frame
                         on too (acs.exe has FXAA nowhere else)
   --motion-blur <n>     AC's motion blur ([EFFECTS] MOTION_BLUR, 0 to 12); above 0 it switches the

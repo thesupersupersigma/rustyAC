@@ -365,8 +365,8 @@ impl GraphicsPreset {
 
     /// The `video.ini` the launcher would write with every slider at its end, four samples per
     /// pixel, and post-processing off: `[POST_PROCESS] ENABLED=0` until all of YEBIS is ported
-    /// (filter, tone mapping, eye adaptation and glare are drawn; depth of field and light shafts
-    /// are still missing), so the preset does not switch it on; with it off, FXAA and motion blur
+    /// (filter, tone mapping, eye adaptation, glare and light shafts are drawn; depth of field
+    /// is still missing), so the preset does not switch it on; with it off, FXAA and motion blur
     /// do not exist in acs.exe either. `--post 1 --fxaa 1 --motion-blur 6` ask for that frame.
     ///
     /// The reflection cube map is 1024, not the launcher's highest 2048 (Task 22c): with six
@@ -720,7 +720,7 @@ impl AcRenderer {
                 parts.push(format!("motion blur {motion_blur}"));
             }
             notes.push(format!(
-                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter, tone mapping, eye adaptation and glare from your acs.exe on Direct3D (no depth of field or light shafts yet){}",
+                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter, tone mapping, eye adaptation and glare and light shafts from your acs.exe on Direct3D (no depth of field yet){}",
                 parts.join(", "),
                 if options.hdr_levels { "; --hdr-levels: the engine's HDR light levels, which only YEBIS brings back into range" } else { "; the light levels are the game's once YEBIS starts" }
             ));
