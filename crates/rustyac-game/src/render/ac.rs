@@ -722,7 +722,7 @@ impl AcRenderer {
                 parts.push(format!("motion blur {motion_blur}"));
             }
             notes.push(format!(
-                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter, tone mapping, eye adaptation and glare and light shafts from your acs.exe on Direct3D (no depth of field yet){}",
+                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter, tone mapping, eye adaptation and glare and light shafts from your acs.exe on Direct3D{}",
                 parts.join(", "),
                 if options.hdr_levels { "; --hdr-levels: the engine's HDR light levels, which only YEBIS brings back into range" } else { "; the light levels are the game's once YEBIS starts" }
             ));

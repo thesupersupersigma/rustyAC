@@ -13,9 +13,18 @@
   `GraphicsManager`'s), and `--gui-do end` holds END for the photo app's focus pick.
   `RENDER_ORACLE_DOF=<quality>[,<focus m>]` (render list key `DOF:`) sets video.ini DOF, `ppDof` and the
   camera's `dofFactor` 1 / `dofFocus` on both sides. Details below ("Depth of field").
-- **Next**: the textures DOF on makes in the game's order (a resize with DOF: call log DIFFERENT in the
-  remake frame only, pixels IDENTICAL; see the `shortcut:` in `yebis.rs`), then the photo-mode GUI row,
-  a planted change, `run_all.sh --quick`, the screenshot and the release.
+- **Done after it**: a planted change caught (the hexagon's tap angles 60 -> 60.5
+  degrees: `ry6_03`'s call log DIFFERENT in 16 lines; an earlier plant on `dof_level_factors`' 0.25 went
+  unseen because that value reaches no upload). The screenshot (step 4) is taken, below. The DOF
+  rows ran through `render.sh` (`RENDER_ONLY`; it ran the overlay cases too: all IDENTICAL).
+- **Next (resume here)**: the textures DOF on makes in the game's order. With DOF on, a resize row
+  (`RESIZE:10:1600x900`, quality 3) has its call log DIFFERENT in the remake frame only (pixels
+  IDENTICAL): the game makes the glare's second target R16G16B16A16 (f9, not f26), five more textures
+  in `CDepthOfField::CreateSystemObjects` (480x270, 240x135, 480x270, 240x135, 240x135 at 1600x900) and
+  takes four more from the pool on first use (480x270, 3 x 240x135), and clears them in its own order;
+  the port makes its own after the others (the `shortcut:` in `yebis.rs`). Then a resize row, the
+  photo-mode GUI row (`app_photo` already proves the link's values; END's pick is not in the GUI
+  oracle), `run_all.sh --quick`, the release. Estimate: about one session.
 - **VR**: never draws DOF: `YebisPP::updatePP` 0x14002c270 calls `SetDepthOfFieldEnable(false)` every
   frame; only `CameraForwardYebis::setPostProcessing` 0x140025080 enables it.
 
@@ -49,6 +58,19 @@
   `ry6_08` (3, 40 m, F2), all 3 frames without glare; `ry6_09` (3, 5 m) and `ry6_10` (3, 8 m, F4),
   40 frames with GLARE 3. The `rustyac_f4` / `rustyac_f2` test filters are default.ini with
   APERTURE_F_NUMBER 4 / 2.
+
+## Screenshot (step 4)
+
+- `re/scratch/taskY6/shot/y6_photo_dof.jpg` (1280x720, 216 KB, from a 1920x1080 window's F8
+  screenshot): `rustyac.exe --track spa --car ks_ferrari_f2004 --no-race-ini --dev-apps --cfg-dir
+  <shot>/cfg --video-ini <shot>/video_dof.ini --gui-do "show:photomode;click:72:321;click:72:321;
+  click:72:321;click:72:321;click:160:142;end;frame;frame;frame;frame;screenshot" --duration 25` (the
+  photo app at (20, 80): DOF factor + four times = 0.2, Start, END held: focus 4.35 m on the car; the
+  user's video.ini with DOF=3, RAYS_OF_GOD=0, default filter, F-number 12). `--gui-do frame` (new)
+  lets END's pick happen before F8.
+- Against the same shot with the factor left 0 (`y6_photo_nodof.jpg`): the stands and trees far
+  ahead differ by 1.9 on average (up to 71), the car by 0.39: the background is soft, the car sharp.
+  At F12 the blur is mild, as in the game.
 
 ## Step 0.2: PP_QUALITY 5 with GLARE 5
 
