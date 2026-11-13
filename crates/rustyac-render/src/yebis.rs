@@ -177,6 +177,52 @@ pub fn dof_sizes(base: i32, w: i32, h: i32) -> [(u32, u32); 2] {
     }
 }
 
+/// One depth of field level with DOF on (Task Y6, `CreateApertureFilterLevelParams` 0x14041f750,
+/// `DOFLEVELPARAM::Initialize` 0x14041e420): its size, hexagon passes, its diameter over its height (+0x30)
+/// and whether it is doubled (its result drawn at twice the size: not ported).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DofLevel {
+    pub size: (u32, u32),
+    pub passes: u32,
+    pub l30: f32,
+    pub doubled: bool,
+}
+
+/// The levels of video.ini DOF `q` (1-5): the quality table 0x141521690's scale, level count, combination
+/// (shift, radius per level) and doubling width and ratio.
+pub fn dof_levels(q: i32, base: i32, w: i32, h: i32) -> Vec<DofLevel> {
+    let (scale, count, c1, dbl, ratio) = match q {
+        1 => (0.25, 2, false, 160, 0.125),
+        2 => (0.375, 2, false, 160, 0.125),
+        3 => (0.5, 3, true, 160, 0.125),
+        4 => (0.5, 3, false, 320, 0.25),
+        _ => (0.5, 3, true, 320, 0.25),
+    };
+    let (mut lw, mut lh) = effect_size(base, scale, w, h);
+    let small = |lw: u32| lw <= dbl || lw as f32 <= w as f32 * ratio;
+    // combination 3's first radius is 1 only when the level is nearly the frame's width
+    let r0 = (w as f32 / lw as f32) < 1.2;
+    let combo: [(u32, u32); 3] = if c1 { [(0, 0), (1, 1), (1, 2)] } else { [(0, r0 as u32), (0, 2), (1, 2)] };
+    let mut idx = small(lw) as usize;
+    let mut shift = 0;
+    combo[..count]
+        .iter()
+        .map(|&(sh, radius)| {
+            if sh != shift {
+                shift = sh;
+                lw = ((lw as f32 * 0.5 + 0.99) as u32).max(3);
+                lh = ((lh as f32 * 0.5 + 0.99) as u32).max(3);
+                if small(lw) {
+                    idx = (idx + 1).min(3);
+                }
+            }
+            let n = radius + 1;
+            let diam = rustyac_math::powf(2.0, n as f32) * 2.0 - 1.0 + [0.0, 0.5, 0.75, 1.0][idx];
+            DofLevel { size: (lw, lh), passes: n, l30: diam / lh as f32, doubled: idx > 0 }
+        })
+        .collect()
+}
+
 /// The pool's R16G16B16A16 textures in the order the pool (0x140411900) gets them: the depth of
 /// field's two levels, then its halvings of the frame (`CDepthOfField::CreateSystemObjects`
 /// 0x1404200a0), a size already there shared. The level asks for its two only when doubled
@@ -400,8 +446,12 @@ mod device {
         particles: u32,
         /// The copy's sampler: the source texture's own sampler mode (`DrawRectGPU_MadT1_Sn`).
         copy_sampler: usize,
-        /// The second effect surface's own mode: point/clamp once a tone map has read it (see `copy_sampler`).
-        frame_clamped: bool,
+        /// Each effect surface's own mode: point/clamp once a tone map has read it (see `copy_sampler`): the
+        /// second, or the first with the depth of field.
+        frame_clamped: [bool; 2],
+        /// Each texture's saved mode (its last sampler's address, as a sampler index of linear filtering), which
+        /// `CTextureUtil::Resample` keeps, by texture (Task Y6; only the depth of field reads them).
+        modes: std::collections::HashMap<usize, usize>,
         /// The effect surface bound as the target.
         current: usize,
         effect_depth: ID3D11DepthStencilView,
@@ -446,6 +496,10 @@ mod device {
         spectrum: ID3D11ShaderResourceView,
         /// the ghost's trim circle (Task Y5c), only with GHOST on; its two targets follow the star's maximum
         trim: Option<ID3D11ShaderResourceView>,
+        /// The depth of field with DOF on (Task Y6): the frame's halvings, then each level with its source,
+        /// front blur factor, result and two work targets.
+        dof_halves: Vec<(Target, u32, u32)>,
+        dof_levels: Vec<(super::DofLevel, [Target; 5])>,
     }
 
     /// The bytes of one input element.
@@ -840,6 +894,19 @@ mod device {
                 for (dw, dh) in super::dof_sizes(base, width, height) {
                     keep(&mut kept, &mut dof, target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
                 }
+                // shortcut: DOF on gets its own targets after all the others, not the game's pool order or its clears; port them when a resize row differs
+                let dof_q = video.get_int("POST_PROCESS", "DOF").unwrap_or(0);
+                let (mut dof_halves, mut dof_levels) = (vec![], vec![]);
+                if dof_q > 0 {
+                    let levels = super::dof_levels(dof_q, base, width, height);
+                    for (hw, hh) in super::halvings(levels[0].size, width, height) {
+                        dof_halves.push((target(device, hw, hh, f9.0, f9.1, true)?, hw, hh));
+                    }
+                    for l in levels {
+                        let t = || target(device, l.size.0, l.size.1, f9.0, f9.1, true);
+                        dof_levels.push((l, [t()?, t()?, t()?, t()?, t()?]));
+                    }
+                }
                 let (luminance_size, chain) = super::luminance_sizes(width, height);
                 let luminance = target(device, luminance_size.0, luminance_size.1, f27.0, f27.1, true)?;
                 // auto exposure's 1x1 result and its CPU copy; then the auto focus's pair and copy
@@ -968,7 +1035,8 @@ mod device {
                     heat_at: 2,
                     particles,
                     copy_sampler: SLB,
-                    frame_clamped: false,
+                    frame_clamped: [false; 2],
+                    modes: Default::default(),
                     current: 0,
                     effect_depth,
                     luminance,
@@ -1007,6 +1075,8 @@ mod device {
                     shaft_at,
                     spectrum,
                     trim,
+                    dof_halves,
+                    dof_levels,
                 })
             }
         }
@@ -1076,7 +1146,13 @@ mod device {
         /// One glare draw into `to` (a viewport of its size): `taps`, `colours`, an optional gamma.
         #[allow(clippy::too_many_arguments)]
         unsafe fn glare_draw(&mut self, t: usize, to: usize, taps: &[[f32; 2]], colours: &[[f32; 4]], gamma: Option<f32>, samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>], vertices: Option<Vec<f32>>) -> Result<(), String> {
-            let (target, w, h) = self.glare[to].clone();
+            self.draw_into(t, self.glare[to].clone(), taps, colours, gamma, samplers, srvs, vertices)
+        }
+
+        /// `glare_draw` into any target.
+        #[allow(clippy::too_many_arguments)]
+        unsafe fn draw_into(&mut self, t: usize, to: (Target, u32, u32), taps: &[[f32; 2]], colours: &[[f32; 4]], gamma: Option<f32>, samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>], vertices: Option<Vec<f32>>) -> Result<(), String> {
+            let (target, w, h) = to;
             self.target_only(&target.rtv);
             self.viewport(0.0, 0.0, w as f32, h as f32);
             let u = self.cbuffer.glare(t, taps, colours, gamma, &self.used);
@@ -1087,21 +1163,23 @@ mod device {
         /// `CTextureUtil::Resample` 0x1403f6710 from `from` (`w` x `h`) into glare target `to`: one box tap
         /// (MadT1_S1) or, with `spread`, `GetTexCoordOffset_Box` 0x1403a7e20's 2x2 taps that far apart
         /// (MadT1_S4); a source of another size is read through the linear border sampler.
-        unsafe fn resample(&mut self, from: (Option<ID3D11ShaderResourceView>, u32, u32), to: usize, spread: f32) -> Result<(), String> {
+        /// `mode`: the source's own mode (a sampler index of linear filtering: border, clamp, mirror ...).
+        unsafe fn resample(&mut self, from: (Option<ID3D11ShaderResourceView>, u32, u32), to: (Target, u32, u32), spread: f32, mode: usize) -> Result<(), String> {
             let (src, w, h) = from;
-            let (_, tw, th) = self.glare[to].clone();
-            let sampler = if (w, h) == (tw, th) { SB } else { SLB };
+            let (tw, th) = (to.1, to.2);
+            // the same size samples points
+            let sampler = mode + ((w, h) == (tw, th)) as usize;
             if spread > 0.0 {
                 let (x, y) = ((1.0 / w as f32) * spread, (1.0 / h as f32) * spread);
                 let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]);
-                return self.glare_draw(T_UP, to, &[[-x, -y], [x, -y], [-x, y], [x, y]], &[[0.25; 4]; 4], None, &[sampler], &[src], Some(v));
+                return self.draw_into(T_UP, to, &[[-x, -y], [x, -y], [-x, y], [x, y]], &[[0.25; 4]; 4], None, &[sampler], &[src], Some(v));
             }
             let taps = crate::yebis_cb::box_taps((w, h), (tw, th));
             if taps.len() != 1 {
                 return Err(format!("yebis: a glare resample of {w}x{h} to {tw}x{th} ({} taps) not ported", taps.len()));
             }
             let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]);
-            self.glare_draw(8, to, &[[taps[0][0], taps[0][1]]], &[[1.0; 4]], None, &[sampler], &[src], Some(v))
+            self.draw_into(8, to, &[[taps[0][0], taps[0][1]]], &[[1.0; 4]], None, &[sampler], &[src], Some(v))
         }
 
         /// The glare's bloom (`CRenderGlare::GenerateGlare` 0x14041d470 with no star, ghost, afterimage or
@@ -1113,7 +1191,7 @@ mod device {
             // GenerateGlare_Source 0x1404160f0: halvings while the pool's next texture is narrower; Resample keeps
             // the frame texture's address (clamp after last frame's tone map) and makes it linear
             let mut cur = (frame, fw, fh);
-            let mut sampler = if self.frame_clamped { SL } else { SLB };
+            let mut sampler = if self.frame_clamped[self.current] { SL } else { SLB };
             for k in 0..self.glare_pool.len() {
                 let (t, pw, ph) = self.glare_pool[k].clone();
                 if pw >= cur.1 {
@@ -1156,7 +1234,7 @@ mod device {
                 if l.own {
                     let prev = levels[i - 1].1[1];
                     let (t, w, h) = self.glare[prev].clone();
-                    self.resample((srv(&t), w, h), *from, 0.0)?;
+                    self.resample((srv(&t), w, h), self.glare[*from].clone(), 0.0, SLB)?;
                 }
                 let radius = if i > 0 { (l.step * base) * rustyac_math::sqrtf(0.75) } else { l.step * base };
                 let rgb = [(radius * 6.15e-07) / 6.15e-07, (radius * 5.4e-07) / 6.15e-07, (radius * 4.65e-07) / 6.15e-07, 0.0];
@@ -1180,7 +1258,7 @@ mod device {
                     self.glare_draw(t, to, &offsets, &colours, None, &[SB], &[s], Some(v))?;
                 }
                 if let Some(u) = up {
-                    self.resample((srv(&self.glare[*result].0), w, h), *u, 0.375)?;
+                    self.resample((srv(&self.glare[*result].0), w, h), self.glare[*u].clone(), 0.375, SLB)?;
                 }
             }
             // GenerateGlare_Bloom_CompositeSubLevels 0x140416be0: the levels summed with GetBloomCompositeLuminanceScale,
@@ -1234,7 +1312,7 @@ mod device {
             if g.blur <= 0.0 || self.glare[4].1 <= gw {
                 return Ok((srv(&self.glare[3].0), gw, gh));
             }
-            self.resample((srv(&self.glare[3].0), gw, gh), 4, g.blur.min(1.0) * 0.5)?;
+            self.resample((srv(&self.glare[3].0), gw, gh), self.glare[4].clone(), g.blur.min(1.0) * 0.5, SLB)?;
             let (t, dw, dh) = self.glare[4].clone();
             Ok((srv(&t), dw, dh))
         }
@@ -1537,6 +1615,88 @@ mod device {
         }
 
         /// Technique `d`'s input layout: its inputs packed one after another.
+        /// `CPostEffect::ApplyEffects_DepthOfField` 0x1403b3610 (`CDepthOfField::ApplyDepthOfField` 0x140430ed0) after a
+        /// round's first draw: the effect surface halved down to each drawn level's source, each level's front blur
+        /// factor and hexagon passes, then the levels composited into the other effect surface (Task Y6).
+        unsafe fn dof(&mut self, pe: &PostEffect, d: &crate::yebis_cb::Dof) -> Result<(), String> {
+            use crate::yebis_cb::{dof_counts, dof_level_factors, hexagon_taps, T_DOF_BLEND, T_DOF_FRONT, T_DOF_LEVELS, T_GAUSS7};
+            let l30: Vec<f32> = self.dof_levels.iter().map(|l| l.0.l30).collect();
+            // the edge flags (+0x140): AC's EDGE_QUALITY call fails below DOF 5, which keeps the table's
+            let flags = if d.quality == 1 { 0 } else { 2 };
+            let f = dof_level_factors(&l30, d.ratio, flags);
+            let (near_n, far_n) = dof_counts(&f, pe.near, pe.far, d.focus);
+            let n = near_n.max(far_n);
+            if n == 0 || self.dof_levels[..n].iter().any(|l| l.0.doubled) {
+                return Err(format!("yebis: the depth of field with {n} levels (a doubled one, or none): not ported"));
+            }
+            // the pool then hands the glare's halving a level's texture, and their sampler modes mix
+            if pe.glare.is_some() && self.dof_levels[..n].iter().any(|l| self.glare_pool.iter().any(|g| (g.1, g.2) == l.0.size)) {
+                return Err("yebis: the depth of field with a level of a glare halving's size (PP_QUALITY 5): not ported".into());
+            }
+            self.reset();
+            let (w, h) = (self.width as u32, self.height as u32);
+            let mut cur = (self.effect[0].srv.clone(), w, h);
+            // each source keeps its own mode
+            for (t, hw, hh) in self.dof_halves.clone() {
+                let mode = self.mode(&cur.0);
+                self.resample(cur, (t.clone(), hw, hh), 0.0, mode)?;
+                cur = (t.srv, hw, hh);
+            }
+            // ApplyDepthOfField_Source: a level's source is resampled only when its size differs
+            let mut srcs = vec![];
+            let levels = self.dof_levels[..n].to_vec();
+            for (l, t) in levels {
+                if (cur.1, cur.2) != l.size {
+                    let mode = self.mode(&cur.0);
+                    self.resample(cur, (t[0].clone(), l.size.0, l.size.1), 0.0, mode)?;
+                    cur = (t[0].srv.clone(), l.size.0, l.size.1);
+                }
+                srcs.push(cur.0.clone());
+            }
+            // ApplyDepthOfField_ApertureFilterLevel_EAPERTUREFM_DISC 0x140425f60
+            let [_, _, z, sw] = d.store;
+            let levels = self.dof_levels[..n].to_vec();
+            for (i, (l, t)) in levels.into_iter().enumerate() {
+                let (lw, lh) = l.size;
+                let v = || rect_vertices([lw as f32, lh as f32], [0.0, 0.0, lw as f32, lh as f32], &[src_rect(lw, lh)]);
+                let mut src = srcs[i].clone();
+                if flags & 2 != 0 && i < near_n {
+                    let a = -f[i][2];
+                    // (the front blur factor puts its source's mode back: RENDER_ORACLE_SAMPLER_LOG)
+                    let (key, mode) = (src.as_ref().map(|v| self.mode_key(v)), self.mode(&src));
+                    self.draw_into(T_DOF_BLEND, (t[1].clone(), lw, lh), &[], &[[1.0, 1.0, 1.0, a * z], [0.0, 0.0, 0.0, f[i][3] + a * sw]], None, &[9], &[src], Some(v()))?;
+                    if let Some(key) = key {
+                        self.modes.insert(key, mode);
+                    }
+                    src = t[1].srv.clone();
+                }
+                for p in 0..l.passes {
+                    let (taps, colours) = hexagon_taps(d.angle, p, l.passes, lw, lh);
+                    let to = if p + 1 == l.passes { t[2].clone() } else { t[3 + (p & 1) as usize].clone() };
+                    self.draw_into(T_GAUSS7, (to.clone(), lw, lh), &taps, &colours, None, &[8], &[src], Some(v()))?;
+                    src = to.srv;
+                }
+            }
+            // ApplyDepthOfField_Composite 0x140428da0 into the other surface
+            self.current = 1;
+            self.effect_with_depth();
+            self.full_viewport();
+            let t = if flags & 2 != 0 { T_DOF_FRONT + far_n * 4 + near_n } else { T_DOF_LEVELS + n };
+            let factors: Vec<[f32; 2]> = std::iter::once([0.0; 2]).chain(f[..n].iter().map(|l| [l[0], l[1]])).collect();
+            let u = self.cbuffer.dof_composite(t, d.store[0], &factors, &self.used);
+            let mut srvs = vec![self.effect[0].srv.clone()];
+            srvs.extend(self.dof_levels[..n].iter().map(|l| l.1[2].srv.clone()));
+            let mut samplers = vec![SL; n + 1];
+            samplers[0] = SP;
+            let (l0w, l0h) = self.dof_levels[0].0.size;
+            let v = rect_vertices([w as f32, h as f32], [0.0, 0.0, w as f32, h as f32], &[src_rect(w, h), src_rect(l0w, l0h)]);
+            self.draw(t, &u, &samplers, &srvs, &v)?;
+            // the composite read the first surface point/clamp: that becomes its own mode (the glare's halving reads it so)
+            self.frame_clamped[0] = true;
+            self.effect_of_eight();
+            Ok(())
+        }
+
         unsafe fn layout(&self, d: usize) -> Result<ID3D11InputLayout, String> {
             let elements: Vec<D3D11_INPUT_ELEMENT_DESC> = self.inputs[d]
                 .iter()
@@ -1557,6 +1717,16 @@ mod device {
         }
 
         /// One draw: `samplers` are (slot, sampler) and only the changed ones are set.
+        unsafe fn mode_key(&self, srv: &ID3D11ShaderResourceView) -> usize {
+            use windows::core::Interface;
+            srv.GetResource().map_or(0, |r| r.as_raw() as usize)
+        }
+
+        /// The saved mode of `srv`'s texture (border before any sampler bound it).
+        unsafe fn mode(&self, srv: &Option<ID3D11ShaderResourceView>) -> usize {
+            srv.as_ref().and_then(|v| self.modes.get(&self.mode_key(v)).copied()).unwrap_or(SLB)
+        }
+
         unsafe fn draw(&mut self, d: usize, upload: &[u8; 4096], samplers: &[usize], srvs: &[Option<ID3D11ShaderResourceView>], vertices: &[f32]) -> Result<(), String> {
             self.pass(d, upload, samplers, srvs)?;
             let c = self.context.clone();
@@ -1638,10 +1808,18 @@ mod device {
                 }
             }
             c.PSSetShaderResources(0, Some(srvs));
+            for (srv, &s) in srvs.iter().zip(samplers) {
+                if let Some(srv) = srv {
+                    self.modes.insert(self.mode_key(srv), s & !3);
+                }
+            }
             std::ptr::copy_nonoverlapping(upload.as_ptr(), m.pData.cast::<u8>(), 4096);
             c.Unmap(&cb, 0);
             c.VSSetConstantBuffers(0, Some(&[Some(cb.clone())]));
-            c.PSSetConstantBuffers(0, Some(&[Some(cb)]));
+            // a pixel program without variables gets no buffer (the depth of field's TS0_1 composite, Task Y6)
+            if rustyac_dxbc::parse(&self.code[d].1).map_or(true, |s| !s.reflection.constant_buffers.is_empty()) {
+                c.PSSetConstantBuffers(0, Some(&[Some(cb)]));
+            }
             if self.layouts[d].is_none() {
                 let same = (0..self.code.len()).find(|&j| self.layouts[j].is_some() && self.inputs[j] == self.inputs[d]);
                 self.layouts[d] = match same {
@@ -1709,6 +1887,9 @@ mod device {
             let shimmer = heat.and_then(|h| h.shimmer(&pe, self.particles as usize));
             // without chromatic aberration (VR) draws 2 and 6 go and the effect stays in its first surface
             let ca = camera.chromatic_aberration;
+            if shimmer.is_some() && pe.dof.is_some() {
+                return Err("yebis: the heat shimmer with the depth of field: not ported".into());
+            }
             if shimmer.is_some() && !ca {
                 return Err("yebis: the heat shimmer without chromatic aberration: not ported".into());
             }
@@ -1770,14 +1951,19 @@ mod device {
                 if let Some(s) = &shimmer {
                     self.shimmer(&pe, s, &e0)?;
                 }
+                if let Some(d) = &pe.dof {
+                    self.dof(&pe, d)?;
+                }
+                // with the depth of field the aberration reads its composite (e1) and draws into e0
+                let e0s = if pe.dof.is_some() { e1.clone() } else { e0s };
                 if ca {
-                    self.current = 1;
+                    self.current ^= 1;
                     self.effect_with_depth();
                     self.full_viewport();
                     let u = self.cbuffer.draw(1, &pe, &self.filmic, &self.used);
                     self.draw(1, &u, &[SL], std::slice::from_ref(&e0s), &plain(1))?;
                 }
-                let src = if ca { e1.clone() } else { e0.clone() };
+                let src = self.effect[self.current].srv.clone();
                 let glare = match pe.glare.clone() {
                     Some(g) => {
                         self.reset();
@@ -1863,13 +2049,18 @@ mod device {
                     (v, l, false) => (T_NO_GAMMA[v as usize + 2 * l as usize], if v { 12 } else { 6 }),
                 };
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
+                // DrawRectGPU_TonemapHDR 0x1403f1b10 ends by giving its first texture its second's saved mode
+                let restored = self.mode(glare.as_ref().map_or(&black, |g| &g.0));
                 if let Some((bloom, bw, bh)) = &glare {
                     let v = tonemap_vertices(w, h, noise_rect(n, 1.0, w / h), self.vignette, src_rect(*bw, *bh));
                     self.draw(t3, &u, &[SP, SL, SP, SW], &[src.clone(), bloom.clone(), grey.clone(), dither.clone()], &v)?;
                 } else {
                     self.draw(t3, &u, &[SP, SP, SP, SW], &[src.clone(), black.clone(), grey.clone(), dither.clone()], &draw_vertices(3, w, h, n, self.vignette, 0))?;
                 }
-                self.frame_clamped = true; // the tone map read the glare's source (e1, or e0 without chromatic aberration)
+                if let Some(v) = &src {
+                    self.modes.insert(self.mode_key(v), restored);
+                }
+                self.frame_clamped[self.current] = true; // the tone map read the glare's source (e1, or e0 without chromatic aberration or with the depth of field)
                 if shimmer.is_some() {
                     // in a shimmer frame the tonemap's source is the texture the shimmer copies from, and
                     // DrawRectGPU_TonemapHDR 0x1403f1b10 ends by giving it black's mode (point, clamp):
@@ -1887,8 +2078,11 @@ mod device {
                 if let Some(s) = &shimmer {
                     self.shimmer(&pe, s, &e0)?;
                 }
+                if let Some(d) = &pe.dof {
+                    self.dof(&pe, d)?;
+                }
                 if ca {
-                    self.current = 1;
+                    self.current ^= 1;
                     self.effect_with_depth();
                     self.full_viewport();
                     let u = self.cbuffer.draw(5, &pe, &self.filmic, &self.used);
@@ -1922,6 +2116,17 @@ mod device {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dof_levels_follow_the_game() {
+        // the game's DOF=1..4 logs at 1280x720, PP_QUALITY 3 (Task Y6)
+        let l = |q| dof_levels(q, 768, 1280, 720).iter().map(|l| (l.size, l.passes, l.doubled)).collect::<Vec<_>>();
+        assert_eq!(l(1), [((192, 108), 1, false), ((192, 108), 3, false)]);
+        assert_eq!(l(2), [((288, 162), 1, false), ((288, 162), 3, false)]);
+        assert_eq!(l(3), [((384, 216), 1, false), ((192, 108), 2, false), ((192, 108), 3, false)]);
+        assert_eq!(l(4), [((384, 216), 1, false), ((384, 216), 3, false), ((192, 108), 3, true)]);
+        assert_eq!(dof_levels(3, 768, 1280, 720)[0].l30, 3.0 / 216.0);
+    }
 
     #[test]
     fn luminance_sizes_follow_the_game() {

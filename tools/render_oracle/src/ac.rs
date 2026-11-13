@@ -677,7 +677,7 @@ impl Game {
             wr(settings, 0x3b, crate::root::pp_rays() as u8); // ppRaysOfGod
             wr(settings, 0x3c, crate::root::pp_quality()); // ppQuality
             wr(settings, 0x40, crate::root::pp_glare()); // ppGlare
-            wr(settings, 0x44, 0i32); // ppDof
+            wr(settings, 0x44, crate::root::pp_dof().0); // ppDof
             wr(settings, 0x48, 0u8); // tripleBuffer
             wr(settings, 0x4c, 60f32); // refresh
 
@@ -1523,6 +1523,10 @@ impl Game {
             wr(camera, 0x8, step.camera.fov);
             wr(camera, 0xc, step.camera.matrix);
             wr(camera, 0x70, step.camera.near);
+            if let Some(focus) = crate::root::pp_dof().1 {
+                wr(camera, 0x1b0, 1f32); // dofFactor
+                wr(camera, 0x1b4, focus); // dofFocus
+            }
             if let Some(far) = step.camera.far {
                 wr(camera, 0x74, far);
             }

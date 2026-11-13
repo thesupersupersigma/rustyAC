@@ -2253,6 +2253,8 @@ fn run_window(options: &Options) -> Result<(), String> {
         for action in renderer.gui().map(|gui| std::mem::take(&mut gui.apps.vr_actions)).unwrap_or_default() {
             renderer.open_vr_action(&action);
         }
+        // the photo app's edits of the scene camera's depth of field and of the exposure multiplier
+        let mut photo_edit = None;
         // Onboard settings: the player's eye point, field of view and pitch as the app left them
         if let Some(gui) = renderer.gui() {
             if gui.apps.made.is_empty() {
@@ -2320,11 +2322,16 @@ fn run_window(options: &Options) -> Result<(), String> {
                 free.fov = p.fov;
             }
             photo_sun = p.custom_sun;
+            photo_edit = Some((((p.dof_factor, p.dof_focus) != (photo_seen.dof_factor, photo_seen.dof_focus)).then_some([p.dof_factor, p.dof_focus]), p.exposure_multiplier));
             gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
             // SAFETY: plain calls.
             gui.apps.suspension_keys = [0x08, 0x11, 0x61, 0x62, 0x63, 0x64].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
+        }
+        if let (Some((dof, exposure)), Some((scene_dof, multiplier))) = (photo_edit, renderer.dof_and_exposure()) {
+            *scene_dof = dof.unwrap_or(*scene_dof);
+            *multiplier = exposure;
         }
         let mut track_look = None;
         // ACCameraManager::update: the random camera's next draw
@@ -2359,6 +2366,11 @@ fn run_window(options: &Options) -> Result<(), String> {
             let input = orbit_input(shared.focused.load(Ordering::Relaxed));
             let body = rustyac_game::render::scene::model_matrix(&view.body, &shapes[focus.index]);
             let in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || replay.is_some();
+            // (the shot cameras write the one scene camera's depth of field, which the other modes
+            // and the photo app share)
+            if let Some((dof, _)) = renderer.dof_and_exposure() {
+                [shot.dof[0], shot.dof[1]] = *dof;
+            }
             let cursor = match (mode, cinematic.as_mut()) {
                 (4, _) => {
                     helicopter.update(shot, &body);
@@ -2385,6 +2397,9 @@ fn run_window(options: &Options) -> Result<(), String> {
             if let Some((x, y)) = cursor {
                 // SAFETY: a plain call.
                 let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) };
+            }
+            if let Some((dof, _)) = renderer.dof_and_exposure() {
+                *dof = [shot.dof[0], shot.dof[1]];
             }
             shot.frame()
         } else if let Some(still) = last_frame.filter(|_| camera.mode == rustyac_game::render::scene::CameraMode::Track && track_cameras.sets.is_empty()) {
@@ -2415,11 +2430,15 @@ fn run_window(options: &Options) -> Result<(), String> {
         };
         renderer.set_track_look(track_look.take().as_ref());
         // SAFETY: a plain call.
-        let end_key = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x23) } != 0;
+        let end_key = (shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x23) } != 0) || renderer.gui().is_some_and(|g| g.end_held);
         let end_pick = end_key.then(|| renderer.pick_centre(frame.fov, &rustyac_physics::vecmath::Mat44f { m: frame.matrix }));
+        let scene_dof = renderer.dof_and_exposure().map(|(dof, _)| *dof);
         if let Some(gui) = renderer.gui() {
             let p = &mut gui.gui.apps.photo;
             (p.matrix, p.fov) = (rustyac_physics::vecmath::Mat44f { m: frame.matrix }, frame.fov);
+            if let Some([factor, focus]) = scene_dof {
+                (p.dof_factor, p.dof_focus) = (factor, focus);
+            }
             p.end_pick = end_pick;
             p.camera_mode = if mouse_camera.is_some() { 6 } else { camera.manager_mode() };
             p.in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some();

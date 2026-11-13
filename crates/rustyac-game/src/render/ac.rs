@@ -572,6 +572,8 @@ pub struct AcRenderer {
     /// `CameraTrack::update`'s far plane, exposures and shadow ranges (F3), and the camera's own
     /// far plane and exposures the other modes keep
     track_look: Option<(f32, f32, f32, [f32; 3])>,
+    /// See [`AcRenderer::dof_and_exposure`] (`Camera::Camera` 0x14020ea40: 0, 500).
+    dof: [f32; 2],
     plain_look: (f32, f32, f32),
     /// `Sim::mirrorTextureRenderer` and `Sim::virtualMirrorRenderer`: only with mirrors on
     mirror: Option<rustyac_render::mirror::MirrorTextureRenderer>,
@@ -927,7 +929,7 @@ FILTER=default
             // (Sim::Sim switches it off with a headset)
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active && !vr)
         });
-        Ok(AcRenderer { heat_speed: 0.0, pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink { vr, ..CrewLink::default() }, crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { heat_speed: 0.0, pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink { vr, ..CrewLink::default() }, crew_seen: (0, 0), crew_fade: None, rules_fade: None, rules_fading: false, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_look: None, dof: [0.0, 500.0], plain_look: (40000.0, hdr_levels.min_exposure, hdr_levels.max_exposure), track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui3d: None, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1101,9 +1103,19 @@ FILTER=default
 
     /// How many cars are loaded.
     /// What the track's camera of the frame sets on the scene camera besides its place (F3;
-    /// `None`: the track has no cameras). The depth of field is not drawn by the port.
+    /// `None`: the track has no cameras), its depth of field included (`CameraTrack::update`
+    /// 0x1400cbe30 writes it every frame; it stays on the scene camera after).
     pub fn set_track_look(&mut self, frame: Option<&super::track_camera::TrackFrame>) {
         self.track_look = frame.map(|f| (f.far, f.min_exposure, f.max_exposure, f.shadow_splits));
+        if let Some(f) = frame {
+            self.dof = [f.dof_factor, f.dof_focus];
+        }
+    }
+
+    /// The scene camera's depth of field (`dofFactor`, `dofFocus`) that every camera mode and the
+    /// photo app share, and `GraphicsManager::exposureMultiplier`.
+    pub fn dof_and_exposure(&mut self) -> (&mut [f32; 2], &mut f32) {
+        (&mut self.dof, &mut self.graphics.exposure_multiplier)
     }
 
     /// The steering wheel's place in the car (`orgSteerMatrix`, the `STEER_HR` node as the car
@@ -1362,6 +1374,7 @@ FILTER=default
         cam.fov = frame.fov;
         cam.matrix = Mat44f { m: frame.matrix };
         cam.near_plane = frame.near;
+        [cam.dof_factor, cam.dof_focus] = self.dof;
         let (far, min_exposure, max_exposure) = self.track_look.filter(|_| driving.mode == CameraMode::Track).map_or(self.plain_look, |l| (l.0, l.1, l.2));
         (cam.far_plane, cam.min_exposure, cam.max_exposure) = (far, min_exposure, max_exposure);
         let s = match self.track_look {

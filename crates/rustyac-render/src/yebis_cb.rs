@@ -30,8 +30,9 @@ use rustyac_physics::data::ini::IniReader;
 /// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels), then
 /// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c),
 /// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46),
-/// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d).
-pub const TECHNIQUES: [&str; 59] = [
+/// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d),
+/// then the depth of field's front blur factor and composites (59-78, Task Y6: `T_DOF_*`).
+pub const TECHNIQUES: [&str; 79] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -91,6 +92,26 @@ pub const TECHNIQUES: [&str; 59] = [
     "MadT1_S9",
     "MadT1_S13",
     "MadT1_S15",
+    "DepthOfField_FrontBlurBlendFactor",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS0_0",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS0_1",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS0_2",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS0_3",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS1_0",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS1_1",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS1_2",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS1_3",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS2_0",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS2_1",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS2_2",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS2_3",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS3_0",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS3_1",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS3_2",
+    "DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS3_3",
+    "DepthOfField_CompositeBlurredLevels_USNORM_T1",
+    "DepthOfField_CompositeBlurredLevels_USNORM_T2",
+    "DepthOfField_CompositeBlurredLevels_USNORM_T3",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
@@ -122,6 +143,12 @@ pub const T_GHOST4: usize = 37;
 pub const T_GHOST3: usize = 38;
 /// The light shafts (Task Y5d): the mask, `TexCoordMadT1_S<n>` (`T_RADIAL + n - 1`), the ring, `MadT4`.
 pub const T_SHAFT_MASK: usize = 47;
+/// The depth of field's techniques (Task Y6): the front blur factor, `..FrontBlur_USNORM_TS<far>_<near>` at
+/// `T_DOF_FRONT + far * 4 + near` and `CompositeBlurredLevels_USNORM_T<n>` at `T_DOF_LEVELS + n - 1` (the
+/// factor store is 1, AC's float-optimised range: `DrawRectGPU_DepthOfFieldCompositeLevels*`' table index).
+pub const T_DOF_BLEND: usize = 59;
+pub const T_DOF_FRONT: usize = 60;
+pub const T_DOF_LEVELS: usize = 76;
 pub const T_RADIAL: usize = 48;
 pub const T_CORONA: usize = 52;
 pub const T_MAD4: usize = 53;
@@ -141,6 +168,8 @@ const SCALER: usize = 2336;
 const GAMMA: usize = 3232;
 /// CTextureUtil's light shaft and corona variables (+0x11c, +0xdc)
 const SHAFT_NOISE: usize = 160;
+const DOF_SCALE_OFFSET: usize = 16;
+const LEVEL_BLEND: usize = 288;
 const SHAFT_PARAMS: usize = 240;
 const DITHER: usize = 3236;
 const MAX_MAPPING_LUM: usize = 3328;
@@ -168,6 +197,9 @@ pub struct Camera {
     pub dt: f32,
     /// `chromabActive`: draws 2 and 6, off in VR (`YebisPP::updatePPCameraValues` 0x14002bcc0)
     pub chromatic_aberration: bool,
+    /// `dofActive` and `dofFocusDistance`: the camera's focus while its DOF factor is not 0; VR
+    /// never has it (`YebisPP::updatePP` 0x14002c270 turns the depth of field off)
+    pub dof_focus: Option<f32>,
     /// The tone map takes auto exposure's current value (`YebisPP::updatePP` 0x14002c270 does
     /// for the first eye only: the second eye keeps the first's)
     pub new_exposure: bool,
@@ -208,6 +240,8 @@ pub struct PostEffect {
     pub auto_exposure: Option<[f32; 3]>,
     /// video.ini's GLARE on.
     pub glare: Option<Glare>,
+    /// The depth of field drawn this frame (CPostEffect+0xb87).
+    pub dof: Option<Dof>,
     /// The light shafts drawn this frame (CPostEffect+0x9ac): the sun on the screen and its colour.
     pub sun: Option<([f32; 2], [f32; 3])>,
 }
@@ -506,8 +540,8 @@ pub fn ghost_passes(g: &Ghost, f: f32, ratio: i32, levels: usize, angle: f32, re
     ([one, two], [c(ratio) as usize, c(ratio + 1) as usize, c(ratio + 2) as usize])
 }
 
-/// `CPostEffect::GetDiaphragmRotateAngle` 0x1403bb140 at the field of view `fov` (+0x534).
-// shortcut: its depth of field aperture term is left out (no aperture with DOF off, as the logs show), port it with DOF
+/// `CPostEffect::GetDiaphragmRotateAngle` 0x1403bb140 at the field of view `fov` (+0x534). Its depth of field
+/// term (`-= GetApertureOpeningRatio() * 0.5`) needs a maximum aperture F-number, which AC never sets (Task Y6).
 pub fn diaphragm_angle(d: (i32, f32, f32), fov: f32) -> f32 {
     use rustyac_math::{logf, tanf};
     let (mode, scale, offset) = d;
@@ -522,6 +556,137 @@ pub fn diaphragm_angle(d: (i32, f32, f32), fov: f32) -> f32 {
         r *= scale;
     }
     r + offset
+}
+
+/// `[DIAPHRAGM]`: setPostProcessing calls SetDiaphragmRotate only with a scale or an offset (CPostEffect::Initialize: 1, 1, 0).
+fn diaphragm(filter: &IniReader) -> Result<(i32, f32, f32), String> {
+    let d = |k: &str| filter.get_float("DIAPHRAGM", k);
+    let (scale, offset) = (d("ROTATE_SCALE")?, d("ROTATE_OFFSET")? * 0.017453);
+    Ok(if scale != 0.0 || offset != 0.0 { (filter.get_int("DIAPHRAGM", "TYPE")?, scale, offset) } else { (1, 1.0, 0.0) })
+}
+
+/// The depth of field this frame (Task Y6): `CDepthOfField` as AC drives it (`CameraForwardYebis::setPostProcessing`
+/// 0x140025080 with the `[DOF]` keys, `CPostEffect::UpdateParameters_DepthOfFieldOpticalParameters` 0x1403b92f0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dof {
+    /// video.ini DOF, the quality table's row
+    pub quality: i32,
+    pub focus: f32,
+    /// the circle of confusion at infinity over the sensor height (+0x1b0)
+    pub ratio: f32,
+    /// `SetDepthOfFieldFactorStore` 0x14042bd90's (x, y, z, w) (+0x1b4..+0x1c0) with AC's float-optimised range
+    pub store: [f32; 4],
+    /// the hexagon's angle: the diaphragm's (+0x194, AC never sets a maximum aperture) and 30 degrees
+    pub angle: f32,
+}
+
+impl Dof {
+    /// None when YEBIS leaves it off (+0xb87: an F-number, near > 0, far > near, a field of view in (0, pi)).
+    fn new(filter: &IniReader, quality: i32, focus: f32, near: f32, far: f32, vfov: f32) -> Result<Option<Dof>, String> {
+        use rustyac_math::{atanf, powf, tanf};
+        let f = |k: &str| filter.get_float("DOF", k);
+        let i = |k: &str| filter.get_int("DOF", k);
+        // every shipped filter has these; others change the draws
+        for (key, want) in [("APERTURE_PARAMETER", 2), ("APERTURE_SHAPE", 3), ("APERTURE_FRONT_LEVELS_NUMBER", -1), ("APERTURE_BACK_LEVELS_NUMBER", -1), ("EDGE_QUALITY", 3)] {
+            if i(key)? != want {
+                return Err(format!("yebis: [DOF] {key} other than {want} not ported"));
+            }
+        }
+        if !(1..=4).contains(&quality) {
+            return Err(format!("yebis: [POST_PROCESS] DOF={quality} not ported (its front layer)"));
+        }
+        let (fnumber, sensor, adaptive) = (f("APERTURE_F_NUMBER")?, f("IMAGE_SENSOR_HEIGHT")?, f("ADAPTIVE_APERTURE_FACTOR")?);
+        let base_fov = f("BASE_FOV")? * 0.017453;
+        // CDepthOfField::SetDepthOfFieldParameters 0x14042c730, CalculateOpticalParameters 0x14042c150
+        let fov = atanf(tanf(vfov * 0.5)) * 2.0;
+        if !(fnumber > 0.0 && near > 0.0 && far > near && fov > 0.0 && fov < std::f32::consts::PI) {
+            return Ok(None);
+        }
+        let t = tanf(fov * 0.5);
+        let f9 = ((t * 2.0) * 0.5) * focus + sensor * 0.5;
+        let focal = ((focus * sensor) * 0.5) / f9;
+        let base_f = sensor / (tanf(base_fov * 0.5) * 2.0);
+        let n = (powf(focal, 1.0 - adaptive) * (fnumber / base_f)) * powf(base_f, adaptive);
+        let d = focal / n;
+        let coc = (d * focal) / (focus - focal);
+        let x = 64000.0 / ((near - focus) / near - 1.0).abs();
+        let y = x * -1.0;
+        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], angle: diaphragm_angle(diaphragm(filter)?, vfov) + std::f32::consts::FRAC_PI_6 }))
+    }
+
+    /// The factor store as the depth range (+0xb8c..+0xb9c): the tail recomputes +0xb94 and +0xb98.
+    fn depth(&self) -> [f32; 5] {
+        let [x, y, ..] = self.store;
+        [x, y, 1.0 / x, -(y / x), self.focus]
+    }
+}
+
+/// `CDepthOfField::UpdateApertureFilterLevelParams` 0x14041fdb0: each level's far-side scale and offset
+/// (+0xd0, +0xd4) and near-side (+0xd8, +0xdc) from its diameter over its height (+0x30, `l30`), the
+/// optics' `ratio` and the edge flags (+0x140).
+pub fn dof_level_factors(l30: &[f32], ratio: f32, flags: u32) -> Vec<[f32; 4]> {
+    (0..l30.len())
+        .map(|i| {
+            let (mut f9, mut f8) = (l30[i], if i < 1 { l30[i] * 0.0001 } else { l30[i - 1] });
+            let (mut f11, mut f6, mut f7) = (0.25f32, f8, f9);
+            if flags & 4 != 0 {
+                f7 = f9 * 0.51;
+                if i == 0 {
+                    f11 = 0.0;
+                    f6 = f8 * 0.0;
+                } else {
+                    f6 = f8 * 0.61;
+                }
+            }
+            if flags & 2 != 0 {
+                f8 *= 1.15;
+                f9 *= 0.98;
+            }
+            let f5 = l30[0] * 0.25;
+            f11 *= l30[0];
+            f8 += f5;
+            f6 += f11;
+            let f10 = (f9 + f5) - f8;
+            let f9b = (f7 + f11) - f6;
+            [(1.0 / f9b) * ratio, -(f6 / f9b), (1.0 / f10) * ratio, -(f8 / f10)]
+        })
+        .collect()
+}
+
+/// `ApplyDepthOfField_Source` 0x1404282e0: the levels drawn on the near side (+0x1d8, from the near plane)
+/// and on the far side (+0x1dc, from the far plane), no level limits set.
+pub fn dof_counts(factors: &[[f32; 4]], near: f32, far: f32, focus: f32) -> (usize, usize) {
+    let (mut n, mut f) = (0, 0);
+    for (i, l) in factors.iter().enumerate() {
+        if -((near - focus) / near) * l[2] + l[3] >= 0.0 {
+            n = i + 1;
+        }
+        if ((far - focus) / far) * l[0] + l[1] >= 0.0 {
+            f = i + 1;
+        }
+    }
+    (n, f)
+}
+
+/// Pass `p` of `passes` of `HexagonFilter_nPass` 0x140404950 (`ArbitraryKernelFilter_nPass` 0x1404040a0) over
+/// a `w` x `h` source: the centre and six taps of the hexagon (first vertex at 90 degrees) turned by `angle`,
+/// 2^p texels out, and their weights (the centre 0.666667 on the last pass, 2 before).
+pub fn hexagon_taps(angle: f32, p: u32, passes: u32, w: u32, h: u32) -> ([[f32; 2]; 7], [[f32; 4]; 7]) {
+    use rustyac_math::{cosf, sinf};
+    let (s, c) = (sinf(angle), cosf(angle));
+    let r = (0..p).fold(1.0f32, |r, _| r * 2.0);
+    let (tu, tv) = (1.0 / w as f32, 1.0 / h as f32);
+    let mut taps = [[0.0; 2]; 7];
+    for (i, t) in taps[1..].iter_mut().enumerate() {
+        let a = (((i as f32) * 60.0) * std::f32::consts::PI) / 180.0;
+        let (kx, ky) = (cosf(a) * 0.0 - sinf(a), sinf(a) * 0.0 + cosf(a));
+        *t = [(kx * c - ky * s) * (r * tu), (kx * s + ky * c) * (r * tv)];
+    }
+    let wc = if p + 1 == passes { 0.666667f32 } else { 2.0 };
+    let m = 1.0 / (wc + 6.0);
+    let mut colours = [[m; 4]; 7];
+    colours[0] = [wc * m; 4];
+    (taps, colours)
 }
 
 impl Glare {
@@ -562,10 +727,7 @@ impl Glare {
             star *= f("SHAPE_STAR_LUMINANCE")?;
         }
         let luminance = f("LUMINANCE")?;
-        // setPostProcessing calls SetDiaphragmRotate only with a scale or an offset (CPostEffect::Initialize: 1, 1, 0)
-        let d = |k: &str| filter.get_float("DIAPHRAGM", k);
-        let (scale, offset) = (d("ROTATE_SCALE")?, d("ROTATE_OFFSET")? * 0.017453);
-        let diaphragm = if scale != 0.0 || offset != 0.0 { (filter.get_int("DIAPHRAGM", "TYPE")?, scale, offset) } else { (1, 1.0, 0.0) };
+        let diaphragm = diaphragm(filter)?;
         // GenerateGlare_Ghost 0x1404185b0 with the custom shape's halo, no distortion and no sharpness; a
         // concentric distortion of 0 picks the other program (no shipped filter does either)
         let ghost = if i("GHOST")? == 0 {
@@ -659,9 +821,6 @@ impl Glare {
 impl PostEffect {
     /// `filter` is `system/cfg/ppfilters/<[POST_PROCESS] FILTER>.ini`.
     pub fn new(filter: &IniReader, video: &IniReader, cam: &Camera) -> Result<PostEffect, String> {
-        if video.get_int("POST_PROCESS", "DOF").unwrap_or(0) != 0 {
-            return Err("yebis: [POST_PROCESS] DOF is on: not ported (Y6)".into());
-        }
         // CameraForwardYebis's constructor: glareEnabled = GLARE != 0, godraysEnabled = RAYS_OF_GOD != 0
         let shafts = video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
         let glare = match glare_quality(video) {
@@ -748,6 +907,15 @@ impl PostEffect {
             let b90 = -64000.0f32;
             [b8c, b90, 1.0 / b8c, -(b90 / b8c), b]
         };
+        // the depth of field on (Task Y6): the range is its factor store, the far end its focus
+        let dof = match (video.get_int("POST_PROCESS", "DOF").unwrap_or(0), cam.dof_focus) {
+            (q, Some(focus)) if q > 0 => Dof::new(filter, q, focus, near, far, cam.fov_deg * 0.017453)?,
+            _ => None,
+        };
+        if dof.is_some() && sun.is_some() {
+            return Err("yebis: the depth of field with the light shafts on screen: not ported".into());
+        }
+        let dof_range = dof.as_ref().map_or(range(near, far), Dof::depth);
         Ok(PostEffect {
             near,
             far,
@@ -774,8 +942,9 @@ impl PostEffect {
             ca_uniform: filter.get_float2("CHROMATIC_ABERRATION", "UNIFORM_DISPERSION")?,
             // measured (state dump of r23_09): the depth texture's cast for AC's float depth
             depth_cast: [1.0, 0.0, 1.0, -0.0],
-            depth: if sun.is_some() { range(far, near) } else { range(near, far) },
-            dof_depth: range(near, far),
+            depth: if sun.is_some() { range(far, near) } else { dof_range },
+            dof_depth: dof_range,
+            dof,
             sun,
         })
     }
@@ -1058,6 +1227,16 @@ impl Cbuffer {
         if let Some(g) = gamma {
             self.put(GAMMA, &[g]);
         }
+        self.upload(&used[t])
+    }
+
+    /// A depth of field composite (`DrawRectGPU_DepthOfFieldCompositeLevels*` 0x1403f2f20 / 0x1403f3210):
+    /// `CTextureUtil::SetEffectDepthOfFieldFactorScaleOffsetParameters` 0x1403f2df0 of the factor store's x and each
+    /// source's blend factor (the effect surface's (0, 0), then the levels').
+    pub fn dof_composite(&mut self, t: usize, x: f32, factors: &[[f32; 2]], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        self.put(DOF_SCALE_OFFSET, &[x, 1.0 - x, 1.0 / x, ((1.0 - x) * -1.0) / x]);
+        let f: Vec<f32> = factors.iter().flat_map(|&[a, b]| [a, b, 0.0, 0.0]).collect();
+        self.put(LEVEL_BLEND, &f);
         self.upload(&used[t])
     }
 
@@ -1517,7 +1696,7 @@ mod tests {
             None => IniReader::load(&path).unwrap(),
         };
         let video = IniReader::from_text(Path::new("video.ini"), "[POST_PROCESS]\nENABLED=1\nFILTER=default\nQUALITY=0\nGLARE=0\nDOF=0\n");
-        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668, chromatic_aberration: true, new_exposure: true, sun: None };
+        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668, chromatic_aberration: true, dof_focus: None, new_exposure: true, sun: None };
         let mut pe = PostEffect::new(&filter, &video, &cam).unwrap();
         // the logged frame is the second, after one auto exposure step from 1 to MAX
         pe.exposure = 0.5;

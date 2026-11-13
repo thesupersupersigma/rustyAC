@@ -6,6 +6,49 @@
   `wasm32-wasip1`); CI reads it.
 - **Step 0.2 done**: PP_QUALITY 5 with GLARE 5 IDENTICAL (rows `ry6_01`, `ry6_02` at 1127x633). Three
   causes, below. Next: step 1, the depth of field.
+- **Step 1 done (committed)**: YEBIS's depth of field, quality 1-4, as AC drives it: rows `ry6_03` to
+  `ry6_10` IDENTICAL (focus 2 / 5 / 8 / 40 m, F-numbers 12 / 4 / 2, with and without glare). The
+  scene camera carries `dof_factor` / `dof_focus` (+0x1b0 / +0x1b4); rustyac.exe writes them from the
+  track cameras, the F5/F6/F7 shot cameras and the photo app (its exposure multiplier too, into
+  `GraphicsManager`'s), and `--gui-do end` holds END for the photo app's focus pick.
+  `RENDER_ORACLE_DOF=<quality>[,<focus m>]` (render list key `DOF:`) sets video.ini DOF, `ppDof` and the
+  camera's `dofFactor` 1 / `dofFocus` on both sides. Details below ("Depth of field").
+- **Next**: the textures DOF on makes in the game's order (a resize with DOF: call log DIFFERENT in the
+  remake frame only, pixels IDENTICAL; see the `shortcut:` in `yebis.rs`), then the photo-mode GUI row,
+  a planted change, `run_all.sh --quick`, the screenshot and the release.
+- **VR**: never draws DOF: `YebisPP::updatePP` 0x14002c270 calls `SetDepthOfFieldEnable(false)` every
+  frame; only `CameraForwardYebis::setPostProcessing` 0x140025080 enables it.
+
+## Depth of field (step 1)
+
+- **Who turns it on**: `CameraForwardYebis::setPostProcessing` 0x140025080: with video.ini DOF > 0
+  (`ppDof`) and the camera's `dofFactor` (+0x1b0) not 0, `SetDepthOfFieldParameters` with the camera's
+  `dofFocus` (+0x1b4) and the filter's [DOF] keys. Chase and cockpit cameras leave the factor 0; the
+  track cameras, the shot cameras and photo mode set it. VR never draws it (`YebisPP::updatePP`
+  0x14002c270 calls `SetDepthOfFieldEnable(false)` every frame).
+- **What the port draws** (`yebis.rs` `dof`, `yebis_cb.rs` `Dof`), before each round's chromatic
+  aberration draw: the frame halved down to level 0 (`ApplyDepthOfField_Source` 0x1404282e0), a
+  resample into each drawn level's source when its size differs, per level the front blur blend
+  factor (`DepthOfField_FrontBlurBlendFactor`, levels before the near count, quality 2-4) and the
+  hexagon (`MadT1_S7`, `hexagon_taps`, one pass at level 0, more further down), then the composite
+  (`DepthOfField_CompositeBlurLevelsFrontBlur_USNORM_TS<far>_<near>` or, at quality 1,
+  `..._CompositeBlurredLevels_USNORM_T<n>`) into the other effect surface. The depth factor draw
+  takes the DOF's factor store. The diaphragm's DOF term: `GetDiaphragmRotateAngle` 0x1403bb140 adds it
+  only with a maximum aperture F-number, which AC never sets (the `shortcut:` is gone).
+- **Sampler modes**: textures keep the mode their last sampler gave them (`CTextureUtil::Resample`
+  0x1403f6710 keeps the address, the front blur factor puts its source's mode back, the composite
+  leaves the first surface point/clamp, the tone map gives its first texture its second's mode;
+  `RENDER_ORACLE_SAMPLER_LOG`). The port records each bound texture's mode (`modes`).
+- **Refused** (an error, no post-processing): quality 5 (its front layer), APERTURE_PARAMETER other
+  than 2, APERTURE_SHAPE other than 3, FRONT/BACK levels other than -1, EDGE_QUALITY other than 3 (no
+  shipped filter has them), a doubled level drawn (focus and window size; 1024x576 at quality 3), a
+  level of a glare halving's size (PP_QUALITY 5: the pool hands both the same texture), the light
+  shafts on screen, the heat shimmer.
+- Rows (`cmp.sh` runs in `re/scratch/taskY6`, then `render.sh`): `ry6_03` (quality 3, 5 m, F12),
+  `ry6_04` (3, 2 m, F2), `ry6_05` (2, 5 m, F4), `ry6_06` (1, 5 m, F4), `ry6_07` (4, 5 m, F4),
+  `ry6_08` (3, 40 m, F2), all 3 frames without glare; `ry6_09` (3, 5 m) and `ry6_10` (3, 8 m, F4),
+  40 frames with GLARE 3. The `rustyac_f4` / `rustyac_f2` test filters are default.ini with
+  APERTURE_F_NUMBER 4 / 2.
 
 ## Step 0.2: PP_QUALITY 5 with GLARE 5
 
@@ -46,8 +89,8 @@
 - **Step 4 done**: screenshot `re/scratch/taskY5d/shot/y5d_shafts.jpg` (see "Screenshot (step 4)").
 - **Step 5 done**: every glare row (41: `ry3e_02`..`05`, `ry5a`, `ry5b`, `ry5c`, `ry5d`) IDENTICAL;
   `run_all.sh --quick` 172/172 IDENTICAL, 0 ERROR, 0h46m. Released as v0.49.0.
-- **Next: Task Y5e**: PP_QUALITY 5 with GLARE 5 (the game skips the result-blur resample; cause not
-  found, see step 3), then the keys left for Y7 (list in step 3).
+- **Next: Task Y6** (above): PP_QUALITY 5 with GLARE 5 (done in Y6 step 0.2), then the depth of
+  field; the keys left for Y7 are listed in step 3.
 - Proof rows `ry5d_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright, default_dark,
   blue_steel, natural, photographic, movie, sepia, b&w; tape from 3590, 175 frames, GLARE 3,
   QUALITY 3, `RAYS:1`, a new `render.sh` key). `ry5d_01` is in the quick list.
@@ -176,11 +219,9 @@ Also IDENTICAL: the camera looking straight at the sun (`--view sun`, 2 frames).
   flare's draws), `[TONEMAPPING] FUNCTION` 0 and 3-8 (other tone map programs and constants), a
   library shape's ghost (`USE_CUSTOM_SHAPE=0` with `GHOST=1`: the library ghost definitions and
   programs), `STAR_LENGTH_FOV_DEPENDENCE` other than 0, the 3x3 bloom gaussian.
-- **New, for Y5e**: PP_QUALITY 5 with GLARE 5 (a real video.ini) differs in every frame: the game
-  draws no result-blur resample there (the composite, 640x360 at 1280x720, goes straight to the
-  tone map), though `GenerateGlare_Composite` 0x14041afb0 calls `Resample` whenever +0x32c > 0 and
-  the double target is made. Cause not found. GLARE 5 at PP_QUALITY 3 and GLARE 3 at PP_QUALITY 5
-  are IDENTICAL.
+- **Done in Task Y6 step 0.2**: PP_QUALITY 5 with GLARE 5 (a real video.ini) differed in every
+  frame: the game draws no result-blur resample there. Cause found and fixed in Y6 (no result blur
+  when the max width is at or below the glare's width); see "Step 0.2" at the top.
 
 # Task Y5c: the glare's ghost, and every shipped filter but vintage (no release)
 

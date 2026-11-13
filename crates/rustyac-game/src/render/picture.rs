@@ -115,6 +115,14 @@ impl Picture {
         }
     }
 
+    /// See [`AcRenderer::dof_and_exposure`] (the debug picture has neither).
+    pub fn dof_and_exposure(&mut self) -> Option<(&mut [f32; 2], &mut f32)> {
+        match self {
+            Picture::Ac(r) => Some(r.dof_and_exposure()),
+            Picture::Debug(_) => None,
+        }
+    }
+
     /// F3: see [`AcRenderer::set_track_look`].
     pub fn set_track_look(&mut self, frame: Option<&super::track_camera::TrackFrame>) {
         if let Picture::Ac(r) = self {

@@ -172,6 +172,8 @@ pub struct GameGui {
     was_replay: bool,
     /// `--gui-do flag:<name>`: flags shown whatever the referee says (for pictures and checks)
     forced_flags: [bool; 5],
+    /// `--gui-do end`: END held (the photo app's focus pick), for pictures.
+    pub end_held: bool,
     /// `Sim::pauseMenu`
     pub pause_menu: Id,
     /// `ACCameraManager::fadeMode` of a fade a menu asked for: `fadeTime`, `fadeTotalTime`
@@ -530,7 +532,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new(), #[cfg(windows)] python_camera: None, clear_color: None, drivable_dash: false, fade_color: [0.0; 3] })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], end_held: false, pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new(), #[cfg(windows)] python_camera: None, clear_color: None, drivable_dash: false, fade_color: [0.0; 3] })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -1454,6 +1456,12 @@ impl GameGui {
                 }
                 "screenshot" => self.take_screen(),
                 "tab" => self.tab_down(),
+                "end" => self.end_held = true,
+                "frame" => {
+                    // the commands after it wait for the next frame (for pictures: END's pick before F8)
+                    self.apps.after = commands[k + 1..].join(";");
+                    return Ok(());
+                }
                 "replay" => {
                     // (for pictures: the bar as a replay of 100 s, half way, would show it)
                     let link = &mut self.gui.sim.replay;
@@ -1497,7 +1505,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, pits, replay, tab, app)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, pits, replay, tab, end, frame, app)")),
             }
         }
         Ok(())

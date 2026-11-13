@@ -776,7 +776,7 @@ impl StereoCameraForward {
             // updatePPCameraValues 0x14002bcc0 and updatePP 0x14002c270 (no depth of field, no shimmer in VR)
             let c = &forward.base.camera;
             let v = self.eye_render_viewport[eye];
-            let camera = crate::yebis_cb::Camera { near: c.near_plane, far: c.far_plane, fov_deg: c.fov, width: v.w as u32, height: v.h as u32, exposure: c.exposure, exposure_multiplier: graphics.exposure_multiplier, dt, chromatic_aberration: false, new_exposure: eye == 0, sun: crate::post::godrays(&c.matrix, &self.proj_matrix, graphics) };
+            let camera = crate::yebis_cb::Camera { near: c.near_plane, far: c.far_plane, fov_deg: c.fov, width: v.w as u32, height: v.h as u32, exposure: c.exposure, exposure_multiplier: graphics.exposure_multiplier, dt, chromatic_aberration: false, dof_focus: None, new_exposure: eye == 0, sun: crate::post::godrays(&c.matrix, &self.proj_matrix, graphics) };
             let chain = self.eye_render_texture[eye].chain;
             let fxaa = self.fxaa_temp.get(eye);
             let (scene_srv, depth_srv) = match (&self.rt_yebis_resolved, &self.rt_yebis_resolved_depth, fxaa) {

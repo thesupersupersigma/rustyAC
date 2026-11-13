@@ -293,6 +293,7 @@ impl CameraForwardYebis {
                 exposure_multiplier: graphics.exposure_multiplier,
                 dt,
                 chromatic_aberration: true,
+                dof_focus: (camera.dof_factor != 0.0).then_some(camera.dof_focus),
                 new_exposure: true,
                 sun: godrays(&camera.matrix, &camera.get_perspective_matrix(graphics), graphics),
             };

@@ -211,3 +211,13 @@ ry5d_18 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 #    positions, the tone map's glare rectangle)
 ry6_01 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter default --frames 40 GLARE:5 PP_QUALITY:5 RAYS:1
 ry6_02 | --track spa --view chase --post --size 1127x633 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter default --frames 40 GLARE:5 PP_QUALITY:5 RAYS:1
+# -- Task Y6: YEBIS's depth of field (camera dofFactor 1 at the given focus; video.ini DOF quality), quality 1-4,
+#    F-numbers 12/4/2 (rustyac_f4/rustyac_f2 filters), near and far focus, with and without glare, an odd size
+ry6_03 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,5
+ry6_04 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f2 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,2
+ry6_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:2,5
+ry6_06 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:1,5
+ry6_07 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:4,5
+ry6_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f2 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,40
+ry6_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:3,5
+ry6_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:3,8

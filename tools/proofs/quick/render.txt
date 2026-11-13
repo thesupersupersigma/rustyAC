@@ -22,3 +22,6 @@ r43c_03
 # Task 45b: one layout the game makes gates for, one without gates
 overlays ct_backwoods
 overlays ks_drag/drag400
+# Task Y6: depth of field without and with glare
+ry6_03
+ry6_09

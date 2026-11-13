@@ -456,6 +456,10 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         camera.base.camera.fov = step.camera.fov;
         camera.base.camera.matrix = mat(&step.camera.matrix);
         camera.base.camera.near_plane = step.camera.near;
+        // RENDER_ORACLE_DOF's focus, as the game side writes the camera's dofFactor / dofFocus
+        if let Some(focus) = crate::root::pp_dof().1 {
+            (camera.base.camera.dof_factor, camera.base.camera.dof_focus) = (1.0, focus);
+        }
         if let Some(far) = step.camera.far {
             camera.base.camera.far_plane = far;
         }

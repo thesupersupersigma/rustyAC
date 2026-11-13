@@ -106,6 +106,13 @@ pub fn pp_quality() -> i32 {
 pub fn pp_glare() -> i32 {
     std::env::var("RENDER_ORACLE_GLARE").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
 }
+/// RENDER_ORACLE_DOF=<0..5>[,<focus m>]: `[POST_PROCESS] DOF`, and with a focus the game camera's
+/// dofFactor 1 / dofFocus, which turn it on (Task Y6)
+pub fn pp_dof() -> (i32, Option<f32>) {
+    let v = std::env::var("RENDER_ORACLE_DOF").unwrap_or_default();
+    let mut it = v.split(',');
+    (it.next().and_then(|q| q.parse().ok()).unwrap_or(0), it.next().and_then(|f| f.parse().ok()))
+}
 pub fn pp_rays() -> bool {
     std::env::var("RENDER_ORACLE_RAYS").is_ok_and(|v| v == "1")
 }
@@ -125,7 +132,7 @@ pub const HEAT_TEST: &str = "rustyac_heat_x100";
 /// Task Y5d: `rustyac_aeoff`, the default with auto exposure off (the glare without eye adaptation);
 /// `rustyac_star1` / `_star5` / `_star12`, other star streak counts (12 with half-length odd streaks);
 /// `rustyac_blur0` / `_blur05`, the glare's result blur off and halved.
-const TEST_FILTERS: [(&str, &[(&str, &str)]); 9] = [
+const TEST_FILTERS: [(&str, &[(&str, &str)]); 11] = [
     (HEAT_TEST, &[("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4")]),
     ("rustyac_bloom", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0"), ("SHAPE_STAR_LUMINANCE=0.025", "SHAPE_STAR_LUMINANCE=0")]),
     ("rustyac_star", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0")]),
@@ -135,6 +142,8 @@ const TEST_FILTERS: [(&str, &[(&str, &str)]); 9] = [
     ("rustyac_star12", &[("SHAPE_STAR_STREAKS_NUMBER=6", "SHAPE_STAR_STREAKS_NUMBER=12"), ("SHAPE_STAR_SECONDARY_LENGTH=1", "SHAPE_STAR_SECONDARY_LENGTH=0.5")]),
     ("rustyac_blur0", &[("\nBLUR=1", "\nBLUR=0")]),
     ("rustyac_blur05", &[("\nBLUR=1", "\nBLUR=0.5")]),
+    ("rustyac_f4", &[("APERTURE_F_NUMBER=12", "APERTURE_F_NUMBER=4")]),
+    ("rustyac_f2", &[("APERTURE_F_NUMBER=12", "APERTURE_F_NUMBER=2")]),
 ];
 
 pub fn video_ini(width: u32, height: u32) -> String {
@@ -179,7 +188,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         format!("QUALITY={}", pp_quality()),
         format!("FILTER={ppfilter}"),
         format!("GLARE={}", pp_glare()),
-        "DOF=0".into(),
+        format!("DOF={}", pp_dof().0),
         format!("RAYS_OF_GOD={}", pp_rays() as i32),
         format!("HEAT_SHIMMER={}", heat_shimmer() as i32),
         format!("FXAA={PP_FXAA}"),
