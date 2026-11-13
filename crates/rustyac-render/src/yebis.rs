@@ -329,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_BRIGHT_PLAIN, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_NO_GAMMA, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -1113,9 +1113,14 @@ mod device {
             let (_, gw, gh) = self.glare[2].clone();
             let e = exposure / pe.exposure_scale;
             let r = 1.0 / g.range;
-            let v = rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2), vignette_rect(fw as f32, fh as f32, self.vignette)]);
+            // GenerateGlare_Source_BrightPass 0x140415a60: the vignette program only with a vignette
+            let (t, v) = if self.vignette == 0.0 {
+                (T_BRIGHT_PLAIN, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2)]))
+            } else {
+                (T_BRIGHT, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2), vignette_rect(fw as f32, fh as f32, self.vignette)]))
+            };
             let sampler = if (cur.1, cur.2) == (gw, gh) { SB } else { SLB };
-            self.glare_draw(T_BRIGHT, 2, &[[0.0, 0.0]], &[[e, e, e, 1.0], [r, r, r, 1.0], [g.threshold; 4]], None, &[sampler], &[cur.0.clone()], Some(v))?;
+            self.glare_draw(t, 2, &[[0.0, 0.0]], &[[e, e, e, 1.0], [r, r, r, 1.0], [g.threshold; 4]], None, &[sampler], &[cur.0.clone()], Some(v))?;
             // GenerateGlare_Bloom 0x140416360: per level a gaussian of its radius (red, green and blue at their
             // wavelengths), the first at full size, the later ones from the level before
             let levels = self.glare_levels.clone();
@@ -1579,8 +1584,8 @@ mod device {
                 let src = if ca { e1.clone() } else { e0.clone() };
                 let glare = match pe.glare.clone() {
                     Some(g) => {
-                        if !ca || self.vignette == 0.0 || pe.auto_exposure.is_none() {
-                            return Err("yebis: the glare without chromatic aberration, vignette or auto exposure not ported (Y5b)".into());
+                        if !ca || pe.auto_exposure.is_none() {
+                            return Err("yebis: the glare without chromatic aberration or auto exposure not ported".into());
                         }
                         self.reset();
                         self.effect_of_eight();
@@ -1652,11 +1657,12 @@ mod device {
                 self.full_viewport();
                 let n = self.noise.next(true);
                 // DrawRectGPU_TonemapHDR 0x1403f1b10 drops the vignette program when its rectangle is zero
-                let (t3, t6) = match (self.vignette == 0.0, pe.tonemap == 1) {
-                    (false, false) => (3, 6),
-                    (true, false) => (11, 12),
-                    (false, true) => (T_LINEARSAT[1], 6),
-                    (true, true) => (T_LINEARSAT[2], 12),
+                let (t3, t6) = match (self.vignette == 0.0, pe.tonemap == 1, pe.gamma != 0.0 && pe.gamma != 1.0) {
+                    (false, false, true) => (3, 6),
+                    (true, false, true) => (11, 12),
+                    (false, true, true) => (T_LINEARSAT[1], 6),
+                    (true, true, true) => (T_LINEARSAT[2], 12),
+                    (v, l, false) => (T_NO_GAMMA[v as usize + 2 * l as usize], if v { 12 } else { 6 }),
                 };
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
                 if let Some(bloom) = &glare {

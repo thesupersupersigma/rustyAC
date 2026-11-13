@@ -29,8 +29,8 @@ use rustyac_physics::data::ini::IniReader;
 /// particles with 1-4 octaves (13-16), then the glare's bloom (17-27, Task Y5a: bright pass,
 /// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels), then
 /// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c),
-/// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`).
-pub const TECHNIQUES: [&str; 42] = [
+/// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46).
+pub const TECHNIQUES: [&str; 47] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -73,14 +73,24 @@ pub const TECHNIQUES: [&str; 42] = [
     "TonemapHDR_Exposure_LINEARSAT",
     "TonemapHDR_PreMatrix_Dither_Vignette_Gamma_LINEARSAT",
     "TonemapHDR_PreMatrix_Dither_Gamma_LINEARSAT",
+    "TonemapHDR_PreMatrix_Dither_Vignette",
+    "TonemapHDR_PreMatrix_Dither",
+    "TonemapHDR_PreMatrix_Dither_Vignette_LINEARSAT",
+    "TonemapHDR_PreMatrix_Dither_LINEARSAT",
+    "BrightPassT1_THRESHOLD_S1",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
 /// from a table by EHDRTONEMAP, and the container names PFXTM_LINEARSAT's `_LINEARSAT` (filmic's have no suffix).
 pub const T_LINEARSAT: [usize; 3] = [39, 40, 41];
+/// Draws 3 and 11 (then their LINEARSAT pair) with `[TONEMAPPING] GAMMA` 0 or 1: DrawRectGPU_TonemapHDR's
+/// gamma flag is `gamma != 0 && gamma != 1` (photographic).
+pub const T_NO_GAMMA: [usize; 4] = [42, 43, 44, 45];
 
 /// The glare's techniques by name (`TECHNIQUES` index).
 pub const T_BRIGHT: usize = 17;
+/// The bright pass with `[VIGNETTING] ENABLED=0` (natural): no vignette rectangle (DrawRectGPU_Effect_XY_TEX2D1).
+pub const T_BRIGHT_PLAIN: usize = 46;
 pub const T_GAUSS7: usize = 18;
 pub const T_GAUSS11: usize = 19;
 pub const T_UP: usize = 20;
@@ -851,7 +861,7 @@ impl Cbuffer {
             }
             1 | 5 => self.chromatic_aberration(pe),
             2 | 39 => self.tonemap(pe, filmic, false),
-            3 | 11 | 40 | 41 => self.tonemap(pe, filmic, true),
+            3 | 11 | 40..=45 => self.tonemap(pe, filmic, true),
             4 => self.depth_blur_factor(pe),
             6 | 12 => self.tonemap(&pe.round_two(), filmic, true),
             // EndPostEffectScene_Process 0x1403b84d0: the glare's share, GetEffectiveGlareLuminanceScale (1)
