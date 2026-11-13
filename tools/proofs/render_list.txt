@@ -195,3 +195,5 @@ ry5d_06 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry5d_07 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter movie --frames 175 GLARE:3 PP_QUALITY:3 RAYS:1
 ry5d_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter sepia --frames 175 GLARE:3 PP_QUALITY:3 RAYS:1
 ry5d_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter b&w --frames 175 GLARE:3 PP_QUALITY:3 RAYS:1
+# -- Task Y5d step 2: vintage, the library star (SunnyCross, eight lines, forced colour dispersion), BRIGHT_PASS=1 and a nine-tap bloom gaussian
+ry5d_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter vintage --frames 175 GLARE:3 PP_QUALITY:3 RAYS:1
