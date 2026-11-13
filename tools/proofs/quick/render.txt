@@ -15,6 +15,8 @@ r23_01
 r23_09
 # Task Y5c: one glare row (movie: bloom, star, ghost, sepia, LINEARSAT with auto exposure)
 ry5c_07
+# Task Y5d: one light-shaft row (default: the sun in and out of view)
+ry5d_01
 r43c_01
 r43c_03
 # Task 45b: one layout the game makes gates for, one without gates

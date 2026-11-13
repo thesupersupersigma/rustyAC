@@ -22,8 +22,8 @@ grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*
         "$RO" pose-of --tape "$tape" --tape-from "$frame" --pose "$pose" > /dev/null 2>&1 < /dev/null
         args=$(echo "$args" | sed "s#$p#$pose#")
     done
-    # Task Y5: RESIZE:<frame>:<W>x<H>, GLARE:<0-5>, PP_QUALITY:<0-5> -> RENDER_ORACLE_<KEY> (see render_list.txt)
-    for key in RESIZE GLARE PP_QUALITY; do
+    # Task Y5: RESIZE:<frame>:<W>x<H>, GLARE:<0-5>, PP_QUALITY:<0-5>, RAYS:1 (Y5d) -> RENDER_ORACLE_<KEY> (see render_list.txt)
+    for key in RESIZE GLARE PP_QUALITY RAYS; do
         v=$(echo "$args" | grep -oE "(^| )$key:[^ ]+" | tr -d ' ')
         if [ -n "$v" ]; then export RENDER_ORACLE_$key=${v#$key:}; args=$(echo "$args" | sed "s#$v##"); else unset RENDER_ORACLE_$key; fi
     done
