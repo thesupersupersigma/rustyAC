@@ -889,13 +889,19 @@ mod device {
                     glare.push((t.clone(), gw, gg));
                     keep(&mut kept, &mut glare_views, t, gw, gg);
                 }
-                // DOF on, the glare makes two more of its size (the call log shows only how many: never drawn here);
+                // DOF on, the glare makes two more of its size (the call log shows only how many);
                 // each is cleared alone before the bright pass's group
                 let mut dof_glare = Views::new();
                 for _ in 0..if dof_q > 0 { 2 } else { 0 } {
                     let t = target(device, ga, gh, f26.0, f26.1, true)?;
                     glare.push((t.clone(), ga, gh));
                     keep(&mut kept, &mut dof_glare, t, ga, gh);
+                }
+                if dof_q > 0 {
+                    // the bright pass draws into the two f26 ones (ry6_09), the R16G16B16A16 pair stays for DOF
+                    let n = glare.len();
+                    glare.swap(0, n - 2);
+                    glare.swap(1, n - 1);
                 }
                 // the ghost's trim circle (+0x2a0, CreateDeviceResources 0x140415520: only with the ghost's targets)
                 let trim = if ghost { Some(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?) } else { None };

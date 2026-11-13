@@ -18,9 +18,9 @@
   unseen because that value reaches no upload). The screenshot (step 4) is taken, below. The DOF
   rows ran through `render.sh` (`RENDER_ONLY`; it ran the overlay cases too: all IDENTICAL).
 - **Done, third session**: the textures DOF on makes, in the game's order (the `shortcut:` in `yebis.rs`
-  is gone). With DOF on: the glare's bright pass takes R16G16B16A16 for its first two targets and makes
-  two more of its size (glare `CreateSystemObjects` 0x140413c00, this[0xf4]), each cleared alone before
-  the bright pass's group; `CDepthOfField::CreateSystemObjects` 0x1404200a0 makes each level size's
+  is gone). With DOF on, the glare (`CreateSystemObjects` 0x140413c00, this[0xf4]) makes two R16G16B16A16
+  targets of its size first and two more f26 ones that the bright pass draws into instead (`ry6_09`
+  showed which), each f26 one is cleared alone and the R16G16B16A16 pair leads the bright pass's group; `CDepthOfField::CreateSystemObjects` 0x1404200a0 makes each level size's
   source once (its pool, this+0x468) and each level's result (+0xa0, at its double's size); every pool
   ask is R16G16B16A16, so `CRenderTexturePool::AllocateTextures` 0x140411900 makes one set per size for
   the glare's halvings, DOF's halvings and each level's work targets (min(2, passes - 1) + doubled +
