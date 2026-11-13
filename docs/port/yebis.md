@@ -1,3 +1,100 @@
+# Task Y5c: the glare's ghost, and every shipped filter but vintage (no release)
+
+## Resume here
+
+- **Y5c done**: the glare's ghost and every shipped ppfilter except vintage are ported and proven
+  IDENTICAL (call log and pixels) with `[POST_PROCESS] GLARE` on and light shafts off. No release:
+  that comes with Y5d (v0.49.0).
+- **Next: Task Y5d**: the light shafts (game draws 898-899, `RAYS_OF_GOD`), vintage (below), then
+  the release. Afterimage and anamorphic flare stay refused (no shipped filter turns them on).
+- Proof rows `ry5c_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright,
+  default_dark, blue_steel, natural, photographic, movie, sepia, b&w; 12 frames, GLARE 3, QUALITY 3).
+  `ry5c_07` (movie) replaced `ry5b_01` in the quick list (`retired.txt` says why).
+- `run_all.sh --quick`: 171 of 171 IDENTICAL in 13 areas, 0 errors, skips or vanished cases, render 15, 0h52m (`re/scratch/taskY5c/quick.log`). Clippy `-D warnings --all-targets` clean for rustyac-render, rustyac-game clean.
+
+## What the port does now (`crates/rustyac-render/src/yebis.rs` `ghost`, `yebis_cb.rs` `Ghost`, `ghost_passes`)
+
+All from the game's code, checked against its call logs:
+
+- **The ghost** (`GenerateGlare_Ghost` 0x1404185b0): two quad passes after the star,
+  `GlareGhost_PointSymmetryDistScaleT4_S8_TrimT1_S8` (three glare levels and the trim circle into
+  a middle target) then `GlareGhost_PointSymmetryT3_S8` (into the glare's result). Eight ghosts
+  each, centres, scales and colours from the library's ghost table, the diaphragm's turn
+  (shared with the star) and the game's xorshift; luminance
+  `range*0.035*glare_lum*(luminance/mapping_div)*((ghost_lum*0.05)*20)` in that machine order.
+  Unit test `ghost_passes_follow_the_game` holds the exact game values.
+- The ghost's two targets (+0x298) and the trim circle (+0x2a0) exist only with `GHOST` != 0
+  (`CreateSystemObjects` 0x140413c00, `CreateDeviceResources` 0x140415520); the start-up clear
+  groups follow (`ClearAllGPUResources` 0x14041c400).
+- **Colour matrix** in `YebisPP::updatePP` 0x14002c270's order: hue (`GPUMath_ColorMatrixHue`
+  0x1403af0a0), saturation, brightness, contrast, sepia (`GPUMath_ColorMatrixMonotone`
+  0x1403cdc40), COLOR_TEMP, WHITE_BALANCE.
+- **Tone map FUNCTION=1** (PFXTM_LINEARSAT, movie): the `_LINEARSAT` programs; with auto
+  exposure `HDRTMAP_DecodeTonemap` 0x1403dfde0 leaves ids 0/1 unchanged.
+- **GAMMA 0 or 1** (photographic): the tone map's programs without `_Gamma`
+  (`DrawRectGPU_TonemapHDR` 0x1403f1b10: the flag is `gamma != 0 && gamma != 1`).
+- **No vignette** (natural): the bright pass is `BrightPassT1_THRESHOLD_S1` with one texture
+  coordinate set (`GenerateGlare_Source_BrightPass` 0x140415a60).
+- `METERING_*` keys are read by nothing in acs.exe: no longer refused. FUNCTION=0 is refused.
+- The star's luminance is now `...*(0.04*star_lum)` (`GenerateGlare_StarStreaks` 0x140417570's
+  order); sepia's star was 1 ulp off before.
+- Game-side fix in `tools/render_oracle/src/ac.rs`: `PointSymmetryT3_S8` 0x1403fef10 uploads its
+  scalers' `.y` from uninitialised stack; the oracle zeroes the stack before it (see
+  `differences.md`, Repeatability).
+- `rustyac.exe`'s post-processing note and `--post` help no longer say "no glare".
+
+## Results
+
+| filter | row | frames | call log | pixels |
+|---|---|---|---|---|
+| default | ry5c_01 | 12 | IDENTICAL | IDENTICAL |
+| default_bright | ry5c_02 | 12 | IDENTICAL | IDENTICAL |
+| default_dark | ry5c_03 | 12 | IDENTICAL | IDENTICAL |
+| blue_steel | ry5c_04 | 12 | IDENTICAL | IDENTICAL |
+| natural | ry5c_05 | 12 | IDENTICAL | IDENTICAL |
+| photographic | ry5c_06 | 12 | IDENTICAL | IDENTICAL |
+| movie | ry5c_07 | 12 | IDENTICAL | IDENTICAL |
+| sepia (GHOST=0, FOV turn) | ry5c_08 | 12 | IDENTICAL | IDENTICAL |
+| b&w (FOV turn) | ry5c_09 | 12 | IDENTICAL | IDENTICAL |
+| vintage | - | - | refused | refused |
+
+Regression: `ry5a_01`, `ry5b_01` IDENTICAL after the last change.
+
+- **Planted change**: the ghost's second-pass colour 0.004 -> 0.0041 (`yebis_cb.rs`): command log
+  DIFFERENT (one word of `afRGBA_Modulate`, cbuffer +0xa04), pixels IDENTICAL (the ghost is below one 8-bit
+  step in that frame: the call log is what catches it). Reverted.
+- **Screenshot**: `re/scratch/taskY5c/shot/y5c_glare.jpg` (960x540, 113 KB), `rustyac.exe --track
+  spa --no-race-ini --autodrive --at 21.6 --sun 70 --no-hud --video-ini
+  re/scratch/taskY5c/video_glare.ini` (the user's video.ini with ENABLED=1 GLARE=3 QUALITY=3,
+  default filter). Against GLARE=0, 22,741 pixels differ by up to 37. At the default sun
+  (`--at 21.6`, no `--sun`) the two pictures are byte-identical: the glare draws (71 calls on its
+  192x108 targets) but THRESHOLD 15 lets nothing through in that daylight frame.
+
+## What Y5d needs
+
+- **Vintage** (refused: `[GLARE] BRIGHT_PASS other than 0 not ported`): a library-shape star
+  (`USE_CUSTOM_SHAPE=0`) needs `GenerateGlare_StarStreaks`' colour-dispersion path. Its bright pass
+  (BRIGHT_PASS=1) is known but unproven: `SetGlareParameters` 0x1403c2640 stores the mode at
+  CPostEffect+0xb10 and remap +0xb14 (AC passes 1.0); `EndPostEffectScene` maps it through
+  {0->1, 1->3} (EFX_BRIGHTPASSTYPE); `GenerateGlare_Source_BrightPass` turns type 3 with remap 1.0
+  into type 2 (`..._THRESHOLD_LUMINANCE_S1`, same cbuffer as type 1), and threshold 0 into type 0.
+  Type 3 would add `fParam_BrightPassRemapFactor` (c209: 4/r^2-2, 1, 1/r^2, r^2/2). Vintage also has
+  HUE 20, SATURATION 9, WHITE_BALANCE 4500, FUNCTION=1, GHOST=0.
+- Light shafts: draws 898-899.
+
+## Not done
+
+- Vintage (above); afterimage and anamorphic flare (no shipped filter); FUNCTION 0 and 3-8.
+- The ghost's second pass's first source size is assumed to be the glare's size (code comment).
+- Library-shape ghosts, `SHAPE_GHOST_DISTORTION` / `SHARPENESS` != 0 and
+  `GHOST_CONCENTRIC_DISTORTION=0` are refused (no shipped filter uses them).
+
+## Open questions
+
+- Glare with no chromatic aberration (VR) or no auto exposure stays refused; no shipped filter
+  turns them off with the glare on, but VR + glare is untested.
+- Streak counts other than 6 and the diaphragm DOF aperture term (Y5b) are still untested.
+
 # Task Y5b: the glare's star streaks (no release)
 
 ## Resume here
