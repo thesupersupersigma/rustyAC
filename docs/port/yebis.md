@@ -9,7 +9,8 @@
 - **Step 3 done**: the glare and light shafts in VR, the glare without eye adaptation, star streak
   counts 1, 5 and 12, and `BLUR` are ported and IDENTICAL (rows `ry5d_11`..`18`); the ghost's
   second pass reads its own source's rectangle now. See "Refused glare cases (step 3)".
-- **Next: step 4** (screenshot), then step 5 (every glare row, `run_all.sh --quick`, release v0.49.0).
+- **Step 4 done**: screenshot `re/scratch/taskY5d/shot/y5d_shafts.jpg` (see "Screenshot (step 4)").
+- **Next: step 5**: every glare row, `run_all.sh --quick`, release v0.49.0.
 - Proof rows `ry5d_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright, default_dark,
   blue_steel, natural, photographic, movie, sepia, b&w; tape from 3590, 175 frames, GLARE 3,
   QUALITY 3, `RAYS:1`, a new `render.sh` key). `ry5d_01` is in the quick list.
@@ -85,6 +86,16 @@ Also IDENTICAL: the camera looking straight at the sun (`--view sun`, 2 frames).
 - `STAR_LENGTH_FOV_DEPENDENCE` other than 0 still refuses, now for library shapes too.
 - Planted change (the dispersion factor 1.5 -> 1.51): caught, 48 call-log lines and 17 pixels in
   every frame of a 4-frame run.
+
+## Screenshot (step 4)
+
+- `re/scratch/taskY5d/shot/y5d_shafts.jpg` (960x540, 118 KB), from `rustyac.exe --track spa
+  --no-race-ini --autodrive --at 55 --sun 70 --no-hud --video-ini
+  re/scratch/taskY5d/shot/video_shafts.ini --screenshot` (the user's video.ini at 1280x720 with
+  ENABLED=1 GLARE=3 QUALITY=3 RAYS_OF_GOD=1, default filter). The sun (`--sun 70`: SUN_ANGLE 70,
+  low in the sky) is just above the horizon ahead and left of the car, 55 s into the autodriven lap.
+- Against the same shot with RAYS_OF_GOD=0, 837,931 pixels differ by up to 61; a second shafts
+  shot is byte-identical to the first. At the default sun the sun is too high for the chase camera.
 
 ## Refused glare cases (step 3)
 
