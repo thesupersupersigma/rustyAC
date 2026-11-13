@@ -5,13 +5,10 @@
 - **Step 1 done**: the light shafts (`[POST_PROCESS] RAYS_OF_GOD=1`, the ppfilter's `[GODRAYS]`)
   are ported and proven IDENTICAL (call log and pixels) with every shipped filter but vintage, the
   glare on, over a chase run where the sun comes into view at frame 10 and leaves it at frame 167.
-- **Next: step 2, vintage.** The library-shape star with its colour dispersion and `BRIGHT_PASS=1`
-  are written (kept out of the step 1 commits, in `re/scratch/taskY5d/patch5.py` / `patch6.py`).
-  Vintage also needs the general gaussian path of `GaussianFilterMax29x29_2Pass` 0x14040a560: its
-  bloom radius 1.045 takes 9 taps (`MadT1_Sn` with `GetColorWeight15_Gauss15` weights), and only
-  the 7x7 and 11x11 programs are ported. About 150 lines.
-- Then step 3 (refused glare cases), step 4 (screenshot), step 5 (every glare row, `run_all.sh --quick`,
-  release v0.49.0).
+- **Step 2 done**: vintage IDENTICAL (row `ry5d_10`, same run, light shafts on).
+- **Next: step 3**, the refused glare cases (glare without chromatic aberration / in VR, without eye
+  adaptation, star counts other than 6, the ghost's second-pass source size, and the small keys);
+  then step 4 (screenshot), step 5 (every glare row, `run_all.sh --quick`, release v0.49.0).
 - Proof rows `ry5d_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright, default_dark,
   blue_steel, natural, photographic, movie, sepia, b&w; tape from 3590, 175 frames, GLARE 3,
   QUALITY 3, `RAYS:1`, a new `render.sh` key). `ry5d_01` is in the quick list.
@@ -64,9 +61,29 @@ All from the game's code, checked against its call logs:
 | movie | ry5d_07 | 175 | IDENTICAL | IDENTICAL |
 | sepia | ry5d_08 | 175 | IDENTICAL | IDENTICAL |
 | b&w | ry5d_09 | 175 | IDENTICAL | IDENTICAL |
-| vintage | - | - | refused | refused |
+| vintage | ry5d_10 | 175 | IDENTICAL | IDENTICAL |
 
 Also IDENTICAL: the camera looking straight at the sun (`--view sun`, 2 frames).
+
+## Vintage (step 2)
+
+- **The library star** (`USE_CUSTOM_SHAPE=0`, SHAPE 11): `setPostProcessing` hands YEBIS the library
+  glare definition, whose star is the STARDEF table's SunnyCross (8 lines, length 2.4, secondary 1.3,
+  at 0x141521bb0) with a dispersion of -1 (`CGlareDef::Initialize` 0x140412bf0: |p| >= 1 forces
+  the dispersion, stored times 0.36). `GenerateGlare_StarStreaks` 0x140417570 then colours pass p
+  with row 7-p of a table made from `ms_avDispersionColor` (`ms_avDiffractionColor` for a positive
+  dispersion), and, forced, takes one pass fewer, spreads the taps of its last pass 1.5 times wider
+  at the first pass's direction and colours them with the table's own colours.
+  `Star::colours` and the `force` branches in `star()`.
+- **`BRIGHT_PASS=1`**: EFX_BRIGHTPASSTYPE 3, which `GenerateGlare_Source_BrightPass` 0x140415a60 turns
+  into 2 with AC's remap of 1: the `..._THRESHOLD_LUMINANCE_S1` programs, the same constants.
+- **A nine-tap bloom gaussian**: vintage's first bloom level (radius 1.045, cutoff 0.0002) is past
+  the 7x7 and 11x11 filters, so `GaussianFilterMax29x29_2Pass` 0x14040a560 draws it with its own
+  `MadT1_Sn` path: 2n-1 taps (15 at most) of `GetColorWeight15_Gauss15` 0x1403ad710's weights.
+  `gauss_taps` gives 5, 9, 13 or 15 there now (unit test: 1.045 -> 9); the 3x3 still refuses.
+- `STAR_LENGTH_FOV_DEPENDENCE` other than 0 still refuses, now for library shapes too.
+- Planted change (the dispersion factor 1.5 -> 1.51): caught, 48 call-log lines and 17 pixels in
+  every frame of a 4-frame run.
 
 # Task Y5c: the glare's ghost, and every shipped filter but vintage (no release)
 
