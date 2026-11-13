@@ -238,7 +238,7 @@ pub fn draw_vertices(d: usize, w: f32, h: f32, noise: [f32; 4], vignette: f32, r
             rect_vertices([w, (h * 0.2).trunc()], [0.0, y - y.trunc(), w, h * 0.2], &[[0.0, v, 1.0, v + 0.2], zero, zero, noise_rect(0.0, 0.0), zero])
         }
         // DrawRectGPU_TonemapHDR 0x1403f1b10: vignette, noise and the 4x4 dither
-        3 | 6 => tonemap_vertices(w, h, noise_rect(1.0, w / h), vignette, false),
+        3 | 6 => tonemap_vertices(w, h, noise_rect(1.0, w / h), vignette, [0.0; 4]),
         7 => rect_vertices([w, h], [0.0, 0.0, w, h], &[full, zero, zero, zero]),
         _ => rect_vertices([w, h], [0.0, 0.0, w, h], &[full]),
     }
@@ -272,9 +272,9 @@ pub fn vignette_rect(w: f32, h: f32, vignette: f32) -> [f32; 4] {
 
 /// The tone map's vertices: the whole source, the glare's coordinates (the whole glare texture
 /// when it is on, `DrawRectGPU_TonemapHDR` 0x1403f1b10), the vignette, the noise, the 4x4 dither.
-pub fn tonemap_vertices(w: f32, h: f32, noise: [f32; 4], vignette: f32, glare: bool) -> Vec<f32> {
-    let (full, zero) = ([0.0, 0.0, 1.0, 1.0], [0.0; 4]);
-    rect_vertices([w, h], [0.0, 0.0, w, h], &[full, if glare { full } else { zero }, vignette_rect(w, h, vignette), noise, [0.0, 0.0, w / 4.0, h / 4.0]])
+/// `glare`: the glare result's rectangle (`src_rect`), zero without the glare.
+pub fn tonemap_vertices(w: f32, h: f32, noise: [f32; 4], vignette: f32, glare: [f32; 4]) -> Vec<f32> {
+    rect_vertices([w, h], [0.0, 0.0, w, h], &[[0.0, 0.0, 1.0, 1.0], glare, vignette_rect(w, h, vignette), noise, [0.0, 0.0, w / 4.0, h / 4.0]])
 }
 
 /// The shared vertex buffer ring's bookkeeping: which buffer and offset a draw of `size` bytes
@@ -820,7 +820,9 @@ mod device {
                 let mut glare: Vec<(Target, u32, u32)> = Vec::new();
                 let mut glare_views = Views::new();
                 // (the double, +0x2d0, only with a result blur: CreateSystemObjects 0x140413c00; Task Y5d)
-                let blur = filter.get_float("GLARE", "BLUR").unwrap_or(1.0) > 0.0;
+                // GLAREPARAM::FillDefaults 0x1404131e0 also turns it off when the max width (half the frame) is not
+                // above the glare's, i.e. when the double would be no wider (PP_QUALITY 5 with GLARE 5; Task Y6)
+                let blur = filter.get_float("GLARE", "BLUR").unwrap_or(1.0) > 0.0 && dw > ga;
                 for (i, &(gw, gg)) in sizes.iter().enumerate() {
                     if i == 4 && !blur {
                         glare.push(glare[3].clone());
@@ -1105,7 +1107,7 @@ mod device {
         /// The glare's bloom (`CRenderGlare::GenerateGlare` 0x14041d470 with no star, ghost, afterimage or
         /// light shafts): the frame halved to the glare size, its bright pass, each level's two-pass
         /// gaussian, the levels summed and the result doubled; returns the double the tone map reads.
-        unsafe fn bloom(&mut self, pe: &PostEffect, g: &Glare, exposure: f32, frame: Option<ID3D11ShaderResourceView>) -> Result<Option<ID3D11ShaderResourceView>, String> {
+        unsafe fn bloom(&mut self, pe: &PostEffect, g: &Glare, exposure: f32, frame: Option<ID3D11ShaderResourceView>) -> Result<(Option<ID3D11ShaderResourceView>, u32, u32), String> {
             let srv = |t: &Target| t.srv.clone();
             let (fw, fh) = (self.width as u32, self.height as u32);
             // GenerateGlare_Source 0x1404160f0: halvings while the pool's next texture is narrower; Resample keeps
@@ -1142,7 +1144,8 @@ mod device {
             } else {
                 (with, rect_vertices([gw as f32, gh as f32], [0.0, 0.0, gw as f32, gh as f32], &[src_rect(cur.1, cur.2), vignette_rect(fw as f32, fh as f32, self.vignette)]))
             };
-            let sampler = if (cur.1, cur.2) == (gw, gh) { SB } else { SLB };
+            // (without a halving it reads the frame itself, at the frame's address: PP_QUALITY 5 with GLARE 5)
+            let sampler = if (cur.1, cur.2) == (gw, gh) { SB } else { sampler };
             self.glare_draw(t, 2, &[[0.0, 0.0]], &[[e, e, e, 1.0], [r, r, r, 1.0], [g.threshold; 4]], None, &[sampler], &[cur.0.clone()], Some(v))?;
             // GenerateGlare_Bloom 0x140416360: per level a gaussian of its radius (red, green and blue at their
             // wavelengths), the first at full size, the later ones from the level before
@@ -1227,11 +1230,13 @@ mod device {
                 }
             }
             self.mad(3, &parts, &vec![[1.0; 4]; parts.len()])?;
-            if g.blur <= 0.0 {
-                return Ok(srv(&self.glare[3].0));
+            // (a double no wider than the glare: FillDefaults' blur off, see the creation)
+            if g.blur <= 0.0 || self.glare[4].1 <= gw {
+                return Ok((srv(&self.glare[3].0), gw, gh));
             }
             self.resample((srv(&self.glare[3].0), gw, gh), 4, g.blur.min(1.0) * 0.5)?;
-            Ok(srv(&self.glare[4].0))
+            let (t, dw, dh) = self.glare[4].clone();
+            Ok((srv(&t), dw, dh))
         }
 
         /// `CTextureUtil::MadTn` 0x140400be0 of glare targets `from` into `to`: the first one's rectangle, each read
@@ -1410,7 +1415,11 @@ mod device {
                 self.target_only(&target.rtv);
                 self.viewport(0.0, 0.0, tw as f32, th as f32);
                 let up = self.cbuffer.ghost(t, &pass.centres, &pass.p32, &pass.scaler, &pass.colours, &self.used);
-                let quad = [-1.0, 1.0, 0.0, v, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, u, v, 1.0, -1.0, u, 0.0];
+                // DrawRectGPU_GetVerticesAndTexCoords 0x1403e5ce0's positions: (x - size/2) * (2/size), not 1 in f32
+                // at some odd sizes (564 wide: 0.99999994)
+                let (hw, hh2, sx, sy) = (-(tw as f32) * 0.5, -(th as f32) * 0.5, 2.0 / tw as f32, 2.0 / th as f32);
+                let (x0, x1, y0, y1) = (hw * sx, (hw + tw as f32) * sx, hh2 * sy, (hh2 + th as f32) * sy);
+                let quad = [x0, y1, 0.0, v, x0, y0, 0.0, 0.0, x1, y1, u, v, x1, y0, u, 0.0];
                 self.draw(t, &up, &vec![SLBM; srvs.len()], &srvs, &quad)?;
             }
             Ok(dst)
@@ -1854,8 +1863,8 @@ mod device {
                     (v, l, false) => (T_NO_GAMMA[v as usize + 2 * l as usize], if v { 12 } else { 6 }),
                 };
                 let u = self.cbuffer.draw(t3, &pe, &self.filmic, &self.used);
-                if let Some(bloom) = &glare {
-                    let v = tonemap_vertices(w, h, noise_rect(n, 1.0, w / h), self.vignette, true);
+                if let Some((bloom, bw, bh)) = &glare {
+                    let v = tonemap_vertices(w, h, noise_rect(n, 1.0, w / h), self.vignette, src_rect(*bw, *bh));
                     self.draw(t3, &u, &[SP, SL, SP, SW], &[src.clone(), bloom.clone(), grey.clone(), dither.clone()], &v)?;
                 } else {
                     self.draw(t3, &u, &[SP, SP, SP, SW], &[src.clone(), black.clone(), grey.clone(), dither.clone()], &draw_vertices(3, w, h, n, self.vignette, 0))?;
@@ -1900,7 +1909,7 @@ mod device {
                 self.full_viewport();
                 let u = self.cbuffer.draw(7, &pe, &self.filmic, &self.used);
                 match glare {
-                    Some(bloom) => self.draw(7, &u, &[SP, SP, SP, SP, SL, SP], &[t0, black, white.clone(), t1, bloom, white], &plain(7))?,
+                    Some((bloom, _, _)) => self.draw(7, &u, &[SP, SP, SP, SP, SL, SP], &[t0, black, white.clone(), t1, bloom, white], &plain(7))?,
                     None => self.draw(7, &u, &[SP; 6], &[t0, black.clone(), white.clone(), t1, black, white], &plain(7))?,
                 }
                 // (the shader reset after this is the caller's resetYebisStates)

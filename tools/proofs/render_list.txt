@@ -206,3 +206,8 @@ ry5d_15 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry5d_16 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_star12 --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1
 ry5d_17 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_blur0 --frames 20 GLARE:3 PP_QUALITY:3 RAYS:1
 ry5d_18 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter rustyac_blur05 --frames 20 GLARE:3 PP_QUALITY:3 RAYS:1
+# -- Task Y6 step 0.2: PP_QUALITY 5 with GLARE 5 (no result blur: the double is no wider than the glare; the bright pass
+#    reads the frame itself) and an odd size where w*(1/w) is not 1 (the ghost's second-pass rectangle, the quad's
+#    positions, the tone map's glare rectangle)
+ry6_01 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter default --frames 40 GLARE:5 PP_QUALITY:5 RAYS:1
+ry6_02 | --track spa --view chase --post --size 1127x633 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 3590 --ppfilter default --frames 40 GLARE:5 PP_QUALITY:5 RAYS:1
