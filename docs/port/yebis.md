@@ -1,3 +1,73 @@
+# Task Y5d: YEBIS's light shafts (in progress, no release yet)
+
+## Resume here
+
+- **Step 1 done**: the light shafts (`[POST_PROCESS] RAYS_OF_GOD=1`, the ppfilter's `[GODRAYS]`)
+  are ported and proven IDENTICAL (call log and pixels) with every shipped filter but vintage, the
+  glare on, over a chase run where the sun comes into view at frame 10 and leaves it at frame 167.
+- **Next: step 2, vintage.** The library-shape star with its colour dispersion and `BRIGHT_PASS=1`
+  are written (kept out of the step 1 commits, in `re/scratch/taskY5d/patch5.py` / `patch6.py`).
+  Vintage also needs the general gaussian path of `GaussianFilterMax29x29_2Pass` 0x14040a560: its
+  bloom radius 1.045 takes 9 taps (`MadT1_Sn` with `GetColorWeight15_Gauss15` weights), and only
+  the 7x7 and 11x11 programs are ported. About 150 lines.
+- Then step 3 (refused glare cases), step 4 (screenshot), step 5 (every glare row, `run_all.sh --quick`,
+  release v0.49.0).
+- Proof rows `ry5d_01`..`09` in `tools/proofs/render_list.txt` (default, default_bright, default_dark,
+  blue_steel, natural, photographic, movie, sepia, b&w; tape from 3590, 175 frames, GLARE 3,
+  QUALITY 3, `RAYS:1`, a new `render.sh` key). `ry5d_01` is in the quick list.
+
+## What the port does now (`yebis.rs` `shafts`, `yebis_cb.rs` `Shafts`, `post.rs` `godrays`)
+
+All from the game's code, checked against its call logs:
+
+- **Where the sun is** (`CameraForwardYebis::updateYebisParameters` 0x140029e30): the sun's colour
+  between its low and high colours by its height, normalised; the shafts are on only when the sun is
+  in front of the camera (the dot product of the camera's forward axis and the light, not a frustum
+  test); its screen position through `createLookAt` and the camera's projection.
+  `setPostProcessing` 0x140025080 hands it to YEBIS with the `[GODRAYS]` keys.
+- **When they draw** (`UpdateParameters_EffectiveLightShaftEnable` 0x1403ba270, CPostEffect+0x9ac):
+  shafts on, no depth of field, the glare's LUMINANCE above 0, a colour above 0.
+- **The depth range turns round** with them on (`UpdateParameters_DepthOfFieldOpticalParameters`
+  0x1403b92f0: AC never calls `SetDepthFactorRange`, so the range the shafts force is far to near);
+  the depth-of-field blur factor draw keeps CDepthOfField's own near-to-far range.
+- **The mask** (`CTextureUtil::LightShaftMask` 0x140401d90, `DrawRectGPU_LightShaftMask` 0x1403f5460):
+  bright pass, depth threshold and noise into a 128x64 (quality 3) target, the sun's rectangle
+  from ANGLE_ATTENUATION and the FOV.
+- **The radial passes** (`GenerateGlare_LightShaft` 0x14041a5d0): `TexCoordMadT1_S1..S4`, each four
+  times longer, the pass count from LENGTH and `GetLightShaftRadiusScale` (the star radius with its FOV
+  term), the weights from the game's **vector** `powf` (`__vdecl_powf4` -> `__sse2_powf4`
+  0x140450650), which is not the scalar one: photographic and movie were 1 ulp off with
+  MSVCR120's `powf`. `rustyac_math::powf4_half` is that function for a base of 0.5 (the only use),
+  with its 2^(j/2048) table copied bit for bit (`powf4_table.rs`); unit test
+  `powf4_half_matches_the_game`. The last pass is coloured and scaled by
+  `GetLightShaftCompositeLuminanceScale` 0x14041bdf0 times 4.
+- **The diffraction ring** (`Corona`, `DrawRectGPU_Corona`) when DIFFRACTION_RING != 0, then the
+  composite gains a fourth input (`MadT4`).
+- New targets: the mask and the ring's result after the star and ghost group, the glare's first
+  and third targets in the mask's format.
+- Game-side fix in `tools/render_oracle/src/ac.rs`: the oracle never wrote video settings'
+  `ppRaysOfGod` (+0x3b), so the game never turned the shafts on whatever video.ini said.
+- `rustyac.exe`'s post-processing note and `--post` help say the light shafts are drawn.
+- Planted change (the mask's noise scale 256 -> 257): caught in the call log in frames 10 to 19
+  of a 20-frame run, exactly the frames with the sun in view.
+
+## Results
+
+| filter | row | frames | call log | pixels |
+|---|---|---|---|---|
+| default | ry5d_01 | 175 | IDENTICAL | IDENTICAL |
+| default_bright | ry5d_02 | 175 | IDENTICAL | IDENTICAL |
+| default_dark | ry5d_03 | 175 | IDENTICAL | IDENTICAL |
+| blue_steel | ry5d_04 | 175 | IDENTICAL | IDENTICAL |
+| natural | ry5d_05 | 175 | IDENTICAL | IDENTICAL |
+| photographic | ry5d_06 | 175 | IDENTICAL | IDENTICAL |
+| movie | ry5d_07 | 175 | IDENTICAL | IDENTICAL |
+| sepia | ry5d_08 | 175 | IDENTICAL | IDENTICAL |
+| b&w | ry5d_09 | 175 | IDENTICAL | IDENTICAL |
+| vintage | - | - | refused | refused |
+
+Also IDENTICAL: the camera looking straight at the sun (`--view sun`, 2 frames).
+
 # Task Y5c: the glare's ghost, and every shipped filter but vintage (no release)
 
 ## Resume here
