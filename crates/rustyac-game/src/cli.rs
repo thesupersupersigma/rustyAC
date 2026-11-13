@@ -824,9 +824,9 @@ for checks, without anybody at the controls:
                         settings say. With more than one, alpha to coverage has steps to work
                         with and the dots on trees, fences and crowds go
   --post <0|1>          the post-processing frame ([POST_PROCESS] ENABLED) whatever the video
-                        settings say: the scene goes through a 16-bit target as in the game. YEBIS
-                        itself (filter, tone mapping, glare, depth of field) is not there yet, so
-                        the picture is the plain one plus what the two options below add
+                        settings say: the scene goes through a 16-bit target and YEBIS as in the
+                        game (filter, tone mapping, eye adaptation, glare; no depth of field or
+                        light shafts yet)
   --fxaa <0|1>          AC's FXAA pass ([POST_PROCESS] FXAA); 1 switches the post-processing frame
                         on too (acs.exe has FXAA nowhere else)
   --motion-blur <n>     AC's motion blur ([EFFECTS] MOTION_BLUR, 0 to 12); above 0 it switches the
