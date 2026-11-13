@@ -28,6 +28,10 @@
   pool are not made. `ClearAllGPUResources` 0x14042b930 clears DOF's pool sizes, halvings and results;
   the teardown releases what was made. Resize rows `ry6_11` (quality 3) and `ry6_12` (quality 4)
   IDENTICAL, quality 1 and 2 also checked by hand (6 frames, IDENTICAL).
+- **Proof run**: `run_all.sh --quick` 173/174 IDENTICAL, 0 ERROR, 0h46m: `ry6_09` DIFFERENT (the
+  bright pass drew into the R16G16B16A16 pair; fixed, above); then the render area again 18/18 and
+  every `ry6` row 12/12 IDENTICAL. Clippy clean on native, both wasm targets and wgpu (render_oracle's
+  42 old errors unchanged). Released as v0.49.1.
 - **The game fails a resize with DOF and glare** (GLARE 3, DOF 3, 1280x720 to 1600x900 or 1024x576):
   the ac side's frame comes back at the old size ("wrong data size, expected 5760000 got 3686400"), so
   that case has no row; for Task Y7 with the pool allocator.
