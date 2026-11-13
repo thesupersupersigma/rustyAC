@@ -1,3 +1,37 @@
+# Task Y6: PP_QUALITY 5 with GLARE 5, a pinned toolchain, then depth of field (v0.49.1)
+
+## Resume here
+
+- **Step 0.1 done**: `rust-toolchain.toml` pins Rust 1.97.0 (clippy, rustfmt, `wasm32-unknown-unknown`,
+  `wasm32-wasip1`); CI reads it.
+- **Step 0.2 done**: PP_QUALITY 5 with GLARE 5 IDENTICAL (rows `ry6_01`, `ry6_02` at 1127x633). Three
+  causes, below. Next: step 1, the depth of field.
+
+## Step 0.2: PP_QUALITY 5 with GLARE 5
+
+- **No result blur** (`GLAREPARAM::FillDefaults` 0x1404131e0, the first call of
+  `CRenderGlare::CreateSystemObjects` 0x140413c00): the max width (+0x1c; AC passes 0, so half the
+  frame) at or below the glare's width (+0xc) sets the result blur (+0x18) to 0, so the double
+  (+0x2d0) is never made and the composite's resample never runs. Only PP_QUALITY 5 with GLARE 5
+  gets there (glare 640 at 1280: 640 <= 640). Seen at run time with temporary hooks on
+  `CRenderGlare::Initialize` 0x14041c290 (blur 1 handed in) and `GenerateGlare_Composite` 0x14041afb0
+  (+0xb4 = 0, +0x32c = 0, +0x2d0 null). The port: `blur` off when `dw <= ga`, and the composite
+  returns the glare target when the double is no wider.
+- **The bright pass's sampler**: there the glare is more than half the frame, so
+  `GenerateGlare_Source` 0x1404160f0 makes no halving and the bright pass reads the frame itself,
+  at the frame's address mode (clamp after a tone map), not border (`RENDER_ORACLE_SAMPLER_LOG`: no
+  `Resample` from 0x14041623a at GLARE 5). The port keeps the frame's sampler when no halving ran.
+- **Odd sizes** (row `ry6_02`, 1127x633: glare 564x317, levels 282x159, 141x80, 71x40; 1279x719 has
+  every size exact in f32 and proves nothing): `w * (1/w)` is 0.99999994 for 282 and 564, which
+  shows in three places, all now as the game does them:
+  - the ghost's second pass's centre from its own source (Y5d's port, unproven until now: planted
+    back to the first pass's rectangle, call log DIFFERENT, centres 0.5 / 0.49999997);
+  - the ghost's quad positions: `DrawRectGPU_GetVerticesAndTexCoords` 0x1403e5ce0's
+    `(x - size/2) * (2/size)`, so 0.99999994 at 564 wide (the port had a fixed +-1);
+  - the tone map's glare texture rectangle: the glare result's `src_rect`, not 0..1.
+- Checks: `cmp.sh`-style runs in `re/scratch/taskY5d` (`gh_g5`, 12 frames from 480: IDENTICAL;
+  `y6_g5`, `y6_odd`: 40 frames from 3590), then every `--post` row (see the proof run below).
+
 # Task Y5d: YEBIS's light shafts, vintage and the refused glare cases (v0.49.0)
 
 ## Resume here
