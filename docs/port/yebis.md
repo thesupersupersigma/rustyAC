@@ -1,3 +1,45 @@
+# Task Y7: YEBIS for every video setting (stopped before step 1, no release)
+
+## Resume here
+
+- **Stopped before step 1 (rule 32): the task is several times the 1.5-2 sessions its prompt gives.**
+  Nothing in the port changed. Estimate, from the game's code and one game-side run:
+
+  | Step | Work | Estimate |
+  |---|---|---|
+  | 1 DOF quality 5 | the front layer: 3 new `CTextureUtil` draws with their cbuffers (below), a front-layer hexagon pass, the masked composite, the level's +0x48 / +0x50 textures in the game's creation / clear / teardown order (`CreateSystemObjects` 0x1404200a0 is 1302 lines, 35 front-layer references) | 1-1.5 sessions |
+  | 1 doubled level | `dof_levels` already computes `doubled`; the extra work target, the up-resample (`MadT1_S4`, `T_UP`) into the level's +0xa0 | 0.3 session |
+  | 2 pool allocator | 0x140411900 handing one texture to a DOF level and a glare halving of the same size | 0.5 session |
+  | 3 DOF with shafts / shimmer | texture formats and order; both refused today | 0.5-1 session |
+  | 4 resize with DOF + glare | first: harness or game (`expected 5760000 got 3686400` = 1600x900 vs 1280x720 RGBA8) | 0.5 session |
+  | 5 sweep | the script is small; the run is not: 5 PP qualities x 6 glare x 6 DOF x shafts x shimmer x FXAA = 1440 combinations a window size, ~13 s each = ~5 h a size, ~16 h for three, before any filter other than default | machine time |
+  | 6 presets | small | 0.2 session |
+  | 7 proofs + release | `run_all.sh --quick` 0h46m, clippy | 0.3 session |
+
+  About 4-5 sessions plus ~16 h of oracle time. Suggested split: Y7a = steps 1-2 (DOF complete),
+  Y7c = steps 3-4, Y7d = steps 5-7 with the sweep cut to pairwise coverage (every pair of settings at
+  least once, a few hundred runs) unless Super wants the full cross product.
+- **Next**: step 1, the front layer, from `ApplyDepthOfField_Source` 0x1404282e0 (the `this+0x1dc` /
+  `this+0x1e4` loops calling `DepthOfFieldLayerMask` 0x1404005a0 and `LayerMaskMakeColor` 0x140400850)
+  and `ApplyDepthOfField_Composite` 0x140428da0's `DrawRectGPU_DepthOfFieldCompositeMaskedBlurLevels`
+  branch (decomp line ~511).
+
+## What the game draws at DOF quality 5 (step 1)
+
+- Run `re/scratch/taskY7/q5`: `RENDER_ORACLE_DOF=5,5 F=rustyac_f4 bash re/scratch/taskY7/cmp.sh q5 0 3`
+  (1280x720, GLARE 0; the port refuses, the game side runs). `re/scratch/taskY7/tech.py <name part>`
+  prints each technique's vs / ps FNV hash from acs.exe's container, to name the gpulog's programs.
+- The game's post draws, in order: depth factor; halving 1280x720 to 640x360; level sources 384x216
+  and 192x108 (`MadT1_S1`); `DepthOfField_BackgroundLayerMaskT1_USNORM_S4` (ps 62a3062e, 640x360 to
+  384x216); `DepthOfField_BackgroundLayerMaskMakeColorT1_USNORM_S5` (ps 43623b35, 384x216);
+  `MadT1_S7` hexagon (the front layer's); `DepthOfField_FrontBlurBlendFactor`; `MadT1_S7`; front blur
+  factor and two hexagons at 192x108; `MadT1_S4` (ps 01cf8836) 192x108 to 384x216, the doubled
+  level's up-resample; `DepthOfField_CompositeMaskedBlurLevels_USNORM_TS1_2` (ps 96d1a053) with the
+  frame and three 384x216 levels; then the tone map. No `BackgroundBlurFactorNormalize` at this focus.
+- The container has the mask programs at S1 / S4 / S8 / S12 / S16 taps (with LOGRGB / REINHARD
+  variants) and the make-colour ones at S5 / S9 / S13 / S17: the tap count follows the sizes, so
+  other window sizes draw other programs.
+
 # Task Y6: PP_QUALITY 5 with GLARE 5, a pinned toolchain, then depth of field (v0.49.1)
 
 ## Resume here
