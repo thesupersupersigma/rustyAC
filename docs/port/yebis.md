@@ -17,14 +17,20 @@
   degrees: `ry6_03`'s call log DIFFERENT in 16 lines; an earlier plant on `dof_level_factors`' 0.25 went
   unseen because that value reaches no upload). The screenshot (step 4) is taken, below. The DOF
   rows ran through `render.sh` (`RENDER_ONLY`; it ran the overlay cases too: all IDENTICAL).
-- **Next (resume here)**: the textures DOF on makes in the game's order. With DOF on, a resize row
-  (`RESIZE:10:1600x900`, quality 3) has its call log DIFFERENT in the remake frame only (pixels
-  IDENTICAL): the game makes the glare's second target R16G16B16A16 (f9, not f26), five more textures
-  in `CDepthOfField::CreateSystemObjects` (480x270, 240x135, 480x270, 240x135, 240x135 at 1600x900) and
-  takes four more from the pool on first use (480x270, 3 x 240x135), and clears them in its own order;
-  the port makes its own after the others (the `shortcut:` in `yebis.rs`). Then a resize row, the
-  photo-mode GUI row (`app_photo` already proves the link's values; END's pick is not in the GUI
-  oracle), `run_all.sh --quick`, the release. Estimate: about one session.
+- **Done, third session**: the textures DOF on makes, in the game's order (the `shortcut:` in `yebis.rs`
+  is gone). With DOF on: the glare's bright pass takes R16G16B16A16 for its first two targets and makes
+  two more of its size (glare `CreateSystemObjects` 0x140413c00, this[0xf4]), each cleared alone before
+  the bright pass's group; `CDepthOfField::CreateSystemObjects` 0x1404200a0 makes each level size's
+  source once (its pool, this+0x468) and each level's result (+0xa0, at its double's size); every pool
+  ask is R16G16B16A16, so `CRenderTexturePool::AllocateTextures` 0x140411900 makes one set per size for
+  the glare's halvings, DOF's halvings and each level's work targets (min(2, passes - 1) + doubled +
+  1 from quality 2 at the level's size, one at its double's), and DOF=0's pair and the separate halves
+  pool are not made. `ClearAllGPUResources` 0x14042b930 clears DOF's pool sizes, halvings and results;
+  the teardown releases what was made. Resize rows `ry6_11` (quality 3) and `ry6_12` (quality 4)
+  IDENTICAL, quality 1 and 2 also checked by hand (6 frames, IDENTICAL).
+- **The game fails a resize with DOF and glare** (GLARE 3, DOF 3, 1280x720 to 1600x900 or 1024x576):
+  the ac side's frame comes back at the old size ("wrong data size, expected 5760000 got 3686400"), so
+  that case has no row; for Task Y7 with the pool allocator.
 - **VR**: never draws DOF: `YebisPP::updatePP` 0x14002c270 calls `SetDepthOfFieldEnable(false)` every
   frame; only `CameraForwardYebis::setPostProcessing` 0x140025080 enables it.
 
@@ -96,6 +102,48 @@
   - the tone map's glare texture rectangle: the glare result's `src_rect`, not 0..1.
 - Checks: `cmp.sh`-style runs in `re/scratch/taskY5d` (`gh_g5`, 12 frames from 480: IDENTICAL;
   `y6_g5`, `y6_odd`: 40 frames from 3590), then every `--post` row (see the proof run below).
+
+## Results
+
+| Case | Frames | Call log | Pixels |
+|---|---|---|---|
+| `ry6_01` PP_QUALITY 5, GLARE 5 | 40 | IDENTICAL | IDENTICAL |
+| `ry6_02` the same at 1127x633 | 40 | IDENTICAL | IDENTICAL |
+| `ry6_03` DOF 3, 5 m, F12 | 3 | IDENTICAL | IDENTICAL |
+| `ry6_04` DOF 3, 2 m, F2 | 3 | IDENTICAL | IDENTICAL |
+| `ry6_05` DOF 2, 5 m, F4 | 3 | IDENTICAL | IDENTICAL |
+| `ry6_06` DOF 1, 5 m, F4 | 3 | IDENTICAL | IDENTICAL |
+| `ry6_07` DOF 4, 5 m, F4 | 3 | IDENTICAL | IDENTICAL |
+| `ry6_08` DOF 3, 40 m, F2 | 3 | IDENTICAL | IDENTICAL |
+| `ry6_09` DOF 3, 5 m, GLARE 3 | 40 | IDENTICAL | IDENTICAL |
+| `ry6_10` DOF 3, 8 m, F4, GLARE 3 | 40 | IDENTICAL | IDENTICAL |
+| `ry6_11` DOF 3, resize 1280x720 to 1600x900 | 6 | IDENTICAL | IDENTICAL |
+| `ry6_12` DOF 4, F4, the same resize | 6 | IDENTICAL | IDENTICAL |
+| DOF 1 / 2 with the resize (by hand) | 6 each | IDENTICAL | IDENTICAL |
+| planted change (hexagon 60.5 degrees) on `ry6_03` | 3 | DIFFERENT (caught) | - |
+| photo mode (`app_photo` GUI row, unchanged) | - | IDENTICAL | IDENTICAL |
+
+## What Y7 needs
+
+- DOF quality 5 (its front layer) and the doubled level drawn (1024x576 at quality 3).
+- The pool allocator 0x140411900 for DOF with PP_QUALITY 5 and glare (a level of a glare halving's
+  size), and the game's failed resize with DOF and glare (above).
+- DOF with the light shafts or the heat shimmer on screen.
+- The other DOF keys no shipped filter uses (APERTURE_PARAMETER, APERTURE_SHAPE, FRONT/BACK levels,
+  EDGE_QUALITY).
+- From Y5d's refused list: `BLOOM_NUM_LEVELS`, `PRECISION`, `AFTER_IMAGE`, `ANAMORPHIC`,
+  `[TONEMAPPING] FUNCTION` 0 and 3-8, a library shape's ghost (`USE_CUSTOM_SHAPE=0` with `GHOST=1`),
+  `STAR_LENGTH_FOV_DEPENDENCE` other than 0, the 3x3 bloom gaussian.
+
+## Not done
+
+- The rows above other than these: DOF with the shafts / with GLARE and a resize (the game fails it).
+- The DOF-on clear order without the ghost, and DOF on with the light shafts' formats: written from
+  the code, no row (no shipped filter turns the ghost off; the shafts with DOF are refused).
+
+## Open questions
+
+- Why the game's resize fails with DOF and glare on together (the frame stays the old size).
 
 # Task Y5d: YEBIS's light shafts, vintage and the refused glare cases (v0.49.0)
 

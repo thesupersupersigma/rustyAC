@@ -871,6 +871,7 @@ mod device {
                 if shafts {
                     sizes.extend([(ga, gh); 2]);
                 }
+                let dof_q = video.get_int("POST_PROCESS", "DOF").unwrap_or(0);
                 let mut glare: Vec<(Target, u32, u32)> = Vec::new();
                 let mut glare_views = Views::new();
                 // (the double, +0x2d0, only with a result blur: CreateSystemObjects 0x140413c00; Task Y5d)
@@ -882,29 +883,46 @@ mod device {
                         glare.push(glare[3].clone());
                         continue;
                     }
-                    let f = if shafts && (i == 0 || i == 2) { f9 } else { f26 };
+                    // DOF on sets this[0xf4]: the bright pass's first two take +0xc4 (Task Y6; with the shafts too: not proven)
+                    let f = if (dof_q > 0 && i < 2) || (shafts && (i == 0 || i == 2)) { f9 } else { f26 };
                     let t = target(device, gw, gg, f.0, f.1, true)?;
                     glare.push((t.clone(), gw, gg));
                     keep(&mut kept, &mut glare_views, t, gw, gg);
                 }
+                // DOF on, the glare makes two more of its size (the call log shows only how many: never drawn here);
+                // each is cleared alone before the bright pass's group
+                let mut dof_glare = Views::new();
+                for _ in 0..if dof_q > 0 { 2 } else { 0 } {
+                    let t = target(device, ga, gh, f26.0, f26.1, true)?;
+                    glare.push((t.clone(), ga, gh));
+                    keep(&mut kept, &mut dof_glare, t, ga, gh);
+                }
                 // the ghost's trim circle (+0x2a0, CreateDeviceResources 0x140415520: only with the ghost's targets)
                 let trim = if ghost { Some(filled(64, 64, 1, DXGI_FORMAT_A8_UNORM, &[crate::yebis_tex::trim_circle()], 1)?) } else { None };
                 kept.extend(trim.clone().map(|t| t.into()));
+                // the depth of field (`CDepthOfField::CreateSystemObjects` 0x1404200a0): DOF off, DOF=0's pair; on, each
+                // level's source from its own pool (this+0x468, a size there shared), then each level's result (+0xa0,
+                // at its double's size); `dof` is also the order ClearAllGPUResources 0x14042b930 clears them in
+                let levels = if dof_q > 0 { super::dof_levels(dof_q, base, width, height) } else { vec![] };
+                let doubled = |l: &super::DofLevel| if l.doubled { ((2 * l.size.0).min(w), (2 * l.size.1).min(h)) } else { l.size };
                 let mut dof = Views::new();
-                for (dw, dh) in super::dof_sizes(base, width, height) {
-                    keep(&mut kept, &mut dof, target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
-                }
-                // shortcut: DOF on gets its own targets after all the others, not the game's pool order or its clears; port them when a resize row differs
-                let dof_q = video.get_int("POST_PROCESS", "DOF").unwrap_or(0);
-                let (mut dof_halves, mut dof_levels) = (vec![], vec![]);
-                if dof_q > 0 {
-                    let levels = super::dof_levels(dof_q, base, width, height);
-                    for (hw, hh) in super::halvings(levels[0].size, width, height) {
-                        dof_halves.push((target(device, hw, hh, f9.0, f9.1, true)?, hw, hh));
+                let mut dof_pool: Vec<((u32, u32), Target)> = vec![];
+                let mut dof_own: Vec<Target> = vec![];
+                if levels.is_empty() {
+                    for (dw, dh) in super::dof_sizes(base, width, height) {
+                        keep(&mut kept, &mut dof, target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
                     }
-                    for l in levels {
-                        let t = || target(device, l.size.0, l.size.1, f9.0, f9.1, true);
-                        dof_levels.push((l, [t()?, t()?, t()?, t()?, t()?]));
+                } else {
+                    for (i, l) in levels.iter().enumerate() {
+                        if !levels[..i].iter().any(|p| p.size == l.size) {
+                            let t = target(device, l.size.0, l.size.1, f9.0, f9.1, true)?;
+                            dof_pool.push((l.size, t.clone()));
+                            keep(&mut kept, &mut dof, t, l.size.0, l.size.1);
+                        }
+                    }
+                    for l in &levels {
+                        let (ow, oh) = doubled(l);
+                        dof_own.push(target(device, ow, oh, f9.0, f9.1, true)?);
                     }
                 }
                 let (luminance_size, chain) = super::luminance_sizes(width, height);
@@ -933,15 +951,65 @@ mod device {
                 // the texture pool: the glare's halvings, the R16G16B16A16 ones, the luminance chain above the 1x1
                 let mut glare_pool = Views::new();
                 let mut glare_pool_targets = Vec::new();
-                for (pw, ph) in super::glare_pool(base, quality, width, height) {
-                    let f = if shafts { f9 } else { f26 };
-                    let t = target(device, pw, ph, f.0, f.1, true)?;
-                    glare_pool_targets.push((t.clone(), pw, ph));
-                    keep(&mut kept, &mut glare_pool, t, pw, ph);
-                }
                 let mut half_pool = Views::new();
-                for (pw, ph) in super::half_pool(base, width, height) {
-                    keep(&mut kept, &mut half_pool, target(device, pw, ph, f9.0, f9.1, true)?, pw, ph);
+                let (mut dof_halves, mut dof_levels) = (vec![], vec![]);
+                if levels.is_empty() {
+                    for (pw, ph) in super::glare_pool(base, quality, width, height) {
+                        let f = if shafts { f9 } else { f26 };
+                        let t = target(device, pw, ph, f.0, f.1, true)?;
+                        glare_pool_targets.push((t.clone(), pw, ph));
+                        keep(&mut kept, &mut glare_pool, t, pw, ph);
+                    }
+                    for (pw, ph) in super::half_pool(base, width, height) {
+                        keep(&mut kept, &mut half_pool, target(device, pw, ph, f9.0, f9.1, true)?, pw, ph);
+                    }
+                } else {
+                    // DOF on, everything in the pool is R16G16B16A16 (glare this[0xf4]: +0xc4), so one texture serves
+                    // a size's every ask (AllocateTextures 0x140411900: n of a size reuse what is there): the glare's
+                    // halvings, the DOF's (this+0x458), then each level's work targets (+0x60: the front blur with
+                    // EDGE flag 2, up to two hexagon temporaries, one more when doubled) and its double (+0x70)
+                    let flag2 = (dof_q > 1) as usize;
+                    let gsizes = super::glare_pool(base, quality, width, height);
+                    let hsizes = super::halvings(levels[0].size, width, height);
+                    let mut need: Vec<((u32, u32), usize)> = vec![];
+                    let mut ask = |s: (u32, u32), n: usize| match need.iter_mut().find(|e| e.0 == s) {
+                        Some(e) => e.1 = e.1.max(n),
+                        None if n > 0 => need.push((s, n)),
+                        None => {}
+                    };
+                    gsizes.iter().chain(&hsizes).for_each(|&s| ask(s, 1));
+                    for l in &levels {
+                        ask(l.size, (l.passes as usize - 1).min(2) + l.doubled as usize + flag2);
+                        if l.doubled {
+                            ask(doubled(l), 1);
+                        }
+                    }
+                    let mut pool: Vec<((u32, u32), Vec<Target>)> = vec![];
+                    for (s, n) in need {
+                        let ts = (0..n).map(|_| target(device, s.0, s.1, f9.0, f9.1, true)).collect::<Result<Vec<_>, _>>()?;
+                        ts.iter().for_each(|t| keep(&mut kept, &mut half_pool, t.clone(), s.0, s.1));
+                        pool.push((s, ts));
+                    }
+                    let get = |s: (u32, u32)| pool.iter().find(|e| e.0 == s).map(|e| e.1.clone()).unwrap_or_default();
+                    for s in gsizes {
+                        let t = get(s)[0].clone();
+                        glare_pool.push((t.rtv.clone(), s.0, s.1));
+                        glare_pool_targets.push((t, s.0, s.1));
+                    }
+                    for s in hsizes {
+                        let t = get(s)[0].clone();
+                        dof.push((t.rtv.clone(), s.0, s.1));
+                        dof_halves.push((t, s.0, s.1));
+                    }
+                    for (l, own) in levels.iter().zip(&dof_own) {
+                        let (ow, oh) = doubled(l);
+                        keep(&mut kept, &mut dof, own.clone(), ow, oh);
+                        // the draw's source, front blur, result and two hexagon temporaries
+                        let temps = get(l.size);
+                        let tmp = |j: usize| temps.get(j).cloned().unwrap_or_else(|| own.clone());
+                        let src = dof_pool.iter().find(|p| p.0 == l.size).map(|p| p.1.clone()).ok_or("yebis: no DOF source")?;
+                        dof_levels.push((*l, [src, tmp(0), own.clone(), tmp(flag2), tmp(flag2 + 1)]));
+                    }
                 }
                 let mut analysis = Vec::new();
                 for &(aw, ah) in &chain[..chain.len() - 1] {
@@ -968,7 +1036,9 @@ mod device {
                 };
                 let chain_views: Views = analysis[..analysis.len() - 1].iter().map(|(t, _, (aw, ah))| (t.rtv.clone(), *aw, *ah)).collect();
                 // 1. the pool, one texture a group
-                for v in glare_pool.iter().chain(&half_pool).chain(&chain_views) {
+                // (DOF on, the glare's halvings are in the pool)
+                let glare_first: &[_] = if levels.is_empty() { &glare_pool } else { &[] };
+                for v in glare_first.iter().chain(&half_pool).chain(&chain_views) {
                     clear_group(std::slice::from_ref(v), false);
                 }
                 // 2. the frame's three with the depth
@@ -978,10 +1048,18 @@ mod device {
                 let own: Vec<Vec<usize>> = glare_levels.iter().filter(|l| l.0.own).map(|l| [l.1[1], l.1[2], l.1[0]].into_iter().chain(l.2).collect()).collect();
                 let mut order: Views = glare_views.iter().enumerate().filter(|(i, _)| *i != 4 && !own.iter().flatten().any(|j| j == i)).map(|(_, v)| v.clone()).collect();
                 // (CRenderGlare::ClearAllGPUResources 0x14041c400: +0x288, the star's ten, the ghost's pair if made, ...)
-                let groups: &[usize] = if ghost { &[1, 10, 2, 1, 3, 1, 1, 1, 2, 2] } else { &[1, 10, 1, 3, 1, 1, 1, 2, 2] };
+                let mut groups: Vec<usize> = if ghost { vec![1, 10, 2, 1, 3, 1, 1, 1, 2, 2] } else { vec![1, 10, 1, 3, 1, 1, 1, 2, 2] };
                 order.insert(if ghost { 19 } else { 17 }, glare_views[4].clone());
+                if !dof_glare.is_empty() {
+                    // the bright pass's first two join its group of three, after DOF's two (without the ghost: not proven)
+                    let b = groups.iter().position(|&n| n == 3).unwrap();
+                    let at = groups[..b].iter().sum::<usize>();
+                    let first: Views = order.drain(..2).collect();
+                    order.splice(at..at, dof_glare.iter().cloned().chain(first));
+                    groups.splice(b..b, [1, 1]);
+                }
                 let mut at = 0;
-                for &n in groups {
+                for &n in &groups {
                     clear_group(&order[at..at + n], false);
                     at += n;
                 }
@@ -993,9 +1071,16 @@ mod device {
                 for v in &glare_pool {
                     clear_group(std::slice::from_ref(v), false);
                 }
-                for size in super::half_pairs(base, width, height) {
-                    // the levels' own targets when the pool has no pair (no double: DOFLEVELPARAM::Initialize)
-                    if let Some(v) = half_pool.iter().chain(&dof).find(|v| (v.1, v.2) == size) {
+                if levels.is_empty() {
+                    for size in super::half_pairs(base, width, height) {
+                        // the levels' own targets when the pool has no pair (no double: DOFLEVELPARAM::Initialize)
+                        if let Some(v) = half_pool.iter().chain(&dof).find(|v| (v.1, v.2) == size) {
+                            clear_group(std::slice::from_ref(v), false);
+                        }
+                    }
+                } else {
+                    // DOF on: its pool's sizes, its halvings, each level's result
+                    for v in &dof {
                         clear_group(std::slice::from_ref(v), false);
                     }
                 }
@@ -1066,7 +1151,8 @@ mod device {
                     // the DOF's two levels (+0x110, then its pool), the render buffers (+0x100 ×3), the colour
                     // alpha dest (+0x118 ×2), the AE query (+0x1c8: 128x64, then the chain), the AF query
                     // (+0x1d0: two 1x1) and CTextureUtil's 16x16 analyser
-                    released: 2 + glare.len() + 2 + 3 + 2 + 1 + 2 + 1 + glare_pool_targets.len() + super::half_pool(base, width, height).len() + chain.len(),
+                    // DOF on: its pool's sizes and each level's result for the two, the glare's halvings inside the pool
+                    released: 2 + glare.len() + 3 + 2 + 1 + 2 + 1 + half_pool.len() + chain.len() + if levels.is_empty() { 2 + glare_pool_targets.len() } else { dof_pool.len() + dof_own.len() },
                     screen: screen.map(|(_, w, h)| (w, h)),
                     glare,
                     glare_levels,

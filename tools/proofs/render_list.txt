@@ -221,3 +221,5 @@ ry6_07 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/au
 ry6_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f2 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,40
 ry6_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:3,5
 ry6_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 40 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:3,8
+ry6_11 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 6 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,5 RESIZE:3:1600x900
+ry6_12 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 6 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:4,5 RESIZE:3:1600x900
