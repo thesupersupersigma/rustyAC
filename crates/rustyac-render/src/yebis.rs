@@ -329,7 +329,7 @@ pub use device::Yebis;
 #[cfg(all(windows, not(feature = "backend-wgpu")))]
 mod device {
     use super::*;
-    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Star, TECHNIQUES, T_BRIGHT, T_BRIGHT_PLAIN, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_NO_GAMMA, T_MAD2, T_MAX2, T_SUM, T_TAPS, T_UP};
+    use crate::yebis_cb::{filmic_table, used_all, AutoExposure, Camera, Cbuffer, Glare, Luminance, PostEffect, Shafts, Star, TECHNIQUES, T_BRIGHT, T_BRIGHT_PLAIN, T_COPY, T_GAUSS11, T_GAUSS7, T_GHOST3, T_GHOST4, T_LINEARSAT, T_NO_GAMMA, T_CORONA, T_MAD2, T_MAD4, T_MAX2, T_RADIAL, T_SHAFT_MASK, T_SUM, T_TAPS, T_UP};
     use std::path::Path;
     use windows::core::PCSTR;
     use windows::Win32::Graphics::Direct3D::*;
@@ -343,6 +343,8 @@ mod device {
     const SW: usize = 13;
     const SLB: usize = 0;
     const SLBM: usize = 2;
+    /// trilinear wrap: the film grain's and the spectrum's own mode (the light shafts)
+    const SW_TRI: usize = 15;
 
     #[derive(Clone)]
     struct Target {
@@ -439,6 +441,9 @@ mod device {
         glare_pool: Vec<(Target, u32, u32)>,
         /// the star's first target (Task Y5b): 8 streaks, the two passes' pair, then the streaks' maximum
         star_at: usize,
+        /// The light shafts' mask and result (glare targets `shaft_at`, `shaft_at + 1`) and the corona's spectrum.
+        shaft_at: usize,
+        spectrum: ID3D11ShaderResourceView,
         /// the ghost's trim circle (Task Y5c), only with GHOST on; its two targets follow the star's maximum
         trim: Option<ID3D11ShaderResourceView>,
     }
@@ -713,7 +718,7 @@ mod device {
                 let grain = crate::yebis_tex::mipmaps(256, 256, crate::yebis_tex::grain(&exe)?, true, true);
                 let grain = filled(256, 256, 0, rgba, &grain, 4)?;
                 let spectrum = crate::yebis_tex::mipmaps(256, 1, &crate::yebis_tex::spectrum(&crate::yebis_tex::Cie::from_exe(&exe)?), true, true);
-                kept.push(filled(256, 1, 0, rgba, &spectrum, 4)?.into());
+                let spectrum = filled(256, 1, 0, rgba, &spectrum, 4)?;
                 let gaussian = filled(64, 64, 5, DXGI_FORMAT_A8_UNORM, &crate::yebis_tex::gaussian(), 1)?;
                 let black = filled(1, 1, 1, rgba, &[vec![0; 4]], 4)?;
                 let grey = filled(1, 1, 1, rgba, &[vec![0x7f; 4]], 4)?;
@@ -805,10 +810,18 @@ mod device {
                 // initPostProcessing 0x140024ca0: m_bGlareGhost (readPPSetOptions' default is on)
                 let ghost = filter.get_int("GLARE", "GHOST").unwrap_or(1) != 0;
                 sizes.extend(vec![(ga, gh); if ghost { 15 } else { 13 }]);
+                // RAYS_OF_GOD (init flag 0x10000000): the shafts' mask (+0x2d8) and result (+0x2e0) last, and the
+                // bright pass's first and third (+0x248) and the halvings in R16G16B16A16
+                let shafts = quality > 0 && video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
+                let shaft_at = sizes.len();
+                if shafts {
+                    sizes.extend([(ga, gh); 2]);
+                }
                 let mut glare = Vec::new();
                 let mut glare_views = Views::new();
-                for &(gw, gg) in &sizes {
-                    let t = target(device, gw, gg, f26.0, f26.1, true)?;
+                for (i, &(gw, gg)) in sizes.iter().enumerate() {
+                    let f = if shafts && (i == 0 || i == 2) { f9 } else { f26 };
+                    let t = target(device, gw, gg, f.0, f.1, true)?;
                     glare.push((t.clone(), gw, gg));
                     keep(&mut kept, &mut glare_views, t, gw, gg);
                 }
@@ -846,7 +859,8 @@ mod device {
                 let mut glare_pool = Views::new();
                 let mut glare_pool_targets = Vec::new();
                 for (pw, ph) in super::glare_pool(base, quality, width, height) {
-                    let t = target(device, pw, ph, f26.0, f26.1, true)?;
+                    let f = if shafts { f9 } else { f26 };
+                    let t = target(device, pw, ph, f.0, f.1, true)?;
                     glare_pool_targets.push((t.clone(), pw, ph));
                     keep(&mut kept, &mut glare_pool, t, pw, ph);
                 }
@@ -982,6 +996,8 @@ mod device {
                     glare_levels,
                     glare_pool: glare_pool_targets,
                     star_at,
+                    shaft_at,
+                    spectrum,
                     trim,
                 })
             }
@@ -1191,6 +1207,11 @@ mod device {
                     parts.push(self.ghost(pe, g, h, ratio)?);
                 }
             }
+            if let Some(sh) = &g.shafts {
+                if let Some(sun) = pe.sun {
+                    parts.push(self.shafts(pe, g, sh, exposure, sun)?);
+                }
+            }
             self.mad(3, &parts, &vec![[1.0; 4]; parts.len()])?;
             self.resample((srv(&self.glare[3].0), gw, gh), 4, 1.0 * 0.5)?;
             Ok(srv(&self.glare[4].0))
@@ -1199,7 +1220,11 @@ mod device {
         /// `CTextureUtil::MadTn` 0x140400be0 of glare targets `from` into `to`: the first one's rectangle, each read
         /// through the point sampler at the target's size, else the linear one.
         unsafe fn mad(&mut self, to: usize, from: &[usize], colours: &[[f32; 4]]) -> Result<(), String> {
-            let t = if from.len() == 1 { T_COPY } else { T_MAD2 + from.len() - 2 };
+            let t = match from.len() {
+                1 => T_COPY,
+                4 => T_MAD4,
+                n => T_MAD2 + n - 2,
+            };
             let (samplers, srvs, v) = self.sources(to, from);
             self.glare_draw(t, to, &[], colours, None, &samplers, &srvs, Some(v))
         }
@@ -1338,6 +1363,117 @@ mod device {
                 self.draw(t, &up, &vec![SLBM; srvs.len()], &srvs, &quad)?;
             }
             Ok(dst)
+        }
+
+        /// The light shafts (`GenerateGlare_LightShaft` 0x14041a5d0) while the sun is in front of the camera:
+        /// the bright pass masked by the sun's angle and the film grain, smeared towards the sun in passes of up
+        /// to four taps, each four times longer, then the diffraction ring. Returns the target the composite adds.
+        unsafe fn shafts(&mut self, pe: &PostEffect, g: &Glare, sh: &Shafts, exposure: f32, sun: ([f32; 2], [f32; 3])) -> Result<usize, String> {
+            use rustyac_math::{atanf, logf, powf, tanf};
+            let (pos, sun_colour) = sun;
+            let mut c = sh.colour(sun_colour);
+            let (mask, result) = (self.shaft_at, self.shaft_at + 1);
+            let work = [self.star_at + 8, self.star_at + 9];
+            // SetPerspectiveByFrustum 0x14041d360: CRenderGlare+0x128 and +0x124
+            let mut t128 = tanf(pe.fov * 0.5);
+            if t128 <= 0.0 {
+                t128 = tanf(std::f32::consts::FRAC_PI_8);
+            }
+            let fov = atanf(t128) * 2.0;
+            // the screen rectangle the sun's angle is measured over (DrawRectGPU_LightShaftMask, DrawRectGPU_Corona)
+            let sun_rect = |f: f32, wf: f32, hf: f32| {
+                let fx = f * (wf / hf);
+                let x0 = -fx;
+                let (dx, dy) = (fx - x0, f - -f);
+                let (x0, y0) = (x0 - dx * 0.0, -f - dy * 0.0);
+                [dx * ((0.0 - pos[0]) + 0.5) + x0, dy * ((0.0 - pos[1]) + 0.5) + y0, dx * ((1.0 - pos[0]) + 0.5) + x0, dy * ((1.0 - pos[1]) + 0.5) + y0]
+            };
+            // UpdateParameters_Base 0x1403b46c0: the depth threshold through GetDepthConversionFactor
+            let df = pe.depth_factor();
+            let depth = df[0] * sh.depth_threshold + df[1];
+            // CTextureUtil::LightShaftMask 0x140401d90 -> DrawRectGPU_LightShaftMask 0x1403f5460
+            let (target, w, h) = self.glare[mask].clone();
+            let (_, bw, bh) = self.glare[2].clone();
+            let (wf, hf) = (w as f32, h as f32);
+            self.target_only(&target.rtv);
+            self.viewport(0.0, 0.0, wf, hf);
+            let u = self.cbuffer.shaft(T_SHAFT_MASK, [sh.noise_mask, sh.glare_ratio, exposure / g.range, depth], [256.0, sh.noise_frequency, (pos[1] + pos[0]) + 0.0, 0.0], &[], &self.used);
+            let v = rect_vertices([wf, hf], [0.0, 0.0, wf, hf], &[src_rect(bw, bh), [0.0, 0.0, (wf / hf) * 4.0, 4.0], sun_rect((sh.angle_attenuation * 0.125) * tanf(fov * 0.5), wf, hf)]);
+            let srvs = [self.glare[2].0.srv.clone(), Some(self.grain.clone())];
+            self.draw(T_SHAFT_MASK, &u, &[SLB, SW_TRI], &srvs, &v)?;
+            // the radial passes: GetLightShaftRadiusScale 0x14041bb30 (GetStarRadiusScale(1.0), the FOV term in)
+            let radius = ((1.0 / (t128 * 2.0)) * bw as f32) * 0.003125;
+            let mut a = (0.0625 / radius) / sh.length;
+            let x = (logf(0.001) / logf(0.5)) / a;
+            let passes = ((logf(x) / logf(4.0)).ceil() as i32).min(8);
+            let last_taps = match ((x * 4.0) / powf(4.0, passes as f32)).ceil() as i32 {
+                0 => 4,
+                t => t.min(4),
+            };
+            let base = powf(t128 * 0.25, 1.0 / passes as f32);
+            if sh.ring == 0.0 && sh.ring_colour[..3] != [1.0; 3] {
+                for (v, r) in c.iter_mut().zip(&sh.ring_colour[..3]) {
+                    *v *= r;
+                }
+            }
+            // GetLightShaftCompositeLuminanceScale 0x14041bdf0, then four
+            let scale = ((((g.range * 0.035) * g.glare_lum) * (g.luminance / pe.mapping_div)) * 0.25) * 4.0;
+            let (mut src, mut ping) = (mask, 0);
+            for i in 0..passes {
+                let last = i == passes - 1;
+                let weight = if i == 0 { base * 0.25 } else { base };
+                let taps = if last { last_taps as usize } else { 4 };
+                let coloured = last || taps < 4;
+                let to = if coloured && sh.ring == 0.0 { result } else { work[ping] };
+                let (_, tw, th) = self.glare[to].clone();
+                let (_, sw, sh_) = self.glare[src].clone();
+                let (swf, shf) = (sw as f32, sh_ as f32);
+                let (px, py) = (((swf * pos[0]) * (1.0 / swf)) + 0.0, ((shf * pos[1]) * (1.0 / shf)) + 0.0);
+                let (su, sv) = (swf * (1.0 / swf) + 0.0, shf * (1.0 / shf) + 0.0);
+                let q = (powf(4.0, i as f32) as i32) as f32;
+                let hh = th as f32;
+                let rects: Vec<[f32; 4]> = (0..taps)
+                    .map(|k| {
+                        let s = 1.0 / (((k as f32 * q) + hh) / hh);
+                        [((0.0 - px) * s) + px, ((0.0 - py) * s) + py, ((su - px) * s) + px, ((sv - py) * s) + py]
+                    })
+                    .collect();
+                let colours: Vec<[f32; 4]> = (0..taps)
+                    .map(|k| {
+                        // the game's vector powf (__vdecl_powf4), not the scalar one
+                        let w = rustyac_math::powf4_half(k as f32 * a) * weight;
+                        if coloured {
+                            [c[0] * w, c[1] * w, c[2] * w, c[3] * w].map(|v| v * scale)
+                        } else {
+                            [w; 4]
+                        }
+                    })
+                    .collect();
+                let v = rect_vertices([tw as f32, hh], [0.0, 0.0, tw as f32, hh], &rects);
+                let view = self.glare[src].0.srv.clone();
+                self.glare_draw(T_RADIAL + taps - 1, to, &[], &colours, None, &[SLB], &[view], Some(v))?;
+                a *= 4.0;
+                src = to;
+                ping = (ping + 1) % 2;
+                if taps < 4 {
+                    break;
+                }
+            }
+            // CTextureUtil::Corona 0x140401f70 -> DrawRectGPU_Corona 0x1403f5800: the ring around the sun
+            if sh.ring != 0.0 {
+                let (_, sw, sh_) = self.glare[src].clone();
+                let (target, w, h) = self.glare[result].clone();
+                let (wf, hf) = (w as f32, h as f32);
+                self.target_only(&target.rtv);
+                self.viewport(0.0, 0.0, wf, hf);
+                let colours = [sh.ring_colour, [1.5, 1.5, 1.5, 0.0], [1.0, 1.0, 1.0, 0.0]];
+                let u = self.cbuffer.shaft(T_CORONA, [sh.ring, sh.ring_attenuation, sh.ring_order, 0.0], [2.0, 4.0, 0.0, 1.0], &colours, &self.used);
+                let ring = sun_rect((std::f32::consts::PI / sh.ring_radius) * tanf(fov * 0.5), wf, hf);
+                let v = rect_vertices([wf, hf], [0.0, 0.0, wf, hf], &[src_rect(sw, sh_), ring]);
+                let srvs = [self.glare[src].0.srv.clone(), Some(self.spectrum.clone()), Some(self.grain.clone())];
+                self.draw(T_CORONA, &u, &[SLB, SW_TRI, SW_TRI], &srvs, &v)?;
+            }
+            Ok(result)
         }
 
         /// Technique `d`'s input layout: its inputs packed one after another.

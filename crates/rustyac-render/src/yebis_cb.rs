@@ -29,8 +29,9 @@ use rustyac_physics::data::ini::IniReader;
 /// particles with 1-4 octaves (13-16), then the glare's bloom (17-27, Task Y5a: bright pass,
 /// the 7- and 11-tap gaussians, the 2x2 resample, the copy, the levels' sum for 3-7 levels), then
 /// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c),
-/// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46).
-pub const TECHNIQUES: [&str; 47] = [
+/// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46),
+/// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d).
+pub const TECHNIQUES: [&str; 54] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -78,6 +79,13 @@ pub const TECHNIQUES: [&str; 47] = [
     "TonemapHDR_PreMatrix_Dither_Vignette_LINEARSAT",
     "TonemapHDR_PreMatrix_Dither_LINEARSAT",
     "BrightPassT1_THRESHOLD_S1",
+    "LightShaftMask_SM3",
+    "TexCoordMadT1_S1",
+    "TexCoordMadT1_S2",
+    "TexCoordMadT1_S3",
+    "TexCoordMadT1_S4",
+    "Corona",
+    "MadT4",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
@@ -105,6 +113,11 @@ pub const T_MAX2: usize = 30;
 /// The ghost's two passes (Task Y5c).
 pub const T_GHOST4: usize = 37;
 pub const T_GHOST3: usize = 38;
+/// The light shafts (Task Y5d): the mask, `TexCoordMadT1_S<n>` (`T_RADIAL + n - 1`), the ring, `MadT4`.
+pub const T_SHAFT_MASK: usize = 47;
+pub const T_RADIAL: usize = 48;
+pub const T_CORONA: usize = 52;
+pub const T_MAD4: usize = 53;
 
 // $Globals byte offsets (c-register x 16)
 const DEPTH_CAST: usize = 0;
@@ -116,6 +129,9 @@ const MODULATE: usize = 2464;
 const OFFSET: usize = 2976;
 const SCALER: usize = 2336;
 const GAMMA: usize = 3232;
+/// CTextureUtil's light shaft and corona variables (+0x11c, +0xdc)
+const SHAFT_NOISE: usize = 160;
+const SHAFT_PARAMS: usize = 240;
 const DITHER: usize = 3236;
 const MAX_MAPPING_LUM: usize = 3328;
 const COLOR_TRANSFORM: usize = 3360;
@@ -145,6 +161,9 @@ pub struct Camera {
     /// The tone map takes auto exposure's current value (`YebisPP::updatePP` 0x14002c270 does
     /// for the first eye only: the second eye keeps the first's)
     pub new_exposure: bool,
+    /// The sun on the screen (0..1, y down) and its normalised colour while it is in front of
+    /// the camera (`updateYebisParameters`' godrays origin and colour), else None.
+    pub sun: Option<([f32; 2], [f32; 3])>,
 }
 
 /// The `CPostEffect` fields of this chain; the comments name their offsets.
@@ -173,10 +192,14 @@ pub struct PostEffect {
     pub ca_uniform: [f32; 2], // +0x9a4
     pub depth_cast: [f32; 4], // +0x410
     pub depth: [f32; 5],      // +0xb8c..+0xb9c
+    /// The same from CDepthOfField's range, near to far as they are (draw 5 converts with it).
+    pub dof_depth: [f32; 5],
     /// `[AUTO_EXPOSURE]` on: MIN, MAX and the middle grey `updatePP` hands YEBIS.
     pub auto_exposure: Option<[f32; 3]>,
     /// video.ini's GLARE on.
     pub glare: Option<Glare>,
+    /// The light shafts drawn this frame (CPostEffect+0x9ac): the sun on the screen and its colour.
+    pub sun: Option<([f32; 2], [f32; 3])>,
 }
 
 /// `CGlareDef::ms_pGlareLib` (`InitializeStaticGlareLibs` 0x140412eb0 from the GLAREDEF table at
@@ -253,6 +276,60 @@ pub struct Glare {
     pub star: Option<Star>,
     /// GHOST (CRenderGlare+0xe4: the ghost's two targets and the trim circle exist)
     pub ghost: Option<Ghost>,
+    /// video.ini's RAYS_OF_GOD (init flag 0x10000000: the shafts' two targets, R16G16B16A16 sources)
+    pub shafts: Option<Shafts>,
+}
+
+/// The light shafts (Task Y5d): `[GODRAYS]` as `readPPSetOptions` 0x140026150 reads it and
+/// `setPostProcessing` 0x140025080 hands it to SetLightShaftParameters / SetLightShaftDiffractionRing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shafts {
+    /// USE_SUN_LIGHT: the sun's colour (alpha 1) instead of COLOR
+    pub use_sun: bool,
+    pub colour: [f32; 4],
+    pub length: f32,
+    pub glare_ratio: f32,
+    pub depth_threshold: f32,
+    pub angle_attenuation: f32,
+    pub noise_mask: f32,
+    pub noise_frequency: f32,
+    /// DIFFRACTION_RING, its RADIUS (radians), ATTENUATION, SPECTRUM_ORDER and OUTER_COLOR
+    pub ring: f32,
+    pub ring_radius: f32,
+    pub ring_attenuation: f32,
+    pub ring_order: f32,
+    pub ring_colour: [f32; 4],
+}
+
+impl Shafts {
+    /// setPostProcessing's colour (CPostEffect+0x674) for the sun's colour `sun`.
+    pub fn colour(&self, sun: [f32; 3]) -> [f32; 4] {
+        if self.use_sun {
+            [sun[0], sun[1], sun[2], 1.0]
+        } else {
+            self.colour
+        }
+    }
+
+    pub fn new(filter: &IniReader) -> Result<Shafts, String> {
+        let f = |k: &str| filter.get_float("GODRAYS", k);
+        let c = |k: &str| filter.get_float4("GODRAYS", k);
+        Ok(Shafts {
+            use_sun: filter.get_int("GODRAYS", "USE_SUN_LIGHT")? != 0,
+            colour: c("COLOR")?,
+            length: f("LENGTH")?,
+            glare_ratio: f("GLARE_RATIO")?,
+            depth_threshold: f("DEPTH_MASK_THRESHOLD")?,
+            angle_attenuation: f("ANGLE_ATTENUATION")?,
+            noise_mask: f("NOISE_MASK")?,
+            noise_frequency: f("NOISE_FREQUENCY")?,
+            ring: f("DIFFRACTION_RING")?,
+            ring_radius: f("DIFFRACTION_RING_RADIUS")? * 0.017453,
+            ring_attenuation: f("DIFFRACTION_RING_ATTENUATION")?,
+            ring_order: f("DIFFRACTION_RING_SPECTRUM_ORDER")?,
+            ring_colour: c("DIFFRACTION_RING_OUTER_COLOR")?,
+        })
+    }
 }
 
 /// The ghost (Task Y5c): the custom shape's ghost luminance (CGlareDef+0x18) and halo (+0x1c),
@@ -501,6 +578,7 @@ impl Glare {
             base_level,
             star,
             ghost,
+            shafts: None,
         })
     }
 }
@@ -508,15 +586,14 @@ impl Glare {
 impl PostEffect {
     /// `filter` is `system/cfg/ppfilters/<[POST_PROCESS] FILTER>.ini`.
     pub fn new(filter: &IniReader, video: &IniReader, cam: &Camera) -> Result<PostEffect, String> {
-        for key in ["DOF", "RAYS_OF_GOD"] {
-            if video.get_int("POST_PROCESS", key).unwrap_or(0) != 0 {
-                return Err(format!("yebis: [POST_PROCESS] {key} is on: not ported (Y5-Y7)"));
-            }
+        if video.get_int("POST_PROCESS", "DOF").unwrap_or(0) != 0 {
+            return Err("yebis: [POST_PROCESS] DOF is on: not ported (Y6)".into());
         }
-        // CameraForwardYebis's constructor: glareEnabled = GLARE != 0
+        // CameraForwardYebis's constructor: glareEnabled = GLARE != 0, godraysEnabled = RAYS_OF_GOD != 0
+        let shafts = video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
         let glare = match glare_quality(video) {
             0 => None,
-            q => Some(Glare::new(filter, q)?),
+            q => Some(Glare { shafts: if shafts { Some(Shafts::new(filter)?) } else { None }, ..Glare::new(filter, q)? }),
         };
         let f = |s: &str, k: &str| filter.get_float(s, k);
         let i = |s: &str, k: &str| filter.get_int(s, k);
@@ -586,9 +663,18 @@ impl PostEffect {
 
         let near = cam.near;
         let far = cam.far.clamp(1.0, 1000.0);
-        // UpdateParameters_DepthOfFieldOpticalParameters 0x1403b92f0, DOF off, float depth formats
-        let b8c = (near / (near - far)) * 64000.0;
-        let b90 = -64000.0f32;
+        // UpdateParameters_DepthOfFieldOpticalParameters 0x1403b92f0: +0x9ac, the light shafts on this frame
+        let sun = match &glare {
+            Some(Glare { shafts: Some(sh), luminance, .. }) if *luminance > 0.0 => cam.sun.filter(|&(_, c)| sh.colour(c).iter().any(|&v| v > 0.0)),
+            _ => None,
+        };
+        // DOF off, float depth formats, SetDepthFactorRange never called (0, 0): with the shafts on the
+        // range is taken the other way round (its far end first)
+        let range = |a: f32, b: f32| {
+            let b8c = (a / (a - b)) * 64000.0;
+            let b90 = -64000.0f32;
+            [b8c, b90, 1.0 / b8c, -(b90 / b8c), b]
+        };
         Ok(PostEffect {
             near,
             far,
@@ -615,7 +701,9 @@ impl PostEffect {
             ca_uniform: filter.get_float2("CHROMATIC_ABERRATION", "UNIFORM_DISPERSION")?,
             // measured (state dump of r23_09): the depth texture's cast for AC's float depth
             depth_cast: [1.0, 0.0, 1.0, -0.0],
-            depth: [b8c, b90, 1.0 / b8c, -(b90 / b8c), far],
+            depth: if sun.is_some() { range(far, near) } else { range(near, far) },
+            dof_depth: range(near, far),
+            sun,
         })
     }
 
@@ -638,7 +726,11 @@ impl PostEffect {
 
     /// GetDepthConversionFactor 0x1403c3600 from CURRENT (0) to EFFECTFACTOR_OPTIMIZED (2).
     pub(crate) fn depth_factor(&self) -> [f32; 4] {
-        let [b8c, b90, _, _, b9c] = self.depth;
+        self.depth_factor_of(self.depth)
+    }
+
+    fn depth_factor_of(&self, depth: [f32; 5]) -> [f32; 4] {
+        let [b8c, b90, _, _, b9c] = depth;
         let (near, far) = (self.near, self.far);
         let mut l = ((far - near) * b9c) / (far * near);
         let mut y = l * 0.0 + (1.0 - b9c / near);
@@ -896,6 +988,14 @@ impl Cbuffer {
         self.upload(&used[t])
     }
 
+    /// The light shafts' mask and ring (Task Y5d): CTextureUtil's +0xdc and +0x11c variables and the ring's colours.
+    pub fn shaft(&mut self, t: usize, params: [f32; 4], noise: [f32; 4], colours: &[[f32; 4]], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        self.put(SHAFT_PARAMS, &params);
+        self.put(SHAFT_NOISE, &noise);
+        self.put(MODULATE, colours.as_flattened());
+        self.upload(&used[t])
+    }
+
     /// `DrawRectGPU_MaxColorTn` 0x1403ee580: each source's weight in all four channels and one colour (+0x10c).
     pub fn max_color(&mut self, t: usize, weights: &[f32], colour: [f32; 4], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
         let w: Vec<f32> = weights.iter().flat_map(|&w| [w; 4]).collect();
@@ -947,7 +1047,7 @@ impl Cbuffer {
     fn depth_blur_factor(&mut self, pe: &PostEffect) {
         let c = pe.depth_cast;
         self.put(DEPTH_CAST, &[c[2], c[3], c[0], c[1]]);
-        self.put(CONVERT_DEPTH, &pe.depth_factor());
+        self.put(CONVERT_DEPTH, &pe.depth_factor_of(pe.dof_depth));
         self.put(MODULATE, &[1.0; 4]);
     }
 
@@ -1340,7 +1440,7 @@ mod tests {
             None => IniReader::load(&path).unwrap(),
         };
         let video = IniReader::from_text(Path::new("video.ini"), "[POST_PROCESS]\nENABLED=1\nFILTER=default\nQUALITY=0\nGLARE=0\nDOF=0\n");
-        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668, chromatic_aberration: true, new_exposure: true };
+        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668, chromatic_aberration: true, new_exposure: true, sun: None };
         let mut pe = PostEffect::new(&filter, &video, &cam).unwrap();
         // the logged frame is the second, after one auto exposure step from 1 to MAX
         pe.exposure = 0.5;
