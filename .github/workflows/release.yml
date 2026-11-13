@@ -26,8 +26,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # the same version as in ci.yml
-  RUST_TOOLCHAIN: "1.97.0"
   GH_TOKEN: ${{ github.token }}
   GH_REPO: ${{ github.repository }}
   TAG: ${{ inputs.tag || github.ref_name }}
@@ -79,9 +77,8 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
-          rustup default "$RUST_TOOLCHAIN"
-          rustup target add wasm32-unknown-unknown
+          # the version, components and targets in rust-toolchain.toml
+          rustup toolchain install --no-self-update
           rustc --version
           cargo --version
 

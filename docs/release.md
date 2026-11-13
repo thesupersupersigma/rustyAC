@@ -59,8 +59,8 @@ About ten minutes later the release is on the [Releases page](https://github.com
 ## What the workflows do
 
 Both run on GitHub's own Windows machines (`windows-latest`), never on a private PC, with Rust pinned to the
-version in the workflow files (`RUST_TOOLCHAIN`; raise it in both files together; the wasm targets are added
-with `rustup target add`). Neither has any Assetto
+version, components and wasm targets in `rust-toolchain.toml` (rustup installs them from it; raise the
+version only in its own task, with a full proof run). Neither has any Assetto
 Corsa file: the tests that need the game's folder or `cardata/` print NOT TESTED and pass, and the bit-exact
 tests that work from the recordings in the repo run in full. The Visual C++ 2013 runtime is installed first,
 so the tests compute with `MSVCR120.dll`, the game's own maths.
