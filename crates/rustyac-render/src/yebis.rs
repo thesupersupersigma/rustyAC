@@ -2185,7 +2185,8 @@ mod device {
                 // with the depth of field the aberration reads its composite (e1) and draws into e0
                 let e0s = if pe.dof.is_some() { e1.clone() } else { e0s };
                 if ca {
-                    self.current ^= 1;
+                    // e1, or e0 after the depth of field's composite (the shimmer leaves the third surface current)
+                    self.current = if pe.dof.is_some() { 0 } else { 1 };
                     self.effect_with_depth();
                     self.full_viewport();
                     let u = self.cbuffer.draw(1, &pe, &self.filmic, &self.used);
@@ -2310,7 +2311,8 @@ mod device {
                     self.dof(&pe, d)?;
                 }
                 if ca {
-                    self.current ^= 1;
+                    // e1, or e0 after the depth of field's composite (the shimmer leaves the third surface current)
+                    self.current = if pe.dof.is_some() { 0 } else { 1 };
                     self.effect_with_depth();
                     self.full_viewport();
                     let u = self.cbuffer.draw(5, &pe, &self.filmic, &self.used);
