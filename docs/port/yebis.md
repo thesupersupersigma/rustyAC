@@ -1,3 +1,75 @@
+# Task Y7c: DOF at big sizes, with the shafts and the shimmer; the resize failure was the oracle's (no release)
+
+## Resume here
+
+- **Done: steps 1 and 2, step 3's question, committed** (`90e855b`, `a950452`, `7cf5665`). No release
+  (v0.49.2 comes with Y7d).
+- **Resume at step 3, the port side**. With the harness fixed, the DOF + glare resize runs on both sides.
+  Two port gaps are left, both found in game code but not ported yet:
+  1. **DOF + glare + shafts, the rebuild after a resize** (`RENDER_ORACLE_DOF=3,5 RENDER_ORACLE_RESIZE=3:1600x900
+     F=rustyac_f4 bash re/scratch/taskY7a/cmp.sh rs7 3 5`): the teardown matches. The rebuild makes one
+     240x135 f9 and one 240x135 f26 fewer than the port does. `CRenderGlare::CreateSystemObjects`
+     0x140413c00 lines 357-370 make +0x2d8 / +0x2e0 whenever DOF is on (this[0xf4]). Those are the port's
+     "two more f26 with DOF on" (`dof_glare`), and they are also the shafts' mask and result. So with
+     the shafts on, the port makes them twice. The third bright-pass target is f26 in the game and
+     f9 in the port (the port's `shafts && i == 2` rule). The `+0x248` array's formats (lines 440-516)
+     still have to be read to settle that. The first build happens before capture, so only a resize
+     shows it.
+  2. **DOF + glare without the shafts** (`R=0 ... cmp.sh rs12 3 5`): it differs from frame 0. The glare's
+     640x360 halving is f26 in the game and the port's f9 pool texture. Every earlier DOF + glare row has
+     `RAYS:1`. Read `CRenderGlare::CreateSystemObjects` lines 255-300: the pool asks (+0x258) are made
+     only with this[0xec], their count is +0x260 = halvings from the frame down to the glare, and their
+     format is +0xc4 with DOF, else +0xbc. Then check the port's `half_pool` shortcut against them.
+- Checks at the end: `run_all.sh --quick` all pass (0 ERROR, 0 skipped, 1h16m); clippy clean on native,
+  both wasm targets and wgpu (render_oracle's 42 old errors unchanged); `cargo test -p rustyac-render yebis` 14 passed.
+- Then the row for step 3 (DOF 3 + GLARE 3 + resize, `--dump` of a frame before the resize), and step 4
+  again.
+
+## Results
+
+| Case | Frames | Call log | Pixels |
+|---|---|---|---|
+| `ry7c_01` 2560x1440, PP 3, DOF 5 focus 2, F2 (three front levels, `TS3_3`, make-colour S17) | 3 | IDENTICAL | IDENTICAL |
+| `ry7c_02` 643x200, PP 0 (frame-to-level mask S6) | 3 | IDENTICAL | IDENTICAL |
+| `ry7c_03` 643x216, PP 0 (2-tap resample, composite's second rectangle) | 3 | IDENTICAL | IDENTICAL |
+| `ry7c_04` 3840x2160, PP 5 | 3 | IDENTICAL | IDENTICAL |
+| `ry7c_05` triple 5760x1080, PP 3 | 3 | IDENTICAL | IDENTICAL |
+| `ry7c_06` / `_07` DOF with the light shafts on screen (sun view), PP 3 DOF 5 / PP 5 DOF 3 | 3 | IDENTICAL | IDENTICAL |
+| `ry7c_08` DOF 5 with the heat shimmer (spa_launch, `rustyac_heat_x100`) | 52 | IDENTICAL | IDENTICAL |
+| DOF 3 + GLARE 3 + shafts, resize 3:1600x900 (`rs7`, no row yet) | 5 | DIFFERENT (rebuild, gap 1) | IDENTICAL |
+| DOF 3 + GLARE 3, RAYS 0 (`rs12`, no row yet) | 5 | DIFFERENT (gap 2) | DIFFERENT (max 2) |
+| Step 4: every render-area `--post` row (`r23_*`, `ry3e_*`, `ry5*`, `ry6_*`, `ry7a_*`, `ry7c_*`) and overlays | | 118 of 118 IDENTICAL | |
+
+## Step 3: the oracle's, not the game's (from code)
+
+- Y6's "wrong data size, expected 5760000 got 3686400" came from the `png` encoder. `run_side`
+  (tools/render_oracle/src/main.rs) wrote every kept frame of a sequence at `rendered.width/height`, the
+  size after the last frame. A frame kept from before the resize (Y6's `rzg` kept frame 0) holds 1280x720
+  pixels, but its PNG was written at 1600x900. Each `Captured` frame now keeps its own size (`7cf5665`).
+- The game resizes fine. `kglResizeBuffers` 0x1400193d0 calls `ResizeBuffers(0, 0, 0, 0x1c, 2)` and
+  prints "ERROR: swapChain->ResizeBuffers FAILED" when that fails. No run printed it, and the game's
+  frames after the resize are 1600x900. Nothing goes into differences.md.
+
+## What the game does (from its code)
+
+- **Three front levels** take `CompositeMaskedBlurLevels_USNORM_TS3_<near>` (added to the technique
+  table). The composite's second rectangle (`ApplyDepthOfField_Composite` 0x140428da0, lines 460-465)
+  is built from the first texture bound, the farthest front result at its doubled size.
+- **Resample with 1-4 taps** (`CTextureUtil::Resample` 0x1403f6710) uses `MadT1_S<n>` with weight 1/n.
+  A 643x216 frame takes the 2-tap one.
+- **Masks and make-colour drawn**: the frame-to-level mask is S4 or S6 (S6 at 643x200), level to level
+  S4 or S1. Make-colour taps are `2^passes * 2 - 1` (3, 7 or 15), so S5, S13 or S17. S9 is never drawn.
+  Mask S2/S8/S9/S12/S16/S20/S25 are not reached by the halving rule either.
+- **BackgroundBlurFactorNormalize** (`ApplyDepthOfField_Source` 0x1404282e0, lines 347-415) is drawn
+  only for front levels from `this+0x1e4` on. That is the far count, unless flags 0x10 / 0x20 set it to
+  1 / 0, and AC's flags (`this+0x140`: 0, 2 or 6) never have those bits. So AC never draws it.
+- **DOF with the shafts**: draw 0's depth factors are the DOF's (`UpdateParameters_Base` 0x1403b46c0,
+  lines 143-158, calls `UpdateParameters_DepthOfFieldOpticalParameters`). The shafts' reversed range is
+  used only without DOF.
+- **DOF with the heat shimmer**: DOF reads the shimmer's third surface. Its resample (0x1404285a2) sets
+  that texture's mode, and the copy before it is point/clamp because the composite left the first
+  surface clamped. The shimmer's trailing surface switch happens only without DOF.
+
 # Task Y7a: DOF quality 5, doubled levels, DOF with glare at PP_QUALITY 5 (no release)
 
 ## Resume here
