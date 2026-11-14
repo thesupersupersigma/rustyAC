@@ -1,3 +1,63 @@
+# Task Y7a: DOF quality 5, doubled levels, DOF with glare at PP_QUALITY 5 (no release)
+
+## Resume here
+
+- **Done: steps 1-4, committed** (`47a66b9`, `9ed0fbf`, `07b0453`). No release (v0.49.2 comes with Y7d).
+- **Next**: Y7c, DOF with the light shafts / heat shimmer (both still refused) and resize with DOF + glare.
+
+## Results
+
+| Case | Frames | Call log | Pixels |
+|---|---|---|---|
+| `ry7a_01` DOF 5, 1280x720, F4 (mask S4, make-colour S5, `TS1_2`) | 3 | IDENTICAL | IDENTICAL |
+| `ry7a_02` DOF 5, 1024x576 (level 0 doubled: front and main up-resampled) | 3 | IDENTICAL | IDENTICAL |
+| `ry7a_03` DOF 5, 1920x1080 (two front levels: make-colour S5 + S13, `TS2_2`) | 3 | IDENTICAL | IDENTICAL |
+| `ry7a_04` DOF 5, resize 3:1600x900 (creation / clear / teardown order) | 6 | IDENTICAL | IDENTICAL |
+| `ry7a_05` DOF 5, default filter | 3 | IDENTICAL | IDENTICAL |
+| `ry7a_06` / `_07` DOF 3, 1024x576, F2, focus 2 / 40 m (doubled level, step 2) | 3 | IDENTICAL | IDENTICAL |
+| `ry7a_08` PP 5, GLARE 3, DOF 3 (a level the size of a glare halving, step 3) | 10 | IDENTICAL | IDENTICAL |
+| `ry7a_09` / `_10` / `_12` PP 5 with GLARE 3 / 5 / 1, DOF 5 / 4 / 5 | 10 | IDENTICAL | IDENTICAL |
+| `ry7a_11` PP 3, GLARE 3, DOF 5 | 10 | IDENTICAL | IDENTICAL |
+| Step 4: every render-area `--post` row (`r23_*`, `ry3e_*`, `ry5*`, `ry6_*`, `ry7a_*`) and overlays | | 110 of 110 IDENTICAL (`ry3e_01` / `ry5_03` after `07b0453`) | |
+| Planted: make-colour threshold 0.001 -> 0.0011 | 3 | DIFFERENT (1 word, +0x21c) | IDENTICAL: caught by the log |
+
+## What the game does (from its code)
+
+- **Front layer** (`ApplyDepthOfField_Source` 0x1404282e0, flags `this+0x140` = 6 at quality 5 only,
+  `SetDepthOfFieldEdgeQuality(3)`): for each of the first `0x1dc` (far) levels a
+  `BackgroundLayerMaskT1_USNORM_S<n>` (0x1404005a0; box taps of `GetTexCoordOffset_Box` with p9 set,
+  sampler mode 5 while drawn; threshold `[DOF] BACKGROUND_MASK_THRESHOLD` at +536) chained from the last
+  halving into the level's +0x48, then `BackgroundLayerMaskMakeColorT1_USNORM_S<5|9|13|17>`
+  (0x140400850; `GetColorWeight_CenterPeak` taps from the level's +0x1c, sampler mode 9; threshold 0.001
+  at +540; Modulate (0.5025, 0, 0, 0)) into +0x50.
+- **Per level** (DISC 0x140425f60): the front hexagon from +0x50 into +0xa8 (or +0x48, then up-resampled
+  into +0xa8 when doubled); the near blend into +0x50; the main hexagon; a doubled level's result
+  up-resampled (`MadT1_S4`, spread `+0x2c * 0.25 + 0.25`, source set to linear clamp first).
+- **Composite** `CompositeMaskedBlurLevels_USNORM_TS<far>_<near>` (0x1403f3510): the frame, front
+  results far-1..0 (factors +0xd0), main results 0..near-1 (+0xd8), Modulate (1.99, 1) (1.95 / 0.9
+  for aperture type 1).
+- **Textures**: per level +0xa0, +0x48, +0x50, +0xa8 (an alias of +0x48 when the sizes match)
+  in `CreateDeviceResources` order; clears +0xa0, +0xa8, +0x48, +0x50, +0x50. The TextureUtil pool
+  (0x140411900) makes textures in ask order, only the missing count per ask; at quality 5 no extra
+  work texture (`DOFLEVELPARAM::Initialize`: only edge 2 without 4).
+- **Step 3**: with PP_QUALITY 5 and glare, a DOF level and a glare halving of one size get the same
+  pool texture; the glare's next halving / bright pass then reads it at the sampler mode the DOF left
+  (`20 2 2`, not border). The port now reads the halving's saved mode.
+
+## A Task Y6 bug found by step 4
+
+- Y6 changed the aberration's `current = 1` to `current ^= 1` (for the DOF composite in e1). After the
+  heat shimmer `current` is 2, so it became 3 and `ry3e_01` / `ry5_03` panicked (index out of
+  bounds). Now e1 without DOF, e0 with it (`07b0453`). v0.49.1 shipped with this bug.
+
+## Not done
+
+- More than two front levels (refused; not reached at 1024x576 to 1920x1080 at quality 5).
+- Mask variants other than S4, make-colour S9 / S17: their code is ported (tap rule tested in
+  `box_taps_follow_the_game`), but no window size tried draws them, so no row proves them.
+- DOF with light shafts or heat shimmer, resize with DOF + glare (Y7c).
+- `BackgroundBlurFactorNormalize` (make-colour loop for levels past `0x1e4`): not drawn at these settings.
+
 # Task Y7: YEBIS for every video setting (stopped before step 1, no release)
 
 ## Resume here
