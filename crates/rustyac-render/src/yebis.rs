@@ -1758,8 +1758,14 @@ mod device {
                 return Err("yebis: the depth of field with no level drawn: not ported".into());
             }
             self.reset();
+            // the source is the current surface: the third after the heat shimmer, which comes back as the
+            // target behind the reset
+            let src = self.current;
+            if src == 2 {
+                self.effect_of_eight();
+            }
             let (w, h) = (self.width as u32, self.height as u32);
-            let mut cur = (self.effect[0].srv.clone(), w, h);
+            let mut cur = (self.effect[src].srv.clone(), w, h);
             // each source keeps its own mode
             for (t, hw, hh) in self.dof_halves.clone() {
                 let mode = self.mode(&cur.0);
@@ -1877,7 +1883,7 @@ mod device {
             self.current = 1;
             self.effect_with_depth();
             self.full_viewport();
-            let mut srvs = vec![self.effect[0].srv.clone()];
+            let mut srvs = vec![self.effect[src].srv.clone()];
             let mut factors = vec![[0.0; 2]];
             let t = if front {
                 // DrawRectGPU_DepthOfFieldCompositeMaskedBlurLevels: the front results far to near, then the levels
@@ -2065,7 +2071,9 @@ mod device {
             self.effect_with_depth();
             self.full_viewport();
             let u = self.cbuffer.copy(&self.used);
-            self.draw(8, &u, &[self.copy_sampler], std::slice::from_ref(e0), &draw_vertices(8, w, h, [0.0; 4], 0.0, 0))?;
+            // the first surface's own mode: point/clamp once the depth of field's composite has read it
+            let s = if self.frame_clamped[0] { SP } else { self.copy_sampler };
+            self.draw(8, &u, &[s], std::slice::from_ref(e0), &draw_vertices(8, w, h, [0.0; 4], 0.0, 0))?;
             let depth = pe.depth_factor();
             let d = crate::yebis_heat::draw(&heat.particles, &heat.view, &heat.frustum, [depth[2], depth[3]], [w, h], [1.0, 1.0], &heat.params);
             let c = self.context.clone();
@@ -2088,7 +2096,10 @@ mod device {
             c.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             c.DrawIndexed(heat.particles.len() as u32 * 6, 0, 0);
             c.PSSetShaderResources(0, Some(&[None, None, None]));
-            self.effect_of_eight();
+            // (the depth of field next starts with its own reset)
+            if pe.dof.is_none() {
+                self.effect_of_eight();
+            }
             Ok(())
         }
 
@@ -2114,9 +2125,6 @@ mod device {
             let shimmer = heat.and_then(|h| h.shimmer(&pe, self.particles as usize));
             // without chromatic aberration (VR) draws 2 and 6 go and the effect stays in its first surface
             let ca = camera.chromatic_aberration;
-            if shimmer.is_some() && pe.dof.is_some() {
-                return Err("yebis: the heat shimmer with the depth of field: not ported".into());
-            }
             if shimmer.is_some() && !ca {
                 return Err("yebis: the heat shimmer without chromatic aberration: not ported".into());
             }

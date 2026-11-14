@@ -952,9 +952,6 @@ impl PostEffect {
             (q, Some(focus)) if q > 0 => Dof::new(filter, q, focus, near, far, cam.fov_deg * 0.017453)?,
             _ => None,
         };
-        if dof.is_some() && sun.is_some() {
-            return Err("yebis: the depth of field with the light shafts on screen: not ported".into());
-        }
         let dof_range = dof.as_ref().map_or(range(near, far), Dof::depth);
         Ok(PostEffect {
             near,
@@ -982,7 +979,7 @@ impl PostEffect {
             ca_uniform: filter.get_float2("CHROMATIC_ABERRATION", "UNIFORM_DISPERSION")?,
             // measured (state dump of r23_09): the depth texture's cast for AC's float depth
             depth_cast: [1.0, 0.0, 1.0, -0.0],
-            depth: if sun.is_some() { range(far, near) } else { dof_range },
+            depth: if sun.is_some() && dof.is_none() { range(far, near) } else { dof_range },
             dof_depth: dof_range,
             dof,
             sun,
