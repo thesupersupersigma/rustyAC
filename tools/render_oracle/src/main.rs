@@ -541,7 +541,7 @@ fn run_side(args: &Args) -> Result<(), String> {
             if let (Some(log), Some(pixels)) = (&f.log, &f.pixels) {
                 std::fs::write(file(&format!("f{}.gpulog", f.index)), log).map_err(|e| e.to_string())?;
                 std::fs::write(file(&format!("f{}.rgba", f.index)), pixels).map_err(|e| e.to_string())?;
-                write_png(&file(&format!("f{}.png", f.index)), rendered.width, rendered.height, pixels)?;
+                write_png(&file(&format!("f{}.png", f.index)), f.size.0, f.size.1, pixels)?;
             }
         }
         std::fs::write(file("seq"), list).map_err(|e| e.to_string())?;

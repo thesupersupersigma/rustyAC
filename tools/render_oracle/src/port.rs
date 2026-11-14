@@ -740,7 +740,7 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
             rendered.width = width;
             rendered.height = height;
-            rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
+            rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index), (width, height)));
         } else if let Some(oculus) = camera.forward.oculus.as_deref_mut() {
             oculus.finish_rendering(&graphics);
             crate::oculus_fake::take_eyes();

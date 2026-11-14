@@ -539,6 +539,8 @@ pub struct Captured {
     pub pixels_hash: u64,
     pub log: Option<Vec<u8>>,
     pub pixels: Option<Vec<u8>>,
+    /// the frame's own size: a resize mid-sequence leaves the frames before it at the old one
+    pub size: (u32, u32),
 }
 
 /// FNV-1a.
@@ -552,8 +554,8 @@ pub fn hash(bytes: &[u8]) -> u64 {
 }
 
 impl Captured {
-    pub fn new(index: usize, log: Vec<u8>, draws: u64, pixels: Vec<u8>, keep: bool) -> Captured {
-        Captured { index, calls: log.iter().filter(|b| **b == 10).count(), draws, log_hash: hash(&log), pixels_hash: hash(&pixels), log: keep.then_some(log), pixels: keep.then_some(pixels) }
+    pub fn new(index: usize, log: Vec<u8>, draws: u64, pixels: Vec<u8>, keep: bool, size: (u32, u32)) -> Captured {
+        Captured { index, calls: log.iter().filter(|b| **b == 10).count(), draws, log_hash: hash(&log), pixels_hash: hash(&pixels), log: keep.then_some(log), pixels: keep.then_some(pixels), size }
     }
 }
 
@@ -1782,7 +1784,7 @@ impl Game {
                 crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
                 rendered.width = width;
                 rendered.height = height;
-                rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+                rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index), (width, height)));
             } else if profile.oculus {
                 let finish: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_STEREO_CAMERA_FORWARD_FINISH_RENDERING));
                 finish(camera);
