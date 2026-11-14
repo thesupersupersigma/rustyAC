@@ -1296,11 +1296,12 @@ mod device {
                 return self.draw_into(T_UP, to, &[[-x, -y], [x, -y], [-x, y], [x, y]], &[[0.25; 4]; 4], None, &[sampler], &[src], Some(v));
             }
             let taps = crate::yebis_cb::box_taps((w, h), (tw, th));
-            if taps.len() != 1 {
+            // MadT1_S<n> with weight 1/n each (Task Y7c: a DOF 5 source of 643x200 at PP_QUALITY 0 takes 2)
+            let Some(&t) = T_TAPS.get(taps.len() - 1) else {
                 return Err(format!("yebis: a glare resample of {w}x{h} to {tw}x{th} ({} taps) not ported", taps.len()));
-            }
+            };
             let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(w, h)]);
-            self.draw_into(8, to, &[[taps[0][0], taps[0][1]]], &[[1.0; 4]], None, &[sampler], &[src], Some(v))
+            self.draw_into(t, to, &taps, &vec![[1.0 / taps.len() as f32; 4]; taps.len()], None, &[sampler], &[src], Some(v))
         }
 
         /// The glare's bloom (`CRenderGlare::GenerateGlare` 0x14041d470 with no star, ghost, afterimage or
@@ -1756,10 +1757,6 @@ mod device {
             if n == 0 {
                 return Err("yebis: the depth of field with no level drawn: not ported".into());
             }
-            // the container's masked composites stop at two front levels
-            if front && far_n > 2 {
-                return Err(format!("yebis: the depth of field with {far_n} front levels: not ported"));
-            }
             self.reset();
             let (w, h) = (self.width as u32, self.height as u32);
             let mut cur = (self.effect[0].srv.clone(), w, h);
@@ -1905,7 +1902,9 @@ mod device {
             let u = self.cbuffer.dof_composite(t, d.store[0], &factors, front, &self.used);
             let mut samplers = vec![SL; srvs.len()];
             samplers[0] = SP;
-            let (l0w, l0h) = self.dof_levels[0].0.size;
+            // the second rectangle is the first texture bound's: the farthest front result (at its double's size) or level 0's
+            let l = &self.dof_levels[if front && far_n > 0 { far_n - 1 } else { 0 }].0;
+            let (l0w, l0h) = if l.doubled { ((2 * l.size.0).min(w), (2 * l.size.1).min(h)) } else { l.size };
             let v = rect_vertices([w as f32, h as f32], [0.0, 0.0, w as f32, h as f32], &[src_rect(w, h), src_rect(l0w, l0h)]);
             self.draw(t, &u, &samplers, &srvs, &v)?;
             // the composite read the first surface point/clamp: that becomes its own mode (the glare's halving reads it so)

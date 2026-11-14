@@ -33,7 +33,7 @@ use rustyac_physics::data::ini::IniReader;
 /// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d),
 /// then the depth of field's front blur factor and composites (59-78, Task Y6: `T_DOF_*`), then DOF 5's front layer:
 /// the background masks, their colours and the masked composites (79-104, Task Y7a).
-pub const TECHNIQUES: [&str; 105] = [
+pub const TECHNIQUES: [&str; 109] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -139,6 +139,10 @@ pub const TECHNIQUES: [&str; 105] = [
     "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_1",
     "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_2",
     "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_3",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_0",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_1",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_2",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_3",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
