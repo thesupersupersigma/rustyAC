@@ -989,8 +989,9 @@ mod device {
                         keep(&mut kept, &mut half_pool, target(device, pw, ph, f9.0, f9.1, true)?, pw, ph);
                     }
                 } else {
-                    // DOF on, everything in the pool is R16G16B16A16 (glare this[0xf4]: +0xc4), so one texture serves
-                    // a size's every ask (AllocateTextures 0x140411900: n of a size reuse what is there): the glare's
+                    // DOF on: the DOF's asks are R16G16B16A16, the glare's halvings only with the shafts (this[0xf4], init
+                    // flag 0x10000000: +0xc4, else +0xbc; CreateSystemObjects 0x140413c00), so one texture serves a size
+                    // and format's every ask (AllocateTextures 0x140411900: n of a size reuse what is there): the glare's
                     // halvings, the DOF's (this+0x458), then each level's work targets (+0x60: the front blur with
                     // EDGE flag 2, up to two hexagon temporaries, one more when doubled) and its double (+0x70)
                     let flag2 = (dof_q > 1 && dof_q < 5) as usize;
@@ -998,35 +999,38 @@ mod device {
                     let gsizes = super::glare_pool(base, quality, width, height);
                     let hsizes = super::halvings(levels[0].size, width, height);
                     // each ask makes only the textures its size lacks, in the order asked
-                    let mut need: Vec<(u32, u32)> = vec![];
-                    let mut ask = |s: (u32, u32), n: usize| {
+                    let mut need: Vec<((u32, u32), bool)> = vec![];
+                    let mut ask = |s: ((u32, u32), bool), n: usize| {
                         let have = need.iter().filter(|&&e| e == s).count();
                         need.extend(std::iter::repeat_n(s, n.saturating_sub(have)));
                     };
-                    gsizes.iter().chain(&hsizes).for_each(|&s| ask(s, 1));
+                    gsizes.iter().for_each(|&s| ask((s, shafts), 1));
+                    hsizes.iter().for_each(|&s| ask((s, true), 1));
                     for l in &levels {
-                        ask(l.size, work(l));
+                        ask((l.size, true), work(l));
                         if doubled(l) != l.size {
-                            ask(doubled(l), 1);
+                            ask((doubled(l), true), 1);
                         }
                     }
-                    let mut pool: Vec<((u32, u32), Vec<Target>)> = vec![];
+                    let mut pool: Vec<(((u32, u32), bool), Vec<Target>)> = vec![];
                     for s in need {
-                        let t = target(device, s.0, s.1, f9.0, f9.1, true)?;
-                        keep(&mut kept, &mut half_pool, t.clone(), s.0, s.1);
+                        let ((sw, sh), wide) = s;
+                        let f = if wide { f9 } else { f26 };
+                        let t = target(device, sw, sh, f.0, f.1, true)?;
+                        keep(&mut kept, &mut half_pool, t.clone(), sw, sh);
                         match pool.iter_mut().find(|e| e.0 == s) {
                             Some(e) => e.1.push(t),
                             None => pool.push((s, vec![t])),
                         }
                     }
-                    let get = |s: (u32, u32)| pool.iter().find(|e| e.0 == s).map(|e| e.1.clone()).unwrap_or_default();
+                    let get = |s: (u32, u32), wide: bool| pool.iter().find(|e| e.0 == (s, wide)).map(|e| e.1.clone()).unwrap_or_default();
                     for s in gsizes {
-                        let t = get(s)[0].clone();
+                        let t = get(s, shafts)[0].clone();
                         glare_pool.push((t.rtv.clone(), s.0, s.1));
                         glare_pool_targets.push((t, s.0, s.1));
                     }
                     for s in hsizes {
-                        let t = get(s)[0].clone();
+                        let t = get(s, true)[0].clone();
                         dof.push((t.rtv.clone(), s.0, s.1));
                         dof_halves.push((t, s.0, s.1));
                     }
@@ -1040,7 +1044,7 @@ mod device {
                             }
                         }
                         // the draw's source, front blur, result and two hexagon temporaries
-                        let temps = get(l.size);
+                        let temps = get(l.size, true);
                         let tmp = |j: usize| temps.get(j).cloned().unwrap_or_else(|| own.clone());
                         let src = dof_pool.iter().find(|p| p.0 == l.size).map(|p| p.1.clone()).ok_or("yebis: no DOF source")?;
                         dof_levels.push((*l, [src, tmp(0), own.clone(), tmp(flag2), tmp(flag2 + 1)], temps[..work(l).min(temps.len())].to_vec(), front.clone()));
