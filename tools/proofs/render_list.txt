@@ -232,3 +232,10 @@ ry7a_04 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry7a_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:5,5
 ry7a_06 | --track spa --view chase --post --size 1024x576 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f2 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,2
 ry7a_07 | --track spa --view chase --post --size 1024x576 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f2 --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,40
+# Task Y7a step 3: PP_QUALITY 5 with glare, a DOF level of a glare halving's size sharing its pool texture (the halving
+# reads it at the mode the DOF left); DOF 3 / 5 / 4 with GLARE 3 / 5 / 1, DOF 5 at PP_QUALITY 3
+ry7a_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 10 GLARE:3 PP_QUALITY:5 RAYS:1 DOF:3,5
+ry7a_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:3 PP_QUALITY:5 RAYS:1 DOF:5,5
+ry7a_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:5 PP_QUALITY:5 RAYS:1 DOF:4,5
+ry7a_11 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:5,5
+ry7a_12 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:1 PP_QUALITY:5 RAYS:1 DOF:5,8

@@ -1329,7 +1329,8 @@ mod device {
                 let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[src_rect(cur.1, cur.2)]);
                 self.draw(8, &u, &[sampler], &[cur.0.clone()], &v)?;
                 cur = (srv(&t), tw, th);
-                sampler = SLB;
+                // the halving's own mode: border, or what a DOF level sharing its pool texture left (PP_QUALITY 5)
+                sampler = self.mode(&cur.0);
             }
             // GenerateGlare_Source_BrightPass 0x140415a60 -> DrawRectGPU_BrightPass 0x1403ef1e0: exposure over
             // its scale, the generation range and the threshold, the vignette's rectangle as the second coordinates
@@ -1758,10 +1759,6 @@ mod device {
             // the container's masked composites stop at two front levels
             if front && far_n > 2 {
                 return Err(format!("yebis: the depth of field with {far_n} front levels: not ported"));
-            }
-            // the pool then hands the glare's halving a level's texture, and their sampler modes mix
-            if pe.glare.is_some() && self.dof_levels[..n].iter().any(|l| self.glare_pool.iter().any(|g| (g.1, g.2) == l.0.size)) {
-                return Err("yebis: the depth of field with a level of a glare halving's size (PP_QUALITY 5): not ported".into());
             }
             self.reset();
             let (w, h) = (self.width as u32, self.height as u32);
