@@ -247,3 +247,7 @@ ry7c_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry7c_06 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 3 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:5,5
 ry7c_07 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 3 GLARE:3 PP_QUALITY:5 RAYS:1 DOF:3,5
 ry7c_08 | --track spa --view chase --post --fxaa --size 1280x720 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/spa_launch.audiotape --frames 52 --ppfilter rustyac_heat_x100 DOF:5,5
+# Task Y7c second session: DOF with glare and the light shafts off (the glare's pool halvings in the glare format)
+ry7c_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:3 PP_QUALITY:3 DOF:3,5
+ry7c_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:3 PP_QUALITY:5 DOF:5,5
+ry7c_11 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 6 GLARE:5 PP_QUALITY:3 DOF:4,5

@@ -889,7 +889,8 @@ mod device {
                         glare.push(glare[3].clone());
                         continue;
                     }
-                    // DOF on sets this[0xf4]: the bright pass's first two take +0xc4 (Task Y6; with the shafts too: not proven)
+                    // shortcut: DOF on, the first two in R16G16B16A16 and the pair below fit the draws and clears, not the
+                    // game's objects (this[0xf4] is the shafts flag only; a resize makes 2 fewer), upgrade with Y7c gap 1
                     let f = if (dof_q > 0 && i < 2) || (shafts && (i == 0 || i == 2)) { f9 } else { f26 };
                     let t = target(device, gw, gg, f.0, f.1, true)?;
                     glare.push((t.clone(), gw, gg));
