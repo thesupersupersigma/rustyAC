@@ -31,8 +31,9 @@ use rustyac_physics::data::ini::IniReader;
 /// the star's (27-36, Task Y5b: the 3-tap pass, the 2- and 3-source sums, the 2-8 streak maximum), then the ghost's two passes (37-38, Task Y5c),
 /// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46),
 /// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d),
-/// then the depth of field's front blur factor and composites (59-78, Task Y6: `T_DOF_*`).
-pub const TECHNIQUES: [&str; 79] = [
+/// then the depth of field's front blur factor and composites (59-78, Task Y6: `T_DOF_*`), then DOF 5's front layer:
+/// the background masks, their colours and the masked composites (79-104, Task Y7a).
+pub const TECHNIQUES: [&str; 105] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -112,6 +113,32 @@ pub const TECHNIQUES: [&str; 79] = [
     "DepthOfField_CompositeBlurredLevels_USNORM_T1",
     "DepthOfField_CompositeBlurredLevels_USNORM_T2",
     "DepthOfField_CompositeBlurredLevels_USNORM_T3",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S1",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S2",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S4",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S6",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S8",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S9",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S12",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S16",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S20",
+    "DepthOfField_BackgroundLayerMaskT1_USNORM_S25",
+    "DepthOfField_BackgroundLayerMaskMakeColorT1_USNORM_S5",
+    "DepthOfField_BackgroundLayerMaskMakeColorT1_USNORM_S9",
+    "DepthOfField_BackgroundLayerMaskMakeColorT1_USNORM_S13",
+    "DepthOfField_BackgroundLayerMaskMakeColorT1_USNORM_S17",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS0_0",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS0_1",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS0_2",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS0_3",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS1_0",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS1_1",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS1_2",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS1_3",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_0",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_1",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_2",
+    "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS2_3",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
@@ -149,6 +176,13 @@ pub const T_SHAFT_MASK: usize = 47;
 pub const T_DOF_BLEND: usize = 59;
 pub const T_DOF_FRONT: usize = 60;
 pub const T_DOF_LEVELS: usize = 76;
+/// DOF 5's front layer (Task Y7a): `BackgroundLayerMaskT1_USNORM_S<n>` at `T_DOF_MASK + k` for the k-th of
+/// `MASK_TAPS`, `..MakeColorT1_USNORM_S<5, 9, 13, 17>` from `T_DOF_MAKE`, `CompositeMaskedBlurLevels_USNORM_TS<far>_<near>`
+/// at `T_DOF_MASKED + far * 4 + near`.
+pub const T_DOF_MASK: usize = 79;
+pub const MASK_TAPS: [usize; 10] = [1, 2, 4, 6, 8, 9, 12, 16, 20, 25];
+pub const T_DOF_MAKE: usize = 89;
+pub const T_DOF_MASKED: usize = 93;
 pub const T_RADIAL: usize = 48;
 pub const T_CORONA: usize = 52;
 pub const T_MAD4: usize = 53;
@@ -578,6 +612,8 @@ pub struct Dof {
     pub store: [f32; 4],
     /// the hexagon's angle: the diaphragm's (+0x194, AC never sets a maximum aperture) and 30 degrees
     pub angle: f32,
+    /// `[DOF] BACKGROUND_MASK_THRESHOLD` (+0x160, the front layer's mask)
+    pub mask_threshold: f32,
 }
 
 impl Dof {
@@ -592,8 +628,8 @@ impl Dof {
                 return Err(format!("yebis: [DOF] {key} other than {want} not ported"));
             }
         }
-        if !(1..=4).contains(&quality) {
-            return Err(format!("yebis: [POST_PROCESS] DOF={quality} not ported (its front layer)"));
+        if !(1..=5).contains(&quality) {
+            return Err(format!("yebis: [POST_PROCESS] DOF={quality} not ported"));
         }
         let (fnumber, sensor, adaptive) = (f("APERTURE_F_NUMBER")?, f("IMAGE_SENSOR_HEIGHT")?, f("ADAPTIVE_APERTURE_FACTOR")?);
         let base_fov = f("BASE_FOV")? * 0.017453;
@@ -611,7 +647,7 @@ impl Dof {
         let coc = (d * focal) / (focus - focal);
         let x = 64000.0 / ((near - focus) / near - 1.0).abs();
         let y = x * -1.0;
-        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], angle: diaphragm_angle(diaphragm(filter)?, vfov) + std::f32::consts::FRAC_PI_6 }))
+        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], angle: diaphragm_angle(diaphragm(filter)?, vfov) + std::f32::consts::FRAC_PI_6, mask_threshold: f("BACKGROUND_MASK_THRESHOLD")? }))
     }
 
     /// The factor store as the depth range (+0xb8c..+0xb9c): the tail recomputes +0xb94 and +0xb98.
@@ -1233,10 +1269,34 @@ impl Cbuffer {
     /// A depth of field composite (`DrawRectGPU_DepthOfFieldCompositeLevels*` 0x1403f2f20 / 0x1403f3210):
     /// `CTextureUtil::SetEffectDepthOfFieldFactorScaleOffsetParameters` 0x1403f2df0 of the factor store's x and each
     /// source's blend factor (the effect surface's (0, 0), then the levels').
-    pub fn dof_composite(&mut self, t: usize, x: f32, factors: &[[f32; 2]], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+    /// With the front layer (`..MaskedBlurLevels` 0x1403f3510) also a Modulate vector: (1.99, 1, 0, 0) for the
+    /// hexagon (ApplyDepthOfField_Composite: (1.95, 0.9) for aperture type 1).
+    pub fn dof_composite(&mut self, t: usize, x: f32, factors: &[[f32; 2]], masked: bool, used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        if masked {
+            self.put(MODULATE, &[1.99, 1.0, 0.0, 0.0]);
+        }
         self.put(DOF_SCALE_OFFSET, &[x, 1.0 - x, 1.0 / x, ((1.0 - x) * -1.0) / x]);
         let f: Vec<f32> = factors.iter().flat_map(|&[a, b]| [a, b, 0.0, 0.0]).collect();
         self.put(LEVEL_BLEND, &f);
+        self.upload(&used[t])
+    }
+
+    /// A front-layer mask or its colour (`DrawRectGPU_DepthOfFieldLayerMask` 0x1403f3860, `..MakeColor` 0x1403f3a90,
+    /// Task Y7a): the factor store's x, the level's far-side factor pair, a threshold at `threshold.0` and the taps
+    /// (the mask's at TexCoordOffsetV16, the colour's at TexCoordOffsetP32).
+    #[allow(clippy::too_many_arguments)]
+    pub fn dof_layer(&mut self, t: usize, x: f32, factor: [f32; 2], threshold: (usize, f32), p32: bool, taps: &[[f32; 2]], used: &[Vec<(usize, usize)>]) -> [u8; 4096] {
+        self.put(DOF_SCALE_OFFSET, &[x, 1.0 - x, 1.0 / x, ((1.0 - x) * -1.0) / x]);
+        self.put(LEVEL_BLEND, &factor);
+        self.put(threshold.0, &[threshold.1]);
+        if p32 {
+            // the colour's first Modulate vector (+0x108): 0.5025
+            self.put(MODULATE, &[f32::from_bits(0x3f00_a4aa), 0.0, 0.0, 0.0]);
+        }
+        let at = if p32 { TEX_OFFSET } else { TAPS };
+        for (k, &[u, v]) in taps.iter().enumerate() {
+            self.put(at + k * 16, &[u, v, 0.0, 0.0]);
+        }
         self.upload(&used[t])
     }
 
@@ -1614,6 +1674,47 @@ pub fn box_taps(src: (u32, u32), dst: (u32, u32)) -> Vec<[f32; 2]> {
     v.iter().flat_map(|&y| u.iter().map(move |&x| [x, y])).collect()
 }
 
+/// `box_taps` as `CTextureUtil::DepthOfFieldLayerMask` 0x1404005a0 asks (its flag on): `ceil(s / d)` taps an
+/// axis (at most 5), half a texel apart each side.
+pub fn mask_taps(src: (u32, u32), dst: (u32, u32)) -> Vec<[f32; 2]> {
+    let axis = |s: u32, d: u32| -> Vec<f32> {
+        let (s, d) = (s as f32, d as f32);
+        let mut n = (s / d).ceil() as i32;
+        if n > 1 && d >= 8.0 {
+            let f = (n - 1) as f32 * d;
+            if f < s && s - (n - 1) as f32 <= f {
+                n -= 1;
+            }
+        }
+        let n = n.min(5);
+        (0..n).map(|i| ((i * 2 - (n - 1)) as f32 * 0.5) * (1.0 / s)).collect()
+    };
+    let (u, v) = (axis(src.0, dst.0), axis(src.1, dst.1));
+    v.iter().flat_map(|&y| u.iter().map(move |&x| [x, y])).collect()
+}
+
+/// `GPUTexUtil_GetColorWeight_CenterPeak` 0x1403aa820 for a `w` x `h` source and a level's diameter `c` (+0x1c),
+/// shader model 3's 17 at most: 5, 9, 13 or 17 taps.
+pub fn centre_peak(w: u32, h: u32, c: i32) -> Vec<[f32; 2]> {
+    let mut scale = 1.0f32;
+    if 17 < c {
+        scale *= c as f32 / 17.0;
+    }
+    let k = c.min(17);
+    let (u, v) = ((1.0 / w as f32) * scale, (1.0 / h as f32) * scale);
+    let mut t = vec![[u * 0.0, v * 0.0], [u * 0.0, v * -1.0], [u * 0.0, v], [u * -1.0, v * 0.0], [u, v * 0.0]];
+    if k >= 4 {
+        t.extend([[u * -2.0, v * -1.0], [u * 2.0, v], [u, v * -2.0], [u * -1.0, v * 2.0]]);
+    }
+    if k >= 6 {
+        t.extend([[u * -1.0, v * -5.0], [u, v * 5.0], [u * -5.0, v], [u * 5.0, v * -1.0]]);
+    }
+    if k >= 10 {
+        t.extend([[u * -8.0, v * -7.0], [u * 8.0, v * 7.0], [u * -7.0, v * 8.0], [u * 7.0, v * -8.0]]);
+    }
+    t
+}
+
 /// `used` for every technique.
 pub fn used_all(tfxo: &crate::yebis_tfxo::Tfxo) -> Result<Vec<Vec<(usize, usize)>>, String> {
     let mut out = vec![Vec::new(); TECHNIQUES.len()];
@@ -1669,6 +1770,12 @@ mod tests {
         // triple 128x24: 2:3 first step, then 16x2 to 1x1 capped at five taps
         assert_eq!(box_taps((128, 24), (64, 8)), vec![[0.0, -1.0 / 24.0], [0.0, 1.0 / 24.0]]);
         assert_eq!(box_taps((16, 2), (1, 1)).len(), 5);
+        // DOF 5's mask, 640x360 to 384x216 (Task Y7a's game upload)
+        let (u, v) = (0.5 / 640.0, 0.5 / 360.0);
+        assert_eq!(mask_taps((640, 360), (384, 216)), vec![[-u, -v], [u, -v], [-u, v], [u, v]]);
+        assert_eq!(mask_taps((384, 216), (384, 216)), vec![[0.0, 0.0]]);
+        assert_eq!(centre_peak(384, 216, 3), vec![[0.0, 0.0], [0.0, -1.0 / 216.0], [0.0, 1.0 / 216.0], [-1.0 / 384.0, 0.0], [1.0 / 384.0, 0.0]]);
+        assert_eq!([7, 15, 31].map(|c| centre_peak(192, 108, c).len()), [13, 17, 17]);
     }
 
     const SCENES: [(&str, &str); 3] = [("r23_09", "spa_chase_r23_09"), ("r23_10", "spa_chase_r23_10"), ("r23_16", "monza_chase_r23_16")];

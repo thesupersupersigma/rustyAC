@@ -186,6 +186,8 @@ pub struct DofLevel {
     pub passes: u32,
     pub l30: f32,
     pub doubled: bool,
+    /// the doubling table's share (+0x2c): the up-resample's spread
+    pub frac: f32,
 }
 
 /// The levels of video.ini DOF `q` (1-5): the quality table 0x141521690's scale, level count, combination
@@ -218,7 +220,7 @@ pub fn dof_levels(q: i32, base: i32, w: i32, h: i32) -> Vec<DofLevel> {
             }
             let n = radius + 1;
             let diam = rustyac_math::powf(2.0, n as f32) * 2.0 - 1.0 + [0.0, 0.5, 0.75, 1.0][idx];
-            DofLevel { size: (lw, lh), passes: n, l30: diam / lh as f32, doubled: idx > 0 }
+            DofLevel { size: (lw, lh), passes: n, l30: diam / lh as f32, doubled: idx > 0, frac: [0.0, 0.5, 0.75, 1.0][idx] }
         })
         .collect()
 }
@@ -499,7 +501,9 @@ mod device {
         /// The depth of field with DOF on (Task Y6): the frame's halvings, then each level with its source,
         /// front blur factor, result and two work targets.
         dof_halves: Vec<(Target, u32, u32)>,
-        dof_levels: Vec<(super::DofLevel, [Target; 5])>,
+        /// each level's source, front blur, result, two hexagon temporaries; its work targets (+0x68); DOF 5's
+        /// front-layer mask (+0x48), colour (+0x50) and front result (+0xa8, the mask when no wider)
+        dof_levels: Vec<DofLevelTargets>,
     }
 
     /// The bytes of one input element.
@@ -601,6 +605,8 @@ mod device {
         }
         out
     }
+
+    type DofLevelTargets = (super::DofLevel, [Target; 5], Vec<Target>, Option<[Target; 3]>);
 
     impl Yebis {
         /// Everything YEBIS makes before its first frame. `filter` is the ppfilter of video.ini's
@@ -914,6 +920,9 @@ mod device {
                 let mut dof = Views::new();
                 let mut dof_pool: Vec<((u32, u32), Target)> = vec![];
                 let mut dof_own: Vec<Target> = vec![];
+                // DOF 5 (EDGE flag 4, this[200]): each level's mask and colour at its size, its front result at its double's
+                let mut dof_front: Vec<Option<[Target; 3]>> = vec![];
+                let mut front_made = 0;
                 if levels.is_empty() {
                     for (dw, dh) in super::dof_sizes(base, width, height) {
                         keep(&mut kept, &mut dof, target(device, dw, dh, f9.0, f9.1, true)?, dw, dh);
@@ -926,9 +935,19 @@ mod device {
                             keep(&mut kept, &mut dof, t, l.size.0, l.size.1);
                         }
                     }
+                    // (CreateDeviceResources 0x140422750: the pool, then each level's +0xa0, +0x48, +0x50, +0xa8)
                     for l in &levels {
                         let (ow, oh) = doubled(l);
                         dof_own.push(target(device, ow, oh, f9.0, f9.1, true)?);
+                        dof_front.push(if dof_q == 5 {
+                            let mask = target(device, l.size.0, l.size.1, f9.0, f9.1, true)?;
+                            let colour = target(device, l.size.0, l.size.1, f9.0, f9.1, true)?;
+                            let front = if (ow, oh) == l.size { mask.clone() } else { target(device, ow, oh, f9.0, f9.1, true)? };
+                            front_made += 2 + ((ow, oh) != l.size) as usize;
+                            Some([mask, colour, front])
+                        } else {
+                            None
+                        });
                     }
                 }
                 let (luminance_size, chain) = super::luminance_sizes(width, height);
@@ -974,27 +993,31 @@ mod device {
                     // a size's every ask (AllocateTextures 0x140411900: n of a size reuse what is there): the glare's
                     // halvings, the DOF's (this+0x458), then each level's work targets (+0x60: the front blur with
                     // EDGE flag 2, up to two hexagon temporaries, one more when doubled) and its double (+0x70)
-                    let flag2 = (dof_q > 1) as usize;
+                    let flag2 = (dof_q > 1 && dof_q < 5) as usize;
+                    let work = |l: &super::DofLevel| (l.passes as usize - 1).min(2) + (doubled(l) != l.size) as usize + flag2;
                     let gsizes = super::glare_pool(base, quality, width, height);
                     let hsizes = super::halvings(levels[0].size, width, height);
-                    let mut need: Vec<((u32, u32), usize)> = vec![];
-                    let mut ask = |s: (u32, u32), n: usize| match need.iter_mut().find(|e| e.0 == s) {
-                        Some(e) => e.1 = e.1.max(n),
-                        None if n > 0 => need.push((s, n)),
-                        None => {}
+                    // each ask makes only the textures its size lacks, in the order asked
+                    let mut need: Vec<(u32, u32)> = vec![];
+                    let mut ask = |s: (u32, u32), n: usize| {
+                        let have = need.iter().filter(|&&e| e == s).count();
+                        need.extend(std::iter::repeat_n(s, n.saturating_sub(have)));
                     };
                     gsizes.iter().chain(&hsizes).for_each(|&s| ask(s, 1));
                     for l in &levels {
-                        ask(l.size, (l.passes as usize - 1).min(2) + l.doubled as usize + flag2);
-                        if l.doubled {
+                        ask(l.size, work(l));
+                        if doubled(l) != l.size {
                             ask(doubled(l), 1);
                         }
                     }
                     let mut pool: Vec<((u32, u32), Vec<Target>)> = vec![];
-                    for (s, n) in need {
-                        let ts = (0..n).map(|_| target(device, s.0, s.1, f9.0, f9.1, true)).collect::<Result<Vec<_>, _>>()?;
-                        ts.iter().for_each(|t| keep(&mut kept, &mut half_pool, t.clone(), s.0, s.1));
-                        pool.push((s, ts));
+                    for s in need {
+                        let t = target(device, s.0, s.1, f9.0, f9.1, true)?;
+                        keep(&mut kept, &mut half_pool, t.clone(), s.0, s.1);
+                        match pool.iter_mut().find(|e| e.0 == s) {
+                            Some(e) => e.1.push(t),
+                            None => pool.push((s, vec![t])),
+                        }
                     }
                     let get = |s: (u32, u32)| pool.iter().find(|e| e.0 == s).map(|e| e.1.clone()).unwrap_or_default();
                     for s in gsizes {
@@ -1007,14 +1030,20 @@ mod device {
                         dof.push((t.rtv.clone(), s.0, s.1));
                         dof_halves.push((t, s.0, s.1));
                     }
-                    for (l, own) in levels.iter().zip(&dof_own) {
+                    for ((l, own), front) in levels.iter().zip(&dof_own).zip(&dof_front) {
                         let (ow, oh) = doubled(l);
                         keep(&mut kept, &mut dof, own.clone(), ow, oh);
+                        // ClearAllGPUResources: +0xa0, +0xa8, +0x48, +0x50 twice (+0x58 is +0x50)
+                        if let Some([mask, colour, fr]) = front {
+                            for (t, (cw, ch)) in [(fr, (ow, oh)), (mask, l.size), (colour, l.size), (colour, l.size)] {
+                                keep(&mut kept, &mut dof, t.clone(), cw, ch);
+                            }
+                        }
                         // the draw's source, front blur, result and two hexagon temporaries
                         let temps = get(l.size);
                         let tmp = |j: usize| temps.get(j).cloned().unwrap_or_else(|| own.clone());
                         let src = dof_pool.iter().find(|p| p.0 == l.size).map(|p| p.1.clone()).ok_or("yebis: no DOF source")?;
-                        dof_levels.push((*l, [src, tmp(0), own.clone(), tmp(flag2), tmp(flag2 + 1)]));
+                        dof_levels.push((*l, [src, tmp(0), own.clone(), tmp(flag2), tmp(flag2 + 1)], temps[..work(l).min(temps.len())].to_vec(), front.clone()));
                     }
                 }
                 let mut analysis = Vec::new();
@@ -1158,7 +1187,7 @@ mod device {
                     // alpha dest (+0x118 ×2), the AE query (+0x1c8: 128x64, then the chain), the AF query
                     // (+0x1d0: two 1x1) and CTextureUtil's 16x16 analyser
                     // DOF on: its pool's sizes and each level's result for the two, the glare's halvings inside the pool
-                    released: 2 + glare.len() + 3 + 2 + 1 + 2 + 1 + half_pool.len() + chain.len() + if levels.is_empty() { 2 + glare_pool_targets.len() } else { dof_pool.len() + dof_own.len() },
+                    released: 2 + glare.len() + 3 + 2 + 1 + 2 + 1 + half_pool.len() + chain.len() + if levels.is_empty() { 2 + glare_pool_targets.len() } else { dof_pool.len() + dof_own.len() + front_made },
                     screen: screen.map(|(_, w, h)| (w, h)),
                     glare,
                     glare_levels,
@@ -1711,15 +1740,24 @@ mod device {
         /// round's first draw: the effect surface halved down to each drawn level's source, each level's front blur
         /// factor and hexagon passes, then the levels composited into the other effect surface (Task Y6).
         unsafe fn dof(&mut self, pe: &PostEffect, d: &crate::yebis_cb::Dof) -> Result<(), String> {
-            use crate::yebis_cb::{dof_counts, dof_level_factors, hexagon_taps, T_DOF_BLEND, T_DOF_FRONT, T_DOF_LEVELS, T_GAUSS7};
+            use crate::yebis_cb::{centre_peak, dof_counts, dof_level_factors, hexagon_taps, mask_taps, MASK_TAPS, T_DOF_BLEND, T_DOF_FRONT, T_DOF_LEVELS, T_DOF_MAKE, T_DOF_MASK, T_DOF_MASKED, T_GAUSS7};
             let l30: Vec<f32> = self.dof_levels.iter().map(|l| l.0.l30).collect();
-            // the edge flags (+0x140): AC's EDGE_QUALITY call fails below DOF 5, which keeps the table's
-            let flags = if d.quality == 1 { 0 } else { 2 };
+            // the edge flags (+0x140): AC's EDGE_QUALITY call (6) fails below DOF 5, which keeps the table's
+            let flags = match d.quality {
+                1 => 0,
+                5 => 6,
+                _ => 2,
+            };
+            let front = flags & 4 != 0;
             let f = dof_level_factors(&l30, d.ratio, flags);
             let (near_n, far_n) = dof_counts(&f, pe.near, pe.far, d.focus);
             let n = near_n.max(far_n);
-            if n == 0 || self.dof_levels[..n].iter().any(|l| l.0.doubled) {
-                return Err(format!("yebis: the depth of field with {n} levels (a doubled one, or none): not ported"));
+            if n == 0 {
+                return Err("yebis: the depth of field with no level drawn: not ported".into());
+            }
+            // the container's masked composites stop at two front levels
+            if front && far_n > 2 {
+                return Err(format!("yebis: the depth of field with {far_n} front levels: not ported"));
             }
             // the pool then hands the glare's halving a level's texture, and their sampler modes mix
             if pe.glare.is_some() && self.dof_levels[..n].iter().any(|l| self.glare_pool.iter().any(|g| (g.1, g.2) == l.0.size)) {
@@ -1734,10 +1772,12 @@ mod device {
                 self.resample(cur, (t.clone(), hw, hh), 0.0, mode)?;
                 cur = (t.srv, hw, hh);
             }
-            // ApplyDepthOfField_Source: a level's source is resampled only when its size differs
+            let halved = cur.clone();
+            // ApplyDepthOfField_Source: a level's source is resampled only when its size differs (with the front
+            // layer only the near side's)
             let mut srcs = vec![];
-            let levels = self.dof_levels[..n].to_vec();
-            for (l, t) in levels {
+            let levels = self.dof_levels[..if front { near_n } else { n }].to_vec();
+            for (l, t, ..) in levels {
                 if (cur.1, cur.2) != l.size {
                     let mode = self.mode(&cur.0);
                     self.resample(cur, (t[0].clone(), l.size.0, l.size.1), 0.0, mode)?;
@@ -1745,40 +1785,128 @@ mod device {
                 }
                 srcs.push(cur.0.clone());
             }
+            let fronts: Vec<[Target; 3]> = self.dof_levels[..far_n].iter().filter_map(|l| l.3.clone()).collect();
+            if front {
+                // the far side's masks, each from the last (DepthOfFieldLayerMask 0x1404005a0), then their colours
+                // (DepthOfFieldLayerMaskMakeColor 0x140400850, the level's diameter +0x1c: 2^passes * 2 - 1);
+                // both set their source's mode for the draw and put it back
+                let mut m = halved;
+                for i in 0..far_n {
+                    let (lw, lh) = self.dof_levels[i].0.size;
+                    let taps = mask_taps((m.1, m.2), (lw, lh));
+                    // DrawRectGPU_DepthOfFieldLayerMask 0x1403f3860 walks down to a program the container has
+                    let k = MASK_TAPS.iter().rposition(|&c| c <= taps.len()).ok_or("yebis: no mask program")?;
+                    let t = T_DOF_MASK + k;
+                    let u = self.cbuffer.dof_layer(t, d.store[0], [f[i][0], f[i][1]], (536, d.mask_threshold), false, &taps[..MASK_TAPS[k]], &self.used);
+                    let saved = self.saved_mode(&m.0);
+                    self.target_only(&fronts[i][0].rtv);
+                    self.viewport(0.0, 0.0, lw as f32, lh as f32);
+                    self.draw(t, &u, &[SP], &[m.0.clone()], &rect_vertices([lw as f32, lh as f32], [0.0, 0.0, lw as f32, lh as f32], &[src_rect(m.1, m.2)]))?;
+                    self.restore_mode(saved);
+                    m = (fronts[i][0].srv.clone(), lw, lh);
+                }
+                for i in 0..far_n {
+                    let l = self.dof_levels[i].0;
+                    let (lw, lh) = l.size;
+                    let taps = centre_peak(lw, lh, (1 << l.passes) * 2 - 1);
+                    let t = T_DOF_MAKE + [5, 9, 13, 17].iter().position(|&c| c == taps.len()).ok_or("yebis: no mask colour program")?;
+                    // FactorThreshold: 0.001 for a 16-bit float source (DrawRectGPU_DepthOfFieldLayerMaskMakeColor 0x1403f3a90)
+                    let u = self.cbuffer.dof_layer(t, d.store[0], [f[i][0], f[i][1]], (540, 0.001), true, &taps, &self.used);
+                    let src = fronts[i][0].srv.clone();
+                    let saved = self.saved_mode(&src);
+                    self.target_only(&fronts[i][1].rtv);
+                    self.viewport(0.0, 0.0, lw as f32, lh as f32);
+                    self.draw(t, &u, &[9], &[src], &rect_vertices([lw as f32, lh as f32], [0.0, 0.0, lw as f32, lh as f32], &[src_rect(lw, lh)]))?;
+                    self.restore_mode(saved);
+                }
+            }
             // ApplyDepthOfField_ApertureFilterLevel_EAPERTUREFM_DISC 0x140425f60
             let [_, _, z, sw] = d.store;
             let levels = self.dof_levels[..n].to_vec();
-            for (i, (l, t)) in levels.into_iter().enumerate() {
+            for (i, (l, t, work, fr)) in levels.into_iter().enumerate() {
                 let (lw, lh) = l.size;
                 let v = || rect_vertices([lw as f32, lh as f32], [0.0, 0.0, lw as f32, lh as f32], &[src_rect(lw, lh)]);
+                // the hexagon passes (ArbitraryKernelFilter_nPass 0x1404040a0): the last into `to`, the others into two temporaries
+                let hexagon = |me: &mut Self, mut src: Option<ID3D11ShaderResourceView>, to: &Target, temps: [&Target; 2]| -> Result<(), String> {
+                    for p in 0..l.passes {
+                        let (taps, colours) = hexagon_taps(d.angle, p, l.passes, lw, lh);
+                        let to = if p + 1 == l.passes { to.clone() } else { temps[(p & 1) as usize].clone() };
+                        me.draw_into(T_GAUSS7, (to.clone(), lw, lh), &taps, &colours, None, &[8], &[src], Some(v()))?;
+                        src = to.srv;
+                    }
+                    Ok(())
+                };
+                // a doubled level's result up-resampled (Resample's spread: +0x2c * 0.25 + 0.25 times the result blur scale 1),
+                // its source first set to address mode 2 (vtable +0x80: linear clamp, sampler 8)
+                let up = |me: &mut Self, from: &Target, to: &Target| {
+                    let (ow, oh) = ((2 * lw).min(w), (2 * lh).min(h));
+                    me.resample((from.srv.clone(), lw, lh), (to.clone(), ow, oh), (l.frac * 0.25 + 0.25).clamp(0.0, 1.0), 8)
+                };
+                let doubled = l.doubled;
+                if let Some([mask, colour, fres]) = fr.as_ref().filter(|_| i < far_n) {
+                    let temps = [work.first().unwrap_or(mask), work.get(1).unwrap_or(mask)];
+                    hexagon(self, colour.srv.clone(), if doubled { mask } else { fres }, temps)?;
+                    if doubled {
+                        up(self, mask, fres)?;
+                    }
+                }
+                if front && i >= near_n {
+                    continue;
+                }
                 let mut src = srcs[i].clone();
                 if flags & 2 != 0 && i < near_n {
                     let a = -f[i][2];
-                    // (the front blur factor puts its source's mode back: RENDER_ORACLE_SAMPLER_LOG)
-                    let (key, mode) = (src.as_ref().map(|v| self.mode_key(v)), self.mode(&src));
-                    self.draw_into(T_DOF_BLEND, (t[1].clone(), lw, lh), &[], &[[1.0, 1.0, 1.0, a * z], [0.0, 0.0, 0.0, f[i][3] + a * sw]], None, &[9], &[src], Some(v()))?;
-                    if let Some(key) = key {
-                        self.modes.insert(key, mode);
-                    }
-                    src = t[1].srv.clone();
-                }
-                for p in 0..l.passes {
-                    let (taps, colours) = hexagon_taps(d.angle, p, l.passes, lw, lh);
-                    let to = if p + 1 == l.passes { t[2].clone() } else { t[3 + (p & 1) as usize].clone() };
-                    self.draw_into(T_GAUSS7, (to.clone(), lw, lh), &taps, &colours, None, &[8], &[src], Some(v()))?;
+                    // into the front layer's colour, else a work target (the front blur factor puts its source's mode
+                    // back: RENDER_ORACLE_SAMPLER_LOG)
+                    let to = match &fr {
+                        Some([_, colour, _]) => colour.clone(),
+                        None if doubled => work[work.len() - 2].clone(),
+                        None => t[1].clone(),
+                    };
+                    let saved = self.saved_mode(&src);
+                    self.draw_into(T_DOF_BLEND, (to.clone(), lw, lh), &[], &[[1.0, 1.0, 1.0, a * z], [0.0, 0.0, 0.0, f[i][3] + a * sw]], None, &[9], &[src], Some(v()))?;
+                    self.restore_mode(saved);
                     src = to.srv;
+                }
+                if front || doubled {
+                    let last = if doubled { work[work.len() - 1].clone() } else { t[2].clone() };
+                    let temps = [work.first().unwrap_or(&last).clone(), work.get(1).unwrap_or(&last).clone()];
+                    hexagon(self, src, &last, [&temps[0], &temps[1]])?;
+                    if doubled {
+                        up(self, &last, &t[2])?;
+                    }
+                } else {
+                    hexagon(self, src, &t[2], [&t[3], &t[4]])?;
                 }
             }
             // ApplyDepthOfField_Composite 0x140428da0 into the other surface
             self.current = 1;
             self.effect_with_depth();
             self.full_viewport();
-            let t = if flags & 2 != 0 { T_DOF_FRONT + far_n * 4 + near_n } else { T_DOF_LEVELS + n };
-            let factors: Vec<[f32; 2]> = std::iter::once([0.0; 2]).chain(f[..n].iter().map(|l| [l[0], l[1]])).collect();
-            let u = self.cbuffer.dof_composite(t, d.store[0], &factors, &self.used);
             let mut srvs = vec![self.effect[0].srv.clone()];
-            srvs.extend(self.dof_levels[..n].iter().map(|l| l.1[2].srv.clone()));
-            let mut samplers = vec![SL; n + 1];
+            let mut factors = vec![[0.0; 2]];
+            let t = if front {
+                // DrawRectGPU_DepthOfFieldCompositeMaskedBlurLevels: the front results far to near, then the levels
+                for k in (0..far_n).rev() {
+                    srvs.push(fronts[k][2].srv.clone());
+                    factors.push([f[k][0], f[k][1]]);
+                }
+                for k in 0..near_n {
+                    srvs.push(self.dof_levels[k].1[2].srv.clone());
+                    factors.push([f[k][2], f[k][3]]);
+                }
+                T_DOF_MASKED + far_n * 4 + near_n
+            } else {
+                srvs.extend(self.dof_levels[..n].iter().map(|l| l.1[2].srv.clone()));
+                factors.extend(f[..n].iter().map(|l| [l[0], l[1]]));
+                if flags & 2 != 0 {
+                    T_DOF_FRONT + far_n * 4 + near_n
+                } else {
+                    T_DOF_LEVELS + n
+                }
+            };
+            let u = self.cbuffer.dof_composite(t, d.store[0], &factors, front, &self.used);
+            let mut samplers = vec![SL; srvs.len()];
             samplers[0] = SP;
             let (l0w, l0h) = self.dof_levels[0].0.size;
             let v = rect_vertices([w as f32, h as f32], [0.0, 0.0, w as f32, h as f32], &[src_rect(w, h), src_rect(l0w, l0h)]);
@@ -1787,6 +1915,17 @@ mod device {
             self.frame_clamped[0] = true;
             self.effect_of_eight();
             Ok(())
+        }
+
+        /// `srv`'s texture and saved mode, for a draw that puts the mode back after it.
+        unsafe fn saved_mode(&self, srv: &Option<ID3D11ShaderResourceView>) -> (Option<usize>, usize) {
+            (srv.as_ref().map(|v| self.mode_key(v)), self.mode(srv))
+        }
+
+        fn restore_mode(&mut self, (key, mode): (Option<usize>, usize)) {
+            if let Some(key) = key {
+                self.modes.insert(key, mode);
+            }
         }
 
         unsafe fn layout(&self, d: usize) -> Result<ID3D11InputLayout, String> {
@@ -2217,6 +2356,8 @@ mod tests {
         assert_eq!(l(2), [((288, 162), 1, false), ((288, 162), 3, false)]);
         assert_eq!(l(3), [((384, 216), 1, false), ((192, 108), 2, false), ((192, 108), 3, false)]);
         assert_eq!(l(4), [((384, 216), 1, false), ((384, 216), 3, false), ((192, 108), 3, true)]);
+        // DOF 5 (Task Y7a's log): the second level doubled and up-resampled into 384x216
+        assert_eq!(l(5), [((384, 216), 1, false), ((192, 108), 2, true), ((192, 108), 3, true)]);
         assert_eq!(dof_levels(3, 768, 1280, 720)[0].l30, 3.0 / 216.0);
     }
 
