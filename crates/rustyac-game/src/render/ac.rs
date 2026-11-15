@@ -744,6 +744,10 @@ impl AcRenderer {
         #[cfg(any(not(windows), feature = "wgpu"))]
         let adapter = format!("{:?} on wgpu", device.adapter);
         let mut graphics = Graphics::new(video, device, &options.game)?;
+        // Sim::Sim 0x140192070: [SATURATION] LEVEL * 0.01 into the lighting's saturation (scene and post-processing)
+        if let Some(ini) = video_ini.as_ref().filter(|i| i.has_section("SATURATION")) {
+            graphics.lighting.saturation = ini.get_float("SATURATION", "LEVEL")? * 0.01;
+        }
         // Sim::Sim: srand(the time in milliseconds)
         graphics.crt_rand = rustyac_physics::session::MsvcRand(options.render_seed);
         // SAFETY: COM calls on the live device.

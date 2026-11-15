@@ -113,6 +113,10 @@ pub fn pp_dof() -> (i32, Option<f32>) {
     let mut it = v.split(',');
     (it.next().and_then(|q| q.parse().ok()).unwrap_or(0), it.next().and_then(|f| f.parse().ok()))
 }
+/// RENDER_ORACLE_SATURATION=<n>: video.ini `[SATURATION] LEVEL`, 100 by default (Task Y7e)
+pub fn saturation_level() -> f32 {
+    std::env::var("RENDER_ORACLE_SATURATION").ok().and_then(|v| v.parse().ok()).unwrap_or(100.0)
+}
 pub fn pp_rays() -> bool {
     std::env::var("RENDER_ORACLE_RAYS").is_ok_and(|v| v == "1")
 }
@@ -206,7 +210,7 @@ ROTATION=2
         format!("FARPLANE={CUBEMAP_FARPLANE}"),
         String::new(),
         "[SATURATION]".into(),
-        "LEVEL=100".into(),
+        format!("LEVEL={}", saturation_level()),
         String::new(),
     ];
     lines.join("\n")

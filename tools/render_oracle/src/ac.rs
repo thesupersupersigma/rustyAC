@@ -691,6 +691,8 @@ impl Game {
             if crate::root::profile().post && crate::root::profile().ldr_levels {
                 wr(graphics, 0x48, 0u8);
             }
+            // Sim::Sim 0x140192070 (movss at 0x1401927da): [SATURATION] LEVEL * 0.01 (Task Y7e)
+            wr(graphics, 0x11c, crate::root::saturation_level() * 0.01f32);
             Ok(Game {
                 acs,
                 graphics,

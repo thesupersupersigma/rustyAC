@@ -122,6 +122,8 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     };
     rustyac_render::gpulog::capture_from_install(true);
     let mut graphics = Graphics::new(video, device_options(args)?, &args.game)?;
+    // Sim::Sim 0x140192070 (the root's video.ini always has [SATURATION])
+    graphics.lighting.saturation = crate::root::saturation_level() * 0.01;
     let init = rustyac_render::gpulog::end_capture();
 
     // the splash screen's frame (see the game's side)

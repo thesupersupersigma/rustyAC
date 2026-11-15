@@ -294,6 +294,7 @@ impl CameraForwardYebis {
                 height: self.height as u32,
                 exposure: camera.exposure,
                 exposure_multiplier: graphics.exposure_multiplier,
+                saturation: graphics.lighting.saturation,
                 dt,
                 chromatic_aberration: true,
                 dof_focus: (camera.dof_factor != 0.0).then_some(camera.dof_focus),
