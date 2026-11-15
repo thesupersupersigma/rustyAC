@@ -1,3 +1,69 @@
+# Task Y7e: the natural and photographic DOF shapes, video.ini saturation, the sweep in --full
+
+## Resume here
+
+- **Done, released as v0.49.3.** Every shipped filter now runs at every setting: the sweep's filter
+  part is 10 of 10 IDENTICAL. Nothing is left from this task.
+- **Next:** custom-filter keys no shipped filter uses (Task Y7b).
+
+## Step 1: DOF APERTURE_SHAPE 2 and 4 (`3eb3286`)
+
+The game's code (not logs): `CPostEffect::Initialize` 0x1403bbb80 takes the filter's `APERTURE_SHAPE`
+into `CDepthOfField+0xd4`, copied into every DOF level (+0x10) at creation.
+
+- `DOFLEVELPARAM::SetApertureFilterDiameter` 0x14041e5f0: filter size n = table[shape*5 + radius]
+  (shape 2 `[3,5,9,15]`, shape 4 `[3,5,9,17]`); width +0x1c = `(int)(sqrtf(2)*n)` for shape 2, n for
+  shape 4. `DOFLEVELPARAM::Initialize` 0x14041e420: work textures 1 (shape 2), 4 or 0 (shape 4, n>=4),
+  the doubled-size extra for shape 4 only above n 8.
+- `ApplyApertureFilter` 0x140425340: shape 2 = `SquareRotatedFilterMax15x15_2Pass` (n 5, 15) or
+  `SquareRotatedFilter3nx3n_2nPass` 0x140403890 (`logf(n)/logf(3)` iterations), angle = the diaphragm
+  angle alone; shape 4 = `HexagonFilter_Rhombic` 0x140404a90 (one draw of 7 or 19 taps for n 3/5; for
+  n 9 three rhombi through work 3 and a `MadTn` of four sources), angle + pi/6. Shapes 2/4 composite
+  like shape 3 (0x140428da0: only shape 1 has 1.95/0.9).
+- The driver 0x140425f60's front blur goes into the last work texture (not work 0, the filters' own
+  temp). `MadT1_S19` joins the program list (19-tap rhombus).
+- Two traps the rows caught: the rhombic line taps are `k * (step * texel)` in machine order
+  (0x140405608..0x14040567c; the pseudo-C reads `(k*step)*texel`, one bit off at 1600x900), and
+  `CTextureUtil::MadTn` 0x140400be0 sets every source to address mode 1 (clamp) and point/linear by
+  size itself, so the four sources read through the point clamp sampler, not their saved modes.
+- Shape 3 code is unchanged.
+
+## Step 2: video.ini [SATURATION] LEVEL (`3411d65`)
+
+`Sim::Sim` 0x140192070 (movss at 0x1401927da): with a `[SATURATION]` section, `LEVEL * 0.01f` into
+GraphicsManager+0x11c, the lighting's saturation. Its readers: the lighting cbuffer at 0x90
+(`updateLightingSetttings` 0x140205190) and `updateYebisParameters` 0x140029e30 (saturation = +0x11c
+times the filter's `[COLOR] SATURATION`). rustyac.exe now reads it from the player's video.ini; YEBIS's
+`Camera` carries it like the exposure multiplier. The render oracle's game side gets the same store
+(it runs Sim::Sim's pieces by hand) and `RENDER_ORACLE_SATURATION` / the `SATURATION:<n>` row key.
+Not ported: numpad + (`Sim::onKeyDown` 0x14019a940 adds 0.01 up to 2.0, "Saturation: N%"); the
+browser page.
+
+## Step 3: the sweep in --full (`4c95453`)
+
+`yebis_sweep` is an area of `run_all.sh`, in the render-oracle lane after `python`, dropped unless the
+mode is `--full` (or the area is named). Its cases count in the table like any area's. It adds about
+1h27m (Y7d's full sweep, 528 cases) to the render lane, so about that much to a `--full` run's wall clock.
+
+## Step 4: proofs
+
+| check | result |
+|---|---|
+| sweep filter cases (`SWEEP_ONLY='f_.*'`) | 10 of 10 IDENTICAL |
+| new rows `ry7e_01`..`_11` | 11 of 11 IDENTICAL |
+| every render post row (`RENDER_ONLY='r23_.*\|ry.*'`) | 141 of 141 IDENTICAL (track overlays included) |
+| `run_all.sh --quick` | 174 of 174 IDENTICAL, 0 ERROR, 0 skipped, 0h54m |
+| clippy native, wasm32-unknown-unknown, wasm32-wasip1, render wgpu, web | clean |
+| `render_oracle` clippy | the same 42 old lints as Y7c/Y7d, none on a changed line |
+| `cargo test -p rustyac-render --lib yebis` | 14 passed |
+
+The full sweep was not run again (only its 10 filter cases); the exhaustive and pairwise parts were
+IDENTICAL in Y7d and shape 3's code did not change.
+
+Disk: C: 30 GB free at the start, 27 GB at the end. RAM 18 GB free at both.
+
+---
+
 # Task Y7d: the YEBIS settings sweep, its fixes, post-processing in the presets
 
 ## Resume here
