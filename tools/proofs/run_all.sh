@@ -18,11 +18,11 @@
 # area builds for itself with 2 jobs a lane (CARGO_BUILD_JOBS), 8 in all.
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-all="physics fresh sound render gui python replays net browser ai_page shaders launcher dumps"
+all="physics fresh sound render gui python replays net browser ai_page shaders launcher dumps yebis_sweep"
 # the lanes, each one area after another, all lanes at once: two lanes load the game's code (the
 # render oracle's and the car oracle's), never two areas of one lane; the others never load it
 # (a render or GUI compare keeps about 1.5 of the 16 threads busy, Task P1)
-lanes="render gui python|fresh sound replays launcher|physics dumps shaders|net browser ai_page"
+lanes="render gui python yebis_sweep|fresh sound replays launcher|physics dumps shaders|net browser ai_page"
 mode=full; tag=; want=; dry=
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -52,6 +52,8 @@ case $mode in
         areas=$(for a in $areas; do case " $picked " in *" $a "*) printf '%s ' "$a" ;; esac; done)
         ;;
 esac
+# the YEBIS settings sweep (≈ 1h30m) runs in --full only, or when named
+[ "$mode" = full ] || [ -n "$want" ] || areas=$(echo " $areas " | sed 's/ yebis_sweep / /')
 areas=$(echo $areas)
 echo "mode $mode: ${areas:-no area}"
 [ -n "$areas" ] && [ -z "$dry" ] || exit 0
@@ -74,7 +76,7 @@ built=
 for t in car_oracle chassis_compare render_oracle audio_oracle; do
     case $t in
         car_oracle) uses="physics fresh replays" ;; chassis_compare) uses="physics fresh" ;;
-        render_oracle) uses="render gui python fresh" ;; audio_oracle) uses="sound" ;;
+        render_oracle) uses="render gui python fresh yebis_sweep" ;; audio_oracle) uses="sound" ;;
     esac
     for u in $uses; do
         case " $areas " in *" $u "*)

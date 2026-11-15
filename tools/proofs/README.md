@@ -52,7 +52,7 @@ here. Today's keys stay, so `fresh` records nothing again after a move.
 Every program more than one area runs (the four oracles, rustyac.exe, replay_hash, track_survey,
 rustyac-launcher) is built once before any area starts, with 8 jobs, so no area relinks an exe
 another lane is running. Then four lanes run side by side, the areas of a lane one after the other:
-`render gui python` (the render oracle), `fresh sound replays launcher` (the car oracle and the
+`render gui python yebis_sweep` (the render oracle), `fresh sound replays launcher` (the car oracle and the
 other game-side tools), `physics dumps shaders` and `net browser ai_page` (never load the game's
 code); each lane builds with 2 jobs. Each area writes `times.tsv` (seconds per case). A case that
 cannot run is never dropped: the area counts it as skipped with its reason, and the run prints
@@ -84,6 +84,7 @@ are fine: Task P1's full runs).
 | shaders | `shaders.sh` | `dxbc_reflect`, `shader_table`, `shader_proof` on SwiftShader and WARP against Task 38b's tables | `re/gold/shaders/` |
 | launcher | `launcher.sh` | the 12 request lists of `re/gold/launcher` (8 recorded from the click scripts of `launcher/` by `launcher_record.sh`, 4 written by hand), the game's own handlers (`tools/launcher_oracle`) against the port, answers and the player folder left behind | `re/gold/launcher/`, the .NET SDK |
 | dumps | `dumps.sh` | every drive's state dump, the last release's rustyac.exe (kept dumps) against this one | `oracle/game`, `re/gold/dumps/` |
+| yebis_sweep | `yebis_sweep.sh` | `--full` only (or named): the 528 YEBIS settings cases of `yebis_sweep.py` (every PP quality × glare × DOF × light shafts, pairwise extras, every shipped filter), call log and pixels, ≈ 1h30m (Task Y7d, joined in Y7e) | `oracle/audio` |
 
 Not an area (no same-or-different verdict, a GPU and SwiftShader differ by rounding):
 `render_wgpu.sh` (Task 38h) draws the cases of `render_list.txt` once more with the port on kgl's
