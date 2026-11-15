@@ -33,7 +33,7 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 |---|---|
 | **Physics** | Bit-exact with the original: tyres, suspension, drivetrain, aero, electronics (TC, ABS, ERS/KERS, DRS), damage. **119 of 123 cars** and **44 track layouts** load. |
 | **Collisions** | ODE 0.13.1 ported to Rust; car-vs-car and car-vs-track contacts, the original's thread pool (same result at any thread count). |
-| **Renderer** | Assetto Corsa's own D3D11 renderer with its own shaders: lighting, shadows, sky, cars, dashboards, mirrors, smoke, skid marks, MSAA / FXAA / motion blur, and YEBIS post-processing (filters, tone mapping, eye adaptation, glare, light shafts, depth of field, heat shimmer) on desktop, at every video setting. |
+| **Renderer** | Assetto Corsa's own D3D11 renderer with its own shaders: lighting, shadows, sky, cars, dashboards, mirrors, smoke, skid marks, MSAA / FXAA / motion blur, and YEBIS post-processing (filters, tone mapping, eye adaptation, glare, light shafts, depth of field, heat shimmer) on desktop, at every video setting (the natural and photographic filters' depth of field shapes are not ported yet). |
 | **Sound** | AC's own FMOD sound banks, every car. |
 | **Racing** | AI drivers, sessions, flags, penalties, results, pit stops and pit crew, replays (your real `.acreplay` files), ghost car. |
 | **UI** | The in-game HUD, menus, setup editor, pit strategy, telemetry and the player apps, pixel-identical to the game. |
