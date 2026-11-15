@@ -872,11 +872,11 @@ mod device {
                 sizes.extend(vec![(ga, gh); if ghost { 15 } else { 13 }]);
                 // RAYS_OF_GOD (init flag 0x10000000): the shafts' mask (+0x2d8) and result (+0x2e0) last, and the
                 // bright pass's first and third (+0x248) and the halvings in R16G16B16A16
-                // this[0xf4] is the init flag alone (the pool's format), the shafts draw only at glare quality > 0
+                // this[0xf4] is the init flag alone: the pair is made with it at any glare quality (CreateSystemObjects
+                // 0x140413c00), the shafts draw only at glare quality > 0 (yebis_cb's `Glare::shafts`)
                 let rays = video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
-                let shafts = quality > 0 && rays;
                 let shaft_at = sizes.len();
-                if shafts {
+                if rays {
                     sizes.extend([(ga, gh); 2]);
                 }
                 let dof_q = video.get_int("POST_PROCESS", "DOF").unwrap_or(0);
@@ -1086,7 +1086,7 @@ mod device {
                 if ghost {
                     groups.push(vec![s + 12, s + 13]);
                 }
-                if shafts {
+                if rays {
                     groups.extend([vec![shaft_at], vec![shaft_at + 1]]);
                 }
                 groups.extend([vec![5], vec![0, 2, 1], vec![3], vec![s + if ghost { 14 } else { 12 }]]);
