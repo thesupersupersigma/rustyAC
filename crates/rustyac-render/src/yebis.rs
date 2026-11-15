@@ -481,6 +481,8 @@ mod device {
         video: IniReader,
         /// The vignette's half-height, from the filter's `[VIGNETTING] STRENGTH` at init.
         pub vignette: f32,
+        /// CameraTripleScreen's handler 0x140224dc0 sets godraysLength (pp+0x614) to 1 on every evOnPostYebisParametersUpdate.
+        pub shaft_length_one: bool,
         width: i32,
         height: i32,
         /// the target bound when YEBIS was made, and how many targets the teardown releases
@@ -1177,6 +1179,7 @@ mod device {
                     filter,
                     video,
                     vignette,
+                    shaft_length_one: false,
                     width,
                     height,
                     // `CRenderTexture::UninitializeDevice` 0x1403d29f0 puts the screen back once for each texture
@@ -2113,6 +2116,9 @@ mod device {
             // CPostEffect+0x2fc: the aspect is set once at Initialize, so a resized frame keeps the made size's
             let camera = &Camera { width: self.width as u32, height: self.height as u32, ..*camera };
             let mut pe = PostEffect::new(&self.filter, &self.video, camera)?;
+            if let Some(sh) = pe.glare.as_mut().and_then(|g| g.shafts.as_mut()).filter(|_| self.shaft_length_one) {
+                sh.length = 1.0;
+            }
             let (w, h) = (self.width as f32, self.height as f32);
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
             let shimmer = heat.and_then(|h| h.shimmer(&pe, self.particles as usize));

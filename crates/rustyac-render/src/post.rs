@@ -199,6 +199,9 @@ impl CameraForwardYebis {
         #[cfg(all(windows, not(feature = "backend-wgpu")))]
         {
             self.parameters_updated = true;
+            if let Some(yebis) = self.yebis.as_mut() {
+                yebis.shaft_length_one = self.forward.base.triple.is_some();
+            }
         }
         self.render_apply_effect(graphics, scene, blurred, unblurred, root, dt);
         self.reset_yebis_states(graphics);
