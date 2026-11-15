@@ -1,3 +1,55 @@
+# Task Y7d: the YEBIS settings sweep, its fixes, post-processing in the presets
+
+## Resume here
+
+- **Done:** step 1's sweep (`278ab08`, `tools/proofs/yebis_sweep.sh`), five fixes from it (`e7bc4ce`,
+  `b499962`, `2c3a865`, `7968dc1`, `ac4bf9f`, rows `ry7d_01`..`_05`). Step 3's text is in the tree, not
+  committed (it is built and checked in step 5).
+- **Running:** the full sweep on the fixed build, `PROOF_OUT=re/scratch/taskY7d/run2 bash
+  tools/proofs/yebis_sweep.sh` (528 cases, ~41 s each, ~6 h). Then: step 2's reruns (failing cases and
+  every render `--post` row, `RENDER_ONLY='r23_.*|ry.*' bash tools/proofs/render.sh`), steps 3-5.
+
+## The sweep (step 1)
+
+- `tools/proofs/yebis_sweep.py` writes the rows, `yebis_sweep.sh` runs them like `render.sh` (call log and
+  pixels, game against port on WARP) and keeps only a failing case's pictures (`<out>/fail/<case>`).
+- **Exhaustive (`x_*`):** PP_QUALITY 0-5 x GLARE 0-5 x DOF 0-5 x RAYS_OF_GOD 0/1 at 1280x720, default
+  filter, the sun in view (`--view sun`), focus 5 m. That is 6 x 6 x 6 x 2 = 432, not the plan's 360:
+  AC's Video tab has six post-processing qualities (0 "Very Low" to 5 "Ultra"), not five.
+- **Pairwise (`p1127x633_*`, `p1920x1080_*`):** 43 rows a size covering every pair of PP 0-5, glare 0-5,
+  DOF 0-5, shafts, heat shimmer, FXAA, AA 1/2/4 and triple screens (a greedy all-pairs list, asserted
+  complete in the script).
+- **Filters (`f_*`):** each of AC's ten `system/cfg/ppfilters` once at PP 5, glare 5, DOF 5, shafts, heat
+  shimmer, FXAA, AA 4.
+
+## What the sweep found (from the game's code)
+
+1. **DOF `EDGE_QUALITY`** (`e7bc4ce`, row `ry7d_01`). Y6 said no shipped filter has other than 3; b&w,
+   movie and natural have 1, photographic and vintage 2, so the port refused them with DOF on. AC hands
+   it to `CPostEffect::SetDepthOfFieldEdgeQuality` 0x1403cadd0 every frame: 0x1403cc0a0 maps 0-4 to the
+   flags 0, 0, 2, 6, 6 (-1 the table's, `this[200]`: 0 at DOF 1, 6 at DOF 5, 2 otherwise), and they are
+   set (+0x140) only when the table's flags hold them all. Flag 4 is the front layer, 2 its blur factor.
+   The port also drew the front layer's hexagon whenever its targets existed; now only with flag 4.
+2. **Shafts with the glare off** (`b499962`, row `ry7d_02`). With GLARE 0 AC never calls
+   `SetGlareParameters`, so +0x66c keeps `Initialize`'s 1.0 and `UpdateParameters_DepthOfFieldOpticalParameters`
+   0x1403b92f0 still turns +0x9ac on: the depth range in the cbuffer (+0x9a0, +0xba0) is the shafts' one.
+   The port took the glare's luminance and had none. Draws and pixels were the same; the call log was not.
+3. **DOF with no level in range** (`2c3a865`, row `ry7d_03`). At PP quality 1 the levels are small enough
+   that none is in range at 5 m; `ApplyDepthOfField` 0x140430ed0 has no special case: the halvings, then
+   the composite reads the source alone. The port refused.
+4. **Glare levels under 4 texels** (`7968dc1`, row `ry7d_04`). PP quality 1 at glare 4-5: the port refused
+   a 4x3 level. `CRenderGlare::CreateSystemObjects` 0x140413c00 makes a side `(w * scale + 0.99)` under 4
+   into 3.
+5. **Triple screens with the shafts** (`ac4bf9f`, row `ry7d_05`). `CameraTripleScreen`'s
+   `evOnPostYebisParametersUpdate` handler 0x140224dc0 writes 1.0 to `godraysLength` (pp+0x614) and 0 to
+   `vignetteStrength`; the port had only the vignette. The radial passes' weights went 0.985 a tap instead
+   of 0.846, and five passes instead of three.
+6. **DOF `APERTURE_SHAPE`** (not fixed, Task Y7e). natural has 2, photographic 4 (others 3). AC passes it
+   at init (`m_eApertureShape`); `ApplyDepthOfField_ApertureFilterLevel_EAPERTUREFM_DISC_ApplyApertureFilter`
+   0x140425340 switches on it: 2 `SquareRotatedFilterMax15x15_2Pass` / `SquareRotatedFilter3nx3n_2nPass`,
+   3 `HexagonFilter_nPass` (ported), 4 `HexagonFilter_Rhombic`. New kernels and programs; the port keeps
+   refusing them with DOF on ("yebis: [DOF] APERTURE_SHAPE other than 3 not ported").
+
 # Task Y7c: DOF at big sizes, with the shafts and the shimmer; the resize failure was the oracle's (no release)
 
 ## Resume here
