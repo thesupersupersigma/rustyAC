@@ -268,3 +268,17 @@ ry7d_03 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/aud
 ry7d_04 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --size 1280x720 --ppfilter default PP_QUALITY:1 GLARE:5 DOF:5,5 RAYS:1
 # triple screens: CameraTripleScreen's handler sets the light shafts' length to 1
 ry7d_05 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --size 1280x720 --ppfilter default --triple PP_QUALITY:0 GLARE:1 RAYS:1
+# -- Task Y7e: DOF APERTURE_SHAPE 2 (natural: the turned square) and 4 (photographic: the rhombic hexagon) at DOF 1-5,
+# doubled levels at 1024x576, a resize; natural's EDGE_QUALITY 1 has no front blur
+ry7e_01 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter natural --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:1,5
+ry7e_02 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter natural --frames 3 --size 1024x576 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,5
+ry7e_03 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter natural --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:4,5
+ry7e_04 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter natural --frames 3 --size 1024x576 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:5,5
+ry7e_05 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter photographic --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:2,5
+ry7e_06 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter photographic --frames 3 --size 1024x576 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:3,5
+ry7e_07 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter photographic --frames 3 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:4,5
+ry7e_08 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter photographic --frames 3 --size 1024x576 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:5,5
+ry7e_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter photographic --frames 6 GLARE:0 PP_QUALITY:3 RAYS:1 DOF:4,5 RESIZE:3:1600x900
+# video.ini [SATURATION] LEVEL (Sim::Sim: LEVEL * 0.01 into the lighting's saturation, the scene's cbuffer and YEBIS's colour matrix), with and without post-processing
+ry7e_10 | --track spa --view chase --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --post --size 1280x720 --ppfilter default GLARE:3 PP_QUALITY:3 SATURATION:70
+ry7e_11 | --track spa --view chase --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 SATURATION:140

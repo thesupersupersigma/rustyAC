@@ -185,7 +185,10 @@ pub fn dof_sizes(base: i32, w: i32, h: i32) -> [(u32, u32); 2] {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DofLevel {
     pub size: (u32, u32),
+    /// the filter's size (+0x18): the hexagon's passes, the square's or the rhombic hexagon's taps
     pub passes: u32,
+    /// `[DOF] APERTURE_SHAPE` (+0x10, Task Y7e)
+    pub shape: i32,
     pub l30: f32,
     pub doubled: bool,
     /// the doubling table's share (+0x2c): the up-resample's spread
@@ -194,7 +197,7 @@ pub struct DofLevel {
 
 /// The levels of video.ini DOF `q` (1-5): the quality table 0x141521690's scale, level count, combination
 /// (shift, radius per level) and doubling width and ratio.
-pub fn dof_levels(q: i32, base: i32, w: i32, h: i32) -> Vec<DofLevel> {
+pub fn dof_levels(q: i32, base: i32, w: i32, h: i32, shape: i32) -> Vec<DofLevel> {
     let (scale, count, c1, dbl, ratio) = match q {
         1 => (0.25, 2, false, 160, 0.125),
         2 => (0.375, 2, false, 160, 0.125),
@@ -220,11 +223,31 @@ pub fn dof_levels(q: i32, base: i32, w: i32, h: i32) -> Vec<DofLevel> {
                     idx = (idx + 1).min(3);
                 }
             }
-            let n = radius + 1;
-            let diam = rustyac_math::powf(2.0, n as f32) * 2.0 - 1.0 + [0.0, 0.5, 0.75, 1.0][idx];
-            DofLevel { size: (lw, lh), passes: n, l30: diam / lh as f32, doubled: idx > 0, frac: [0.0, 0.5, 0.75, 1.0][idx] }
+            // SetApertureFilterDiameter 0x14041e5f0: the size by shape and radius, then the diameter (+0x20)
+            let n = match shape {
+                2 => [3, 5, 9, 15],
+                4 => [3, 5, 9, 17],
+                _ => [1, 2, 3, 4],
+            }[radius as usize];
+            let diam = match shape {
+                2 => rustyac_math::sqrtf(2.0) * n as f32,
+                4 => n as f32,
+                _ => rustyac_math::powf(2.0, n as f32) * 2.0 - 1.0,
+            } + [0.0, 0.5, 0.75, 1.0][idx];
+            DofLevel { size: (lw, lh), passes: n, shape, l30: diam / lh as f32, doubled: idx > 0, frac: [0.0, 0.5, 0.75, 1.0][idx] }
         })
         .collect()
+}
+
+impl DofLevel {
+    /// The diameter's whole texels (+0x1c): the front layer's mask colour taps.
+    pub fn width(&self) -> i32 {
+        match self.shape {
+            2 => (rustyac_math::sqrtf(2.0) * self.passes as f32) as i32,
+            4 => self.passes as i32,
+            _ => (1 << self.passes) * 2 - 1,
+        }
+    }
 }
 
 /// The pool's R16G16B16A16 textures in the order the pool (0x140411900) gets them: the depth of
@@ -903,7 +926,8 @@ mod device {
                 // the depth of field (`CDepthOfField::CreateSystemObjects` 0x1404200a0): DOF off, DOF=0's pair; on, each
                 // level's source from its own pool (this+0x468, a size there shared), then each level's result (+0xa0,
                 // at its double's size); `dof` is also the order ClearAllGPUResources 0x14042b930 clears them in
-                let levels = if dof_q > 0 { super::dof_levels(dof_q, base, width, height) } else { vec![] };
+                let shape = filter.get_int("DOF", "APERTURE_SHAPE").unwrap_or(3);
+                let levels = if dof_q > 0 { super::dof_levels(dof_q, base, width, height, shape) } else { vec![] };
                 let doubled = |l: &super::DofLevel| if l.doubled { ((2 * l.size.0).min(w), (2 * l.size.1).min(h)) } else { l.size };
                 let mut dof = Views::new();
                 let mut dof_pool: Vec<((u32, u32), Target)> = vec![];
@@ -988,7 +1012,22 @@ mod device {
                     // temporaries, one more when doubled) and its double (+0x70), then the DOF's halvings (this+0x458,
                     // asked last: CDepthOfField::CreateSystemObjects 0x1404200a0)
                     let flag2 = (dof_q > 1 && dof_q < 5) as usize;
-                    let work = |l: &super::DofLevel| (l.passes as usize - 1).min(2) + (doubled(l) != l.size) as usize + flag2;
+                    // by shape (DOFLEVELPARAM::Initialize): the square one, the hexagon up to two, the rhombic hexagon four
+                    // from 9 taps; doubled one more, but the rhombic hexagon only from 9 taps (else at least one)
+                    let work = |l: &super::DofLevel| {
+                        let n = l.passes as usize;
+                        let c = match l.shape {
+                            2 => 1,
+                            4 => if n >= 4 { 4 } else { 0 },
+                            _ => (n - 1).min(2),
+                        };
+                        let c = match doubled(l) != l.size {
+                            false => c,
+                            true if l.shape != 4 || n > 8 => c + 1,
+                            true => c.max(1),
+                        };
+                        c + flag2
+                    };
                     let gsizes = super::glare_pool(base, quality, width, height);
                     let hsizes = super::halvings(levels[0].size, width, height);
                     // each ask makes only the textures its size lacks, in the order asked
@@ -1745,7 +1784,7 @@ mod device {
         /// round's first draw: the effect surface halved down to each drawn level's source, each level's front blur
         /// factor and hexagon passes, then the levels composited into the other effect surface (Task Y6).
         unsafe fn dof(&mut self, pe: &PostEffect, d: &crate::yebis_cb::Dof) -> Result<(), String> {
-            use crate::yebis_cb::{centre_peak, dof_counts, dof_level_factors, hexagon_taps, mask_taps, MASK_TAPS, T_DOF_BLEND, T_DOF_FRONT, T_DOF_LEVELS, T_DOF_MAKE, T_DOF_MASK, T_DOF_MASKED, T_GAUSS7};
+            use crate::yebis_cb::{centre_peak, dof_counts, dof_level_factors, hexagon_taps, mask_taps, rhombic_line_taps, rhombic_taps, square_line_taps, square_taps, MASK_TAPS, T_DOF_BLEND, T_DOF_FRONT, T_DOF_LEVELS, T_DOF_MAKE, T_DOF_MASK, T_DOF_MASKED, T_GAUSS7, T_TAPS19};
             let l30: Vec<f32> = self.dof_levels.iter().map(|l| l.0.l30).collect();
             let flags = d.edges;
             let front = flags & 4 != 0;
@@ -1804,7 +1843,7 @@ mod device {
                 for i in 0..far_n {
                     let l = self.dof_levels[i].0;
                     let (lw, lh) = l.size;
-                    let taps = centre_peak(lw, lh, (1 << l.passes) * 2 - 1);
+                    let taps = centre_peak(lw, lh, l.width());
                     let t = T_DOF_MAKE + [5, 9, 13, 17].iter().position(|&c| c == taps.len()).ok_or("yebis: no mask colour program")?;
                     // FactorThreshold: 0.001 for a 16-bit float source (DrawRectGPU_DepthOfFieldLayerMaskMakeColor 0x1403f3a90)
                     let u = self.cbuffer.dof_layer(t, d.store[0], [f[i][0], f[i][1]], (540, 0.001), true, &taps, &self.used);
@@ -1832,6 +1871,60 @@ mod device {
                     }
                     Ok(())
                 };
+                // ApplyApertureFilter 0x140425340's turned square (2) and rhombic hexagon (4) into `to`, the level's work
+                // targets their temporaries; the source, `to` and the first work targets set to address mode 2 first
+                let aperture = |me: &mut Self, src: Option<ID3D11ShaderResourceView>, to: &Target, work: &[Target]| -> Result<(), String> {
+                    for t in [&src, &to.srv].into_iter().chain(work.iter().take(if l.shape == 2 { 1 } else { 2 }).map(|t| &t.srv)).flatten() {
+                        let key = me.mode_key(t);
+                        me.modes.insert(key, 8);
+                    }
+                    let n = l.passes;
+                    let draw = |me: &mut Self, to: &Target, taps: &[[f32; 2]], weight: f32, sampler: usize, src: Option<ID3D11ShaderResourceView>| {
+                        let t = match taps.len() {
+                            k @ 1..=4 => T_TAPS[k - 1],
+                            5 => T_TAPS_ODD[0],
+                            7 => T_GAUSS7,
+                            _ => T_TAPS19,
+                        };
+                        me.draw_into(t, (to.clone(), lw, lh), taps, &vec![[weight; 4]; taps.len()], None, &[sampler], &[src], Some(v()))
+                    };
+                    match (l.shape, n) {
+                        // SquareRotatedFilterMax15x15_2Pass
+                        (2, 5 | 15) => {
+                            let [a, b] = square_line_taps(d.angle, n, lw, lh);
+                            draw(me, &work[0], &a, 1.0 / n as f32, 8, src)?;
+                            draw(me, to, &b, 1.0 / n as f32, 8, work[0].srv.clone())
+                        }
+                        // SquareRotatedFilter3nx3n_2nPass: log3(n) iterations of 3 taps along, then across (powf(1, ..) / 3)
+                        (2, _) => {
+                            let mut src = src;
+                            for i in 0..(rustyac_math::logf(n as f32) / rustyac_math::logf(3.0)) as u32 {
+                                let [a, b] = square_taps(d.angle, i, lw, lh);
+                                draw(me, &work[0], &a, 0.33333334, 8, src)?;
+                                draw(me, to, &b, 0.33333334, 8, work[0].srv.clone())?;
+                                src = to.srv.clone();
+                            }
+                            Ok(())
+                        }
+                        (_, 3 | 5) => draw(me, to, &rhombic_taps(d.angle, n, lw, lh), 1.0 / [7.0, 19.0][(n == 5) as usize], 8, src),
+                        // three rhombi into work 0-2 through work 3, then their sum with the source (MadTn: each
+                        // source the target's size, so the point clamp sampler, see `sources`)
+                        _ => {
+                            let half = n / 2;
+                            for r in 0..3 {
+                                let [a, b] = rhombic_line_taps(d.angle, r, n, lw, lh);
+                                draw(me, &work[3], &a, 1.0 / half as f32, 8, src.clone())?;
+                                let m = me.mode(&work[3].srv);
+                                draw(me, &work[r as usize], &b, 1.0 / (half + 1) as f32, m, work[3].srv.clone())?;
+                            }
+                            let f18 = 1.0 / ((half + 1) * half) as f32;
+                            let f19 = 1.0 / (f18 + 3.0);
+                            let srvs = [src, work[0].srv.clone(), work[1].srv.clone(), work[2].srv.clone()];
+                            let colours = [[1.0 * f18 * f19; 4], [f19; 4], [f19; 4], [f19; 4]];
+                            me.draw_into(T_MAD4, (to.clone(), lw, lh), &[], &colours, None, &[SP; 4], &srvs, Some(v()))
+                        }
+                    }
+                };
                 // a doubled level's result up-resampled (Resample's spread: +0x2c * 0.25 + 0.25 times the result blur scale 1),
                 // its source first set to address mode 2 (vtable +0x80: linear clamp, sampler 8)
                 let up = |me: &mut Self, from: &Target, to: &Target| {
@@ -1840,8 +1933,12 @@ mod device {
                 };
                 let doubled = l.doubled;
                 if let Some([mask, colour, fres]) = fr.as_ref().filter(|_| front && i < far_n) {
-                    let temps = [work.first().unwrap_or(mask), work.get(1).unwrap_or(mask)];
-                    hexagon(self, colour.srv.clone(), if doubled { mask } else { fres }, temps)?;
+                    let to = if doubled { mask } else { fres };
+                    if l.shape == 3 {
+                        hexagon(self, colour.srv.clone(), to, [work.first().unwrap_or(mask), work.get(1).unwrap_or(mask)])?;
+                    } else {
+                        aperture(self, colour.srv.clone(), to, &work)?;
+                    }
                     if doubled {
                         up(self, mask, fres)?;
                     }
@@ -1857,14 +1954,21 @@ mod device {
                     let to = match &fr {
                         Some([_, colour, _]) => colour.clone(),
                         None if doubled => work[work.len() - 2].clone(),
-                        None => t[1].clone(),
+                        None if l.shape == 3 => t[1].clone(),
+                        None => work[work.len() - 1].clone(),
                     };
                     let saved = self.saved_mode(&src);
                     self.draw_into(T_DOF_BLEND, (to.clone(), lw, lh), &[], &[[1.0, 1.0, 1.0, a * z], [0.0, 0.0, 0.0, f[i][3] + a * sw]], None, &[9], &[src], Some(v()))?;
                     self.restore_mode(saved);
                     src = to.srv;
                 }
-                if front || doubled {
+                if l.shape != 3 {
+                    let last = if doubled { work[work.len() - 1].clone() } else { t[2].clone() };
+                    aperture(self, src, &last, &work)?;
+                    if doubled {
+                        up(self, &last, &t[2])?;
+                    }
+                } else if front || doubled {
                     let last = if doubled { work[work.len() - 1].clone() } else { t[2].clone() };
                     let temps = [work.first().unwrap_or(&last).clone(), work.get(1).unwrap_or(&last).clone()];
                     hexagon(self, src, &last, [&temps[0], &temps[1]])?;
@@ -2356,14 +2460,18 @@ mod tests {
     #[test]
     fn dof_levels_follow_the_game() {
         // the game's DOF=1..4 logs at 1280x720, PP_QUALITY 3 (Task Y6)
-        let l = |q| dof_levels(q, 768, 1280, 720).iter().map(|l| (l.size, l.passes, l.doubled)).collect::<Vec<_>>();
+        let l = |q| dof_levels(q, 768, 1280, 720, 3).iter().map(|l| (l.size, l.passes, l.doubled)).collect::<Vec<_>>();
         assert_eq!(l(1), [((192, 108), 1, false), ((192, 108), 3, false)]);
         assert_eq!(l(2), [((288, 162), 1, false), ((288, 162), 3, false)]);
         assert_eq!(l(3), [((384, 216), 1, false), ((192, 108), 2, false), ((192, 108), 3, false)]);
         assert_eq!(l(4), [((384, 216), 1, false), ((384, 216), 3, false), ((192, 108), 3, true)]);
         // DOF 5 (Task Y7a's log): the second level doubled and up-resampled into 384x216
         assert_eq!(l(5), [((384, 216), 1, false), ((192, 108), 2, true), ((192, 108), 3, true)]);
-        assert_eq!(dof_levels(3, 768, 1280, 720)[0].l30, 3.0 / 216.0);
+        assert_eq!(dof_levels(3, 768, 1280, 720, 3)[0].l30, 3.0 / 216.0);
+        // natural and photographic (Task Y7e): 3, 5 and 9 taps, the square's +0x1c sqrt(2) times as wide
+        let w = |shape| dof_levels(5, 768, 1280, 720, shape).iter().map(|l| (l.passes, l.width())).collect::<Vec<_>>();
+        assert_eq!(w(2), [(3, 4), (5, 7), (9, 12)]);
+        assert_eq!(w(4), [(3, 3), (5, 5), (9, 9)]);
     }
 
     #[test]

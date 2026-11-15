@@ -32,8 +32,8 @@ use rustyac_physics::data::ini::IniReader;
 /// then draws 2, 3 and 11 with PFXTM_LINEARSAT (39-41: `T_LINEARSAT`), then draws 3 and 11 without gamma (42-45: `T_NO_GAMMA`), then the bright pass without the vignette (46),
 /// then the light shafts' mask, radial passes of 1-4 taps and diffraction ring, and the composite with them (47-53, Task Y5d),
 /// then the depth of field's front blur factor and composites (59-78, Task Y6: `T_DOF_*`), then DOF 5's front layer:
-/// the background masks, their colours and the masked composites (79-104, Task Y7a).
-pub const TECHNIQUES: [&str; 109] = [
+/// the background masks, their colours and the masked composites (79-104, Task Y7a), then the rhombic hexagon's 19 taps (109, Task Y7e).
+pub const TECHNIQUES: [&str; 110] = [
     "MadAlphaColorT2_R_S1",
     "TransformMadT1_S5",
     "TonemapHDR_Exposure",
@@ -143,6 +143,7 @@ pub const TECHNIQUES: [&str; 109] = [
     "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_1",
     "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_2",
     "DepthOfField_CompositeMaskedBlurLevels_USNORM_TS3_3",
+    "MadT1_S19",
 ];
 
 /// Draws 2, 3 and 11's techniques with `[TONEMAPPING] FUNCTION=1`: DrawRectGPU_TonemapHDR picks its program
@@ -167,6 +168,8 @@ pub const T_SUM: usize = 22;
 pub const T_TAPS: [usize; 4] = [8, 9, 27, 20];
 /// `MadT1_S5`, `_S9`, `_S13`, `_S15`: the 29x29 gaussian's own path (Task Y5d).
 pub const T_TAPS_ODD: [usize; 4] = [10, 56, 57, 58];
+/// `MadT1_S19`: the photographic filter's rhombic hexagon of radius 5 (Task Y7e).
+pub const T_TAPS19: usize = 109;
 pub const T_MAD2: usize = 28;
 pub const T_MAX2: usize = 30;
 /// The ghost's two passes (Task Y5c).
@@ -231,6 +234,8 @@ pub struct Camera {
     /// The camera's exposure (40 by default) and `[EXPOSURE]` of the graphics settings.
     pub exposure: f32,
     pub exposure_multiplier: f32,
+    /// GraphicsManager+0x11c, the lighting's saturation: video.ini [SATURATION] LEVEL * 0.01 (Sim::Sim 0x140192070)
+    pub saturation: f32,
     /// The frame time auto exposure moves by.
     pub dt: f32,
     /// `chromabActive`: draws 2 and 6, off in VR (`YebisPP::updatePPCameraValues` 0x14002bcc0)
@@ -614,7 +619,10 @@ pub struct Dof {
     pub ratio: f32,
     /// `SetDepthOfFieldFactorStore` 0x14042bd90's (x, y, z, w) (+0x1b4..+0x1c0) with AC's float-optimised range
     pub store: [f32; 4],
-    /// the hexagon's angle: the diaphragm's (+0x194, AC never sets a maximum aperture) and 30 degrees
+    /// `[DOF] APERTURE_SHAPE` (+0xd4): 2 the turned square (natural), 3 the hexagon, 4 the rhombic hexagon (photographic)
+    pub shape: i32,
+    /// the filter's angle: the diaphragm's (+0x194, AC never sets a maximum aperture), and 30 degrees for the hexagons
+    /// (ApplyApertureFilter 0x140425340)
     pub angle: f32,
     /// `[DOF] BACKGROUND_MASK_THRESHOLD` (+0x160, the front layer's mask)
     pub mask_threshold: f32,
@@ -629,10 +637,14 @@ impl Dof {
         let f = |k: &str| filter.get_float("DOF", k);
         let i = |k: &str| filter.get_int("DOF", k);
         // every shipped filter has these; others change the draws
-        for (key, want) in [("APERTURE_PARAMETER", 2), ("APERTURE_SHAPE", 3), ("APERTURE_FRONT_LEVELS_NUMBER", -1), ("APERTURE_BACK_LEVELS_NUMBER", -1)] {
+        for (key, want) in [("APERTURE_PARAMETER", 2), ("APERTURE_FRONT_LEVELS_NUMBER", -1), ("APERTURE_BACK_LEVELS_NUMBER", -1)] {
             if i(key)? != want {
                 return Err(format!("yebis: [DOF] {key} other than {want} not ported"));
             }
+        }
+        let shape = i("APERTURE_SHAPE")?;
+        if !(2..=4).contains(&shape) {
+            return Err(format!("yebis: [DOF] APERTURE_SHAPE={shape} not ported"));
         }
         if !(1..=5).contains(&quality) {
             return Err(format!("yebis: [POST_PROCESS] DOF={quality} not ported"));
@@ -668,7 +680,9 @@ impl Dof {
         let coc = (d * focal) / (focus - focal);
         let x = 64000.0 / ((near - focus) / near - 1.0).abs();
         let y = x * -1.0;
-        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], angle: diaphragm_angle(diaphragm(filter)?, vfov) + std::f32::consts::FRAC_PI_6, mask_threshold: f("BACKGROUND_MASK_THRESHOLD")?, edges }))
+        let angle = diaphragm_angle(diaphragm(filter)?, vfov);
+        let angle = if shape == 2 { angle } else { angle + std::f32::consts::FRAC_PI_6 };
+        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], shape, angle, mask_threshold: f("BACKGROUND_MASK_THRESHOLD")?, edges }))
     }
 
     /// The factor store as the depth range (+0xb8c..+0xb9c): the tail recomputes +0xb94 and +0xb98.
@@ -744,6 +758,66 @@ pub fn hexagon_taps(angle: f32, p: u32, passes: u32, w: u32, h: u32) -> ([[f32; 
     let mut colours = [[m; 4]; 7];
     colours[0] = [wc * m; 4];
     (taps, colours)
+}
+
+/// Iteration `i` of `SquareRotatedFilter3nx3n_2nPass` 0x140403890 over a `w` x `h` source: the three taps
+/// 3^i texels apart along `angle` (pass A) and across it (pass B).
+pub fn square_taps(angle: f32, i: u32, w: u32, h: u32) -> [[[f32; 2]; 3]; 2] {
+    use rustyac_math::{cosf, sinf};
+    let (s, c) = (sinf(angle), cosf(angle));
+    let (tx, ty) = (1.0 / w as f32, 1.0 / h as f32);
+    let k = powf(3.0, i as f32);
+    let p = [-1.0f32, 0.0, 1.0].map(|j| ((k * j) * c - s * 0.0, (k * j) * s + c * 0.0));
+    [p.map(|(x, y)| [x * tx, y * ty]), p.map(|(x, y)| [-(y * tx), x * ty])]
+}
+
+/// `ConvolutionRotatedFilterMax15x15_2Pass` 0x140402b80's taps (`SquareRotatedFilterMax15x15_2Pass`, the weights
+/// all 1): `n` along `angle` (pass 1), then across it (pass 2).
+pub fn square_line_taps(angle: f32, n: u32, w: u32, h: u32) -> [Vec<[f32; 2]>; 2] {
+    use rustyac_math::{cosf, sinf};
+    let (s, c) = (sinf(angle), cosf(angle));
+    let (tx, ty) = (1.0 / w as f32, 1.0 / h as f32);
+    let half = (n as i32 - 1) / 2;
+    let p: Vec<(f32, f32)> = (0..n as i32).map(|j| (j - half) as f32 * (n as f32 / n as f32)).map(|k| (k * c - s * 0.0, k * s + c * 0.0)).collect();
+    [p.iter().map(|&(x, y)| [tx * x, ty * y]).collect(), p.iter().map(|&(x, y)| [-(tx * y), ty * x]).collect()]
+}
+
+/// `HexagonFilter_Rhombic` 0x140404a90 with `n` 3 or 5: the centre and six hexagon taps (FUN_14040de20) turned by
+/// `angle`, and for 5 the six doubled and the midpoints between them (19).
+pub fn rhombic_taps(angle: f32, n: u32, w: u32, h: u32) -> Vec<[f32; 2]> {
+    use rustyac_math::{cosf, sinf};
+    let (s, c) = (sinf(angle), cosf(angle));
+    let (tu, tv) = (1.0 / w as f32, 1.0 / h as f32);
+    let mut t = vec![[(0.0f32 * c - 0.0f32 * s) * tu, (0.0f32 * c + 0.0f32 * s) * tv]];
+    for i in 0..6 {
+        let a = (((i as f32) * 60.0) * std::f32::consts::PI) / 180.0;
+        let (px, py) = (cosf(a) * 0.0 - sinf(a), sinf(a) * 0.0 + cosf(a));
+        t.push([(px * c - py * s) * tu, (py * c + px * s) * tv]);
+    }
+    if n == 5 {
+        let d: Vec<[f32; 2]> = t[1..].iter().map(|p| [p[0] * 2.0, p[1] * 2.0]).collect();
+        t.extend_from_slice(&d);
+        for (a, b) in [(0, 1), (2, 1), (3, 2), (4, 3), (4, 5), (0, 5)] {
+            t.push([(d[a][0] + d[b][0]) * 0.5, (d[a][1] + d[b][1]) * 0.5]);
+        }
+    }
+    t
+}
+
+/// `HexagonFilter_Rhombic` 0x140404a90 with `n` 9 or 17, rhombus `r` of three: the `n / 2` taps out along
+/// `r * 120` degrees + `angle`, then `n / 2 + 1` from the centre 120 degrees back.
+pub fn rhombic_line_taps(angle: f32, r: u32, n: u32, w: u32, h: u32) -> [Vec<[f32; 2]>; 2] {
+    use rustyac_math::{cosf, sinf};
+    let (tu, tv) = (1.0 / w as f32, 1.0 / h as f32);
+    let half = n / 2;
+    let a = (((r as f32) * 120.0) * std::f32::consts::PI) / 180.0 + angle;
+    let (s, c) = (sinf(a), cosf(a));
+    let one = (0..half).map(|i| (i as f32 + 1.0, s, c));
+    let (s2, c2) = (sinf(a + -2.0943952), cosf(a + -2.0943952));
+    let two = (0..=half).map(|i| (i as f32, s2, c2));
+    // machine order (0x140405608..0x14040567c): the step is scaled first, then times k
+    let tap = |(k, s, c): (f32, f32, f32)| [k * ((c * 0.0 - s * 1.0) * tu), k * ((c * 1.0 + s * 0.0) * tv)];
+    [one.map(tap).collect(), two.map(tap).collect()]
 }
 
 impl Glare {
@@ -921,7 +995,8 @@ impl PostEffect {
         if v != 0.0 {
             m = mul(&m, &hue((v * std::f32::consts::PI) / 180.0));
         }
-        let v = f("COLOR", "SATURATION")?;
+        // updateYebisParameters 0x140029e30: the graphics saturation times the filter's
+        let v = cam.saturation * f("COLOR", "SATURATION")?;
         if v != 1.0 {
             m = mul(&m, &saturation(v));
         }
@@ -1823,7 +1898,7 @@ mod tests {
             None => IniReader::load(&path).unwrap(),
         };
         let video = IniReader::from_text(Path::new("video.ini"), "[POST_PROCESS]\nENABLED=1\nFILTER=default\nQUALITY=0\nGLARE=0\nDOF=0\n");
-        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, dt: 0.016666668, chromatic_aberration: true, dof_focus: None, new_exposure: true, sun: None };
+        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, saturation: 1.0, dt: 0.016666668, chromatic_aberration: true, dof_focus: None, new_exposure: true, sun: None };
         let mut pe = PostEffect::new(&filter, &video, &cam).unwrap();
         // the logged frame is the second, after one auto exposure step from 1 to MAX
         pe.exposure = 0.5;
