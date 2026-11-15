@@ -2,26 +2,34 @@
 
 ## Resume here
 
-- **Done: steps 1 and 2, step 3's question, committed** (`90e855b`, `a950452`, `7cf5665`). No release
-  (v0.49.2 comes with Y7d).
-- **Resume at step 3, the port side**. With the harness fixed, the DOF + glare resize runs on both sides.
-  Two port gaps are left, both found in game code but not ported yet:
-  1. **DOF + glare + shafts, the rebuild after a resize** (`RENDER_ORACLE_DOF=3,5 RENDER_ORACLE_RESIZE=3:1600x900
-     F=rustyac_f4 bash re/scratch/taskY7a/cmp.sh rs7 3 5`): the teardown matches. The rebuild makes one
-     240x135 f9 and one 240x135 f26 fewer than the port does. `CRenderGlare::CreateSystemObjects`
-     0x140413c00 lines 357-370 make +0x2d8 / +0x2e0 whenever DOF is on (this[0xf4]). Those are the port's
-     "two more f26 with DOF on" (`dof_glare`), and they are also the shafts' mask and result. So with
-     the shafts on, the port makes them twice. The third bright-pass target is f26 in the game and
-     f9 in the port (the port's `shafts && i == 2` rule). The `+0x248` array's formats (lines 440-516)
-     still have to be read to settle that. The first build happens before capture, so only a resize
-     shows it.
-  2. **DOF + glare without the shafts** (`R=0 ... cmp.sh rs12 3 5`): it differs from frame 0. The glare's
-     640x360 halving is f26 in the game and the port's f9 pool texture. Every earlier DOF + glare row has
-     `RAYS:1`. Read `CRenderGlare::CreateSystemObjects` lines 255-300: the pool asks (+0x258) are made
-     only with this[0xec], their count is +0x260 = halvings from the frame down to the glare, and their
-     format is +0xc4 with DOF, else +0xbc. Then check the port's `half_pool` shortcut against them.
-- Checks at the end: `run_all.sh --quick` all pass (0 ERROR, 0 skipped, 1h16m); clippy clean on native,
-  both wasm targets and wgpu (render_oracle's 42 old errors unchanged); `cargo test -p rustyac-render yebis` 14 passed.
+- **Done: steps 1 and 2, step 3's question, gap 2, committed** (`90e855b`, `a950452`, `7cf5665`,
+  `fbb0075`, `cd16579` and the RAYS fix after them). No release (v0.49.2 comes with Y7d).
+- **Gap 2 fixed** (`fbb0075`): `this[0xf4]` is the light-shafts flag, not "DOF on". It is bit 28 of
+  CPostEffect+0x1dc (`CPostEffect::Initialize` 0x1403bbb80 lines 698 and 1578), and only
+  `CameraForwardYebis::initPostProcessing` sets it, from `godraysEnabled`. With DOF on, the glare's pool
+  halvings (+0x258, `CreateSystemObjects` lines 255-300) use +0xc4 (R16G16B16A16) only with the shafts and
+  +0xbc otherwise. Rows `ry7c_09`..`_11` cover DOF + glare with the shafts off. The flag is RAYS_OF_GOD
+  alone, even at glare quality 0 where no shaft is drawn: step 4 caught `ry6_11`, `ry6_12` and `ry7a_04`
+  (GLARE 0, RAYS 1, DOF, resize), whose rebuilt pool is R16G16B16A16, so the port keys the pool on `rays`.
+- **Resume at step 3, the port side: gap 1 is the glare + shafts rebuild after a resize, with or without DOF.**
+  Pixels are IDENTICAL in every case and only the call log differs. No row covers a resize with the shafts on.
+  - `RENDER_ORACLE_DOF=0 RENDER_ORACLE_RESIZE=3:1600x900 F=rustyac_f4 bash re/scratch/taskY7c/cmp.sh rs14 3 5 --dump 3`
+    (no DOF): in the game's rebuild the bright pass is 240x135 f9, f9, f26, and in the port f9, f26, f9. The port also
+    has 2 extra teardown pairs (1280x720 f28 bind + viewport) and creates and clears 800x450 / 400x225 f9
+    (`half_pool`) that the game's rebuild does not make.
+  - `rs7` (DOF 3,5, same args) and `rs13` (`R=0`, shafts off): the game makes 80 / 79 creates and the port
+    82 / 81. The port's `dof_glare` pair (2 x 240x135 f26) is not in the game's rebuild. With the shafts
+    off, the game's rebuild bright pass is f26 x3, against the port's f9, f9, f26.
+  - Game rule (`CreateSystemObjects` 0x140413c00 lines 440-516): +0x248 e0 = fVar37, e1 only if this[0xf6]
+    (never in AC), e2 = fVar37, where fVar37 = this[0xf4] ? +0xc4 : +0xbc. Next comes +0x288 (+0xc0, f26).
+    That gives the order [e0, e2, +0x288]. The port's `glare[0..2]` slot model mixes objects with draw targets:
+    port `glare[2]` is cleared first, as +0x288 would be, but draws need it f9. Making it f26 broke frame 0 at a
+    192x108 draw. The shortcut comment at yebis.rs ~:892 marks this.
+  - Still open: what the game's two lone 240x135 f26 clears before +0x248's group are when DOF is on
+    (`ClearAllGPUResources` 0x14041c400 order: +0x288, +0x280, +0x298, +0x2d8, +0x2e0, +0x270, +0x2a8, +0x248,
+    ...); and why the game's rebuild skips the shafts' half-size f9 pair.
+  - The first build happens before capture, so only a resize shows these. One frame without a resize
+    (`rs7a` / `rs13a` / `rs14a`, `--dump 0`) is IDENTICAL.
 - Then the row for step 3 (DOF 3 + GLARE 3 + resize, `--dump` of a frame before the resize), and step 4
   again.
 
@@ -36,9 +44,12 @@
 | `ry7c_05` triple 5760x1080, PP 3 | 3 | IDENTICAL | IDENTICAL |
 | `ry7c_06` / `_07` DOF with the light shafts on screen (sun view), PP 3 DOF 5 / PP 5 DOF 3 | 3 | IDENTICAL | IDENTICAL |
 | `ry7c_08` DOF 5 with the heat shimmer (spa_launch, `rustyac_heat_x100`) | 52 | IDENTICAL | IDENTICAL |
-| DOF 3 + GLARE 3 + shafts, resize 3:1600x900 (`rs7`, no row yet) | 5 | DIFFERENT (rebuild, gap 1) | IDENTICAL |
-| DOF 3 + GLARE 3, RAYS 0 (`rs12`, no row yet) | 5 | DIFFERENT (gap 2) | DIFFERENT (max 2) |
-| Step 4: every render-area `--post` row (`r23_*`, `ry3e_*`, `ry5*`, `ry6_*`, `ry7a_*`, `ry7c_*`) and overlays | | 118 of 118 IDENTICAL | |
+| `ry7c_09` / `_10` / `_11` DOF + glare, shafts off (GLARE 3 PP 3 DOF 3, GLARE 3 PP 5 DOF 5, GLARE 5 PP 3 DOF 4) | 10 / 10 / 6 | IDENTICAL | IDENTICAL |
+| DOF 3 + GLARE 3, RAYS 0 (`rs12`, gap 2 fixed in `fbb0075`) | 5 | IDENTICAL | IDENTICAL |
+| DOF 3 + GLARE 3 + shafts, resize 3:1600x900 (`rs7`, no row) | 5 | DIFFERENT (rebuild, gap 1) | IDENTICAL |
+| DOF 3 + GLARE 3, shafts off, resize (`rs13`, no row) | 5 | DIFFERENT (rebuild, gap 1) | IDENTICAL |
+| GLARE 3 + shafts, no DOF, resize (`rs14`, no row) | 5 | DIFFERENT (rebuild, gap 1) | IDENTICAL |
+| Step 4: every render-area `--post` row (`r23_*`, `ry3e_*`, `ry5*`, `ry6_*`, `ry7a_*`, `ry7c_*`) and overlays | | 121 of 121 IDENTICAL (the 50 DOF rows rerun after the RAYS fix) | |
 
 ## Step 3: the oracle's, not the game's (from code)
 
