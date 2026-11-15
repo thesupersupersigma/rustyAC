@@ -5,9 +5,11 @@
 - **Done:** step 1's sweep (`278ab08`, `tools/proofs/yebis_sweep.sh`), five fixes from it (`e7bc4ce`,
   `b499962`, `2c3a865`, `7968dc1`, `ac4bf9f`, rows `ry7d_01`..`_05`). Step 3's text is in the tree, not
   committed (it is built and checked in step 5).
-- **Running:** the full sweep on the fixed build, `PROOF_OUT=re/scratch/taskY7d/run2 bash
-  tools/proofs/yebis_sweep.sh` (528 cases, ~41 s each, ~6 h). Then: step 2's reruns (failing cases and
-  every render `--post` row, `RENDER_ONLY='r23_.*|ry.*' bash tools/proofs/render.sh`), steps 3-5.
+- **Full sweep on the fixed build** (`re/scratch/taskY7d/run2`, 1 h 27 min): 528 cases, 526 IDENTICAL.
+  Exhaustive 432 of 432, pairwise 86 of 86, filters 8 of 10: `f_natural` and `f_photographic` are
+  finding 6 (APERTURE_SHAPE, refused, Task Y7e).
+- **Running:** step 2's rerun of every render `--post` row (`RENDER_ONLY='r23_.*|ry.*' bash
+  tools/proofs/render.sh`, `re/scratch/taskY7d/post`). Then steps 3-5.
 
 ## The sweep (step 1)
 
