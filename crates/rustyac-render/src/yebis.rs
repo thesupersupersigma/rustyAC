@@ -872,7 +872,9 @@ mod device {
                 sizes.extend(vec![(ga, gh); if ghost { 15 } else { 13 }]);
                 // RAYS_OF_GOD (init flag 0x10000000): the shafts' mask (+0x2d8) and result (+0x2e0) last, and the
                 // bright pass's first and third (+0x248) and the halvings in R16G16B16A16
-                let shafts = quality > 0 && video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
+                // this[0xf4] is the init flag alone (the pool's format), the shafts draw only at glare quality > 0
+                let rays = video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
+                let shafts = quality > 0 && rays;
                 let shaft_at = sizes.len();
                 if shafts {
                     sizes.extend([(ga, gh); 2]);
@@ -1005,7 +1007,7 @@ mod device {
                         let have = need.iter().filter(|&&e| e == s).count();
                         need.extend(std::iter::repeat_n(s, n.saturating_sub(have)));
                     };
-                    gsizes.iter().for_each(|&s| ask((s, shafts), 1));
+                    gsizes.iter().for_each(|&s| ask((s, rays), 1));
                     hsizes.iter().for_each(|&s| ask((s, true), 1));
                     for l in &levels {
                         ask((l.size, true), work(l));
@@ -1013,7 +1015,8 @@ mod device {
                             ask((doubled(l), true), 1);
                         }
                     }
-                    let mut pool: Vec<(((u32, u32), bool), Vec<Target>)> = vec![];
+                    type Ask = ((u32, u32), bool);
+                    let mut pool: Vec<(Ask, Vec<Target>)> = vec![];
                     for s in need {
                         let ((sw, sh), wide) = s;
                         let f = if wide { f9 } else { f26 };
@@ -1026,7 +1029,7 @@ mod device {
                     }
                     let get = |s: (u32, u32), wide: bool| pool.iter().find(|e| e.0 == (s, wide)).map(|e| e.1.clone()).unwrap_or_default();
                     for s in gsizes {
-                        let t = get(s, shafts)[0].clone();
+                        let t = get(s, rays)[0].clone();
                         glare_pool.push((t.rtv.clone(), s.0, s.1));
                         glare_pool_targets.push((t, s.0, s.1));
                     }
