@@ -1,3 +1,58 @@
+# Task Y7f: the airy disc check (stopped before the port, rule 32)
+
+## Resume here
+
+- **Stopped in step 1 (rule 32), no release, no tag.** Step 1's question is answered from the code
+  (below): the airy disc **does** draw in AC with shipped filters, so the prompt's "port it now" applies,
+  but the port is about 2 sessions, not part of one. Steps 2-4 not started.
+- **Decision for Super:** port the airy disc before v1.0 (Task Y7g, estimate below), or count b&w/sepia
+  at very narrow replay cameras as a known gap. Step 2 depends on it: refusing `[AIRYDISC] ENABLED=1`
+  would refuse two shipped filters.
+- **Next:** Y7g = airy disc port; then Y7f steps 2-4 (refusals, README, release v0.50.0).
+
+## Step 1: does the airy disc draw?
+
+The prompt's premise is off: **vintage.ini has `[AIRYDISC] ENABLED=0`**. `ENABLED=1` is in **b&w.ini and
+sepia.ini** (all shipped filters: `WAVELENGTH=500`, `AIRY_DISC_DISPERSION_ENABLED=1`). The sweep
+matched because no swept camera is narrow enough (the rule below). From the code:
+
+- `initPostProcessing` 0x140024ca0: init flag 0x40000 iff `ENABLED`, then `SetApertureAiryDiscEnable` and
+  `SetApertureAiryDiscParameters(WAVELENGTH * 1e-9, DISPERSION != 0)`. The wrapper 0x14039c6a0 always
+  passes the third bool as 1 (`mov r9b, 1`), so +0x9b5 = 1 and the +0xb87 (DOF active) escape never fires.
+- `UpdateParameters_EffectiveApertureAiryDiscEnable` 0x1403ba090 (each frame): on iff +0x9ad (enable),
+  +0x6ea = 0 (only `ApplyDepthOfFieldFilter` sets it; AC never calls it), +0xb88 = 1 (the depth of
+  field's optical parameters computed), and `W * (+0xba8) * (dispersion ? 7e-7/5.8756e-7 : 1) > 0.7259524`,
+  W = scene target width.
+- `UpdateParameters_DepthOfFieldOpticalParameters` 0x1403b92f0 runs every frame whatever the DOF enable:
+  +0xb88 = `CDepthOfField[0x164]`, +0xba8 = `GetAiryDiscDiameterToScreenRatio(wavelength, 1) * 0.5`
+  = `focus*N/(focus-focal) * 2.4392 * wavelength / sensor * 0.5`, N from `CalculateOpticalParameters`
+  0x14042c150 (aperture parameter 2: `focal^0.5 * F/base_f * base_f^0.5`; CDepthOfField +0x388/+0x38c
+  are 0, so no stop rounding and no clamp). The focus, sensor and F-number inputs are only written by
+  `SetDepthOfFieldParameters` 0x1403c2e90, which AC calls only while `dofEnabled && dofActive`
+  (`setPostProcessing` 0x140025080:158); they keep their last values after the DOF goes inactive, and are
+  never initialised before the first DOF frame (heap from malloc).
+- Worked out: with λ 500 nm, sensor 0.24, dispersion on, it draws iff `W * N * M > 239,780`, M =
+  focus/(focus-focal). F 11 (b&w, sepia): vertical FOV 1°, focus 100 m gives N*M ≈ 86, on at W ≥ ~2800;
+  FOV 0.5° gives ≈ 128, on at 1920. FOV 2° needs W ≥ ~4100; normal FOVs never. Shipped track cameras
+  with DOF (`DOF_FACTOR` non-zero, so DOF active) reach `MIN_FOV=1` (45 cameras, e.g. ks_laguna_seca,
+  ks_silverstone1967), 0.75 (1), 0.5 (2). So: **b&w or sepia, DOF on in video.ini, a replay track camera
+  zoomed in to about 1° or less, at 1440p-4K.** vintage, and every filter with `ENABLED=0`, never draw it.
+- The draw: `EndPostEffectScene_InternalProcess` 0x1403b5f40 (`cmp [rdi+0xba5]` at 0x1403b69e9):
+  resolve, then `CTextureUtil::GaussianFilter_UnlimitedRadius` 0x14040bd20 of the scene with radius
+  `width * (+0xba8) * 0.3443752` clamped to 5.0 (4.776911 with dispersion) unless +0x3f8, dispersion
+  scaling r/g/b by 1.0467017 / 0.79140854 / 0.9190551, plus the +0x3f0/+0x3f8 loop;
+  `EndPostEffectScene_PreProcess` 0x1403b56d0:196-215 changes target indices when it is on.
+
+### Port estimate (Task Y7g, ~2 sessions)
+
+- The gate: the DOF optical parameters every frame (the port has the maths, yebis_cb.rs:667-681) with
+  the last-DOF-frame persistence; frames before the first DOF frame read uninitialised heap in the game
+  (port: off, noted in differences.md).
+- `GaussianFilter_UnlimitedRadius` (2368 bytes: downsample chain via `Resample`, `GaussianFilterMax61x61_2Pass`
+  0x14040b470, which the port lacks, then `MadTn` blend), the airy section and the PreProcess index change.
+- Rows: render_oracle needs a narrow-FOV replay track camera with DOF on, b&w and sepia, dispersion on/off,
+  at 1920 (FOV 0.5) and 2560+ (FOV 1); the call log must match.
+
 # Task Y7b: every ppfilter key (custom filters)
 
 ## Resume here
@@ -53,7 +108,7 @@ Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 
 | AUTO_EXPOSURE | MAX | Float | 0.45 / 0.5 / 0.7 | done-proven |  |
 | AUTO_EXPOSURE | TARGET | Float | 0.20 / 0.26 / 0.28 / 0.32 / 0.35 | done-proven |  |
 | AUTO_EXPOSURE | INFLUENCED_BY_GLARE | Float | 0 | refused | only 0 |
-| AIRYDISC | ENABLED | Int | 0 / 1 | ignored | never read; vintage.ini has 1 (flag 0x40000 + SetApertureAiryDiscEnable) |
+| AIRYDISC | ENABLED | Int | 0 / 1 | ignored | never read; b&w.ini and sepia.ini have 1, vintage.ini 0 (Task Y7f) (flag 0x40000 + SetApertureAiryDiscEnable) |
 | AIRYDISC | WAVELENGTH | Float | 500 | ignored | never read |
 | AIRYDISC | AIRY_DISC_DISPERSION_ENABLED | Int | 1 | ignored | never read |
 | FEEDBACK | ENABLED | Int | 0 | ignored | never read; shipped 0, so 1 runs as 0 |
