@@ -1747,12 +1747,7 @@ mod device {
         unsafe fn dof(&mut self, pe: &PostEffect, d: &crate::yebis_cb::Dof) -> Result<(), String> {
             use crate::yebis_cb::{centre_peak, dof_counts, dof_level_factors, hexagon_taps, mask_taps, MASK_TAPS, T_DOF_BLEND, T_DOF_FRONT, T_DOF_LEVELS, T_DOF_MAKE, T_DOF_MASK, T_DOF_MASKED, T_GAUSS7};
             let l30: Vec<f32> = self.dof_levels.iter().map(|l| l.0.l30).collect();
-            // the edge flags (+0x140): AC's EDGE_QUALITY call (6) fails below DOF 5, which keeps the table's
-            let flags = match d.quality {
-                1 => 0,
-                5 => 6,
-                _ => 2,
-            };
+            let flags = d.edges;
             let front = flags & 4 != 0;
             let f = dof_level_factors(&l30, d.ratio, flags);
             let (near_n, far_n) = dof_counts(&f, pe.near, pe.far, d.focus);
@@ -1846,7 +1841,7 @@ mod device {
                     me.resample((from.srv.clone(), lw, lh), (to.clone(), ow, oh), (l.frac * 0.25 + 0.25).clamp(0.0, 1.0), 8)
                 };
                 let doubled = l.doubled;
-                if let Some([mask, colour, fres]) = fr.as_ref().filter(|_| i < far_n) {
+                if let Some([mask, colour, fres]) = fr.as_ref().filter(|_| front && i < far_n) {
                     let temps = [work.first().unwrap_or(mask), work.get(1).unwrap_or(mask)];
                     hexagon(self, colour.srv.clone(), if doubled { mask } else { fres }, temps)?;
                     if doubled {

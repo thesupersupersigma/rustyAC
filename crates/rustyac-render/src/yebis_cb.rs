@@ -618,6 +618,8 @@ pub struct Dof {
     pub angle: f32,
     /// `[DOF] BACKGROUND_MASK_THRESHOLD` (+0x160, the front layer's mask)
     pub mask_threshold: f32,
+    /// the edge flags (+0x140): 2 the front blur factor, 4 the front layer
+    pub edges: u32,
 }
 
 impl Dof {
@@ -627,7 +629,7 @@ impl Dof {
         let f = |k: &str| filter.get_float("DOF", k);
         let i = |k: &str| filter.get_int("DOF", k);
         // every shipped filter has these; others change the draws
-        for (key, want) in [("APERTURE_PARAMETER", 2), ("APERTURE_SHAPE", 3), ("APERTURE_FRONT_LEVELS_NUMBER", -1), ("APERTURE_BACK_LEVELS_NUMBER", -1), ("EDGE_QUALITY", 3)] {
+        for (key, want) in [("APERTURE_PARAMETER", 2), ("APERTURE_SHAPE", 3), ("APERTURE_FRONT_LEVELS_NUMBER", -1), ("APERTURE_BACK_LEVELS_NUMBER", -1)] {
             if i(key)? != want {
                 return Err(format!("yebis: [DOF] {key} other than {want} not ported"));
             }
@@ -635,6 +637,21 @@ impl Dof {
         if !(1..=5).contains(&quality) {
             return Err(format!("yebis: [POST_PROCESS] DOF={quality} not ported"));
         }
+        // the table's flags (this[200]: 0 at DOF 1, 6 at DOF 5); SetDepthOfFieldEdgeQuality 0x1403cadd0 sets
+        // EDGE_QUALITY's (0x1403cc0a0: 0 1 2 3 4 -> 0 0 2 6 6, -1 the table's) only when the table has its bits
+        let table = match quality {
+            1 => 0,
+            5 => 6,
+            _ => 2,
+        };
+        let edges = match i("EDGE_QUALITY")? {
+            -1 => table,
+            e @ 0..=4 => match [0, 0, 2, 6, 6][e as usize] {
+                v if v & table == v => v,
+                _ => table,
+            },
+            e => return Err(format!("yebis: [DOF] EDGE_QUALITY={e} not ported")),
+        };
         let (fnumber, sensor, adaptive) = (f("APERTURE_F_NUMBER")?, f("IMAGE_SENSOR_HEIGHT")?, f("ADAPTIVE_APERTURE_FACTOR")?);
         let base_fov = f("BASE_FOV")? * 0.017453;
         // CDepthOfField::SetDepthOfFieldParameters 0x14042c730, CalculateOpticalParameters 0x14042c150
@@ -651,7 +668,7 @@ impl Dof {
         let coc = (d * focal) / (focus - focal);
         let x = 64000.0 / ((near - focus) / near - 1.0).abs();
         let y = x * -1.0;
-        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], angle: diaphragm_angle(diaphragm(filter)?, vfov) + std::f32::consts::FRAC_PI_6, mask_threshold: f("BACKGROUND_MASK_THRESHOLD")? }))
+        Ok(Some(Dof { quality, focus, ratio: coc / sensor, store: [x, y, 1.0 / x, (y * -1.0) / x], angle: diaphragm_angle(diaphragm(filter)?, vfov) + std::f32::consts::FRAC_PI_6, mask_threshold: f("BACKGROUND_MASK_THRESHOLD")?, edges }))
     }
 
     /// The factor store as the depth range (+0xb8c..+0xb9c): the tail recomputes +0xb94 and +0xb98.

@@ -257,3 +257,6 @@ ry7c_12 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 ry7c_13 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 5 --dump 3 GLARE:3 PP_QUALITY:3 DOF:3,5 RESIZE:3:1600x900
 ry7c_14 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 5 --dump 3 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:0 RESIZE:3:1600x900
 ry7c_15 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 6 --dump 0,2,5 GLARE:3 PP_QUALITY:3 DOF:3,5 RESIZE:3:1600x900
+# -- Task Y7d: the sweep's findings (tools/proofs/yebis_sweep.sh)
+# DOF EDGE_QUALITY 1 (b&w, movie, natural) at DOF 5: no front layer
+ry7d_01 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --size 1280x720 --ppfilter b&w PP_QUALITY:5 GLARE:5 DOF:5,5 RAYS:1
