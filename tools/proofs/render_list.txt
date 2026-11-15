@@ -251,3 +251,9 @@ ry7c_08 | --track spa --view chase --post --fxaa --size 1280x720 --car ks_ferrar
 ry7c_09 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:3 PP_QUALITY:3 DOF:3,5
 ry7c_10 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 10 GLARE:3 PP_QUALITY:5 DOF:5,5
 ry7c_11 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 6 GLARE:5 PP_QUALITY:3 DOF:4,5
+# Task Y7c third session: the glare's rebuild after a resize, with and without DOF and the light shafts (rs7, rs13, rs14),
+# and step 3's row: DOF 3 + GLARE 3 + resize with frames from before the resize kept (each kept frame at its own size)
+ry7c_12 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 5 --dump 3 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:3,5 RESIZE:3:1600x900
+ry7c_13 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 5 --dump 3 GLARE:3 PP_QUALITY:3 DOF:3,5 RESIZE:3:1600x900
+ry7c_14 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter rustyac_f4 --frames 5 --dump 3 GLARE:3 PP_QUALITY:3 RAYS:1 DOF:0 RESIZE:3:1600x900
+ry7c_15 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --ppfilter default --frames 6 --dump 0,2,5 GLARE:3 PP_QUALITY:3 DOF:3,5 RESIZE:3:1600x900
