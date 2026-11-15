@@ -14,8 +14,9 @@
 - **Gap 1 fixed (third session, `28769ac`, rows in `bd44344`):** the glare's objects are made, cleared and
   released as `CRenderGlare::CreateSystemObjects` makes them; the draws are unchanged. Rows `ry7c_12`..`_15`.
   See "Gap 1: the glare's objects (from code)" below.
-- **Resume at the third session's step 3:** `bash tools/proofs/run_all.sh --quick` and every render
-  `--post` / glare / DOF row again. Then Y7c is done (no release; v0.49.2 is Y7d).
+- **Step 3 done; Y7c done** (no release, no tag; v0.49.2 is Y7d). `run_all.sh --quick` 174 of 174
+  IDENTICAL. The full render `--post` / glare / DOF sweep (125 rows with overlays) found 3 call-log
+  differences (`ry6_11`, `ry6_12`, `ry7a_04`), fixed in the shafts' pair commit below; all 125 are now IDENTICAL.
 
 ## Gap 1: the glare's objects (from code)
 
@@ -44,6 +45,12 @@
   0x1404200a0 asks for every level's work targets first (lines ~1240-1300). The port asked for the
   halvings before the levels. Each size still gets the same textures, so the draws do not change, but
   the pool's creation and clear order now match the game's (`rs13`).
+- **The shafts' mask and result are made with RAYS at any glare quality.** `CreateSystemObjects` lines
+  357-381 make +0x2d8 / +0x2e0 under `this[0xf4] != 0` alone, and lines 874-897 initialize them whenever
+  they exist. The port made them only at glare quality > 0. At GLARE 0 + RAYS 1 a rebuild makes and clears
+  two 120x68 f26 the port lacked (`ry6_11`, `ry6_12`, `ry7a_04`). The old `dof_glare` pair had stood in
+  for them by chance. Now the pair follows `rays`; the shafts still draw only at glare quality > 0
+  (`yebis_cb.rs` `Glare::shafts`).
 
 ## Results
 
@@ -63,6 +70,8 @@
 | `ry7c_14` (`rs14`) GLARE 3 + shafts, no DOF, resize (before: DIFFERENT) | 5 | IDENTICAL | IDENTICAL |
 | `ry7c_15` step 3's row: DOF 3 + GLARE 3 + resize, frames 0 and 2 kept from before the resize | 6 | IDENTICAL | IDENTICAL |
 | Step 4: every render-area `--post` row (`r23_*`, `ry3e_*`, `ry5*`, `ry6_*`, `ry7a_*`, `ry7c_*`) and overlays | | 121 of 121 IDENTICAL (the 50 DOF rows rerun after the RAYS fix) | |
+| Third session step 3: `run_all.sh --quick` (13 areas) | | 174 of 174 IDENTICAL | |
+| Third session step 3: every `--post` / glare / DOF row + overlays (125) | | 122 of 125 before the shafts' pair fix (`ry6_11`, `ry6_12`, `ry7a_04` call log DIFFERENT); after it the 20 GLARE 0 + RAYS rows and `ry7c_*` rerun: IDENTICAL, so 125 of 125 | IDENTICAL (all 125) |
 
 ## Step 3: the oracle's, not the game's (from code)
 
