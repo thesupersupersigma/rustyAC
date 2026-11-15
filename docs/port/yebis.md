@@ -3,13 +3,26 @@
 ## Resume here
 
 - **Done:** step 1's sweep (`278ab08`, `tools/proofs/yebis_sweep.sh`), five fixes from it (`e7bc4ce`,
-  `b499962`, `2c3a865`, `7968dc1`, `ac4bf9f`, rows `ry7d_01`..`_05`). Step 3's text is in the tree, not
-  committed (it is built and checked in step 5).
-- **Full sweep on the fixed build** (`re/scratch/taskY7d/run2`, 1 h 27 min): 528 cases, 526 IDENTICAL.
+  `b499962`, `2c3a865`, `7968dc1`, `ac4bf9f`, rows `ry7d_01`..`_05`).- **Full sweep on the fixed build** (`re/scratch/taskY7d/run2`, 1 h 27 min): 528 cases, 526 IDENTICAL.
   Exhaustive 432 of 432, pairwise 86 of 86, filters 8 of 10: `f_natural` and `f_photographic` are
   finding 6 (APERTURE_SHAPE, refused, Task Y7e).
-- **Running:** step 2's rerun of every render `--post` row (`RENDER_ONLY='r23_.*|ry.*' bash
-  tools/proofs/render.sh`, `re/scratch/taskY7d/post`). Then steps 3-5.
+- **Step 2's rerun** of every render `--post` row on that build (`RENDER_ONLY='r23_.*|ry.*' bash
+  tools/proofs/render.sh`): 115 of 115 IDENTICAL, rows `ry7d_01`..`_05` among them (the 2 h limit cut
+  the track-overlays loop after 6 tracks, all IDENTICAL; they are not post-processing).
+- **Step 3** (`cd1e129`, `29bf13a`): `--graphics max` writes `[POST_PROCESS] ENABLED=1 FXAA=1 QUALITY=5
+  GLARE=5 DOF=5 RAYS_OF_GOD=1 HEAT_SHIMMER=1 FILTER=default`, AC's highest (AC's launcher has no video
+  presets; its shipped `cfg/video.ini` is the page's "high"). `low` keeps post-processing off. The
+  "until YEBIS is ported" notes are gone from `--help`, the startup notes, README and the graphics page
+  (the page itself stays without YEBIS). The cube map stays 1024 (Task 22c).
+- **Step 4:** `re/scratch/taskY7d/shot/y7d_max.jpg` (960x540, 119 KB) from `rustyac.exe --track spa
+  --no-race-ini --autodrive --at 55 --sun 70 --no-hud --graphics max --width 1280 --height 720
+  --screenshot`: the low sun ahead left with glare and light shafts.
+- **Step 5:** clippy native, both wasm targets, wgpu and web all clean; `render_oracle`'s own clippy has
+  the same 42 old lints as Y7c (no file of it changed here). `run_all.sh --quick` 174 of 174 IDENTICAL,
+  0 ERROR, 0h42m. Released as v0.49.2 (Y7a, Y7c, Y7d).
+- **Left for Task Y7e:** DOF `APERTURE_SHAPE` 2 and 4 (finding 6: natural, photographic); video.ini
+  `[SATURATION] LEVEL` (Sim::Sim 0x140192070 stores LEVEL*0.01 at renderer+0x11c; nothing on desktop
+  reads it yet). Custom-filter keys no shipped filter uses stay Task Y7b.
 
 ## The sweep (step 1)
 
