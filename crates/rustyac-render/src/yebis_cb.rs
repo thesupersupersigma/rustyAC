@@ -879,10 +879,10 @@ impl PostEffect {
     /// `filter` is `system/cfg/ppfilters/<[POST_PROCESS] FILTER>.ini`.
     pub fn new(filter: &IniReader, video: &IniReader, cam: &Camera) -> Result<PostEffect, String> {
         // CameraForwardYebis's constructor: glareEnabled = GLARE != 0, godraysEnabled = RAYS_OF_GOD != 0
-        let shafts = video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0;
+        let shafts = if video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0 { Some(Shafts::new(filter)?) } else { None };
         let glare = match glare_quality(video) {
             0 => None,
-            q => Some(Glare { shafts: if shafts { Some(Shafts::new(filter)?) } else { None }, ..Glare::new(filter, q)? }),
+            q => Some(Glare { shafts: shafts.clone(), ..Glare::new(filter, q)? }),
         };
         let f = |s: &str, k: &str| filter.get_float(s, k);
         let i = |s: &str, k: &str| filter.get_int(s, k);
@@ -953,8 +953,10 @@ impl PostEffect {
         let near = cam.near;
         let far = cam.far.clamp(1.0, 1000.0);
         // UpdateParameters_DepthOfFieldOpticalParameters 0x1403b92f0: +0x9ac, the light shafts on this frame
-        let sun = match &glare {
-            Some(Glare { shafts: Some(sh), luminance, .. }) if *luminance > 0.0 => cam.sun.filter(|&(_, c)| sh.colour(c).iter().any(|&v| v > 0.0)),
+        // with the glare off AC never sets +0x66c: Initialize's SetGlareParameters(1.0, ..) stays
+        let luminance = glare.as_ref().map_or(1.0, |g| g.luminance);
+        let sun = match &shafts {
+            Some(sh) if luminance > 0.0 => cam.sun.filter(|&(_, c)| sh.colour(c).iter().any(|&v| v > 0.0)),
             _ => None,
         };
         // DOF off, float depth formats, SetDepthFactorRange never called (0, 0): with the shafts on the

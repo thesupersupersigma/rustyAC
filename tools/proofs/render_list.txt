@@ -260,3 +260,5 @@ ry7c_15 | --track spa --view chase --post --car ks_ferrari_f2004 --tape oracle/a
 # -- Task Y7d: the sweep's findings (tools/proofs/yebis_sweep.sh)
 # DOF EDGE_QUALITY 1 (b&w, movie, natural) at DOF 5: no front layer
 ry7d_01 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --size 1280x720 --ppfilter b&w PP_QUALITY:5 GLARE:5 DOF:5,5 RAYS:1
+# light shafts with the glare off: Initialize's glare luminance 1.0 stays
+ry7d_02 | --track spa --view sun --post --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/trk_lap.audiotape --tape-from 480 --frames 3 --size 1280x720 --ppfilter default PP_QUALITY:0 GLARE:0 DOF:0 RAYS:1
