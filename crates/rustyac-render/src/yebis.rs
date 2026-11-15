@@ -139,7 +139,9 @@ pub fn glare_levels(base: i32, quality: usize, w: i32, h: i32) -> Vec<GlareLevel
         .map(|i| {
             let k = i - cc + 1;
             let scale = if k > 0 { rustyac_math::powf(2.0, -(k as f32)) } else { 1.0 };
-            let size = if k > 0 { ((gw as f32 * scale + 0.99) as u32, (gh as f32 * scale + 0.99) as u32) } else { (gw, gh) };
+            // CreateSystemObjects 0x140413c00: a side under 4 texels is made 3
+            let side = |v: f32| match (v * scale + 0.99) as u32 { s if s < 4 => 3, s => s };
+            let size = if k > 0 { (side(gw as f32), side(gh as f32)) } else { (gw, gh) };
             let up = (k >= 1 && ((w as u32 >> 4) >= size.0 || i == n - 1)).then_some((size.0 * 2, size.1 * 2));
             GlareLevel { size, own: k > 0, up, step: rustyac_math::powf(2.0, i as f32) * scale }
         })
@@ -846,11 +848,6 @@ mod device {
                 sizes.extend([(ga, gh); 5]);
                 let mut glare_levels = Vec::new();
                 for (i, l) in super::glare_levels(base, quality, width, height).into_iter().enumerate() {
-                    let (s0, s1) = l.size;
-                    if s0 < 4 || s1 < 4 {
-                        // shortcut: the game's rule for levels under 4 texels is not read, never at AC's sizes
-                        return Err(format!("yebis: a glare level of {s0}x{s1} not ported"));
-                    }
                     let at = sizes.len();
                     let idx = match (i, l.own) {
                         (0, _) => [2, 6, 7],
