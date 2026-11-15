@@ -803,9 +803,9 @@ for checks, without anybody at the controls:
                         4096, world detail 5, anisotropic 16, reflections 1024 with 6 faces a frame (the
                         launcher's highest, 2048, costs too many frames: --cube-size 2048 has it),
                         mirrors 1024 in high quality with smoke, the virtual mirror, smoke 5, 4 samples
-                        per pixel; post-processing off until YEBIS is ported: --post 1 --fxaa 1
-                        --motion-blur 6 switch its frame on); low: everything off or at the lowest
-                        value. The options above still win.
+                        per pixel, post-processing with the default filter, quality, glare and depth
+                        of field 5, light shafts, heat shimmer and FXAA); low: everything off or at
+                        the lowest value. The options above still win.
   --ideal-line, --no-ideal-line
                         AC's ideal line (the coloured arrows on the road) on or off from the start,
                         whatever assists.ini [ASSISTS] IDEAL_LINE says; Ctrl+I switches it while
@@ -825,8 +825,8 @@ for checks, without anybody at the controls:
                         with and the dots on trees, fences and crowds go
   --post <0|1>          the post-processing frame ([POST_PROCESS] ENABLED) whatever the video
                         settings say: the scene goes through a 16-bit target and YEBIS as in the
-                        game (filter, tone mapping, eye adaptation, glare, light shafts; no depth
-                        of field yet)
+                        game (filter, tone mapping, eye adaptation, glare, light shafts, depth of
+                        field, heat shimmer)
   --fxaa <0|1>          AC's FXAA pass ([POST_PROCESS] FXAA); 1 switches the post-processing frame
                         on too (acs.exe has FXAA nowhere else)
   --motion-blur <n>     AC's motion blur ([EFFECTS] MOTION_BLUR, 0 to 12); above 0 it switches the

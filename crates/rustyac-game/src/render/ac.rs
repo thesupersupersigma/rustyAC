@@ -364,10 +364,8 @@ impl GraphicsPreset {
     }
 
     /// The `video.ini` the launcher would write with every slider at its end, four samples per
-    /// pixel, and post-processing off: `[POST_PROCESS] ENABLED=0` until all of YEBIS is ported
-    /// (filter, tone mapping, eye adaptation, glare and light shafts are drawn; depth of field
-    /// is still missing), so the preset does not switch it on; with it off, FXAA and motion blur
-    /// do not exist in acs.exe either. `--post 1 --fxaa 1 --motion-blur 6` ask for that frame.
+    /// pixel and post-processing on (AC's default filter, quality, glare and depth of field 5,
+    /// light shafts, heat shimmer, FXAA); `low` has every slider at its start, post-processing off.
     ///
     /// The reflection cube map is 1024, not the launcher's highest 2048 (Task 22c): with six
     /// faces drawn again every frame a 2048 map costs 13 to 50 ms a frame on the PC this was
@@ -376,7 +374,7 @@ impl GraphicsPreset {
     fn video_ini(self) -> &'static str {
         match self {
             GraphicsPreset::Max => {
-                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=1024\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=0\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=0\nFXAA=0\n"
+                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=1024\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=0\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=1\nFXAA=1\nQUALITY=5\nGLARE=5\nDOF=5\nRAYS_OF_GOD=1\nHEAT_SHIMMER=1\nFILTER=default\n"
             }
             GraphicsPreset::Low => {
                 "[VIDEO]\nANISOTROPIC=0\nAASAMPLES=1\nSHADOW_MAP_SIZE=512\n[ASSETTOCORSA]\nWORLD_DETAIL=0\n[CUBEMAP]\nSIZE=0\nFACES_PER_FRAME=0\n[EFFECTS]\nSMOKE=0\nRENDER_SMOKE_IN_MIRROR=0\nMOTION_BLUR=0\n[MIRROR]\nSIZE=0\nHQ=0\n[POST_PROCESS]\nENABLED=0\nFXAA=0\n"
@@ -687,7 +685,7 @@ impl AcRenderer {
             notes.retain(|n| !n.contains("[CUBEMAP] SIZE=0"));
             notes.insert(0, format!("{video_name}: the built-in settings, your video.ini is not read"));
             if options.preset == Some(GraphicsPreset::Max) {
-                notes.insert(1, "  (4 samples per pixel; post-processing stays off until all of YEBIS is ported: --post 1 --fxaa 1 --motion-blur 6 switch its frame on)".to_string());
+                notes.insert(1, "  (4 samples per pixel, post-processing at its highest)".to_string());
             }
         } else if options.video_ini.is_some() {
             notes.insert(0, format!("the video settings of {video_name}"));
@@ -722,7 +720,7 @@ impl AcRenderer {
                 parts.push(format!("motion blur {motion_blur}"));
             }
             notes.push(format!(
-                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter, tone mapping, eye adaptation and glare and light shafts from your acs.exe on Direct3D{}",
+                "post-processing on: the game's post-processing frame ({}) with YEBIS's filter, tone mapping, eye adaptation, glare, light shafts, depth of field and heat shimmer from your acs.exe on Direct3D{}",
                 parts.join(", "),
                 if options.hdr_levels { "; --hdr-levels: the engine's HDR light levels, which only YEBIS brings back into range" } else { "; the light levels are the game's once YEBIS starts" }
             ));
