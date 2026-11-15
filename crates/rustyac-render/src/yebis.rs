@@ -1751,10 +1751,8 @@ mod device {
             let front = flags & 4 != 0;
             let f = dof_level_factors(&l30, d.ratio, flags);
             let (near_n, far_n) = dof_counts(&f, pe.near, pe.far, d.focus);
+            // no level in range (PP quality 1's small levels): the game still halves and composites the source alone
             let n = near_n.max(far_n);
-            if n == 0 {
-                return Err("yebis: the depth of field with no level drawn: not ported".into());
-            }
             self.reset();
             // the source is the current surface: the third after the heat shimmer, which comes back as the
             // target behind the reset
