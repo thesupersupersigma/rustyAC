@@ -1,3 +1,186 @@
+# Task Y7b: every ppfilter key (custom filters)
+
+## Resume here
+
+- **Stopped before step 2 (rule 32), no release.** Step 1 (the key table below) is done. Step 2 is
+  far bigger than the prompt's ~2 sessions: 43 keys in 16 YEBIS features are refused or ignored,
+  about 14-16 sessions at one feature per session (estimate below).
+- **Next:** split step 2 into tasks; the first, as the prompt says, is the tone map (`FUNCTION` 0 and
+  3-8, `HDR` 0) plus the bloom (`BLOOM_NUM_LEVELS`, the 3x3 gaussian, `PRECISION`).
+
+## Step 1: the key table
+
+Source: `CameraForwardYebis::readPPSetOptions` 0x140026150 (the desktop reader; the VR path
+`YebisPP::readPPSet` 0x14002cd60 reads the same keys). Scratch: `re/scratch/taskY7b/keys.py` pulls
+(section, key, getter, pp field) out of the pseudo-C, `values.py` lists each key's values across the
+10 shipped filters, `table.py` adds the port's status.
+
+What the game does with a value (rules from code):
+
+- No range anywhere: neither the reader nor `setPostProcessing` 0x140025080 clamps a key.
+- A missing or empty key is 0 (`INIReader::getFloat` 0x1402358c0 / `getInt`); text that does not
+  start with a number throws (`invalid stof argument`, `stof argument out of range`). The port's
+  `IniReader` (`crates/rustyac-physics/src/data/ini.rs`) does the same, the throw as an `Err`.
+- Every section sits behind `hasSection`, so a missing section leaves the pp field as it was: 0 on
+  the first load (the constructor's `memset(&pp, 0, 0x648)`), the previous filter's value after a
+  filter change. The port builds its effect from the new filter alone, so a filter change to a filter
+  with a section missing is not the game's (not proven either way; no shipped filter lacks a section).
+- "Shipped values" is every value in the 10 shipped filters. **done-proven**: rows vary the key
+  (two or more shipped values, or a `TEST_FILTERS` edit in `tools/render_oracle/src/root.rs`), all
+  IDENTICAL. **done-not-proven**: ported, but every row has the same value. **refused**: the port
+  stops with an error for the listed values. **ignored**: the port never reads the key, so a custom
+  filter's value changes nothing (worse than refused: no error). **no effect**: the game reads it but
+  nothing uses it.
+
+Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 no effect.
+
+| section | key | type | shipped values | status | note |
+|---|---|---|---|---|---|
+| DEBUG | DOF_FOCUS | Float | - | no effect | updateYebisParameters 0x140029e30 overwrites dofFocusDistance from the camera every frame |
+| VARIOUS | APERTURE_RESULT_BLUR_MOD | Int | 1 | no effect | stored only; nothing reads apertureResltBlurModify |
+| TONEMAPPING | HDR | Int | 1 | refused | only 1 |
+| TONEMAPPING | EXPOSURE | Float | 0.28 | done-not-proven | one value in every row |
+| TONEMAPPING | GAMMA | Float | 0.60 / 1.0 / 1.05 / 1.1 / 1.2 / 1.20 / 1.30 | done-proven |  |
+| TONEMAPPING | FUNCTION | Int | -1 / 1 / 2 | refused | only -1, 1, 2 (-1 = 2); 0 and 3-8 refused |
+| TONEMAPPING | SCALE_WIDTH | Float | 1 | ignored | tonemap viewport (setPostProcessing): never read; shipped 1 |
+| TONEMAPPING | SCALE_HEIGHT | Float | 1 | ignored | as SCALE_WIDTH |
+| TONEMAPPING | OFFSET_X | Float | 0 | ignored | as SCALE_WIDTH; shipped 0 |
+| TONEMAPPING | OFFSET_Y | Float | 0 | ignored | as SCALE_WIDTH |
+| TONEMAPPING | MAPPING_FACTOR | Float | 32 | done-not-proven | one value in every row |
+| AUTO_EXPOSURE | ENABLED | Int | 1 | done-proven |  |
+| AUTO_EXPOSURE | DELAY | Float | 0 | refused | only 0 |
+| AUTO_EXPOSURE | MIN | Float | 0.1 / 0.2 / 0.25 / 0.26 / 0.3 | done-proven |  |
+| AUTO_EXPOSURE | MAX | Float | 0.45 / 0.5 / 0.7 | done-proven |  |
+| AUTO_EXPOSURE | TARGET | Float | 0.20 / 0.26 / 0.28 / 0.32 / 0.35 | done-proven |  |
+| AUTO_EXPOSURE | INFLUENCED_BY_GLARE | Float | 0 | refused | only 0 |
+| AIRYDISC | ENABLED | Int | 0 / 1 | ignored | never read; vintage.ini has 1 (flag 0x40000 + SetApertureAiryDiscEnable) |
+| AIRYDISC | WAVELENGTH | Float | 500 | ignored | never read |
+| AIRYDISC | AIRY_DISC_DISPERSION_ENABLED | Int | 1 | ignored | never read |
+| FEEDBACK | ENABLED | Int | 0 | ignored | never read; shipped 0, so 1 runs as 0 |
+| FEEDBACK | ASPECT_RATIO | Float | 0 | ignored | never read |
+| FEEDBACK | WEIGHT | Float | 0.0425 / 0.05 | ignored | never read |
+| FEEDBACK | CURRENT_WEIGHT | Float | -0.05 | ignored | never read |
+| FEEDBACK | TIME | Float | 0.1 | ignored | never read |
+| VIGNETTING | STRENGTH | Float | 0.0 / 0.035 / 0.25 //6 / 0.4 | done-proven |  |
+| VIGNETTING | FOV_DEPENDENCE | Float | 0 | refused | only 0 |
+| CHROMATIC_ABERRATION | ENABLED | Int | 1 | refused | only 1 (0 refused, and shimmer without CA) |
+| CHROMATIC_ABERRATION | SAMPLES | Int | 5 | done-not-proven | one value in every row |
+| CHROMATIC_ABERRATION | LATERAL_DISPERSION | Float2 | 0.0025,0.0025 / 0.005,0.005 | done-proven |  |
+| CHROMATIC_ABERRATION | UNIFORM_DISPERSION | Float2 | 0,0 / 0.0,0.0 / 0.0005,0.0005 | done-proven |  |
+| DIAPHRAGM | ROTATE_SCALE | Float | 0 | done-not-proven | one value in every row |
+| DIAPHRAGM | ROTATE_OFFSET | Float | 0 / 2 | done-proven |  |
+| DIAPHRAGM | TYPE | Int | 1 / 2 / 3 | done-proven |  |
+| COLOR | HUE | Float | 0 / 20 | done-proven |  |
+| COLOR | SATURATION | Float | 0 / 0.8 / 0.85 / 0.95 / 0.96 / 1.55 / 9.0 | done-proven |  |
+| COLOR | BRIGHTNESS | Float | 1 / 1.0 / 1.08 / 1.1 / 1.15 / 1.5 / 1.65 | done-proven |  |
+| COLOR | CONTRAST | Float | 0.80 / 1 / 1.0 / 1.05 / 1.25 | done-proven |  |
+| COLOR | SEPIA | Float | 0 / 0.5 / 0.9 / 1 | done-proven |  |
+| COLOR | COLOR_TEMP | Float | 6400 / 6500 / 7200 | refused | below 4000 K refused |
+| COLOR | WHITE_BALANCE | Float | 4500 / 6400 / 6500 | refused | below 4000 K refused |
+| GLARE | SHAPE | Int | 11 / 6 | done-proven |  |
+| GLARE | GHOST | Int | 0 / 1 | done-proven |  |
+| GLARE | GHOST_CONCENTRIC_DISTORTION | Float | 1.0 / 5.5 | refused | 0 with the library-shape ghost refused |
+| GLARE | AFTER_IMAGE | Int | 0 | refused | only 0 |
+| GLARE | ANAMORPHIC | Int | 0 | refused | only 0 |
+| GLARE | LUMINANCE | Float | 0.4 / 1.5 / 1.6 / 2.5 / 3 / 3.0 | done-proven |  |
+| GLARE | PRECISION | Int | 0 | refused | only 0 |
+| GLARE | BLUR | Float | 1 | done-proven |  |
+| GLARE | BLOOM_FILTER_THRESHOLD | Float | 0.0002 / 0.002 | done-proven |  |
+| GLARE | BLOOM_GAUSSIAN_RADIUS_SCALE | Float | .95 | refused | values giving the 3x3 (radius 2) gaussian refused |
+| GLARE | BLOOM_LUMINANCE_GAMMA | Float | 1.5 / 2 | done-proven |  |
+| GLARE | BLOOM_NUM_LEVELS | Int | 0 | refused | only 0 |
+| GLARE | GENERATION_RANGE_SCALE | Float | 1 | done-not-proven | one value in every row |
+| GLARE | THRESHOLD | Float | 0.5 / 15 / 2 / 3.5 / 5 | refused | 0 refused |
+| GLARE | BRIGHT_PASS | Int | 0 / 1 | done-proven |  |
+| GLARE | STAR_FILTER_THRESHOLD | Float | 0.0002 / 0.002 | done-proven |  |
+| GLARE | STAR_SOFTNESS | Float | 0.015 / 0.5 / 1 | done-proven |  |
+| GLARE | STAR_LENGTH_FOV_DEPENDENCE | Float | 0 | refused | only 0 |
+| GLARE | USE_CUSTOM_SHAPE | Int | 0 / 1 | refused | 0 with GHOST=1 (library-shape ghost) refused |
+| GLARE | SHAPE_LUMINANCE | Float | 5 / 8 | done-proven |  |
+| GLARE | SHAPE_BLOOM_LUMINANCE | Float | .0125 / 0.01 / 0.028 / 0.03 / 0.038 | done-proven |  |
+| GLARE | SHAPE_BLOOM_DISPERSION | Float | 0.03 / 0.05 | done-proven |  |
+| GLARE | SHAPE_BLOOM_DISPERSION_BASE_LEVEL | Int | 2 | done-not-proven | one value in every row |
+| GLARE | SHAPE_GHOST_LUMINANCE | Float | 0.1 / 0.15 / 1 | done-proven |  |
+| GLARE | SHAPE_GHOST_HALO_LUMINANCE | Float | 0.005 / 05 | done-proven |  |
+| GLARE | SHAPE_GHOST_DISTORTION | Float | 0 | refused | library-shape ghost only |
+| GLARE | SHAPE_GHOST_SHARPENESS | Float | 0 | refused | library-shape ghost only |
+| GLARE | SHAPE_STAR_LUMINANCE | Float | 0.01 / 0.025 / 0.045 / 0.05 | done-proven |  |
+| GLARE | SHAPE_STAR_STREAKS_NUMBER | Int | 6 | done-proven |  |
+| GLARE | SHAPE_STAR_LENGTH | Float | .3 / 0.2 / 0.25 / 0.5 | done-proven |  |
+| GLARE | SHAPE_STAR_SECONDARY_LENGTH | Float | 1 | done-proven |  |
+| GLARE | SHAPE_STAR_ROTATION | Float | 1 | done-not-proven | one value in every row |
+| GLARE | SHAPE_STAR_INCLINATION_ANGLE | Float | 3 | done-not-proven | one value in every row |
+| GLARE | SHAPE_STAR_DISPERSION | Float | 0 | refused | only 0 with a custom shape |
+| GLARE | SHAPE_STAR_FORCE_DISPERSION | Int | 0 | refused | only 0 with a custom shape |
+| GLARE | SHAPE_AFTERIMAGE_LUMINANCE | Float | 80 | ignored | never read (AFTER_IMAGE is refused) |
+| GLARE | SHAPE_AFTERIMAGE_LENGTH | Float | 0.5 | ignored | never read (AFTER_IMAGE is refused) |
+| HEAT_SHIMMER | HEAT_PARTICLE_RADIUS | Float | 0.75 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_SHIMMER | Float | 0.004 | done-proven |  |
+| HEAT_SHIMMER | HEAT_PARTICLE_COORD | Float | 1.5 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_FRACTAL_OCTAVES | Float | 3 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_MAX_NUMBER | Int | 10 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_LIFE_MULT | Float | 1.0 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_MIN_LIFE | Float | 0.75 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_INTENSITY_MULT | Float | 0.3 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_MIN_INTENSITY | Float | 0.15 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_VELOCITY_MULT | Float | 0.2 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_MIN_VELOCITY | Float | 0 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_RADIUS_VELOCITY_MULT | Float | 0.1 | done-not-proven | one value in every row |
+| GODRAYS | USE_SUN_LIGHT | Int | 1 | done-not-proven | one value in every row |
+| GODRAYS | DIFFRACTION_RING | Float | 0.10 / 0.15 / 0.25 | done-proven |  |
+| GODRAYS | DIFFRACTION_RING_RADIUS | Float | 5 | done-not-proven | one value in every row |
+| GODRAYS | DIFFRACTION_RING_ATTENUATION | Float | 0.1 / 0.5 | done-proven |  |
+| GODRAYS | DIFFRACTION_RING_SPECTRUM_ORDER | Float | 1 | done-not-proven | one value in every row |
+| GODRAYS | DIFFRACTION_RING_OUTER_COLOR | Float4 | 0.5,0.5,0.5,0.5 | done-not-proven | one value in every row |
+| GODRAYS | COLOR | Float4 | 1,1,1,1 | done-not-proven | one value in every row |
+| GODRAYS | LENGTH | Float | 11.0 / 12.0 / 2.5 / 25.0 / 8.0 | done-proven |  |
+| GODRAYS | GLARE_RATIO | Float | 0.001 / 0.003 / 0.005 / 0.015 / 0.02 | done-proven |  |
+| GODRAYS | ANGLE_ATTENUATION | Float | 10 / 5 | done-proven |  |
+| GODRAYS | NOISE_MASK | Float | 0.01 | done-not-proven | one value in every row |
+| GODRAYS | NOISE_FREQUENCY | Float | 1 | done-not-proven | one value in every row |
+| GODRAYS | DEPTH_MASK_THRESHOLD | Float | 0.9998 / 0.999999999 | done-proven |  |
+| DOF | APERTURE_PARAMETER | Int | 2 | refused | only 2 |
+| DOF | APERTURE_F_NUMBER | Float | 11 / 12 / 8 | done-proven |  |
+| DOF | IMAGE_SENSOR_HEIGHT | Float | 0.24 | done-not-proven | one value in every row |
+| DOF | BASE_FOV | Float | 50 / 54 / 60 | done-proven |  |
+| DOF | ADAPTIVE_APERTURE_FACTOR | Float | 0.5 / 0.65 | done-proven |  |
+| DOF | APERTURE_FRONT_LEVELS_NUMBER | Int | -1 | refused | only -1 |
+| DOF | APERTURE_BACK_LEVELS_NUMBER | Int | -1 | refused | only -1 |
+| DOF | EDGE_QUALITY | Int | 1 / 2 / 3 | refused | only -1..4 |
+| DOF | BACKGROUND_MASK_THRESHOLD | Float | 0.1 | done-not-proven | one value in every row |
+| DOF | APERTURE_SHAPE | Int | 2 / 3 / 4 | refused | only 2-4 |
+| LENSDISTORTION | ENABLED | Int | 0 | ignored | never read; shipped 0 |
+| LENSDISTORTION | ROUNDNESS | Float | 0.05 | ignored | never read |
+| LENSDISTORTION | SMOOTHNESS | Float | 1.0 | ignored | never read |
+| HEAT_SHIMMER | HEAT_PARTICLE_COLOR | Float3 | 1,1,1 | done-not-proven | one value in every row |
+| HEAT_SHIMMER | HEAT_PARTICLE_POSITION_VELOCITY | Float3 | 0,0,0.2 | done-not-proven | one value in every row |
+
+### Step 2 estimate (why the task stopped)
+
+The refused and ignored keys are 16 separate YEBIS features, each a set of new programs, targets
+and call-log order to port and prove (past tasks: about one session per feature):
+
+| feature | keys | estimate |
+|---|---|---|
+| tone map curves | `FUNCTION` 0, 3-8; `HDR` 0 | 1-1.5 |
+| bloom | `BLOOM_NUM_LEVELS`, 3x3 gaussian, `PRECISION` | 1 |
+| after image | `AFTER_IMAGE`, `SHAPE_AFTERIMAGE_*` | 1 |
+| anamorphic glare | `ANAMORPHIC` | 1 |
+| library-shape ghost | `USE_CUSTOM_SHAPE` 0 with ghost, `SHAPE_GHOST_DISTORTION/SHARPENESS`, `GHOST_CONCENTRIC_DISTORTION` 0 | 1-2 |
+| star | `STAR_LENGTH_FOV_DEPENDENCE`, `SHAPE_STAR_(FORCE_)DISPERSION` | 1 |
+| glare threshold 0 | `THRESHOLD` 0 | 0.25 |
+| auto exposure | `DELAY`, `INFLUENCED_BY_GLARE` | 1 |
+| colour temperature | `COLOR_TEMP`/`WHITE_BALANCE` < 4000 K | 0.25 |
+| chromatic aberration off | `CHROMATIC_ABERRATION ENABLED` 0, shimmer without CA | 0.5 |
+| vignetting | `FOV_DEPENDENCE` | 0.25 |
+| DOF | `APERTURE_PARAMETER`, `FRONT/BACK_LEVELS_NUMBER`, shapes 0/1/5+, `EDGE_QUALITY` | 2 |
+| airy disc | `[AIRYDISC]` | 1 |
+| feedback | `[FEEDBACK]` | 1 |
+| lens distortion | `[LENSDISTORTION]` | 1 |
+| tone-map viewport | `SCALE_WIDTH/HEIGHT`, `OFFSET_X/Y` | 0.5 |
+
+About 14-16 sessions in all, against the prompt's ~2 for the whole task.
+
 # Task Y7e: the natural and photographic DOF shapes, video.ini saturation, the sweep in --full
 
 ## Resume here
