@@ -36,7 +36,13 @@
   clean with `-D warnings` (11 same-type casts, 2 `is_multiple_of`, 1 `ptr::eq`, the video.ini
   key names allowed on `video_ini`; arguments, types and `!(a >= b)` allowed crate-wide as in
   the ported crates). No behaviour change.
-- Next: step 3 (quick proofs, clippy everywhere, README known gaps, v0.51.0).
+- Done: step 3. `run_all.sh --quick`: 174 of 174 cases identical in 13 areas, 0 ERROR, 0 skipped
+  (`re/scratch/taskL1/checks/quick.txt`); clippy with `-D warnings` native, both wasm targets,
+  the wgpu renderer and render_oracle all clean (`re/scratch/taskL1/clippy.txt`). README has the
+  v1.0 known-gaps list, and its post-processing paragraph says refused keys draw without their
+  effect. Released as v0.51.0.
+- Table totals: 66 items; 6 fixed in L1, 33 known gaps for v1.0, 27 after v1.0. Nothing is left
+  for Task L1b.
 - Still refused per frame (not filter keys): glare resample sizes, a glare halving with
   several taps, the heat shimmer in VR; these still skip YEBIS for the frame.
 
