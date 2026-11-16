@@ -13,8 +13,11 @@
   Row `rl1_01` (test filter `rustyac_caoff`): command log and pixels IDENTICAL in all 175
   frames. Shimmer + CA off on a flat camera is not ported; it draws with CA and warns once.
 - Step 1 table: written below.
-- Next: step 2 in order: the numpad saturation key (code written, not committed), the FMOD
-  crash cause, render_oracle's clippy errors, the scratch archive
+- Done: the saturation key (`Sim::onKeyDown` 0x14019a940): Shift+Ctrl+numpad + / - moves
+  GraphicsManager +0x11c (the lighting saturation) by 0.01 (f32), clamped to 0..2, and shows
+  "Saturation: N%" (`(int)(s * 100.0f)`); nothing while the console shows. Desktop only.
+  Proof: unit test `saturation_step_clamps_at_0_and_2`; the saturation itself draws as in Y7e.
+- Next: step 2 in order: the FMOD crash cause, render_oracle's clippy errors, the scratch archive
   (`re/scratch/taskL1/archive_scratch.sh`, not run yet); then step 3.
 - Still refused per frame (not filter keys): glare resample sizes, a glare halving with
   several taps, the heat shimmer in VR; these still skip YEBIS for the frame.
@@ -32,7 +35,7 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 | Item | Source | Hits | Size | Plan |
 |---|---|---|---|---|
 | A custom filter's refused key gave black frames | yebis.md (Y7f) | yes | small | **L1, done** (b8297a8): banner + log once, drawn without the key |
-| `[CHROMATIC_ABERRATION] ENABLED=0` drew CA on | yebis.md | rare | small | **L1** (VR's draw list for the flat camera, row rl1_01) |
+| `[CHROMATIC_ABERRATION] ENABLED=0` drew CA on | yebis.md | rare | small | **L1, done** (VR's draw list for the flat camera, row rl1_01) |
 | Heat shimmer with CA off on a flat camera | L1 | rare | medium | gap (drawn with CA, warned once) |
 | Per frame: glare resample sizes the port lacks (skips YEBIS that frame) | yebis.md (Y5) | rare | medium | gap |
 | Per frame: glare halving with several taps | yebis.md (Y5) | rare | medium | gap |
@@ -46,7 +49,7 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 | Measured shortcuts: pool f9 list, pair clear order, teardown counted not walked, shimmer copy sampler, diaphragm aperture term, frame 0 startup not compared, one more blend/A2C set | yebis.md | dev-only | medium | after |
 | Open: which +0x248 target glare[1] is; why the game fails DOF+glare resize; s1024 frames 10-13 once; extra W×H f9 in some game runs; CA weights as immediates | yebis.md | dev-only | – | after |
 | rustyac.exe draws more rand() for shimmer sets than acs.exe; no shimmer row in tools/proofs | yebis.md | dev-only | small | after |
-| Numpad saturation key (Shift+Ctrl+numpad + / -) | yebis.md (Y7e) | yes | small | **L1** |
+| Numpad saturation key (Shift+Ctrl+numpad + / -) | yebis.md (Y7e) | yes | small | **L1, done** |
 | Saturation in the browser page | yebis.md (Y7e) | rare | medium | gap |
 | Full mode in the page has no YEBIS | web_graphics.md | yes (page) | big | gap |
 | Start lights use summed frame times, not the wall clock | postfx.md | rare | small | gap |

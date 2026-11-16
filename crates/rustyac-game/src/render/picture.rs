@@ -192,6 +192,13 @@ impl Picture {
         }
     }
 
+    /// See [`AcRenderer::saturation_key`].
+    pub fn saturation_key(&mut self, up: bool) {
+        if let Picture::Ac(r) = self {
+            r.saturation_key(up);
+        }
+    }
+
     /// Ctrl+I: the ideal line (AC's renderer only).
     pub fn toggle_ideal_line(&mut self) -> Option<bool> {
         match self {

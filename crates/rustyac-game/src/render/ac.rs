@@ -659,6 +659,19 @@ impl AcRenderer {
         self.camera.debug_motion_blur_enabled = !self.camera.debug_motion_blur_enabled;
     }
 
+    /// `Sim::onKeyDown` 0x14019a940, Shift+Ctrl+numpad + / -: the lighting's saturation
+    /// (GraphicsManager +0x11c) 0.01 up to 2 or down to 0, then "Saturation: N%"; nothing while the console shows.
+    pub fn saturation_key(&mut self, up: bool) {
+        if self.gui.as_ref().is_some_and(|gui| gui.console.shown) {
+            return;
+        }
+        let (s, text) = saturation_step(self.graphics.lighting.saturation, up);
+        self.graphics.lighting.saturation = s;
+        if let Some(gui) = self.gui.as_deref_mut() {
+            gui.add_message(&text, "");
+        }
+    }
+
     pub fn motion_blur_enabled(&self) -> bool {
         self.camera.debug_motion_blur_enabled
     }
@@ -2254,5 +2267,22 @@ impl rustyac_render::tyre_crew::CrewHost for CrewLink {
     }
     fn event_stop(&mut self, wheel: usize, screw: bool) {
         self.sound.push(CrewSound::Stop { wheel, screw });
+    }
+}
+
+/// One Shift+Ctrl+numpad step of [`AcRenderer::saturation_key`]: the new saturation (f32 adds,
+/// clamped to 0..2 as the game does) and its message.
+fn saturation_step(s: f32, up: bool) -> (f32, String) {
+    let s = if up { (s + 0.01).min(2.0) } else { (s - 0.01).max(0.0) };
+    (s, format!("Saturation: {}%", (s * 100.0) as i32))
+}
+
+#[cfg(test)]
+mod saturation_tests {
+    #[test]
+    fn saturation_step_clamps_at_0_and_2() {
+        assert_eq!(super::saturation_step(1.995, true), (2.0, "Saturation: 200%".to_string()));
+        assert_eq!(super::saturation_step(0.005, false), (0.0, "Saturation: 0%".to_string()));
+        assert_eq!(super::saturation_step(1.0, true).0, 1.0f32 + 0.01f32);
     }
 }

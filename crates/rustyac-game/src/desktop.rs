@@ -1682,6 +1682,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // Shift does; they come before rustyAC's own Ctrl+F
                     let replay_keys = [bindings.key_ffwd, bindings.key_slowmo, bindings.key_pause_replay, bindings.key_rev, bindings.key_next_lap, bindings.key_previous_lap, bindings.key_start_replay];
                     let in_ac_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode());
+                    // Sim::onKeyDown 0x14019a940: Shift and Ctrl held (GetAsyncKeyState, either side), numpad + / -
+                    if shift && (left_ctrl || right_ctrl) && (key == 0x6b || key == 0x6d) {
+                        renderer.saturation_key(key == 0x6b);
+                    }
                     if key == 0x09 {
                         // Sim::onKeyDown 0x14019a940, its first lines: TAB shows the table
                         if let Some(gui) = renderer.gui() {
