@@ -141,9 +141,8 @@ frame by frame, through `car_oracle start-camera-micro` → `start_camera_check`
   there (pointer lock would give it).
 - The page's keyboard reaches the game only through the key layout: F5's keys-and-orbit way and
   the cinematic camera's keys work on the desktop only (the default F5, mouse only, works in both).
-- Python right after its own `setCameraMode` reads the mode it asked, until the next frame.
-- The free camera's clear colour (`ac.freeCameraSetClearColor`) is not ported.
-- Delete's blur switch on the cinematic camera (`CameraForwardYebis` +0x7a0) is not carried.
+- (Done later: `setCameraMode` runs the camera at once, `ac.freeCameraSetClearColor` and
+  Delete's blur switch (`CameraForwardYebis` +0x7a0) are applied in `render/ac.rs`.)
 
 ### Open questions
 

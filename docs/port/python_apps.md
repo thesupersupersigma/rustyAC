@@ -202,9 +202,8 @@ requests, the online chat listener and server getters, the activated / dismissed
 the car values from the session. `newApp(name, 1)` matches acs.exe 1.16 as it is: the game
 fires `evOnSetupAppCreated` and nothing listens to it. Still not done:
 
-- `getCarTyreCompound` and the rest of the car data not listed in step 3 keep their defaults.
-- `setCameraMode` with the track, helicopter, on-board free and random cameras (3, 4, 5, 7),
-  and `freeCameraSetClearColor`, are logged on the command line ("not carried out").
+- (Done later: `getCarTyreCompound` reads the car's compound; `setCameraMode` 0-7 runs the
+  camera at once (Task 46b); `freeCameraSetClearColor` sets the free camera's clear colour.)
 - The C++ plugin SDK (`apps/*.dll`) and CSP's Lua apps are not part of this task.
 
 ## Rule notes

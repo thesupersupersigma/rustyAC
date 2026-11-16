@@ -50,7 +50,13 @@
 
 Every "Not done", open question and leftover in `docs/port/*.md` since Task 43, plus the older
 open ones still true (collected in `re/scratch/taskL1/collected.md`). Items later tasks already
-did are left out. **Hits**: whether a player meets it (yes / rare / dev-only). **Size**: small /
+did are left out. Task S2 step 0 rechecked every row against later reports and the code and
+removed what was already done: the server's forced virtual mirror (47d, screens_steam.md
+step 3), the server's DRS zones, `race_out.json` after the next race and the kept AI lap
+(44c, content_tools.md), the photo window's END ray picker and exposure start value (44c, Y6),
+the Python rows (`getCarTyreCompound` reads the car's compound, `setCameraMode` 0-7 runs the
+camera at once (46b), `freeCameraSetClearColor` and Delete's blur are applied in
+`render/ac.rs`), and the DOF + glare resize question (Y7c: the oracle's harness). **Hits**: whether a player meets it (yes / rare / dev-only). **Size**: small /
 medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (README list);
 *after* = after v1.0 (Enhanced mode, CSP, custom-filter work).
 
@@ -71,7 +77,7 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 | BackgroundBlurFactorNormalize not drawn | yebis.md | rare | medium | after |
 | Untested: glare without AE, star counts other than 1/5/6/12, QUALITY other than the rows | yebis.md | rare | small | gap (untested, not known wrong) |
 | Measured shortcuts: pool f9 list, pair clear order, teardown counted not walked, shimmer copy sampler, diaphragm aperture term, frame 0 startup not compared, one more blend/A2C set | yebis.md | dev-only | medium | after |
-| Open: which +0x248 target glare[1] is; why the game fails DOF+glare resize; s1024 frames 10-13 once; extra W×H f9 in some game runs; CA weights as immediates | yebis.md | dev-only | – | after |
+| Open: which +0x248 target glare[1] is; s1024 frames 10-13 once; extra W×H f9 in some game runs; CA weights as immediates | yebis.md | dev-only | – | after |
 | rustyac.exe draws more rand() for shimmer sets than acs.exe; no shimmer row in tools/proofs | yebis.md | dev-only | small | after |
 | Numpad saturation key (Shift+Ctrl+numpad + / -) | yebis.md (Y7e) | yes | small | **L1, done** |
 | Saturation in the browser page | yebis.md (Y7e) | rare | medium | gap |
@@ -84,26 +90,20 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 |---|---|---|---|---|
 | Friends Leaderboard rows made but not drawn | screens_steam.md (47e) | rare | medium | gap |
 | MOTION_TRACKER=RIGHT_HAND with no right controller | screens_steam.md | rare (VR) | medium | gap |
-| Server FORCE_VIRTUAL_MIRROR read but not applied | screens_steam.md | rare | small | gap |
 | Headless without --drawn-frames: no achievement checks | screens_steam.md | dev-only | small | after |
 | Mouse pit menu online is the OnlinePit HUD lines | leftovers_43b.md | rare | medium | gap |
 | Start Benchmark (BenchmarkMode not ported) | content_tools.md (44d) | rare | medium | gap |
-| Photo mode: END / ray picker, FOV / roll before Start, exposure start value | content_tools.md | rare | medium | gap |
+| Photo mode: FOV / roll before Start (END's ray picker and the exposure start value: done in 44c / Y6) | content_tools.md (44c Not done) | rare | medium | gap |
 | `--screenshot` of the photo window shows FOV 0 | content_tools.md | dev-only | small | after |
 | Driver model `data_<config>` save path (MODEL_CONFIG unused) | content_tools.md | dev-only | small | after |
 | FormAI window, 3D splines, AUTO_FUEL_CONS, AUTO_SHIFTER copy, side spline indexes | content_tools.md | dev-only | big | after |
 | AI line swap with several cars (after all cars, not inside car 0's step) | content_tools.md | rare | medium | gap |
-| Kept AI lap not the live AI line at once (bestLapSpline) | content_tools.md | rare | small | gap |
 | Camera editor doesn't read back its saved cameras.ini / dash_cam.ini; AUTOEXP quit after save | content_tools.md | dev-only | small | after |
-| DRS zones sent by a server (0x53) decoded, not applied | content_tools.md | rare | small | gap |
-| race_out.json after an online server's next race | content_tools.md | rare | small | gap |
 | Console axisMode, lodDebug, editBoxes / editCMesh, observe* reloads, cockpit exposure | dev_tools.md | dev-only | medium | after |
 | ACSuspension TempRun button writes nothing (write guard) | dev_tools.md | dev-only | small | after |
 | Telemetry RIDE_HEIGHT_* one step late at the 2 m/s edge | dev_tools.md | rare | small | gap |
 | Online: remote cars have no Car, Setup debug shows the player's car | dev_tools.md | dev-only | medium | after |
 | Online tape car's delta may stay 0 in net_drive; online / replay graphics page fields not in the oracle | dev_tools.md | dev-only | small | after |
-| Python: getCarTyreCompound etc. keep defaults; setCameraMode 3/4/5/7, freeCameraSetClearColor only logged; setCameraMode reads its old mode until the next frame | python_apps.md, cameras.md | rare | medium | gap |
-| Delete's blur (CameraForwardYebis +0x7a0) not carried; F5 keys-and-orbit desktop only | cameras.md | rare | small | gap |
 | camera_manager.ini written into rustyAC's cfg each run (open) | cameras.md | dev-only | – | after |
 | Open: RACE_OVER_TIME=150 had no visible effect | content_tools.md | rare | – | gap |
 | C++ plugin SDK, CSP Lua | python_apps.md | – | big | after (CSP) |
@@ -112,7 +112,8 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 
 | Item | Source | Hits | Size | Plan |
 |---|---|---|---|---|
-| Page doesn't save acos.ini / gameplay.ini / exposure.ini / last.ini (GameGui::shutdown) nor other apps' shutdown files | screens_steam.md | yes (page) | medium | gap |
+| Page doesn't save acos.ini / gameplay.ini / exposure.ini / last.ini (GameGui::shutdown; apps' own files are saved since 47d) | screens_steam.md:116-117 | yes (page) | medium | gap |
+| F5's keys-and-orbit camera (the page's keys reach the game only through the key layout) | cameras.md | rare (page) | small | gap |
 | Special Events sorted by name (a browser folder handle has no dates) | content_tools.md | rare | – | gap (no dates to sort by) |
 | Opponent car that won't load is fatal for a join | web_fixes.md | rare | small | gap |
 | No reconnect (AC has none) | web_fixes.md | rare | – | gap (as AC) |
