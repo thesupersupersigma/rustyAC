@@ -1872,6 +1872,12 @@ FILTER=default
         if let Some(gui) = &mut self.gui {
             gui.frame_stats(update_ms, render_ms, &self.graphics.stats, &info.timing);
         }
+        // a refused ppfilter key: once on AC's banner (the log has it too), the frame drawn without it
+        if let Some(gui) = &mut self.gui {
+            for msg in rustyac_render::yebis_cb::take_refusals() {
+                gui.add_message("Post-processing filter", msg.trim_start_matches("yebis: "));
+            }
+        }
         if self.gui.as_mut().is_some_and(|gui| gui.pre_gui()) {
             // (F8's picture: the page reads none back, the browser takes screenshots)
             #[cfg(not(target_arch = "wasm32"))]

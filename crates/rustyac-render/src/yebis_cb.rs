@@ -219,7 +219,30 @@ const PRE_TONEMAP: usize = 3424;
 const PRE_TONEMAP_GLARE: usize = 3488;
 const TRANSFORM: usize = 3584;
 
-const IDENTITY: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+/// Custom-filter keys the port leaves out: each logged once a run, queued for the screen.
+static REFUSED: std::sync::Mutex<(Vec<String>, Vec<String>)> = std::sync::Mutex::new((Vec::new(), Vec::new()));
+
+/// A refused key: the caller draws without its effect (never a black frame, Task L1).
+pub fn refuse(msg: String) {
+    let mut r = REFUSED.lock().unwrap();
+    if !r.0.contains(&msg) {
+        eprintln!("{msg}: drawn without it");
+        r.0.push(msg.clone());
+        r.1.push(msg);
+    }
+}
+
+/// A refused effect (shafts, glare, depth of field) is left out.
+fn off<T>(r: Result<T, String>) -> Option<T> {
+    r.map_err(refuse).ok()
+}
+
+/// The refusals not shown yet (AC's banner takes them).
+pub fn take_refusals() -> Vec<String> {
+    std::mem::take(&mut REFUSED.lock().unwrap().1)
+}
+
+const IDENTITY: [f32; 16] =[1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
 /// BT.709 luma weights (YEBIS's colour code uses them as immediates).
 const LUM: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
@@ -989,35 +1012,38 @@ impl PostEffect {
     /// `filter` is `system/cfg/ppfilters/<[POST_PROCESS] FILTER>.ini`.
     pub fn new(filter: &IniReader, video: &IniReader, cam: &Camera) -> Result<PostEffect, String> {
         // CameraForwardYebis's constructor: glareEnabled = GLARE != 0, godraysEnabled = RAYS_OF_GOD != 0
-        let shafts = if video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0 { Some(Shafts::new(filter)?) } else { None };
+        let shafts = if video.get_int("POST_PROCESS", "RAYS_OF_GOD").unwrap_or(0) != 0 { off(Shafts::new(filter)) } else { None };
         let glare = match glare_quality(video) {
             0 => None,
-            q => Some(Glare { shafts: shafts.clone(), ..Glare::new(filter, q)? }),
+            q => off(Glare::new(filter, q)).map(|g| Glare { shafts: shafts.clone(), ..g }),
         };
         let f = |s: &str, k: &str| filter.get_float(s, k);
         let i = |s: &str, k: &str| filter.get_int(s, k);
         if i("TONEMAPPING", "HDR")? != 1 {
-            return Err("yebis: [TONEMAPPING] HDR=0 (PFXTM_REMAP_REINHARD_SENSITOMETRIC) not ported".into());
+            refuse("yebis: [TONEMAPPING] HDR=0 (PFXTM_REMAP_REINHARD_SENSITOMETRIC) not ported".into());
         }
         // UpdateParameters_ChangeFormat 0x1403b8f00: -1 becomes PFXTM_FILMIC (2) with AC's formats
         let tonemap = match i("TONEMAPPING", "FUNCTION")? {
             -1 => 2,
             v @ 1..=2 => v,
-            v => return Err(format!("yebis: [TONEMAPPING] FUNCTION={v} not ported")),
+            v => {
+                refuse(format!("yebis: [TONEMAPPING] FUNCTION={v} not ported"));
+                2
+            }
         };
         if i("CHROMATIC_ABERRATION", "ENABLED")? == 0 {
-            return Err("yebis: chromatic aberration off changes the draw list: not ported".into());
+            refuse("yebis: chromatic aberration off changes the draw list: not ported, drawn on".into());
         }
         // keys the port doesn't read (Task Y7f): every shipped filter has these values, others draw in the game
         // (setPostProcessing 0x140025080: SetTonemapViewportScale, SetFeedbackEnable, SetLensDistortionEnable)
         for (key, want) in [("SCALE_WIDTH", 1.0), ("SCALE_HEIGHT", 1.0), ("OFFSET_X", 0.0), ("OFFSET_Y", 0.0)] {
             if f("TONEMAPPING", key)? != want {
-                return Err(format!("yebis: [TONEMAPPING] {key} other than {want}: a custom-filter key, not ported yet"));
+                refuse(format!("yebis: [TONEMAPPING] {key} other than {want}: a custom-filter key, not ported yet"));
             }
         }
         for s in ["FEEDBACK", "LENSDISTORTION"] {
             if i(s, "ENABLED")? != 0 {
-                return Err(format!("yebis: [{s}] ENABLED other than 0: a custom-filter key, not ported yet"));
+                refuse(format!("yebis: [{s}] ENABLED other than 0: a custom-filter key, not ported yet"));
             }
         }
         let auto_exposure = if i("AUTO_EXPOSURE", "ENABLED")? != 0 {
@@ -1025,7 +1051,7 @@ impl PostEffect {
             let checks = [("DELAY", 0.0), ("INFLUENCED_BY_GLARE", 0.0)];
             for (key, want) in checks {
                 if f("AUTO_EXPOSURE", key)? != want {
-                    return Err(format!("yebis: [AUTO_EXPOSURE] {key} other than {want} not ported"));
+                    refuse(format!("yebis: [AUTO_EXPOSURE] {key} other than {want} not ported"));
                 }
             }
             // YebisPP::updatePP 0x14002c270
@@ -1091,7 +1117,7 @@ impl PostEffect {
         };
         // the depth of field on (Task Y6): the range is its factor store, the far end its focus
         let dof = match (video.get_int("POST_PROCESS", "DOF").unwrap_or(0), cam.dof_focus) {
-            (q, Some(focus)) if q > 0 => Dof::new(filter, q, focus, near, far, cam.fov_deg * 0.017453)?,
+            (q, Some(focus)) if q > 0 => off(Dof::new(filter, q, focus, near, far, cam.fov_deg * 0.017453)).flatten(),
             _ => None,
         };
         let dof_range = dof.as_ref().map_or(range(near, far), Dof::depth);
@@ -1290,6 +1316,10 @@ fn rgb_of(k: f32) -> Result<[f32; 3], String> {
 /// MultiplyMatrixColorTemperature 0x1403caa60 / WhiteBalance 0x1403cab60, which inverts).
 fn rgb_from_temperature(k: f32, invert: bool) -> Result<[f32; 3], String> {
     let k = k.clamp(2000.0, 25000.0);
+    if k < 4000.0 {
+        refuse(format!("yebis: colour temperature {k} K under 4000 not ported"));
+        return Ok([1.0; 3]);
+    }
     if k == 6500.0 {
         return Ok([1.0; 3]);
     }
@@ -1624,7 +1654,11 @@ pub fn gauss_taps(radius: f32, cutoff: f32) -> Result<usize, String> {
     match below {
         Some(4) => Ok(7),
         Some(6) => Ok(11),
-        Some(2) => Err(format!("yebis: a bloom gaussian of radius {radius} (the 3x3) not ported")),
+        Some(2) => {
+            // shortcut: the 3x3 program is not ported, the 7-tap one stands in until it is
+            refuse(format!("yebis: a bloom gaussian of radius {radius} (the 3x3) not ported"));
+            Ok(7)
+        }
         b => Ok((b.unwrap_or(15) * 2 - 1).min(15)),
     }
 }
@@ -1981,6 +2015,26 @@ ENABLED=0
         let mut cb = Cbuffer::default();
         (0..8).for_each(|t| _ = cb.draw(t, &pe, &filmic, &used));
         (0..8).map(|t| cb.draw(t, &pe, &filmic, &used)).collect()
+    }
+
+    #[test]
+    fn refused_keys_draw_without_their_effect() {
+        let Some(root) = rustyac_content::install::ac_root() else {
+            eprintln!("no Assetto Corsa install: skipped");
+            return;
+        };
+        let path = root.join("system/cfg/ppfilters/default.ini");
+        let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n").replace("[FEEDBACK]\nENABLED=0", "[FEEDBACK]\nENABLED=1").replace("\nTHRESHOLD=5\n", "\nTHRESHOLD=0\n");
+        let filter = IniReader::from_text(&path, &text);
+        let video = IniReader::from_text(Path::new("video.ini"), "[POST_PROCESS]\nENABLED=1\nFILTER=default\nQUALITY=0\nGLARE=3\nDOF=0\n");
+        let cam = Camera { near: 1.0, far: 1000.0, fov_deg: 60.0, width: 1280, height: 720, exposure: 40.0, exposure_multiplier: 1.0, saturation: 1.0, dt: 0.016666668, chromatic_aberration: true, dof_focus: None, new_exposure: true, sun: None };
+        let pe = PostEffect::new(&filter, &video, &cam).unwrap();
+        assert!(pe.glare.is_none());
+        let shown = take_refusals();
+        assert!(shown.iter().any(|m| m.contains("[FEEDBACK]")) && shown.iter().any(|m| m.contains("THRESHOLD=0")), "{shown:?}");
+        // once a run: the next frame queues nothing new
+        PostEffect::new(&filter, &video, &cam).unwrap();
+        assert!(!take_refusals().iter().any(|m| m.contains("[FEEDBACK]")));
     }
 
     fn runs() -> PathBuf {

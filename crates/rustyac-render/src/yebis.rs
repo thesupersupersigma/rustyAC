@@ -390,7 +390,7 @@ impl Ring {
 /// `[VIGNETTING]` of the filter: the half-height of the vignette rectangle.
 pub fn vignette(filter: &IniReader) -> Result<f32, String> {
     if filter.get_float("VIGNETTING", "FOV_DEPENDENCE")? != 0.0 {
-        return Err("yebis: [VIGNETTING] FOV_DEPENDENCE is not 0: not ported".into());
+        crate::yebis_cb::refuse("yebis: [VIGNETTING] FOV_DEPENDENCE is not 0: not ported".into());
     }
     // SetVignetteParameters: tan(pi / 8) times the strength
     Ok(rustyac_math::tanf(std::f32::consts::FRAC_PI_8) * filter.get_float("VIGNETTING", "STRENGTH")?)
