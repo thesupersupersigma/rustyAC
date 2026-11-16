@@ -295,6 +295,7 @@ pub struct PostEffect {
     pub vignette: [f32; 4],   // +0x958..+0x964
     pub alpha_out: i32,       // +0x458, 2 = PFXALPHAOUT_EFFECTRESULT_ALPHA
     pub color_matrix: [f32; 16], // PFXMTX_TONEMAP_COLOR_HDRSPACE
+    pub ca_enabled: bool,     // chromabEnabled: off draws as VR does (no draws 2 and 6)
     pub ca_samples: i32,      // +0x994
     pub ca_lateral: [f32; 2], // +0x99c
     pub ca_uniform: [f32; 2], // +0x9a4
@@ -1031,9 +1032,6 @@ impl PostEffect {
                 2
             }
         };
-        if i("CHROMATIC_ABERRATION", "ENABLED")? == 0 {
-            refuse("yebis: chromatic aberration off changes the draw list: not ported, drawn on".into());
-        }
         // keys the port doesn't read (Task Y7f): every shipped filter has these values, others draw in the game
         // (setPostProcessing 0x140025080: SetTonemapViewportScale, SetFeedbackEnable, SetLensDistortionEnable)
         for (key, want) in [("SCALE_WIDTH", 1.0), ("SCALE_HEIGHT", 1.0), ("OFFSET_X", 0.0), ("OFFSET_Y", 0.0)] {
@@ -1142,6 +1140,7 @@ impl PostEffect {
             vignette: [1.0, 0.0, 0.5, 0.5],
             alpha_out: 2,
             color_matrix: m,
+            ca_enabled: i("CHROMATIC_ABERRATION", "ENABLED")? != 0,
             ca_samples: i("CHROMATIC_ABERRATION", "SAMPLES")?,
             ca_lateral: filter.get_float2("CHROMATIC_ABERRATION", "LATERAL_DISPERSION")?,
             ca_uniform: filter.get_float2("CHROMATIC_ABERRATION", "UNIFORM_DISPERSION")?,

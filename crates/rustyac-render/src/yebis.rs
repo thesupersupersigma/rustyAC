@@ -2238,7 +2238,12 @@ mod device {
             let (e0, e1) = (self.effect[0].srv.clone(), self.effect[1].srv.clone());
             let shimmer = heat.and_then(|h| h.shimmer(&pe, self.particles as usize));
             // without chromatic aberration (VR) draws 2 and 6 go and the effect stays in its first surface
-            let ca = camera.chromatic_aberration;
+            let mut ca = camera.chromatic_aberration && pe.ca_enabled;
+            if shimmer.is_some() && !ca && camera.chromatic_aberration {
+                // shortcut: a flat camera's shimmer without CA isn't ported, drawn with CA; port it if a filter needs it
+                crate::yebis_cb::refuse("yebis: the heat shimmer with chromatic aberration off: not ported, drawn with it".into());
+                ca = true;
+            }
             if shimmer.is_some() && !ca {
                 return Err("yebis: the heat shimmer without chromatic aberration: not ported".into());
             }

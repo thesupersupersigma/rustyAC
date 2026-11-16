@@ -136,7 +136,8 @@ pub const HEAT_TEST: &str = "rustyac_heat_x100";
 /// Task Y5d: `rustyac_aeoff`, the default with auto exposure off (the glare without eye adaptation);
 /// `rustyac_star1` / `_star5` / `_star12`, other star streak counts (12 with half-length odd streaks);
 /// `rustyac_blur0` / `_blur05`, the glare's result blur off and halved.
-const TEST_FILTERS: [(&str, &[(&str, &str)]); 11] = [
+/// Task L1: `rustyac_caoff`, chromatic aberration off on a flat camera (no init flag 0x40000, no draws 2 and 6).
+const TEST_FILTERS: [(&str, &[(&str, &str)]); 12] = [
     (HEAT_TEST, &[("HEAT_PARTICLE_SHIMMER=0.004", "HEAT_PARTICLE_SHIMMER=0.4")]),
     ("rustyac_bloom", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0"), ("SHAPE_STAR_LUMINANCE=0.025", "SHAPE_STAR_LUMINANCE=0")]),
     ("rustyac_star", &[("SHAPE_GHOST_LUMINANCE=0.15", "SHAPE_GHOST_LUMINANCE=0")]),
@@ -148,6 +149,7 @@ const TEST_FILTERS: [(&str, &[(&str, &str)]); 11] = [
     ("rustyac_blur05", &[("\nBLUR=1", "\nBLUR=0.5")]),
     ("rustyac_f4", &[("APERTURE_F_NUMBER=12", "APERTURE_F_NUMBER=4")]),
     ("rustyac_f2", &[("APERTURE_F_NUMBER=12", "APERTURE_F_NUMBER=2")]),
+    ("rustyac_caoff", &[("[CHROMATIC_ABERRATION]\r\nENABLED=1", "[CHROMATIC_ABERRATION]\r\nENABLED=0")]),
 ];
 
 pub fn video_ini(width: u32, height: u32) -> String {
