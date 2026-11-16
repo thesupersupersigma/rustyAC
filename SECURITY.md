@@ -8,10 +8,8 @@ Only the **latest release** gets security fixes. Older versions won't be patched
 
 | Version                  | Supported          |
 | ------------------------ | ------------------ |
-| Latest release (0.52.x)  | :white_check_mark: |
+| Latest release (1.x)     | :white_check_mark: |
 | Anything older           | :x:                |
-
-Once v1.0 ships, the latest 1.x release will be the supported one.
 
 ## What's in scope
 

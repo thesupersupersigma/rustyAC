@@ -1,11 +1,10 @@
 rustyAC @VERSION@ - how to run
 =====================================
 
-rustyAC is a Rust rewrite of Assetto Corsa. It is very experimental: one car on a
-track or on an endless flat road. The picture is drawn by a port of the game's
-own renderer with the game's own shaders (anti-aliasing, FXAA and motion blur
-are there; the post-processing filters are not yet); --debug-view brings the
-older, simpler picture back.
+rustyAC is a Rust rewrite of Assetto Corsa 1.16, checked bit for bit against
+the original game: the physics, the AI, the renderer with the game's own shaders
+and post-processing, the sound, the HUD and menus, the launcher and online play.
+--debug-view swaps the picture for a simple debug view.
 
 Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
 
@@ -147,7 +146,7 @@ bindings, the second is added by rustyAC):
     Shift + R                  back onto the track where the car is
     N                          a brand-new car
     P or Pause                 pause
-    Esc                        quit
+    Esc                        Assetto Corsa's pause menu (Exit is in it)
 
 Xbox pad:
 
@@ -168,9 +167,10 @@ Xbox pad:
     D-pad's up or down while holding it (it was the ABS combination), else the
     reset after a tap, or "back onto the track" after 0.6 s or more.
 
-The display always shows the levels: "TC 2/3", "ABS off" (or "not fitted" for
-a car without it) and "Bias 58.0 %", and a note in the upper middle for a
-moment when one of them changes. A level goes up to its highest and then to
+With --debug-hud rustyAC's own panels show the levels: "TC 2/3", "ABS off" (or
+"not fitted" for a car without it) and "Bias 58.0 %", and a note in the upper
+middle for a moment when one of them changes (AC's own HUD shows what the game
+shows). A level goes up to its highest and then to
 off, as in the game. The numbers are the game's own: the level and count its
 own message shows, and the brake bias of its shared memory (brakeBias).
 

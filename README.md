@@ -18,7 +18,7 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 
 ## Download and play
 
-**Windows**
+**Windows** needs Windows 10 or 11 (64-bit, Direct3D 11) and your own **Assetto Corsa 1.16** (the Steam version); rustyAC finds it in your Steam libraries, or set `AC_ROOT`.
 1. Get the newest zip from the **[Releases page](https://github.com/thesupersupersigma/rustyAC/releases)** and unzip it somewhere you can write to (not `Program Files`).
 2. Run **`rustyac-launcher.exe`**. It opens Assetto Corsa's own launcher menu, so you can pick a car, track and session (practice, quick race, race weekend, hotlap, online, special events, career), then press Drive.
 3. `rustyac.exe` also runs on its own from the command line, or from a Content Manager `race.ini`. Run `rustyac.exe --help` for the options.
@@ -38,6 +38,9 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 | **Racing** | AI drivers, sessions, flags, penalties, results, pit stops and pit crew, replays (your real `.acreplay` files), ghost car. |
 | **UI** | The in-game HUD, menus, setup editor, pit strategy, telemetry and the player apps, pixel-identical to the game. |
 | **Launcher** | AC's own launcher, with Kunos' theme from your install. |
+| **Game modes** | Practice, quick race, race weekend, hotlap, Time Attack, Drift, Drag Race, special events and career. |
+| **Cameras and hardware** | Every camera (chase, cockpit, the car's own, track and replay cameras, free camera), triple screens, VR (OpenVR and Oculus), TrackIR, force feedback, and Steam achievements (off by default). |
+| **Apps** | AC's Python app API, so Python apps from your install run, and the dev apps. |
 | **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
 | **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view; post-processing (YEBIS) is not available in the browser), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
 
@@ -72,8 +75,9 @@ Each task's proof is written up in [`docs/port/`](docs/port).
 
 ## Roadmap
 
-- **Vanilla** (now): a complete 1:1 Assetto Corsa. Left: the full renderer, HUD and sound in the browser; AC's Python app API; dev and modding tools; game modes; the rest of the cameras; VR and triple screens; Content Manager support.
-- **Enhanced** (later): the same game with upgraded physics (tyres, aero, soft-body crash damage), plus some chaos (yes, tnt and lava).
+- **Vanilla** (v1.0, done): a complete 1:1 Assetto Corsa 1.16. Fixes for the known gaps above come in 1.0.x releases.
+- **CSP** (next): Custom Shaders Patch support, so CSP cars, tracks and physics work.
+- **Enhanced** (after that): the same game with upgraded physics (tyres, aero, soft-body crash damage), plus some chaos (yes, tnt and lava).
 
 ---
 
