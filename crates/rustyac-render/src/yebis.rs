@@ -502,6 +502,8 @@ mod device {
         root: std::path::PathBuf,
         filter: IniReader,
         video: IniReader,
+        /// the last DOF frame's focus, for the airy disc's test (Task Y7f)
+        airy_focus: Option<f32>,
         /// The vignette's half-height, from the filter's `[VIGNETTING] STRENGTH` at init.
         pub vignette: f32,
         /// CameraTripleScreen's handler 0x140224dc0 sets godraysLength (pp+0x614) to 1 on every evOnPostYebisParametersUpdate.
@@ -1217,6 +1219,7 @@ mod device {
                     root: root.to_path_buf(),
                     filter,
                     video,
+                    airy_focus: None,
                     vignette,
                     shaft_length_one: false,
                     width,
@@ -2220,6 +2223,14 @@ mod device {
             // CPostEffect+0x2fc: the aspect is set once at Initialize, so a resized frame keeps the made size's
             let camera = &Camera { width: self.width as u32, height: self.height as u32, ..*camera };
             let mut pe = PostEffect::new(&self.filter, &self.video, camera)?;
+            if camera.dof_focus.is_some() && self.video.get_int("POST_PROCESS", "DOF").unwrap_or(0) > 0 {
+                self.airy_focus = camera.dof_focus;
+            }
+            static AIRY_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !AIRY_LOGGED.load(std::sync::atomic::Ordering::Relaxed) && crate::yebis_cb::airy_disc_draws(&self.filter, self.airy_focus, camera.fov_deg * 0.017453, camera.width)? {
+                AIRY_LOGGED.store(true, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("yebis: the game draws the airy disc ([AIRYDISC] ENABLED=1, DOF on, a narrow camera) from here: not ported yet, frames differ");
+            }
             if let Some(sh) = pe.glare.as_mut().and_then(|g| g.shafts.as_mut()).filter(|_| self.shaft_length_one) {
                 sh.length = 1.0;
             }

@@ -633,7 +633,7 @@ pub struct Dof {
 impl Dof {
     /// None when YEBIS leaves it off (+0xb87: an F-number, near > 0, far > near, a field of view in (0, pi)).
     fn new(filter: &IniReader, quality: i32, focus: f32, near: f32, far: f32, vfov: f32) -> Result<Option<Dof>, String> {
-        use rustyac_math::{atanf, powf, tanf};
+        use rustyac_math::{atanf, tanf};
         let f = |k: &str| filter.get_float("DOF", k);
         let i = |k: &str| filter.get_int("DOF", k);
         // every shipped filter has these; others change the draws
@@ -671,11 +671,7 @@ impl Dof {
         if !(fnumber > 0.0 && near > 0.0 && far > near && fov > 0.0 && fov < std::f32::consts::PI) {
             return Ok(None);
         }
-        let t = tanf(fov * 0.5);
-        let f9 = ((t * 2.0) * 0.5) * focus + sensor * 0.5;
-        let focal = ((focus * sensor) * 0.5) / f9;
-        let base_f = sensor / (tanf(base_fov * 0.5) * 2.0);
-        let n = (powf(focal, 1.0 - adaptive) * (fnumber / base_f)) * powf(base_f, adaptive);
+        let (focal, n) = optics(focus, sensor, fov, fnumber, adaptive, base_fov);
         let d = focal / n;
         let coc = (d * focal) / (focus - focal);
         let x = 64000.0 / ((near - focus) / near - 1.0).abs();
@@ -690,6 +686,46 @@ impl Dof {
         let [x, y, ..] = self.store;
         [x, y, 1.0 / x, -(y / x), self.focus]
     }
+}
+
+/// `CDepthOfField::CalculateOpticalParameters` 0x14042c150 with aperture parameter 2 (no stop rounding, no
+/// clamp: CDepthOfField +0x388 and +0x38c stay 0): the focal length and the F-number.
+fn optics(focus: f32, sensor: f32, fov: f32, fnumber: f32, adaptive: f32, base_fov: f32) -> (f32, f32) {
+    use rustyac_math::{powf, tanf};
+    let t = tanf(fov * 0.5);
+    let f9 = ((t * 2.0) * 0.5) * focus + sensor * 0.5;
+    let focal = ((focus * sensor) * 0.5) / f9;
+    let base_f = sensor / (tanf(base_fov * 0.5) * 2.0);
+    (focal, (powf(focal, 1.0 - adaptive) * (fnumber / base_f)) * powf(base_f, adaptive))
+}
+
+/// Whether the game draws the airy disc this frame (Task Y7f: its test only, the effect isn't ported yet).
+/// `UpdateParameters_EffectiveApertureAiryDiscEnable` 0x1403ba090 on the optics
+/// `UpdateParameters_DepthOfFieldOpticalParameters` 0x1403b92f0 works out every frame: `focus` is the last
+/// DOF frame's (SetDepthOfFieldParameters 0x1403c2e90 runs only on those and its values stay), None before
+/// the first (the game reads uninitialised heap there). `vfov` in radians, `width` the scene target's.
+pub fn airy_disc_draws(filter: &IniReader, focus: Option<f32>, vfov: f32, width: u32) -> Result<bool, String> {
+    use rustyac_math::{atanf, tanf};
+    let Some(focus) = focus else { return Ok(false) };
+    if filter.get_int("AIRYDISC", "ENABLED")? == 0 {
+        return Ok(false);
+    }
+    let f = |k: &str| filter.get_float("DOF", k);
+    let (sensor, fnumber) = (f("IMAGE_SENSOR_HEIGHT")?, f("APERTURE_F_NUMBER")?);
+    let fov = atanf(tanf(vfov * 0.5)) * 2.0;
+    let (focal, n) = optics(focus, sensor, fov, fnumber, f("ADAPTIVE_APERTURE_FACTOR")?, f("BASE_FOV")? * 0.017453);
+    // CDepthOfField+0x164: the optics worked out and a field of view in (0, pi)
+    if !(focus > 0.0 && sensor > 0.0 && n > 0.0 && focal / n > 0.0 && fov > 0.0 && fov < std::f32::consts::PI) {
+        return Ok(false);
+    }
+    // GetAiryDiscDiameterToScreenRatio 0x14041efc0 (wavelength in metres) * 0.5 = +0xba8
+    let wavelength = filter.get_float("AIRYDISC", "WAVELENGTH")? * 1e-9;
+    let ratio = ((((focus * n) / (focus - focal)) * wavelength) * 2.4392) / sensor * 0.5;
+    let mut size = width as f32 * ratio;
+    if filter.get_int("AIRYDISC", "AIRY_DISC_DISPERSION_ENABLED")? != 0 {
+        size = (size * 7e-7) / 5.8756e-7;
+    }
+    Ok(size > 0.7259524)
 }
 
 /// `CDepthOfField::UpdateApertureFilterLevelParams` 0x14041fdb0: each level's far-side scale and offset
@@ -971,6 +1007,18 @@ impl PostEffect {
         };
         if i("CHROMATIC_ABERRATION", "ENABLED")? == 0 {
             return Err("yebis: chromatic aberration off changes the draw list: not ported".into());
+        }
+        // keys the port doesn't read (Task Y7f): every shipped filter has these values, others draw in the game
+        // (setPostProcessing 0x140025080: SetTonemapViewportScale, SetFeedbackEnable, SetLensDistortionEnable)
+        for (key, want) in [("SCALE_WIDTH", 1.0), ("SCALE_HEIGHT", 1.0), ("OFFSET_X", 0.0), ("OFFSET_Y", 0.0)] {
+            if f("TONEMAPPING", key)? != want {
+                return Err(format!("yebis: [TONEMAPPING] {key} other than {want}: a custom-filter key, not ported yet"));
+            }
+        }
+        for s in ["FEEDBACK", "LENSDISTORTION"] {
+            if i(s, "ENABLED")? != 0 {
+                return Err(format!("yebis: [{s}] ENABLED other than 0: a custom-filter key, not ported yet"));
+            }
         }
         let auto_exposure = if i("AUTO_EXPOSURE", "ENABLED")? != 0 {
             // (the four METERING_* keys are read by nothing: b&w, sepia and vintage leave them out)
@@ -1825,6 +1873,30 @@ mod tests {
     use super::*;
     use crate::yebis_tfxo::Tfxo;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn airy_disc_test_needs_a_narrow_dof_camera() {
+        // b&w.ini's and sepia.ini's keys
+        let filter = IniReader::from_text(Path::new("bw.ini"), "[AIRYDISC]
+ENABLED=1
+WAVELENGTH=500
+AIRY_DISC_DISPERSION_ENABLED=1
+[DOF]
+IMAGE_SENSOR_HEIGHT=0.24
+APERTURE_F_NUMBER=11
+ADAPTIVE_APERTURE_FACTOR=0.5
+BASE_FOV=50
+");
+        let deg = 0.017453;
+        assert!(airy_disc_draws(&filter, Some(100.0), 0.5 * deg, 2560).unwrap());
+        assert!(!airy_disc_draws(&filter, Some(100.0), 1.0 * deg, 1920).unwrap());
+        assert!(!airy_disc_draws(&filter, Some(100.0), 50.0 * deg, 3840).unwrap());
+        assert!(!airy_disc_draws(&filter, None, 0.5 * deg, 2560).unwrap());
+        let off = IniReader::from_text(Path::new("v.ini"), "[AIRYDISC]
+ENABLED=0
+");
+        assert!(!airy_disc_draws(&off, Some(100.0), 0.5 * deg, 2560).unwrap());
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // the game's values as its log prints them
