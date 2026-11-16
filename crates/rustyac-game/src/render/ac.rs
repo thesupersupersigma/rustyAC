@@ -40,7 +40,7 @@ use crate::view::CarView;
 #[cfg(all(windows, not(feature = "wgpu")))]
 use std::time::Instant;
 
-/// shortcut (known gap, shortcuts.md #10): std's clock panics in the browser, so the load and frame times read 0 there; use the
+/// shortcut (browser only, shortcuts.md #10): std's clock panics in the browser, so the load and frame times read 0 there; use the
 /// page's `performance.now()` once those times are shown in the page (the HUD task).
 #[cfg(any(not(windows), feature = "wgpu"))]
 struct Instant;
@@ -1907,7 +1907,7 @@ FILTER=default
         // Game::evOnPreGUI: the handler of ScreenCapturer first (it was hung up first)
         // the statistics apps' numbers: Game::stats so far, GraphicsManager::stats of the 3D part
         let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - update_ms;
-        // shortcut (known gap, shortcuts.md #14): the statistics apps get no frame numbers on wgpu (the page has no clock in
+        // shortcut (browser only, shortcuts.md #14): the statistics apps get no frame numbers on wgpu (the page has no clock in
         // here), give them the page's performance.now() when those apps matter there
         #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {

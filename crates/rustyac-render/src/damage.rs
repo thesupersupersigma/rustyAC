@@ -161,7 +161,7 @@ impl VisualDamageManager {
         if value == 6.0 {
             zones.iter_mut().for_each(flip);
         } else if !value.is_nan() {
-            // shortcut (known gap, shortcuts.md #44): an index outside 0..5 writes past the game's array; here it does nothing
+            // shortcut (difference (differences.md), shortcuts.md #44): an index outside 0..5 writes past the game's array; here it does nothing
             if let Some(z) = zones.get_mut(value as i32 as usize) {
                 flip(z);
             }

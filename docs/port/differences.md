@@ -81,7 +81,7 @@ does something else on purpose, each with its reason and the report that has the
   `getCarRealTimeLeaderboardPosition`, `getLastSplits`, `getCurrentSplits`, `isCameraOnBoard`,
   `getCameraCarCount` with a bad car, `getCarState` 41/42/55/58 with wheel -1 or 4,
   `printErr` with an exception object, `ac.log(5)`): rustyAC returns -1, clamps or prints an empty
-  message; `getPosition` with a bad handle gives -1 (the game: NULLs). (python_apps.md)
+  message; `getPosition` with a bad handle gives -1 (the game: NULLs). (python_apps.md; shortcuts.md #41, #43)
 - **Replays the game's loader crashes on** (a leaderboard snapshot with fewer entries): the port
   leaves the snapshots out and plays them. (replays.md)
 - **Console `testCrash`**: rustyAC prints what the game would do and goes on. (apps_telemetry.md)
@@ -95,6 +95,19 @@ does something else on purpose, each with its reason and the report that has the
 - **Bad spawn slots**: the game puts a car at the origin or on a taken slot; rustyAC reuses slots
   from the first and says so. A car without a model is left out with a console line. (draw_hear_cars.md)
 - **Audio device lost**: AC stops; rustyAC prints a line and plays on silently. (audio.md)
+- **Keyboard steering with no AI line point ahead** (`controls.ini [KEYBOARD]` look-ahead, or a
+  NaN distance): the game's search loops forever; rustyAC stops after one lap of points. (shortcuts.md #5)
+- **Setup debug app on an online remote car**: a remote CarAvatar has no RaceEngineer, so
+  `SetupDebug::render` 0x140318010 reads address 8 and crashes; rustyAC shows the player's car. (shortcuts.md #19)
+- **Time Attack's first frame after Still to On**: `timeToTimeAttackString` 0x1401be000 formats a
+  buffer it never wrote; rustyAC shows `0.000"`. (shortcuts.md #26)
+- **An online lap with a sector the car missed**: the game reads past its split list; rustyAC
+  reads 0. (shortcuts.md #36)
+- **A damage index outside 0..5**: the game writes past its array; rustyAC ignores it. (shortcuts.md #44)
+- **More than 30 cars with heat shimmer**: the game reads past `heatParticleSets[30]`; rustyAC's
+  extra cars share the last volume. (shortcuts.md #45)
+- **An OpenVR device index past 16** other than SteamVR's -1: the game reads past its pose array;
+  rustyAC reads the -1 slot for all. (shortcuts.md #50)
 
 ## Repeatability
 

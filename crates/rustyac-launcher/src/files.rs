@@ -230,7 +230,7 @@ impl Files for MemFiles {
         if entries.0.get(&k).is_some_and(|e| e.bytes.is_none()) {
             return Err(Error::from(ErrorKind::PermissionDenied));
         }
-        // shortcut (known gap, shortcuts.md #27): the clock is a counter (no wall clock in wasm32-unknown-unknown); only the
+        // shortcut (browser only, shortcuts.md #27): the clock is a counter (no wall clock in wasm32-unknown-unknown); only the
         // order of the times is right, which is what the launcher sorts by
         entries.1 += 1;
         let now = entries.1;

@@ -631,7 +631,7 @@ impl StereoCameraVive {
         match usize::try_from(index) {
             Ok(i) if i < 16 => self.device_pose[i],
             _ => {
-                // shortcut (known gap, shortcuts.md #50): only -1 is laid out (SteamVR's one invalid index); any other index past the array reads that too
+                // shortcut (difference (differences.md), shortcuts.md #50): only -1 is laid out (SteamVR's one invalid index); any other index past the array reads that too
                 // (the pose's two padding bytes taken as zero)
                 let p = &self.poses[15];
                 let m = &p.device_to_absolute_tracking;

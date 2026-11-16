@@ -1051,7 +1051,7 @@ impl CarView {
 /// What the Setup debug app reads of the focused car's `Car` (`focus`: 0 the player's, then the
 /// other cars in their order).
 pub fn setup_debug(sim: &GameSim, focus: usize) -> rustyac_gui::app_setup_debug::SetupDebugCar {
-    // shortcut (known gap, shortcuts.md #19): an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted
+    // shortcut (difference (differences.md), shortcuts.md #19): the game crashes on an online remote car (no RaceEngineer: SetupDebug::render 0x140318010 reads [0+8]); the player's is shown
     let car = sim.cars().nth(focus).unwrap_or(&sim.car.car);
     let d = car.drivetrain.as_ref().map(|d| d.base());
     let gear_ratios: Vec<f64> = d.map_or(Vec::new(), |d| d.gears.iter().map(|g| g.ratio).collect());
@@ -1213,9 +1213,9 @@ pub fn telemetry_values(sim: &GameSim, names: &[String]) -> Vec<f32> {
                 "STEER_DEG" => car.get_wheel_steer_angle_deg(wheel),
                 // (Car::getPhysicsState's copies, which the main thread reads)
                 "FF_FINAL" => car.last_ff_final(),
-                // shortcut (known gap, shortcuts.md #20): the speed of this step stands for the previous snapshot's, exact but at the 2 m/s edge
-                "RIDE_HEIGHT_F" => car.ride_heights(car.speed)[0],
-                "RIDE_HEIGHT_R" => car.ride_heights(car.speed)[1],
+                // (getPhysicsState's rideHeight: the step's snapshot, made with the previous snapshot's speed)
+                "RIDE_HEIGHT_F" => car.telemetry.as_ref().map_or_else(|| car.ride_heights(car.speed)[0], |w| w.ride_height[0]),
+                "RIDE_HEIGHT_R" => car.telemetry.as_ref().map_or_else(|| car.ride_heights(car.speed)[1], |w| w.ride_height[1]),
                 // SKID_VOL SKID_PITCH: the sound's, on the display thread (GameGui::telemetry_skids)
                 _ => 0.0,
             }

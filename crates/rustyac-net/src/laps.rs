@@ -64,7 +64,7 @@ impl SessionLaps {
             car.best = time;
         }
         if sectors > 0 {
-            // shortcut (known gap, shortcuts.md #36): a sector the car missed reads 0 here; the game reads past its list then
+            // shortcut (difference (differences.md), shortcuts.md #36): a sector the car missed reads 0 here; the game reads past its list then
             let before: u32 = (0..sectors - 1).map(|k| car.current_splits.get(k).copied().unwrap_or(0)).fold(0u32, u32::wrapping_add);
             car.current_splits.push(0);
             let last = car.current_splits.len() - 1;
