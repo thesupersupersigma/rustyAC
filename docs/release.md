@@ -98,6 +98,8 @@ Cargo's downloads and the build output are cached between runs.
    the last release, the two zips and their `.sha256` files attached; a normal release, marked as the latest
    (`--latest`) only when the tag is the highest version released (versions compared with `sort -V`),
    otherwise `--latest=false`
+7. by hand, when the release has a notes file: `gh release edit vX.Y.Z --notes-file docs/releases/vX.Y.Z.md`
+   replaces the generated notes with it
 
 ### Starting a release by hand
 
