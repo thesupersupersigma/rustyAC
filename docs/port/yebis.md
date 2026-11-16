@@ -1,14 +1,11 @@
-# Task Y7f: the airy disc check (stopped before the port, rule 32)
+# Task Y7f: YEBIS for everything AC ships (v0.50.0)
 
 ## Resume here
 
-- **Stopped in step 1 (rule 32), no release, no tag.** Step 1's question is answered from the code
-  (below): the airy disc **does** draw in AC with shipped filters, so the prompt's "port it now" applies,
-  but the port is about 2 sessions, not part of one. Steps 2-4 not started.
-- **Decision for Super:** port the airy disc before v1.0 (Task Y7g, estimate below), or count b&w/sepia
-  at very narrow replay cameras as a known gap. Step 2 depends on it: refusing `[AIRYDISC] ENABLED=1`
-  would refuse two shipped filters.
-- **Next:** Y7g = airy disc port; then Y7f steps 2-4 (refusals, README, release v0.50.0).
+- **Done in two sessions.** Session 1 answered step 1 from the code and stopped (rule 32: the airy disc
+  port is ~2 sessions). Super's decision for session 2: the airy disc is **not ported before v1.0**; it is
+  accepted, its gate is ported, and a log line says when the game would draw it. Steps 2-4 done, v0.50.0.
+- Next: the custom-filter key tasks after v1.0 (plan at the end of this section).
 
 ## Step 1: does the airy disc draw?
 
@@ -43,15 +40,52 @@ matched because no swept camera is narrow enough (the rule below). From the code
   scaling r/g/b by 1.0467017 / 0.79140854 / 0.9190551, plus the +0x3f0/+0x3f8 loop;
   `EndPostEffectScene_PreProcess` 0x1403b56d0:196-215 changes target indices when it is on.
 
-### Port estimate (Task Y7g, ~2 sessions)
+## Step 1b: the gate and its log line (session 2)
 
-- The gate: the DOF optical parameters every frame (the port has the maths, yebis_cb.rs:667-681) with
-  the last-DOF-frame persistence; frames before the first DOF frame read uninitialised heap in the game
-  (port: off, noted in differences.md).
-- `GaussianFilter_UnlimitedRadius` (2368 bytes: downsample chain via `Resample`, `GaussianFilterMax61x61_2Pass`
-  0x14040b470, which the port lacks, then `MadTn` blend), the airy section and the PreProcess index change.
-- Rows: render_oracle needs a narrow-FOV replay track camera with DOF on, b&w and sepia, dispersion on/off,
-  at 1920 (FOV 0.5) and 2560+ (FOV 1); the call log must match.
+- `yebis_cb::airy_disc_draws(filter, focus, vfov, width)` is the gate above: `ENABLED`, the +0x164 checks
+  (focus, sensor, N, focal/N > 0, 0 < FOV < π), the ratio and the 0.7259524 threshold, with the focal and N
+  from `optics()`, which `Dof::new` now shares. Self-check `airy_disc_test_needs_a_narrow_dof_camera`
+  (b&w keys: 0.5° at 2560 draws; 1° at 1920, 50° at 3840, no DOF frame yet, `ENABLED=0` do not).
+- `Yebis::render` keeps the last DOF frame's focus (`airy_focus`, the game's persistence) and the first time
+  the gate passes it prints once per run: `yebis: the game draws the airy disc ([AIRYDISC] ENABLED=1, DOF
+  on, a narrow camera) from here: not ported yet, frames differ`. Never a refusal: b&w and sepia ship it.
+
+## Step 2: refusals instead of ignored keys
+
+`PostEffect::new` refuses, with the same per-frame path and wording as the other unported keys
+(`yebis: [SECTION] KEY other than V: a custom-filter key, not ported yet`, the frame is not drawn):
+
+- `[TONEMAPPING] SCALE_WIDTH`/`SCALE_HEIGHT` other than 1 and `OFFSET_X`/`OFFSET_Y` other than 0:
+  `setPostProcessing` 0x140025080:90-93 calls `SetTonemapViewportScale` every frame. Every shipped filter
+  has 1/1/0/0.
+- `[FEEDBACK] ENABLED` and `[LENSDISTORTION] ENABLED` other than 0 (`setPostProcessing` :219-226, :319-324).
+  Their other keys reach YEBIS only when `ENABLED` is 1, so they are accepted (no effect).
+- Accepted as no effect: `[GLARE] SHAPE_AFTERIMAGE_LUMINANCE/LENGTH` (written into the glare shape, but
+  `GenerateGlare_Afterimage` 0x140419fe0 returns 0 without the after-image object; `AFTER_IMAGE` is refused).
+
+The key table (Task Y7b, below) now has no ignored key: 32 refused, 10 no effect, 3 gap (logged).
+
+## Step 3: README
+
+The README's "Post-processing (YEBIS, desktop)" paragraph: exact for every shipped filter at every setting
+(the sweep); not yet: the airy disc of b&w/sepia (DOF on, replay track camera ≈1° or less, a log line) and
+custom filters with unshipped keys or values (refused, the key named), linking the key table.
+
+## After v1.0: custom-filter keys
+
+One task per feature group from the Task Y7b estimate (below), **tone map curves and bloom first** (the
+keys custom filters change most), then auto exposure, glare (after image, anamorphic, library-shape ghost,
+star, threshold 0), colour temperature, chromatic aberration off, vignetting, DOF, feedback, lens distortion,
+the tone-map viewport, and the **airy disc**:
+
+- The airy disc (~2 sessions): the gate is ported; left is `GaussianFilter_UnlimitedRadius` 0x14040bd20
+  (2368 bytes: `Resample` downsample chain, `GaussianFilterMax61x61_2Pass` 0x14040b470, which the port
+  lacks, `MadTn` blend), the airy section of `EndPostEffectScene_InternalProcess` and the PreProcess index
+  change. Rows: a narrow-FOV replay track camera with DOF on, b&w and sepia, dispersion on/off, at 1920
+  (FOV 0.5) and 2560+ (FOV 1); the call log must match.
+- **Uninitialised memory:** the game's focus, sensor and F-number (+0x6cc/+0x6d0/+0x6d8) are heap from
+  malloc until the first DOF frame, so the gate before it reads whatever was there; the port says off. Decide
+  then whether that is a differences.md entry (it cannot be reproduced) or provable some other way.
 
 # Task Y7b: every ppfilter key (custom filters)
 
@@ -85,9 +119,11 @@ What the game does with a value (rules from code):
   IDENTICAL. **done-not-proven**: ported, but every row has the same value. **refused**: the port
   stops with an error for the listed values. **ignored**: the port never reads the key, so a custom
   filter's value changes nothing (worse than refused: no error). **no effect**: the game reads it but
-  nothing uses it.
+  nothing uses it (at the values the port accepts). **gap (logged)**: the airy disc (Task Y7f): accepted,
+  the gate is ported and a log line says when the game would draw it.
 
-Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 no effect.
+Totals (after Task Y7f): 118 keys; 43 done-proven, 30 done-not-proven, 32 refused, 0 ignored, 10 no effect,
+3 gap (logged).
 
 | section | key | type | shipped values | status | note |
 |---|---|---|---|---|---|
@@ -97,10 +133,10 @@ Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 
 | TONEMAPPING | EXPOSURE | Float | 0.28 | done-not-proven | one value in every row |
 | TONEMAPPING | GAMMA | Float | 0.60 / 1.0 / 1.05 / 1.1 / 1.2 / 1.20 / 1.30 | done-proven |  |
 | TONEMAPPING | FUNCTION | Int | -1 / 1 / 2 | refused | only -1, 1, 2 (-1 = 2); 0 and 3-8 refused |
-| TONEMAPPING | SCALE_WIDTH | Float | 1 | ignored | tonemap viewport (setPostProcessing): never read; shipped 1 |
-| TONEMAPPING | SCALE_HEIGHT | Float | 1 | ignored | as SCALE_WIDTH |
-| TONEMAPPING | OFFSET_X | Float | 0 | ignored | as SCALE_WIDTH; shipped 0 |
-| TONEMAPPING | OFFSET_Y | Float | 0 | ignored | as SCALE_WIDTH |
+| TONEMAPPING | SCALE_WIDTH | Float | 1 | refused (not 1) | tonemap viewport, SetTonemapViewportScale every frame (setPostProcessing :90-93) |
+| TONEMAPPING | SCALE_HEIGHT | Float | 1 | refused (not 1) | as SCALE_WIDTH |
+| TONEMAPPING | OFFSET_X | Float | 0 | refused (not 0) | as SCALE_WIDTH |
+| TONEMAPPING | OFFSET_Y | Float | 0 | refused (not 0) | as SCALE_WIDTH |
 | TONEMAPPING | MAPPING_FACTOR | Float | 32 | done-not-proven | one value in every row |
 | AUTO_EXPOSURE | ENABLED | Int | 1 | done-proven |  |
 | AUTO_EXPOSURE | DELAY | Float | 0 | refused | only 0 |
@@ -108,14 +144,14 @@ Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 
 | AUTO_EXPOSURE | MAX | Float | 0.45 / 0.5 / 0.7 | done-proven |  |
 | AUTO_EXPOSURE | TARGET | Float | 0.20 / 0.26 / 0.28 / 0.32 / 0.35 | done-proven |  |
 | AUTO_EXPOSURE | INFLUENCED_BY_GLARE | Float | 0 | refused | only 0 |
-| AIRYDISC | ENABLED | Int | 0 / 1 | ignored | never read; b&w.ini and sepia.ini have 1, vintage.ini 0 (Task Y7f) (flag 0x40000 + SetApertureAiryDiscEnable) |
-| AIRYDISC | WAVELENGTH | Float | 500 | ignored | never read |
-| AIRYDISC | AIRY_DISC_DISPERSION_ENABLED | Int | 1 | ignored | never read |
-| FEEDBACK | ENABLED | Int | 0 | ignored | never read; shipped 0, so 1 runs as 0 |
-| FEEDBACK | ASPECT_RATIO | Float | 0 | ignored | never read |
-| FEEDBACK | WEIGHT | Float | 0.0425 / 0.05 | ignored | never read |
-| FEEDBACK | CURRENT_WEIGHT | Float | -0.05 | ignored | never read |
-| FEEDBACK | TIME | Float | 0.1 | ignored | never read |
+| AIRYDISC | ENABLED | Int | 0 / 1 | gap (logged) | b&w.ini and sepia.ini have 1, vintage.ini 0; the gate (`yebis_cb::airy_disc_draws`) is ported, the draw is not (Task Y7f) |
+| AIRYDISC | WAVELENGTH | Float | 500 | gap (logged) | read by the gate |
+| AIRYDISC | AIRY_DISC_DISPERSION_ENABLED | Int | 1 | gap (logged) | read by the gate |
+| FEEDBACK | ENABLED | Int | 0 | refused (not 0) | SetFeedbackEnable (setPostProcessing :219-226) |
+| FEEDBACK | ASPECT_RATIO | Float | 0 | no effect | the game sets it only with ENABLED 1 (refused) |
+| FEEDBACK | WEIGHT | Float | 0.0425 / 0.05 | no effect | as ASPECT_RATIO |
+| FEEDBACK | CURRENT_WEIGHT | Float | -0.05 | no effect | as ASPECT_RATIO |
+| FEEDBACK | TIME | Float | 0.1 | no effect | as ASPECT_RATIO |
 | VIGNETTING | STRENGTH | Float | 0.0 / 0.035 / 0.25 //6 / 0.4 | done-proven |  |
 | VIGNETTING | FOV_DEPENDENCE | Float | 0 | refused | only 0 |
 | CHROMATIC_ABERRATION | ENABLED | Int | 1 | refused | only 1 (0 refused, and shimmer without CA) |
@@ -167,8 +203,8 @@ Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 
 | GLARE | SHAPE_STAR_INCLINATION_ANGLE | Float | 3 | done-not-proven | one value in every row |
 | GLARE | SHAPE_STAR_DISPERSION | Float | 0 | refused | only 0 with a custom shape |
 | GLARE | SHAPE_STAR_FORCE_DISPERSION | Int | 0 | refused | only 0 with a custom shape |
-| GLARE | SHAPE_AFTERIMAGE_LUMINANCE | Float | 80 | ignored | never read (AFTER_IMAGE is refused) |
-| GLARE | SHAPE_AFTERIMAGE_LENGTH | Float | 0.5 | ignored | never read (AFTER_IMAGE is refused) |
+| GLARE | SHAPE_AFTERIMAGE_LUMINANCE | Float | 80 | no effect | GenerateGlare_Afterimage 0x140419fe0 returns 0 without the after-image object (AFTER_IMAGE is refused) |
+| GLARE | SHAPE_AFTERIMAGE_LENGTH | Float | 0.5 | no effect | as SHAPE_AFTERIMAGE_LUMINANCE |
 | HEAT_SHIMMER | HEAT_PARTICLE_RADIUS | Float | 0.75 | done-not-proven | one value in every row |
 | HEAT_SHIMMER | HEAT_PARTICLE_SHIMMER | Float | 0.004 | done-proven |  |
 | HEAT_SHIMMER | HEAT_PARTICLE_COORD | Float | 1.5 | done-not-proven | one value in every row |
@@ -204,9 +240,9 @@ Totals: 118 keys; 43 done-proven, 30 done-not-proven, 26 refused, 17 ignored, 2 
 | DOF | EDGE_QUALITY | Int | 1 / 2 / 3 | refused | only -1..4 |
 | DOF | BACKGROUND_MASK_THRESHOLD | Float | 0.1 | done-not-proven | one value in every row |
 | DOF | APERTURE_SHAPE | Int | 2 / 3 / 4 | refused | only 2-4 |
-| LENSDISTORTION | ENABLED | Int | 0 | ignored | never read; shipped 0 |
-| LENSDISTORTION | ROUNDNESS | Float | 0.05 | ignored | never read |
-| LENSDISTORTION | SMOOTHNESS | Float | 1.0 | ignored | never read |
+| LENSDISTORTION | ENABLED | Int | 0 | refused (not 0) | SetLensDistortionEnable (setPostProcessing :319-324) |
+| LENSDISTORTION | ROUNDNESS | Float | 0.05 | no effect | the game sets it only with ENABLED 1 (refused) |
+| LENSDISTORTION | SMOOTHNESS | Float | 1.0 | no effect | as ROUNDNESS |
 | HEAT_SHIMMER | HEAT_PARTICLE_COLOR | Float3 | 1,1,1 | done-not-proven | one value in every row |
 | HEAT_SHIMMER | HEAT_PARTICLE_POSITION_VELOCITY | Float3 | 0,0,0.2 | done-not-proven | one value in every row |
 

@@ -41,6 +41,8 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 | **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
 | **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view; post-processing (YEBIS) is not available in the browser), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
 
+**Post-processing (YEBIS, desktop):** exact for every filter AC ships, at every post-processing setting, proven by a sweep of all ten filters against the game. Not yet: the **airy disc** of the b&w and sepia filters, which the game draws only with depth of field on and a replay track camera zoomed in to about 1° or less (rustyAC writes a line to its log when that happens); and **custom filters** that use keys or values no shipped filter uses: rustyAC refuses those: a warning names the key and the frame is not drawn (the [key table](docs/port/yebis.md) lists each key's status). Both come after v1.0.
+
 Not supported: Custom Shaders Patch (CSP) features. Cars that need CSP won't load, and cars handle like **vanilla** Assetto Corsa (CSP changes the physics).
 
 Not ported on purpose: AC's **showroom** (`acShowroom.exe`, the car viewer). Use the one in your Assetto Corsa install: rustyAC reads the same content files as the original game, so any car or track that works in vanilla Assetto Corsa works in rustyAC too, and the original showroom already shows them.
