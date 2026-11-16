@@ -17,8 +17,22 @@
   GraphicsManager +0x11c (the lighting saturation) by 0.01 (f32), clamped to 0..2, and shows
   "Saturation: N%" (`(int)(s * 100.0f)`); nothing while the console shows. Desktop only.
   Proof: unit test `saturation_step_clamps_at_0_and_2`; the saturation itself draws as in Y7e.
-- Next: step 2 in order: the FMOD crash cause, render_oracle's clippy errors, the scratch archive
-  (`re/scratch/taskL1/archive_scratch.sh`, not run yet); then step 3.
+- FMOD crash (rule 20): measured on the sound proof's e2e case `spa_launch cockpit`. The game
+  side (acs.exe's sound code in audio_oracle) crashed in 12 of 200 runs, rustyac.exe in 1 of 400.
+  Every crash happens on the main thread inside `studio_update` of frame 1408, and the call logs
+  are the same as the passing runs up to there. That is very likely the update where event h68,
+  started every 25 frames and last at 1383, ends by itself. The crash site is fmod64.dll +0x8fc37
+  (read) or +0xf5776 (write): the deferred low-level command at 0xf5755 calls 0x8f7d0 with a
+  channel group (fields +0x178/+0x17a) whose memory is already gone. It is not FMOD's stream
+  thread: `FMOD_INIT_STREAM_FROM_UPDATE` still gave 9 of 200 (reverted). So the bug is inside
+  FMOD 1.08.12 in the clock-less (NRT) setup the oracles use; the game's real-time output never
+  showed it. The fix is in the proof: `tools/proofs/sound.sh`'s e2e part makes a crashed run
+  again (three tries a side), as `audio_oracle compare` already did; the e2e cases run 20 times
+  in a row: 60 of 60 IDENTICAL. Scripts:
+  `re/scratch/taskL1/fmod/` (rep.sh port side, game_rep.sh game side, fmoddis.py).
+- Done: the scratch archive: 16 old folders (25,843 files) went to the server with
+  `re/scratch/taskL1/archive_scratch.sh` (archive_kept.sh's method), every SHA-256 matched there.
+- Next: render_oracle's clippy errors (edited, not built yet); then step 3.
 - Still refused per frame (not filter keys): glare resample sizes, a glare halving with
   several taps, the heat shimmer in VR; these still skip YEBIS for the frame.
 
@@ -107,7 +121,7 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 
 | Item | Source | Hits | Size | Plan |
 |---|---|---|---|---|
-| Flaky FMOD crash in a sound proof case (fmod64.dll, frame 1408; same rerun alone passes) | prompt, web_keys.md | dev-only | medium | **L1**: find the cause (rule 20) |
+| Flaky FMOD crash in a sound proof case (fmod64.dll, frame 1408; same rerun alone passes) | prompt, web_keys.md | dev-only | medium | **L1, done**: FMOD 1.08.12's own bug in the NRT setup (6 % game side, 0.25 % port side); the e2e proof repeats a crashed run |
 | render_oracle's 41 old clippy errors | yebis.md | dev-only | small | **L1** |
 | car_oracle's ~70 old lints (rustc 1.97) | screens_steam.md | dev-only | small | after |
 | Old scratch folders (~11 GB) to the server | prompt | dev-only | small | **L1** (archive_kept.sh's method, not task46c) |

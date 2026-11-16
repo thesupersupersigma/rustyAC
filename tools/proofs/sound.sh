@@ -51,11 +51,18 @@ keep dsp && { "$AO" dsp --count 2000 > "$out/dsp.txt" 2>&1 && verdict "dsp plug-
 root=$out/root_e2e
 while read -r scenario camera; do
     keep "e2e $scenario $camera" || continue
-    "$AO" run --side ac --tape "oracle/audio_e2e/$scenario.audiotape" --camera "$camera" --out "$out/e2e" --root "$root" > "$out/e2e.txt" 2>&1
+    # FMOD 1.08.12 itself crashes now and then in this clock-less setup (docs/port/leftovers.md, the
+    # FMOD row): a crashed run is made again, as audio_oracle compare does; three tries each side
+    for try in 1 2 3; do
+        rm -rf "$out/e2e"
+        "$AO" run --side ac --tape "oracle/audio_e2e/$scenario.audiotape" --camera "$camera" --out "$out/e2e" --root "$root" > "$out/e2e.txt" 2>&1 < /dev/null && break
+    done
     game_log=$(ls "$out"/e2e/*_"${scenario}_${camera}"_ac.log 2>/dev/null | head -n 1)
-    rustyac target/release/rustyac.exe --replay "oracle/game/audio_e2e_$scenario.ryin" --headless --no-shm \
-        --audio-wav "$out/e2e/port.wav" --audio-log "$out/e2e/port.log" --audio-oracle-camera "$camera" \
-        --audio-ini "$root/cfg/audio.ini" --audio-script "$game_log" >> "$out/e2e.txt" 2>&1
+    for try in 1 2 3; do
+        rustyac target/release/rustyac.exe --replay "oracle/game/audio_e2e_$scenario.ryin" --headless --no-shm \
+            --audio-wav "$out/e2e/port.wav" --audio-log "$out/e2e/port.log" --audio-oracle-camera "$camera" \
+            --audio-ini "$root/cfg/audio.ini" --audio-script "$game_log" >> "$out/e2e.txt" 2>&1 && break
+    done
     r=$(python tools/proofs/logdiff.py "$game_log" "$out/e2e/port.log" | head -n 1)
     case "$r" in IDENTICAL*) verdict "rustyac.exe $scenario $camera" IDENTICAL "$r" ;; *) verdict "rustyac.exe $scenario $camera" DIFFERENT "$r" ;; esac
     rm -rf "$out/e2e"
