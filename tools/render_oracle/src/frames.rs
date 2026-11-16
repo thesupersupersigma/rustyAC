@@ -136,7 +136,7 @@ pub fn test_sus_lines(index: usize, wheel: usize, b: &rustyac_physics::vecmath::
     use rustyac_physics::car::suspension::{transform, DebugLine};
     use rustyac_physics::vecmath::Vec3f;
     let t = index as f32 * 0.1;
-    let (x, z) = (if wheel % 2 == 0 { 0.75 } else { -0.75 }, if wheel < 2 { 1.25 } else { -1.3 });
+    let (x, z) = (if wheel.is_multiple_of(2) { 0.75 } else { -0.75 }, if wheel < 2 { 1.25 } else { -1.3 });
     let colors = [[1.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [4.0, 4.0, 4.0, 1.0]];
     (0..3)
         .map(|k| {

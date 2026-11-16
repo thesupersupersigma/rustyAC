@@ -94,7 +94,7 @@ pub unsafe fn game_call(game: &Game, what: &str, number: f32, text: &str) -> Res
             let sim = h.sim;
             // the scene camera (a CameraForward: initCommands casts it), fov at +8
             let camera = acs.alloc(0x2000);
-            wr(camera, 0, acs.va(VA_CAMERA_FORWARD_VFTABLE) as usize);
+            wr(camera, 0, acs.va(VA_CAMERA_FORWARD_VFTABLE));
             wr(camera, 8, FOV);
             wr(sim, 0x238, camera);
             // the OptionsManager (Sim+0xf0), as Sim::Sim makes it

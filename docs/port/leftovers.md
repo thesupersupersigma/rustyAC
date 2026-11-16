@@ -32,7 +32,11 @@
   `re/scratch/taskL1/fmod/` (rep.sh port side, game_rep.sh game side, fmoddis.py).
 - Done: the scratch archive: 16 old folders (25,843 files) went to the server with
   `re/scratch/taskL1/archive_scratch.sh` (archive_kept.sh's method), every SHA-256 matched there.
-- Next: render_oracle's clippy errors (edited, not built yet); then step 3.
+- Done: render_oracle's clippy errors: `cargo clippy --release --locked --all-targets` on it is
+  clean with `-D warnings` (11 same-type casts, 2 `is_multiple_of`, 1 `ptr::eq`, the video.ini
+  key names allowed on `video_ini`; arguments, types and `!(a >= b)` allowed crate-wide as in
+  the ported crates). No behaviour change.
+- Next: step 3 (quick proofs, clippy everywhere, README known gaps, v0.51.0).
 - Still refused per frame (not filter keys): glare resample sizes, a glare halving with
   several taps, the heat shimmer in VR; these still skip YEBIS for the frame.
 
@@ -122,9 +126,9 @@ medium / big. **Plan**: *L1* = fixed in this task; *gap* = a v1.0 known gap (REA
 | Item | Source | Hits | Size | Plan |
 |---|---|---|---|---|
 | Flaky FMOD crash in a sound proof case (fmod64.dll, frame 1408; same rerun alone passes) | prompt, web_keys.md | dev-only | medium | **L1, done**: FMOD 1.08.12's own bug in the NRT setup (6 % game side, 0.25 % port side); the e2e proof repeats a crashed run |
-| render_oracle's 41 old clippy errors | yebis.md | dev-only | small | **L1** |
+| render_oracle's 41 old clippy errors | yebis.md | dev-only | small | **L1, done** (39 at -D warnings, now 0) |
 | car_oracle's ~70 old lints (rustc 1.97) | screens_steam.md | dev-only | small | after |
-| Old scratch folders (~11 GB) to the server | prompt | dev-only | small | **L1** (archive_kept.sh's method, not task46c) |
+| Old scratch folders (~11 GB) to the server | prompt | dev-only | small | **L1, done** (archive_kept.sh's method, not task46c; 25,843 files, SHA-256 checked there) |
 | Six render rows lost their made-up car data; four sound drives' .ryin lost; Task 36 lobby recording; Task 37c Race Weekend tape | proofs.md | dev-only | medium | after |
 | re/gold/fresh/rec grows ~12 GB per car_oracle source change | proofs.md | dev-only | medium | after |
 | Fifth lane, D: drive, keeping the game side of compares | proofs.md | dev-only | – | after |

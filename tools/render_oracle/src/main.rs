@@ -3,6 +3,8 @@
 //! Render oracle: Assetto Corsa's own renderer (run from acs.exe in this process, on a WARP
 //! device, off screen) against the Rust port in `crates/rustyac-render`.
 //! See `docs/port/renderer_core.md`.
+// Game-shaped calls and tables, and `!(a >= b)` kept for its NaN case, as in the ported crates
+#![allow(clippy::too_many_arguments, clippy::type_complexity, clippy::neg_cmp_op_on_partial_ord)]
 
 #[allow(dead_code)]
 #[path = "../../car_oracle/src/acs.rs"]

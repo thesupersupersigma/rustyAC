@@ -776,7 +776,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
     if what == "app.create" {
         crate::gui_ac_hud::set_acs(&game.acs);
         install(game);
-        *GAME_ACS.lock().unwrap() = Some((a.va(VA_SPEED_USE_MPH) as usize,));
+        *GAME_ACS.lock().unwrap() = Some((a.va(VA_SPEED_USE_MPH),));
         let game_block = a.alloc(0x300);
         wr(game_block, 0x138, game.graphics);
         wr(game_block, 0x180, gui);
@@ -920,7 +920,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 let mut dic = 0usize;
                 if let Some(u) = upgrades {
                     let block = a.alloc(0x1000);
-                    wr(block, 0, a.va(VA_DICARCONTROL_VFTABLE) as usize);
+                    wr(block, 0, a.va(VA_DICARCONTROL_VFTABLE));
                     wr(block, 0xa68, u);
                     if let Some(p) = PROVIDERS.lock().unwrap().get_mut(0) {
                         *p = block as usize;
@@ -949,7 +949,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 // a SteamInterface among the Sim's game objects (the class's own table, for the
                 // app's dynamic cast; its evOnLeaderboardUpdated at +0x58)
                 let steam = a.alloc(0x400);
-                wr(steam, 0, a.va(0x1_404d_a7b8) as usize);
+                wr(steam, 0, a.va(0x1_404d_a7b8));
                 let list = a.alloc(0x10);
                 wr(list, 0, steam);
                 wr(sim, 0x40, list);
@@ -1014,7 +1014,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 // +0x960); SteamVR's supersampling read and set, the distance set: written down
                 let v = crate::gui_seq_apps::OPEN_VR;
                 let camera = a.alloc(0x1418);
-                wr(camera, 0, a.va(0x1_404e_d4f8) as usize);
+                wr(camera, 0, a.va(0x1_404e_d4f8));
                 wr(camera, 0x954, v.eyes_distance_ref);
                 wr(camera, 0x95c, v.eyes_distance);
                 wr(camera, 0x960, v.max_distance_offset);
@@ -1049,7 +1049,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 // PostProcessEffectsUpdater (its table for the dynamic cast, defaultFilter +0x58);
                 // loadConfigurationFile written down
                 let ppeu = a.alloc(0x88);
-                wr(ppeu, 0, a.va(0x1_404b_8730) as usize);
+                wr(ppeu, 0, a.va(0x1_404b_8730));
                 crate::ac::write_wstring(&game.acs, ppeu.add(0x58), "default");
                 let list = a.alloc(0x10);
                 wr(list, 0, ppeu);
@@ -1068,7 +1068,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 // GetAsyncKeyState answers the script's buttons.
                 let l = crate::gui_seq_apps::photo_start();
                 let scene = a.alloc(0x200);
-                wr(scene, 0, a.va(0x1_404e_d0a8) as usize);
+                wr(scene, 0, a.va(0x1_404e_d0a8));
                 wr(scene, 8, l.fov);
                 wr(scene, 0xc, l.matrix.m);
                 wr(scene, 0x1b0, l.dof_factor);
@@ -1081,7 +1081,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 let sun_gm = a.alloc(0x400);
                 wr(sun_game, 0x138, sun_gm);
                 let sa = a.alloc(0x80);
-                wr(sa, 0, a.va(0x1_404d_b280) as usize);
+                wr(sa, 0, a.va(0x1_404d_b280));
                 wr(sa, 8, sun_game);
                 wr(sa, 0x30, 1u8);
                 let list = a.alloc(0x10);
@@ -1797,7 +1797,7 @@ pub unsafe fn update() {
 unsafe fn telemetry_car(a: &crate::acs::Acs, avatar: *mut u8) {
     let c = crate::gui_seq_apps::TELEMETRY_CAR;
     let car = a.alloc(0x4000);
-    wr(car, 0x3f0, a.va(0x1_404f_8fd8) as usize);
+    wr(car, 0x3f0, a.va(0x1_404f_8fd8));
     wr(car, 0x3f0 + 0x11c, c.limiter_rpm);
     wr(car, 0x3f0 + 0x14c, 1.0f32);
     wr(car, 0x7e0, c.clutch_max_torque);

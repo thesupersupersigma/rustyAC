@@ -171,7 +171,7 @@ pub unsafe fn game_call(game: &Game, what: &str) -> Result<(), String> {
     if what == "tele.setup" {
         // the recorder among Sim's game objects (its class's table: the page's dynamic cast)
         let recorder = acs.alloc(0x170);
-        wr(recorder, 0, acs.va(VA_RECORDER_VFTABLE) as usize);
+        wr(recorder, 0, acs.va(VA_RECORDER_VFTABLE));
         wr(recorder, 0x58, h.cars[0]);
         let (begin, end): (*const usize, *const usize) = (rd(h.sim, 0x40), rd(h.sim, 0x48));
         let mut objects: Vec<usize> = if begin.is_null() { Vec::new() } else { (0..(end as usize - begin as usize) / 8).map(|i| *begin.add(i)).collect() };

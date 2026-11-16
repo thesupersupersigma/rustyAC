@@ -80,7 +80,7 @@ pub fn tyre_debug_rows(frame: usize) -> [rustyac_gui::app_tyre_debug::TyreDebugR
             virtual_km,
             wear_value: curve.get_value(virtual_km as f32),
             core_temp: ((frame * 7 + k * 13) % 90) as f32 * 1.37 - 4.0,
-            active: (frame / 40 + k) % 2 == 0,
+            active: (frame / 40 + k).is_multiple_of(2),
         }
     })
 }

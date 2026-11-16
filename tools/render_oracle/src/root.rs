@@ -152,6 +152,7 @@ const TEST_FILTERS: [(&str, &[(&str, &str)]); 12] = [
     ("rustyac_caoff", &[("[CHROMATIC_ABERRATION]\r\nENABLED=1", "[CHROMATIC_ABERRATION]\r\nENABLED=0")]),
 ];
 
+#[allow(non_snake_case)] // the names are video.ini's keys, captured by the format string
 pub fn video_ini(width: u32, height: u32) -> String {
     let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur: MOTION_BLUR, ldr_levels: _, triple, vr, oculus, vr_room, vr_tracker: _, ppfilter } = profile();
     let (POST, PP_FXAA) = (post as i32, fxaa as i32);

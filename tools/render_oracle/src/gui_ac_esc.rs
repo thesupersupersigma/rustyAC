@@ -387,7 +387,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, h: &mut HudGame, what: &str, numbe
             let add: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(a.va(VA_GUI_ADD_CONTROL));
             add(gui, menu);
             let table = a.alloc(0x40);
-            wr(table, 0x10, a.va(VA_ESC_MENU_TRIGGERED_HANDLER) as usize);
+            wr(table, 0x10, a.va(VA_ESC_MENU_TRIGGERED_HANDLER));
             let implementation = a.alloc(0x10);
             wr(implementation, 0, table);
             wr(implementation, 0x8, sim);

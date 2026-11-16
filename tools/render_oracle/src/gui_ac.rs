@@ -255,7 +255,7 @@ impl Side<'_> {
     unsafe fn hook_event(&mut self, control: *mut u8, at: usize, callback: crate::gui_ac2::Callback) {
         let mut recorder = self.recorder(callback);
         let acs = &self.game.acs;
-        if at == 0xc8 && callback as *const () as usize == click_recorder as *const () as usize {
+        if at == 0xc8 && std::ptr::eq(callback as *const (), click_recorder as *const ()) {
             // the click recorder's own object, with its control
             let own = acs.alloc(0x10);
             wr(own, 0, rd::<usize>(recorder, 0));
