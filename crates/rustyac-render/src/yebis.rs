@@ -508,6 +508,12 @@ mod device {
         pub vignette: f32,
         /// CameraTripleScreen's handler 0x140224dc0 sets godraysLength (pp+0x614) to 1 on every evOnPostYebisParametersUpdate.
         pub shaft_length_one: bool,
+        /// `CameraForwardYebis::useAutoExposureLimits` (+0x7a1), set by the camera every frame
+        pub use_auto_exposure_limits: bool,
+        /// the HDR Settings app's `pp.autoExposureTarget` (+0xcc4), when it moved it
+        pub auto_exposure_target: Option<f32>,
+        /// `CameraForwardYebis::currentAutoExposure` (+0x7b4) as `setPostProcessing` leaves it
+        pub current_auto_exposure: f32,
         width: i32,
         height: i32,
         /// the target bound when YEBIS was made, and how many targets the teardown releases
@@ -1222,6 +1228,9 @@ mod device {
                     airy_focus: None,
                     vignette,
                     shaft_length_one: false,
+                    use_auto_exposure_limits: true,
+                    auto_exposure_target: None,
+                    current_auto_exposure: 0.0,
                     width,
                     height,
                     // `CRenderTexture::UninitializeDevice` 0x1403d29f0 puts the screen back once for each texture
@@ -1260,6 +1269,11 @@ mod device {
                     }
                 }
             }
+        }
+
+        /// The filter's `[AUTO_EXPOSURE]` MIN, MAX and TARGET (`getAutoExposureLimits` 0x14002ab20, the HDR app).
+        pub fn auto_exposure_limits(&self) -> [f32; 3] {
+            ["MIN", "MAX", "TARGET"].map(|key| self.filter.get_float("AUTO_EXPOSURE", key).unwrap_or(0.0))
         }
 
         /// `CameraForwardYebis::onResize` 0x140029da0: the game destroys YEBIS and makes it again
@@ -2223,6 +2237,18 @@ mod device {
             // CPostEffect+0x2fc: the aspect is set once at Initialize, so a resized frame keeps the made size's
             let camera = &Camera { width: self.width as u32, height: self.height as u32, ..*camera };
             let mut pe = PostEffect::new(&self.filter, &self.video, camera)?;
+            // CameraForwardYebis::setPostProcessing 0x140025080: the current exposure (read before
+            // this frame's update), the range (the filter's or 0..10) and the middle grey
+            self.current_auto_exposure = pe.exposure;
+            if let Some(ae) = pe.auto_exposure.as_mut() {
+                self.current_auto_exposure = self.auto_exposure.adjusted();
+                if !self.use_auto_exposure_limits {
+                    (ae[0], ae[1]) = (0.0, 10.0);
+                }
+                if let Some(target) = self.auto_exposure_target {
+                    ae[2] = ((camera.exposure / 30.0) * target) * camera.exposure_multiplier;
+                }
+            }
             if camera.dof_focus.is_some() && self.video.get_int("POST_PROCESS", "DOF").unwrap_or(0) > 0 {
                 self.airy_focus = camera.dof_focus;
             }

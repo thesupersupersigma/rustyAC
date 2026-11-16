@@ -483,12 +483,19 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
 /// cannot start (no Assetto Corsa folder, no Direct3D 11 …).
 /// The Camera editor's start (car 0's cameras and views), before the apps are made; `--post`
 /// decides whether it is made at all (only with post-processing on, as with YEBIS's camera).
-fn start_camera_editor(gui: Option<&mut rustyac_game::render::gui::GameGui>, options: &Options, unix: &str, data: &Path, shape: &CarShape) {
-    if let Some(gui) = gui {
+fn start_camera_editor(renderer: &mut Picture, options: &Options, unix: &str, data: &Path, shape: &CarShape) {
+    // (FormHDR's target spinner starts from the filter's [AUTO_EXPOSURE] TARGET)
+    let target = match renderer {
+        Picture::Ac(r) => r.auto_exposure().map(|(_, [.., target])| target),
+        Picture::Debug(_) => None,
+    };
+    if let Some(gui) = renderer.gui() {
         if let Some(on) = options.post {
             gui.gui.sim.replay.post_processing = Some(on);
         }
-        gui.gui.apps.camera_editor = Some(rustyac_game::render::gui_apps::camera_editor_link(unix, data, shape));
+        let mut link = rustyac_game::render::gui_apps::camera_editor_link(unix, data, shape);
+        link.auto_exposure_target = target.unwrap_or(0.0);
+        gui.gui.apps.camera_editor = Some(link);
     }
 }
 
@@ -1560,7 +1567,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     // shake's rand() (the game's one generator)
     let mut random_camera = rustyac_game::render::track_camera::RandomCamera::of_install(&mut camera.cockpit.rand);
     camera.track_sets = track_cameras.sets.len();
-    start_camera_editor(renderer.gui(), options, &car_names[0], &car_info.data_path, &shapes[0]);
+    start_camera_editor(&mut renderer, options, &car_names[0], &car_info.data_path, &shapes[0]);
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
     // replay shows from its first frame (the physics stands still for good)
     if let (Some(file), Some(rig)) = (&options.ac_replay, &rig) {
@@ -2039,6 +2046,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                         }
                     }
                     SimAction::Shutdown => shutdown = true,
+                    SimAction::Exit(code) => std::process::exit(code),
                     SimAction::ClearMessage | SimAction::FadeIn(_) => {}
                     // (the tables' clicks: the camera to a car; off line a vote has no client)
                     SimAction::SetFocusedCarIndex(car) => {
@@ -2852,7 +2860,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
             &own
         };
         let unix = Path::new(&first.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        start_camera_editor(renderer.gui(), options, &unix, &first.data_path, car0);
+        start_camera_editor(&mut renderer, options, &unix, &first.data_path, car0);
     }
     if let (Some(commands), Some(gui)) = (&options.gui_do, renderer.gui()) {
         gui.script(commands)?;

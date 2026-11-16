@@ -755,9 +755,9 @@ pub fn camera_editor_link(unix: &str, data: &Path, shape: &crate::render::scene:
         bonnet_pitch: shape.bonnet_pitch,
         scene_camera: Mat44f::IDENTITY,
         body: Mat44f::IDENTITY,
+        // (YEBIS's values are put in by the renderer every frame, before the GUI updates)
         auto_exposure: 0.0,
-        use_auto_exposure_limits: false,
-        // shortcut (known gap, shortcuts.md #16): YEBIS's current auto exposure and the filter's [AUTO_EXPOSURE] limits are not handed to the HDR and camera editor apps (0)
+        use_auto_exposure_limits: true,
         auto_exposure_min: 0.0,
         auto_exposure_max: 0.0,
         auto_exposure_target: 0.0,

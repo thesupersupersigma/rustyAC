@@ -645,6 +645,11 @@ pub struct AcRenderer {
 }
 
 impl AcRenderer {
+    /// YEBIS's current auto exposure and the filter's `[AUTO_EXPOSURE]` MIN, MAX, TARGET.
+    pub fn auto_exposure(&self) -> Option<(f32, [f32; 3])> {
+        self.camera.auto_exposure()
+    }
+
     /// `GraphicsManager::useCustomSunDirection` / `customSunDirection` (the Photo mode's sun);
     /// None: the sun of the time of day.
     /// Photo mode's END: `RayPicker::pick` at the screen's centre from a camera (its field of
@@ -1727,6 +1732,15 @@ FILTER=default
                     gui.gui.sim.sun_angle = this.options.sun_angle;
                     // DriverNameDisplayer's cameraTripleScreen: the screens' matrices of this frame
                     gui.names.triple = this.camera.base.triple.as_ref().map(|t| (t.current_view_proj, t.current_camera_matrix));
+                    // FormHDR / FormCamera: CameraForwardYebis's auto exposure, and what the apps change in it
+                    let ae = this.camera.auto_exposure();
+                    if let Some(l) = gui.gui.apps.camera_editor.as_mut() {
+                        (l.auto_exposure, l.use_auto_exposure_limits) = (ae.map_or(0.0, |(current, _)| current), this.camera.use_auto_exposure_limits);
+                        if let Some((_, [min, max, target])) = ae {
+                            (l.auto_exposure_min, l.auto_exposure_max) = (min, max);
+                            l.auto_exposure_target = this.camera.auto_exposure_target.unwrap_or(target);
+                        }
+                    }
                     gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, this.time_ms, dt);
                     // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
                     let rows = this.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
@@ -1737,6 +1751,13 @@ FILTER=default
                     }
                     if drawn {
                         gui.render(&mut this.graphics, dt);
+                    }
+                    // (after the draw: the camera editor's AUTOEXP run changes the link while it draws)
+                    if let (Some(l), Some((_, [.., target]))) = (gui.gui.apps.camera_editor.as_ref(), ae) {
+                        this.camera.use_auto_exposure_limits = l.use_auto_exposure_limits;
+                        if l.auto_exposure_target != this.camera.auto_exposure_target.unwrap_or(target) {
+                            this.camera.auto_exposure_target = Some(l.auto_exposure_target);
+                        }
                     }
                     this.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
                     // FormDriverModel: what it wrote into car 0's driverModel_HR, its updateHeadMovement calls

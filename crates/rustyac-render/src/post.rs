@@ -52,6 +52,11 @@ pub struct CameraForwardYebis {
     /// evOnPostYebisParametersUpdate has fired once: on triple screens the vignette strength is zero from then on
     #[cfg(all(windows, not(feature = "backend-wgpu")))]
     parameters_updated: bool,
+    /// `useAutoExposureLimits` (+0x7a1, true from the constructor): the camera editor's
+    /// AUTOEXP run and the HDR app switch it
+    pub use_auto_exposure_limits: bool,
+    /// the HDR app's target, once it moved it (`pp.autoExposureTarget`)
+    pub auto_exposure_target: Option<f32>,
     /// the heat shimmer's particles, with video.ini's HEAT_SHIMMER on (Task Y3d-3)
     pub heat: Option<crate::heat_shimmer::HeatShimmer>,
 }
@@ -92,6 +97,8 @@ impl CameraForwardYebis {
             yebis: None,
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             parameters_updated: false,
+            use_auto_exposure_limits: true,
+            auto_exposure_target: None,
             heat: None,
         };
         if graphics.video.pp_hdr_enabled && !stereo {
@@ -131,6 +138,15 @@ impl CameraForwardYebis {
         return self.forward.vr.is_some() || self.forward.oculus.is_some();
         #[cfg(feature = "backend-wgpu")]
         false
+    }
+
+    /// YEBIS's `currentAutoExposure` and the filter's `[AUTO_EXPOSURE]` MIN, MAX, TARGET, for the
+    /// HDR and camera editor apps; `None` without YEBIS.
+    pub fn auto_exposure(&self) -> Option<(f32, [f32; 3])> {
+        #[cfg(all(windows, not(feature = "backend-wgpu")))]
+        return self.yebis.as_ref().map(|y| (y.current_auto_exposure, y.auto_exposure_limits()));
+        #[cfg(not(all(windows, not(feature = "backend-wgpu"))))]
+        None
     }
 
     /// The old YEBIS's teardown, which the game does before the screen is resized.
@@ -201,6 +217,8 @@ impl CameraForwardYebis {
             self.parameters_updated = true;
             if let Some(yebis) = self.yebis.as_mut() {
                 yebis.shaft_length_one = self.forward.base.triple.is_some();
+                yebis.use_auto_exposure_limits = self.use_auto_exposure_limits;
+                yebis.auto_exposure_target = self.auto_exposure_target;
             }
         }
         self.render_apply_effect(graphics, scene, blurred, unblurred, root, dt);

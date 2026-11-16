@@ -4,7 +4,7 @@
 - Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern).
 - Step 2.2 done: #34 logf ported.
 - Step 2.3 done: #54 qsort ported.
-- Step 2.4: #17, #11, #7, #12, #13, #15 done. Next: #16, #24.
+- Step 2.4 done: #17, #11, #7, #12, #13, #15, #16, #24. Next: step 2.5, #8.
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -52,6 +52,19 @@
   scene (`CarAvatar::wheel_node_position`) right before the GUI draws, not the drawn wheels'
   matrices. render_oracle's `app_suspension` builds its own link, so this glue is checked by
   the build only.
+- **#16 auto exposure to the apps**: YEBIS keeps `currentAutoExposure` as
+  `CameraForwardYebis::setPostProcessing` 0x140025080 does (the tone map's exposure, or
+  `GetAutoExposureAdjusted` with auto exposure on), uses 0..10 instead of the filter's
+  MIN / MAX while `useAutoExposureLimits` is off, and the middle grey from the HDR app's
+  target once the app moved it. The renderer hands the current value and the filter's
+  MIN / MAX / TARGET to the HDR and camera editor apps' link before the GUI updates and
+  takes the limits switch and target back after it draws. The apps themselves were already
+  proven against the game with these values scripted (render_oracle `gui_ac_apps`); the
+  YEBIS row r23_09 stays IDENTICAL (defaults unchanged).
+- **#24 AUTOEXP quit**: case 9 of the calibration now ends the process with `exit(2)`
+  (`SimAction::Exit(2)`) when the run was started from assetto_corsa.ini's AUTOEXP, as
+  FormCamera::render 0x1402f6ff0 does; the page stops its loop instead. Checked by the build
+  only (a live run takes 9 × 3 s levels with YEBIS converging).
 
 # Task S2 — the shortcut sweep
 
@@ -102,7 +115,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 13 | `crates/rustyac-game/src/render/ac.rs:1842` | the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ | unreachable (S2b) | the view's body and tyre matrices are physicsState's, the replayed ones in a replay. |
 | 14 | `crates/rustyac-game/src/render/ac.rs:1882` | the statistics apps get no frame numbers on wgpu (the page has no clock in | known gap | browser only. |
 | 15 | `crates/rustyac-game/src/render/gui_apps.rs:621` | the wheels' drawn matrices stand for the wheel nodes' world matrices | ported (S2b) | the wheel nodes' world matrices, read from the scene before the GUI draws. |
-| 16 | `crates/rustyac-game/src/render/gui_apps.rs:760` | YEBIS's current auto exposure and the filter's [AUTO_EXPOSURE] limits are not handed to the HDR and camera editor apps (0) | known gap | HDR app: FormHDR::render 0x14032af90 graphs the camera's currentAutoExposure and the filter's limits; the port's link has 0 (needs YebisPP::updatePP readback). |
+| 16 | `crates/rustyac-game/src/render/gui_apps.rs:760` | YEBIS's current auto exposure and the filter's [AUTO_EXPOSURE] limits are not handed to the HDR and camera editor apps (0) | ported (S2b) | HDR app: FormHDR::render 0x14032af90 graphs the camera's currentAutoExposure and the filter's limits; the port's link has 0 (needs YebisPP::updatePP readback). |
 | 17 | `crates/rustyac-game/src/shm.rs:277` | written once as the replay starts, not every frame; the | ported (S2b) | the page is written every drawn frame of a replay, from the replayed car. |
 | 18 | `crates/rustyac-game/src/view.rs:23` | a car with more [WING_n] + [FIN_n] shows only the first 12 in the Wings app; raise if one appears | ported | FormWings::render 0x1402edff0 draws every wing; the most [WING_n]+[FIN_n] among installed cars is 23 (vrc_formula_alpha_2025): MAX_WINGS 12 -> 32. |
 | 19 | `crates/rustyac-game/src/view.rs:1054` | an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted | known gap | setup debug app for an online remote car. |
@@ -110,7 +123,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 21 | `crates/rustyac-gui/src/app_ai.rs:202` | the 3D lines of the render-finished handler (the line, the pit lane, the sides) are not drawn, port FormAI::re | known gap | AI app's 3D lines. |
 | 22 | `crates/rustyac-gui/src/app_ai.rs:301` | drivetrain.ini's AUTO_SHIFTER copy for a loose unencrypted | known gap | AI app SAVE: drivetrain.ini AUTO_SHIFTER copy for a loose unencrypted car. |
 | 23 | `crates/rustyac-gui/src/app_ai.rs:403` | the recorder's side splines are empty here (the game fills them only when side_l/r.csv are newer than the line | unreachable | content: 10 installed tracks have side_l.csv, none newer than fast_lane.ai (the recorder writes the line, so it stays newer). |
-| 24 | `crates/rustyac-gui/src/app_camera_editor.rs:847` | the game quits (exit(2)) after a run started from assetto_corsa.ini's AUTOEXP; rustyAC goes on | known gap | FormCamera::render 0x1402f6ff0 case 9: `if (isByButton == false) exit(2)`; reachable only once #16 gives the link the live auto exposure (with 0 the run never finishes), so it comes with #16. |
+| 24 | `crates/rustyac-gui/src/app_camera_editor.rs:847` | the game quits (exit(2)) after a run started from assetto_corsa.ini's AUTOEXP; rustyAC goes on | ported (S2b) | FormCamera::render 0x1402f6ff0 case 9: `if (isByButton == false) exit(2)`; reachable only once #16 gives the link the live auto exposure (with 0 the run never finishes), so it comes with #16. |
 | 25 | `crates/rustyac-gui/src/app_suspension.rs:63` | the game's susGL is one static for every instance; one app is ever made | unreachable | one caller, crates/rustyac-game/src/render/gui_apps.rs (one app per name). |
 | 26 | `crates/rustyac-gui/src/time_attack.rs:138` | the game leaves the text unwritten when no time is left (never drawn so) | known gap | game fault: the frame after Still->On, timeLeft is still 0 and timeToTimeAttackString 0x1401be000 formats an uninitialised buffer; rustyAC shows 0.000". |
 | 27 | `crates/rustyac-launcher/src/files.rs:233` | the clock is a counter (no wall clock in wasm32-unknown-unknown); only the | known gap | browser: page-written files' dates come from a counter. |

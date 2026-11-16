@@ -314,7 +314,7 @@ impl GuiLoop {
                         f5.esc_mode = on;
                     }
                 }
-                SimAction::Shutdown => self.exit = true,
+                SimAction::Shutdown | SimAction::Exit(_) => self.exit = true,
                 // (the page has no AC replay and no other car to watch; the rest are the
                 // sound's, the chat's and the referee's)
                 _ => {}

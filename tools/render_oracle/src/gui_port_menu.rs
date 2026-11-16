@@ -126,6 +126,7 @@ pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
             SimAction::GoToSpawnPosition(name) => action(format!("goToSpawnPosition {name}")),
             SimAction::StartReplayMode => action("startReplayMode 0".into()),
             SimAction::Shutdown => action("shutdown".into()),
+            SimAction::Exit(code) => action(format!("exit {code}")),
             SimAction::SendVote { kind, value, guid } => action(format!("sendVote {kind} {} {guid}", value as u8)),
             SimAction::SendChat(text) => {
                 action(format!("sendChat {text}"));

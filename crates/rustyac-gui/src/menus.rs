@@ -64,6 +64,8 @@ pub enum SimAction {
     StartReplayMode,
     /// `Game::shutdown` 0x140242fb0
     Shutdown,
+    /// the CRT's `exit(code)`: the process ends at once, nothing saved
+    Exit(i32),
     /// `ACClient::sendVote(type, value, guid)` 0x140052ba0 (2: kick this car)
     SendVote { kind: i32, value: bool, guid: i32 },
     /// `Sim::setFocusedCarIndex` 0x14019e6b0

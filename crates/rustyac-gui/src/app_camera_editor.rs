@@ -844,7 +844,10 @@ impl App for CameraEditor {
                     save_f1(gui, s);
                     save_f6(gui);
                     s.target_exp = 0.0;
-                    // shortcut (known gap, shortcuts.md #24): the game quits (exit(2)) after a run started from assetto_corsa.ini's AUTOEXP; unreachable here until #16 (the link's auto exposure is 0, so no run gets this far)
+                    // (a run started from assetto_corsa.ini's AUTOEXP, not the button, quits the game)
+                    if !s.is_by_button {
+                        gui.sim.actions.push(crate::menus::SimAction::Exit(2));
+                    }
                     s.is_by_button = false;
                 }
                 _ => {}

@@ -1699,6 +1699,13 @@ pub struct AutoExposure {
     tonemap: f32,       // CPostEffect+0x6f4, the tone map's exposure
 }
 
+impl AutoExposure {
+    /// `IPfxBaseContext::GetAutoExposureAdjusted(-1)` 0x14039bf00: the manager's +0x54.
+    pub fn adjusted(&self) -> f32 {
+        self.value
+    }
+}
+
 impl Default for AutoExposure {
     fn default() -> AutoExposure {
         AutoExposure { frames: [1; 17], lum: [0.18; 17], exposure: [1.0; 17], at: 0, pending: false, since: 0, adjust: 0.0, value: 1.0, rows: 0, current: 0.0, tonemap: 1.0 }
