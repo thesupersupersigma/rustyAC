@@ -9,7 +9,9 @@
 - Step 2.6 done: #22 and #30 ported; #29, #31, #32 stay known gaps (why in their rows).
 - Step 1 done: #20 ported, #42 traced (as the game); #19 is a game fault (traced); the nine
   game faults are in differences.md with `difference (differences.md)` markers; the five
-  browser-only markers say `browser only`. Next: step 3.
+  browser-only markers say `browser only`.
+- Step 3 done: quick lane (one fresh case fixed in the script: the e30 crash replay ran on the
+  set-damage recording; rerun IDENTICAL), clippy every way clean, README gaps in three groups, v0.52.1.
 
 ## Totals
 54 markers: 15 ported, 19 unreachable, 9 game fault, 5 browser only, 6 desktop gap
