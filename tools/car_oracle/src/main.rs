@@ -224,6 +224,14 @@ fn parse_args() -> Result<Args, String> {
                 let (wheel, seconds) = parsed.filter(|(w, t)| (0..4).contains(w) && *t >= 0.0).ok_or(format!("--pop <wheel 0..3>@<seconds>, got {text:?}"))?;
                 game::POP.store(wheel << 32 | (seconds * 333.0).round() as i64, std::sync::atomic::Ordering::Relaxed);
             }
+            "--set-damage" => {
+                // Task S2b: <zone 0..4>@<seconds>=<level>, the console's bodyDamageLevel job
+                let text = value()?;
+                let parsed = text.split_once('@').and_then(|(z, rest)| rest.split_once('=').and_then(|(t, v)| Some((z.parse::<i64>().ok()?, t.parse::<f64>().ok()?, v.parse::<f32>().ok()?))));
+                let (zone, seconds, level) = parsed.filter(|(z, t, _)| (0..5).contains(z) && *t >= 0.0).ok_or(format!("--set-damage <zone 0..4>@<seconds>=<level>, got {text:?}"))?;
+                game::SET_DAMAGE.store(zone << 32 | (seconds * 333.0).round() as i64, std::sync::atomic::Ordering::Relaxed);
+                game::SET_DAMAGE_LEVEL.store(level.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
             "--hash-only" => a.hash_only = true,
             "--audio-tape" => a.audio_tape = true,
             "--replay" => a.replay = true,

@@ -135,14 +135,22 @@ pub fn carry_out(gui: &mut super::gui::GameGui) -> bool {
                 "steerAssist" => gui.apps.ffb_jobs.push(SetupJob::SetSteerAssist { value }),
                 // the physics thread's (jobs, so a drive's input file keeps them)
                 "restrictor" => gui.apps.ffb_jobs.push(SetupJob::SetRestrictor { value }),
-                "engineDamageLevel" => gui.apps.ffb_jobs.push(SetupJob::SetEngineLife { value }),
+                // lambda_d21707 / lambda_e938ee: compared on this thread with the frame's
+                // physicsState, the job then sets the car's value as it is
+                "engineDamageLevel" => {
+                    if gui.input.cars.first().is_some_and(|car| value < car.engine_life_left) {
+                        gui.apps.ffb_jobs.push(SetupJob::SetEngineLife { value });
+                    }
+                }
                 "aiSteerGain" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 0, value, car: 0 }),
                 "aiPush" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 1, value, car: 0 }),
                 "aiLookAhead" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 2, value, car: 0 }),
                 "AUTOFLIP_RECOVERY" => gui.apps.ffb_jobs.push(SetupJob::SetAutoflipRecovery { on: value != 0.0 }),
                 n if n.starts_with("bodyDamageLevel") => {
                     let zone = (n.as_bytes()[15] - b'0') as usize;
-                    gui.apps.ffb_jobs.push(SetupJob::SetDamageLevel { zone, value });
+                    if gui.input.cars.first().is_some_and(|car| value > car.damage_zone_level[zone]) {
+                        gui.apps.ffb_jobs.push(SetupJob::SetDamageLevel { zone, value });
+                    }
                 }
                 // the scene's (the renderer's next frame)
                 _ => gui.apps.console_sets.push((name, value)),

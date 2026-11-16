@@ -455,6 +455,11 @@ fn apply_jobs(chassis: &mut replay::Runner, recording: &Recording, step: usize) 
         // Task 22b: the oracle burst a tyre before this step (what Tyre::stepPuncture does)
         chassis.tyres[recording.i(step, "script.pop") as usize - 1].status.inflation = 0.0;
     }
+    if recording.has("script.damageZone") && recording.i(step, "script.damageZone") != 0 {
+        // Task S2b: the console's bodyDamageLevelN job (Car::setDamageLevel(float, int))
+        let job = rustyac_physics::car::setup::SetupJob::SetDamageLevel { zone: recording.i(step, "script.damageZone") as usize - 1, value: recording.f(step, "script.damageLevel") };
+        chassis.apply_setup_job(&job);
+    }
     if recording.has("script.resetObjects") && recording.i(step, "script.resetObjects") != 0 {
         // the job of a new session: the loose objects back where the track has them
         chassis.core.reset_track_objects();

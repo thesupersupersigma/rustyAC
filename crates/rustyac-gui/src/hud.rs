@@ -91,8 +91,8 @@ pub struct HudCar {
     pub real_time_position: i32,
     /// `ACClient::getPing` (online)
     pub ping: i32,
-    /// `physicsState.damageZoneLevel`: front, rear, left, right
-    pub damage_zone_level: [f32; 4],
+    /// `physicsState.damageZoneLevel`: front, rear, left, right, centre
+    pub damage_zone_level: [f32; 5],
     /// `physicsState.engineLifeLeft`
     pub engine_life_left: f32,
     /// the float at `physicsState` + 0x7f4 the damage picture reads as the gearbox's health

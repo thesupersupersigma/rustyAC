@@ -54,6 +54,7 @@ const VA_DWORLDSTEP: usize = 0x1_4034_04c0; // dWorldStep(dWorldID, float)
 const VA_STEP_MEMORY_ESTIMATE: usize = 0x1_4035_0000; // dxEstimateStepMemoryRequirements
 const VA_STEP_STAGE0_JOINTS: usize = 0x1_4035_0b80; // dxStepIsland_Stage0_Joints (runs right after gravity and the gyroscopic torque were added)
 const VA_CAR_SET_DAMAGE_LEVEL: usize = 0x1_4027_5b20; // Car::setDamageLevel(float)
+const VA_CAR_SET_DAMAGE_ZONE: usize = 0x1_4027_5b50; // Car::setDamageLevel(float, int)
 const VA_PHYSICS_ENGINE_SET_WIND: usize = 0x1_4026_45a0; // PhysicsEngine::setWind(Speed, float)
 // Task 15: the session's conditions and a saved setup
 const VA_KS_RAND_RANGE: usize = 0x1_4003_3770; // float ksRand(float min, float max)
@@ -634,6 +635,9 @@ static STATE: Global = Global(UnsafeCell::new(None));
 
 /// `--pop <wheel>@<seconds>`: wheel << 32 | step, or -1.
 pub static POP: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+/// `--set-damage <zone>@<seconds>=<level>`: zone << 32 | step, or -1; the level's bits.
+pub static SET_DAMAGE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+pub static SET_DAMAGE_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn state() -> &'static mut State {
     unsafe { (*STATE.0.get()).as_mut().expect("the game called a hook before the world was built") }
@@ -2446,6 +2450,16 @@ impl<'a> World<'a> {
         if let Some(wheel) = popped {
             unsafe { wr(self.car, CAR_TYRES + wheel * TYRE_SIZE + T_STATUS + 0x90, 0.0f32) };
         }
+        // Task S2b, `--set-damage`: the job the console's bodyDamageLevelN posts (lambda_f095d67)
+        let set_damage = SET_DAMAGE.load(std::sync::atomic::Ordering::Relaxed);
+        let damage_set = if set_damage >= 0 && (set_damage & 0xffff_ffff) as usize == self.step_index { Some((set_damage >> 32) as i32) } else { None };
+        let damage_level = f32::from_bits(SET_DAMAGE_LEVEL.load(std::sync::atomic::Ordering::Relaxed));
+        if let Some(zone) = damage_set {
+            unsafe {
+                let set: extern "C" fn(*mut u8, f32, i32) = std::mem::transmute(self.acs.va(VA_CAR_SET_DAMAGE_ZONE));
+                set(self.car, damage_level, zone);
+            }
+        }
         if controls.reset_objects {
             // the job a new session queues for the start of the next step
             unsafe { crate::track::reset_objects(self.acs, &self.game_objects) };
@@ -2563,6 +2577,10 @@ impl<'a> World<'a> {
             self.emit(&mut row, &controls);
             if pop >= 0 {
                 row.i("script.pop", popped.map_or(0, |wheel| wheel as i32 + 1));
+            }
+            if set_damage >= 0 {
+                row.i("script.damageZone", damage_set.map_or(0, |zone| zone + 1));
+                row.f("script.damageLevel", damage_level);
             }
             if let Some(track) = state().game_track {
                 if !self.game_objects.is_empty() {

@@ -1,3 +1,20 @@
+# Task S2b — the small shortcuts as the game does
+
+## Resume here
+- Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern). Next: step 2.2, #34 logf.
+
+## Ported in this task
+- **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
+  0x140195fb0 compares the new level with the frame's `physicsState.damageZoneLevel[i]` on the
+  GUI thread (`level <= value && value != level`) and only then posts the job, whose body
+  `Car::setDamageLevel(float, int)` 0x140275b50 sets the zone without comparing;
+  `lambda_d21707` 0x140195e40 does the same for the engine (`value < engineLifeLeft`, the job sets
+  `Engine::lifeLeft`). The port compared inside the job; now `console.rs` compares with the
+  frame's `HudCar` (all five zones) and the job sets. Proof: `car_oracle run --track spa --collide
+  --scenario spa_crash --car bmw_m3_e30 --set-damage 0@30=1` calls the game's job 6.6 s after
+  the crash, front zone 92.9 → 1.0 (the old port refused it); `chassis_compare run` 100 %
+  (12001/12001). In the `fresh` area (`crash bmw_m3_e30`).
+
 # Task S2 — the shortcut sweep
 
 ## Resume here
@@ -69,7 +86,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 35 | `crates/rustyac-math/src/lib.rs:471` | base 0.5 only and no rare path (y within +-100), the light shafts' | unreachable | only caller yebis.rs `powf4_half(k*a)` keeps the argument under ~30 < 100. |
 | 36 | `crates/rustyac-net/src/laps.rs:67` | a sector the car missed reads 0 here; the game reads past its list then | known gap | game fault. |
 | 37 | `crates/rustyac-physics/src/ai/car_ext.rs:166` | worked out again for each session, the same car on the same track). | unreachable | the result depends only on the car's and track's files, so working it out again gives the same values. |
-| 38 | `crates/rustyac-physics/src/car/chassis.rs:1808` | the game compares with the frame's snapshot of the level on the GUI | known gap | damage level compared one step later at most. |
+| 38 | `crates/rustyac-physics/src/car/chassis.rs:1808` | the game compares with the frame's snapshot of the level on the GUI | ported (S2b) | compared on the GUI thread with the frame's level, the job sets. |
 | 39 | `crates/rustyac-physics/src/race/shm.rs:306` | the game's list is empty unless all four tyres have as many compounds; never so in Kunos cars) | unreachable | every installed car's tyres.ini (205 cars: cardata, extracted, loose) has equal FRONT/REAR counts. |
 | 40 | `crates/rustyac-physics/src/track/ai_line.rs:812` | keeps every recorded lap's lines until the track goes (a few MB a lap), drop old ones once no reader can hold  | unreachable | memory only, nothing seen. |
 | 41 | `crates/rustyac-python/src/ac.rs:294` | the game returns a tuple of two empty items here (Python crashes on it) | known gap | game fault (Python crash). |

@@ -560,7 +560,7 @@ impl GameGui {
             car.connected = !view.disconnected;
             car.body_matrix = Mat44f { m: view.body };
             car.world_position = [view.body[3][0], view.body[3][1], view.body[3][2]];
-            car.damage_zone_level = [view.damage[0], view.damage[1], view.damage[2], view.damage[3]];
+            car.damage_zone_level = view.damage;
             car.sus_damage = view.suspension_damage;
             car.engine_life_left = view.engine_life;
         }
