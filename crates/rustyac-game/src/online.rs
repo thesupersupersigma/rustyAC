@@ -373,12 +373,6 @@ fn ignore_result_teleport(root: Option<std::path::PathBuf>) -> bool {
 }
 
 /// The short name of a car's `tyres.ini [COMPOUND_DEFAULT] INDEX` compound (front).
-fn default_compound(data_path: &Path) -> String {
-    let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&data_path.join("tyres.ini")) else { return String::new() };
-    let index = ini.get_int("COMPOUND_DEFAULT", "INDEX").unwrap_or(0);
-    ini.get_string(&if index == 0 { "FRONT".to_string() } else { format!("FRONT_{index}") }, "SHORT_NAME")
-}
-
 fn mirror_session(info: &rustyac_net::handshake::SessionInfo, start: f64) -> rustyac_physics::race::Session {
     rustyac_physics::race::convert_remote_session(&rustyac_physics::race::RemoteSession {
         name: info.name.clone(),
@@ -433,10 +427,9 @@ impl OnlineSession {
     pub fn start_results(&mut self, sectors: usize) {
         let cars = 1 + self.net.cars.iter().map(|car| car.guid as usize).max().unwrap_or(0);
         self.laps = rustyac_net::laps::SessionLaps::new(cars, sectors);
+        // (a remote CarAvatar has no physics car: getCurrentCompoundShortName 0x1400d3200 returns its
+        // externalTyreCompoundShortName, empty until the car's TYRE_COMPOUND message)
         self.compounds = vec![String::new(); cars];
-        for (car, remote) in self.net.cars.iter().zip(&self.remote) {
-            self.compounds[car.guid as usize] = default_compound(&remote.data_path);
-        }
         let map = self.car_numbers();
         let current = &self.net.client.current_session;
         self.laps.new_session_results(current.kind == session_type::RACE, &current.grid, |slot| number_of(&map, slot));
@@ -798,8 +791,7 @@ impl OnlineSession {
                         self.laps.sector_split(car, *sector as usize, *time);
                     }
                 }
-                // shortcut (known gap, shortcuts.md #8): another car's compound is the one it last told of (tyres.ini's
-                // default before), not read from its CarAvatar; upgrade if the tyres differ
+                // ACClient::onMessageTCP 0x50: lambda_84f96568 sets the CarAvatar's externalTyreCompoundShortName
                 Event::Message(Message::TyreCompound { slot, compound }) => {
                     if let Some(car) = number_of(&self.car_numbers(), *slot).filter(|car| *car != 0) {
                         if let Some(own) = self.compounds.get_mut(car) {

@@ -4,7 +4,8 @@
 - Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern).
 - Step 2.2 done: #34 logf ported.
 - Step 2.3 done: #54 qsort ported.
-- Step 2.4 done: #17, #11, #7, #12, #13, #15, #16, #24. Next: step 2.5, #8.
+- Step 2.4 done: #17, #11, #7, #12, #13, #15, #16, #24.
+- Step 2.5 done: #8. Next: step 2.6 (#22, #29–#32).
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -65,6 +66,13 @@
   (`SimAction::Exit(2)`) when the run was started from assetto_corsa.ini's AUTOEXP, as
   FormCamera::render 0x1402f6ff0 does; the page stops its loop instead. Checked by the build
   only (a live run takes 9 × 3 s levels with YEBIS converging).
+- **#8 another car's compound**: traced. `ACClient::onMessageTCP` 0x50 posts lambda_84f96568,
+  which sets the remote CarAvatar's `externalTyreCompoundShortName` (+0x100); a remote car has
+  no physics car (`Sim::addNetCar` 0x140197c30 makes a NetCarStateProvider), so
+  `getCurrentCompoundShortName` 0x1400d3200 returns that string, and `onRemoteLapCompleted`
+  0x14004f470 writes it into the lap. The constructor leaves it empty: the port now starts
+  every remote car with "" instead of tyres.ini's default, and keeps the last told name as
+  before. Checked by the build (the multiplayer goldens carry no lap compounds of remote cars).
 
 # Task S2 — the shortcut sweep
 
@@ -107,7 +115,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 5 | `crates/rustyac-game/src/input/keyboard.rs:420` | the game never stops when no point | known gap | game fault: `controls.ini [KEYBOARD]` look-ahead loops forever when no line point is ahead (or NaN); rustyAC stops after one lap. |
 | 6 | `crates/rustyac-game/src/input_file.rs:530` | an input file does not carry the special event's goals, add a key when a proof replays one | unreachable | the input file is rustyAC's own. |
 | 7 | `crates/rustyac-game/src/online.rs:206` | refreshed with the rest of this state (every 64 steps), not every frame | ported (S2b) | the error vector is published every physics step. |
-| 8 | `crates/rustyac-game/src/online.rs:792` | another car's compound is the one it last told of (tyres.ini's | known gap | where acs.exe's remote CarAvatar compound comes from was not traced (ACClient onMessageTCP); the last told compound is very likely the same. |
+| 8 | `crates/rustyac-game/src/online.rs:792` | another car's compound is the one it last told of (tyres.ini's | ported (S2b) | where acs.exe's remote CarAvatar compound comes from was not traced (ACClient onMessageTCP); the last told compound is very likely the same. |
 | 9 | `crates/rustyac-game/src/online.rs:970` | options.ini's IGNORE_RESULT_TELEPORT is not read and there is no fade; add them if a player asks. | known gap | IGNORE_RESULT_TELEPORT now read as `ACClient::ACClient` 0x14003a2c0 does (ported); the 4 s fade before the teleport is not. |
 | 10 | `crates/rustyac-game/src/render/ac.rs:43` | std's clock panics in the browser, so the load and frame times read 0 there; use the | known gap | browser: load and frame times are 0 (no clock in the page). |
 | 11 | `crates/rustyac-game/src/render/ac.rs:1745` | set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if t | ported (S2b) | set once per spinner change, as `updateForces` does. |
