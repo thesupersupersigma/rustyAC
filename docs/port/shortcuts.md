@@ -1,7 +1,8 @@
 # Task S2b — the small shortcuts as the game does
 
 ## Resume here
-- Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern). Next: step 2.2, #34 logf.
+- Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern).
+- Step 2.2 done: #34 logf ported. Next: step 2.3, #54 qsort.
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -14,6 +15,13 @@
   --scenario spa_crash --car bmw_m3_e30 --set-damage 0@30=1` calls the game's job 6.6 s after
   the crash, front zone 92.9 → 1.0 (the old port refused it); `chassis_compare run` 100 %
   (12001/12001). In the `fresh` area (`crash bmw_m3_e30`).
+- **#34 logf**: `MSVCR120.dll`'s `logf`, FMA3 path 0x180094560, ported into `rustyac_math::pure`
+  instruction by instruction (single precision, `vfmadd…ss` as `f32::mul_add`, three 129-entry
+  tables from 0x1800c0030 / 0x1800c0240 / 0x1800c0450); the pure backend (the browser, and a
+  desktop without the DLL) no longer uses Rust's `ln`. Proof: `math_proof one logf`, every 32-bit
+  pattern (4,294,967,296) identical to the DLL; YEBIS's auto exposure row (`r23_09`, `--track
+  spa --view chase --post`, `RENDER_ORACLE_YEBIS=1`) with `RUSTYAC_MATH=pure`: command log and
+  pixels IDENTICAL.
 
 # Task S2 — the shortcut sweep
 
@@ -82,7 +90,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 31 | `crates/rustyac-launcher/src/online.rs:176` | redirects are not followed (.NET follows them), nothing redirects here. | known gap | redirects. |
 | 32 | `crates/rustyac-launcher/src/online.rs:311` | dotted IPv4 only, IPAddress.Parse takes more forms, the theme sends the lobby's dotted ones | known gap | only dotted IPv4 (the lobby's); a hand-typed other form IPAddress.Parse takes is refused. |
 | 33 | `crates/rustyac-launcher/src/profile.rs:9` | every file is read as ANSI bytes, where Windows reads a file as UTF-16 when it | unreachable | scan: 5090 .ini under the install + Documents\Assetto Corsa, none UTF-16 with BOM. |
-| 34 | `crates/rustyac-math/src/lib.rs:198` | the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a | known gap | logf 1 ulp off; no proof shows it. |
+| 34 | `crates/rustyac-math/src/lib.rs:198` | the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a | ported (S2b) | `pure::logf`, all 2^32 inputs identical to the DLL. |
 | 35 | `crates/rustyac-math/src/lib.rs:471` | base 0.5 only and no rare path (y within +-100), the light shafts' | unreachable | only caller yebis.rs `powf4_half(k*a)` keeps the argument under ~30 < 100. |
 | 36 | `crates/rustyac-net/src/laps.rs:67` | a sector the car missed reads 0 here; the game reads past its list then | known gap | game fault. |
 | 37 | `crates/rustyac-physics/src/ai/car_ext.rs:166` | worked out again for each session, the same car on the same track). | unreachable | the result depends only on the car's and track's files, so working it out again gives the same values. |

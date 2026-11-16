@@ -176,6 +176,9 @@ unsafe extern "C" fn pure_atan2f(y: f32, x: f32) -> f32 {
 unsafe extern "C" fn pure_powf(x: f32, y: f32) -> f32 {
     pure::powf(x, y)
 }
+unsafe extern "C" fn pure_logf(x: f32) -> f32 {
+    pure::logf(x)
+}
 unsafe extern "C" fn pure_sin(x: f64) -> f64 {
     pure::sin(x)
 }
@@ -195,9 +198,7 @@ const PURE: Crt = Crt {
     // (the DLL's log10f is not rewritten: its one reader rounds the result to a whole
     // number, the wheel speeds of a multiplayer car update)
     log10f: std_log10f,
-    // shortcut (known gap, shortcuts.md #34): the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a
-    // last-bit difference moves the exposure by one ulp); port it if a pure proof shows one
-    logf: std_logf,
+    logf: pure_logf,
     sin: pure_sin,
     // (the DLL's double-precision cosine is not rewritten: only the version 1 flames' wobble
     // reads it, on a desktop that has the DLL)

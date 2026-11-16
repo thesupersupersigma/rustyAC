@@ -6,7 +6,7 @@
 //! ```text
 //! math_proof all [--threads N] [--pairs N] [--out <file.md>]   every check, a results table
 //! math_proof one <function> [...]                             single functions: sinf cosf tanf
-//!                                                             expf asinf acosf atanf atan2f
+//!                                                             expf logf asinf acosf atanf atan2f
 //!                                                             powf sin, or the sweeps `edges`
 //! math_proof std                                              the same against Rust's own
 //!                                                             maths (the UCRT on Windows)
@@ -73,7 +73,7 @@ mod dll {
 
     #[derive(Clone, Copy)]
     pub struct Dll {
-        pub one: [(&'static str, F1); 7],
+        pub one: [(&'static str, F1); 8],
         pub atan2f: F2,
         pub powf: F2,
         pub sin: D1,
@@ -100,6 +100,7 @@ mod dll {
                     ("cosf", f1(c"cosf")),
                     ("tanf", f1(c"tanf")),
                     ("expf", f1(c"expf")),
+                    ("logf", f1(c"logf")),
                     ("asinf", f1(c"asinf")),
                     ("acosf", f1(c"acosf")),
                     ("atanf", f1(c"atanf")),
@@ -117,11 +118,12 @@ mod dll {
 
 type Pure1 = fn(f32) -> f32;
 
-const PURE_ONE: [(&str, Pure1); 7] = [
+const PURE_ONE: [(&str, Pure1); 8] = [
     ("sinf", pure::sinf),
     ("cosf", pure::cosf),
     ("tanf", pure::tanf),
     ("expf", pure::expf),
+    ("logf", pure::logf),
     ("asinf", pure::asinf),
     ("acosf", pure::acosf),
     ("atanf", pure::atanf),
@@ -990,6 +992,9 @@ mod rust_std {
     pub unsafe extern "C" fn expf(x: f32) -> f32 {
         x.exp()
     }
+    pub unsafe extern "C" fn logf(x: f32) -> f32 {
+        x.ln()
+    }
     pub unsafe extern "C" fn asinf(x: f32) -> f32 {
         x.asin()
     }
@@ -1017,11 +1022,12 @@ fn compare_std(args: &[String]) {
     let pair_count: u64 = option(args, "--pairs").unwrap_or(400_000_000);
     println!("Rust std (the UCRT here) against rustyac_math::pure, {threads} threads");
     let mut out = String::from("| Function | Inputs | Count | Result |\n|---|---|---|---|\n");
-    let one: [(&str, F1); 7] = [
+    let one: [(&str, F1); 8] = [
         ("sinf", rust_std::sinf),
         ("cosf", rust_std::cosf),
         ("tanf", rust_std::tanf),
         ("expf", rust_std::expf),
+        ("logf", rust_std::logf),
         ("asinf", rust_std::asinf),
         ("acosf", rust_std::acosf),
         ("atanf", rust_std::atanf),
@@ -1088,9 +1094,9 @@ fn main() {
                 .take_while(|a| !a.starts_with("--"))
                 .cloned()
                 .collect();
-            const KNOWN: [&str; 11] = [
-                "sinf", "cosf", "tanf", "expf", "asinf", "acosf", "atanf", "atan2f", "powf", "sin",
-                "edges",
+            const KNOWN: [&str; 12] = [
+                "sinf", "cosf", "tanf", "expf", "logf", "asinf", "acosf", "atanf", "atan2f", "powf",
+                "sin", "edges",
             ];
             if only.is_empty() || only.iter().any(|name| !KNOWN.contains(&name.as_str())) {
                 eprintln!("one: give one or more of {}", KNOWN.join(" "));

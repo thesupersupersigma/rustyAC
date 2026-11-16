@@ -2,26 +2,28 @@
 // Ported from MSVCR120.dll 12.0.21005.1 (the Microsoft Visual C++ 2013 runtime Assetto Corsa
 // imports its maths from; the float functions in it are AMD's LibM).
 
-//! `sinf cosf tanf expf asinf acosf atanf atan2f powf` and the double `sin` of `MSVCR120.dll`
-//! in plain Rust, read from the DLL's machine code instruction by instruction, so a target
+//! `sinf cosf tanf expf logf asinf acosf atanf atan2f powf` and the double `sin` of
+//! `MSVCR120.dll` in plain Rust, read from the DLL's machine code instruction by instruction, so a target
 //! that cannot load the DLL (the browser) still gets AC's exact bits.
 //!
-//! **Which path.** `sinf`, `cosf`, `tanf`, `expf`, `powf` and `sin` start with
+//! **Which path.** `sinf`, `cosf`, `tanf`, `expf`, `logf`, `powf` and `sin` start with
 //! `cmp [__use_fma3_lib], 0`: the runtime sets that flag when the CPU has FMA3 and the OS saves
 //! the AVX state, and `acs.exe` never calls `_set_FMA3_enable`. So on every CPU since about
 //! 2013 (Haswell / Piledriver) the game runs the FMA3 versions, and those are what is ported
 //! here. The four inverse functions are compiled C with a single path.
 //!
-//! **Fused multiply-add.** Where the DLL executes `vfmadd…sd` this file calls
-//! [`f64::mul_add`], which is one correctly rounded operation on every target (an instruction
-//! where there is one, exact software arithmetic in wasm). Nothing else here may be fused or
+//! **Fused multiply-add.** Where the DLL executes `vfmadd…sd` (`…ss`) this file calls
+//! [`f64::mul_add`] ([`f32::mul_add`]), which is one correctly rounded operation on every
+//! target (an instruction where there is one, exact software arithmetic in wasm). Nothing else here may be fused or
 //! reordered: every `a * b + c` written with separate operators is separate in the DLL too.
 //!
 //! **Proof.** `tools/math_proof` runs every one of the 2^32 inputs of each one-argument
 //! function, and random plus special pairs for `atan2f` / `powf`, against the real DLL
 //! (results: `docs/port/web.md`).
 
-use super::pure_tables::{ATAN_JBY256, LOG_256, LOG_F_INV, PIBITS, TWO_TO_JBY64};
+use super::pure_tables::{
+    ATAN_JBY256, LOGF_INV, LOGF_LEAD, LOGF_TAIL, LOG_256, LOG_F_INV, PIBITS, TWO_TO_JBY64,
+};
 
 const SIGN64: u64 = 0x8000_0000_0000_0000;
 const ABS64: u64 = 0x7fff_ffff_ffff_ffff;
@@ -413,6 +415,61 @@ pub fn expf(x: f32) -> f32 {
     let value = fma(q, f, f);
     let scale = d((m as u32 as u64).wrapping_add(0x3ff) << 52);
     (value * scale) as f32
+}
+
+/// `vfmadd…ss`: `a * b + c` with one rounding, in single precision.
+#[inline(always)]
+fn fma32(a: f32, b: f32, c: f32) -> f32 {
+    a.mul_add(b, c)
+}
+
+#[inline(always)]
+fn f(bits: u32) -> f32 {
+    f32::from_bits(bits)
+}
+
+/// `logf`, the FMA3 path (0x180094560), all in single precision. The error cases return what
+/// the DLL hands its error handler (0x1800a21fc): -inf for a zero, the indefinite NaN for a
+/// negative number or -inf, the NaN made quiet for a NaN.
+pub fn logf(x: f32) -> f32 {
+    let ux = x.to_bits();
+    if ux & INF32 == INF32 {
+        if ux == INF32 {
+            return x;
+        }
+        return f(if ux == 0xff80_0000 { 0xffc0_0000 } else { ux | 0x0040_0000 });
+    }
+    if x <= 0.0 {
+        return f(if x == 0.0 { 0xff80_0000 } else { 0xffc0_0000 });
+    }
+    // (`psrld` then `psubd`: the exponent without its bias, as a float)
+    let mut e = ((ux >> 23) as i32 - 127) as f32;
+    let mut bits = ux;
+    if e == -127.0 {
+        // a denormal: scaled into a normal number's mantissa, its exponent read again
+        let m = (f(ux & 0x007f_ffff | 0x3f80_0000) - 1.0).to_bits();
+        e = ((m >> 23) as i32 - 253) as f32;
+        bits = m & 0x007f_ffff;
+    }
+    let near = x - 1.0;
+    let idx_bits = (bits & 0x007f_0000) + ((bits & 0x8000) << 1);
+    if near.abs() < f(0x3d80_0000) {
+        // within 1/16 of 1
+        let u = near / (2.0 + near);
+        let h = near * u;
+        let u2 = u + u;
+        let v = u2 * u2;
+        let w = u2 * v;
+        let p = fma32(v, f(0x3c4c_cccd), f(0x3daa_aaab));
+        return near + fma32(p, w, -h);
+    }
+    let j = (idx_bits >> 16) as usize;
+    let m = f(bits & 0x007f_ffff | 0x3f00_0000);
+    let r = (f(idx_bits | 0x3f00_0000) - m) * f(LOGF_INV[j]);
+    let q = fma32(f(0x3eaa_aaab), r, 0.5);
+    let s = fma32(q, r * r, r);
+    let tail = fma32(f(0x3805_fdf4), e, -s) + f(LOGF_TAIL[j]);
+    fma32(f(0x3f31_7000), e, f(LOGF_LEAD[j])) + tail
 }
 
 /// What `addss x, x` leaves for a NaN `x` (the DLL's way of returning one): the same NaN, quiet.

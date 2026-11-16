@@ -108,6 +108,8 @@ Windows-only code was put behind `cfg(windows)`, not removed. The desktop still 
   double precision, `atan2f` with a 241-entry table.
 - The large-argument reduction multiplies the mantissa by 192 bits of 2/π picked from a table by the exponent
   (integer arithmetic). `cosf` and `sin` call a function for it, `sinf` and `tanf` have a shorter copy inline.
+- `logf` (added in v0.52.1) is single precision throughout, `vfmadd…ss`, with three 129-entry tables; its
+  `math_proof one logf` run: every 32-bit pattern, 4,294,967,296 inputs, identical (36 s, 8 threads).
 - Oddities that are copied as they are: `expf(-inf)` returns `-inf` (not 0); `expf` of a NaN returns it with
   the sign cleared; `powf(NaN, 0)` is NaN; `powf(-1, -inf)` is -1.
 
