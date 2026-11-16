@@ -6,6 +6,13 @@
   port is ~2 sessions). Super's decision for session 2: the airy disc is **not ported before v1.0**; it is
   accepted, its gate is ported, and a log line says when the game would draw it. Steps 2-4 done, v0.50.0.
 - Next: the custom-filter key tasks after v1.0 (plan at the end of this section).
+- Commits: `d39d09b` (step 1 report), `28a7d92` (airy gate + log line, refusals), `005264e` (README, this
+  report), then `chore(release): v0.50.0`.
+- End proofs (re/scratch/taskY7f/end.sh): clippy native, both wasm targets, wgpu, web: clean;
+  render_oracle's clippy: the same 41 old errors as Y7e. Sweep 10/10 IDENTICAL, render post rows 141/141
+  IDENTICAL, `run_all.sh --quick` all IDENTICAL but one sound case (FMOD's known crash inside
+  fmod64.dll at frame 1408), IDENTICAL when run again alone. Disk: 27 GB free at start, 29 GB at the end.
+  No new files in the web zip.
 
 ## Step 1: does the airy disc draw?
 
