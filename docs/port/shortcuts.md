@@ -2,7 +2,8 @@
 
 ## Resume here
 - Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern).
-- Step 2.2 done: #34 logf ported. Next: step 2.3, #54 qsort.
+- Step 2.2 done: #34 logf ported.
+- Step 2.3 done: #54 qsort ported. Next: step 2.4 (#17, #11, #7, #16, #24, #12, #13, #15).
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -22,6 +23,13 @@
   pattern (4,294,967,296) identical to the DLL; YEBIS's auto exposure row (`r23_09`, `--track
   spa --view chase --post`, `RENDER_ORACLE_YEBIS=1`) with `RUSTYAC_MATH=pure`: command log and
   pixels IDENTICAL.
+- **#54 qsort**: `MSVCR120.dll`'s `qsort` 0x180077250 (median of three, `shortsort` 0x180077550
+  below nine elements, an explicit stack with the bigger half pushed) is `rustyac_math::qsort`,
+  comparison for comparison; the heat shimmer sorts its particles with it and
+  `Callback_QSort_CompareParticleZ_S` 0x1403fe1e0, so particles at the same depth come out in the
+  game's order. Proof: `same_as_the_dll` (20,000 random arrays full of ties against the real
+  DLL's `qsort`, identical) and `ties_in_the_dlls_order` (the DLL's order of one array, on any
+  target); shimmer row `ry3e_01` IDENTICAL.
 
 # Task S2 — the shortcut sweep
 
@@ -110,7 +118,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 51 | `crates/rustyac-render/src/yebis.rs:1610` | rows past the eighth pass would read before the game's table, no shipped star gets there | unreachable | shipped filters: Y7e sweep 10/10 IDENTICAL; custom filters are the README refused-key gap. |
 | 52 | `crates/rustyac-render/src/yebis.rs:2243` | a flat camera's shimmer without CA isn't ported, drawn with CA; port it if a filter needs it | unreachable | as #51. |
 | 53 | `crates/rustyac-render/src/yebis_cb.rs:1657` | the 3x3 program is not ported, the 7-tap one stands in until it is | unreachable | as #51. |
-| 54 | `crates/rustyac-render/src/yebis_heat.rs:155` | msvcr120's qsort is not stable, only particles at the same depth could come out in another order | known gap | msvcr120's qsort is not stable: particles at the same depth may draw in another order. |
+| 54 | `crates/rustyac-render/src/yebis_heat.rs:155` | msvcr120's qsort is not stable, only particles at the same depth could come out in another order | ported (S2b) | `rustyac_math::qsort`, the DLL's algorithm; tested against the DLL with ties. |
 | T1 | `tools/proofs/dumps.sh:30` | files a drive names (a setup .ini) are not in the key; a changed one shows as a difference | tool limit | stated in place |
 | T2 | `tools/proofs/lib.sh:85` | the port crates an oracle links are not in the key (they change every task, the game's | tool limit | stated in place |
 | T3 | `tools/proofs/lib.sh:183` | gives up waiting after 30 min and starts anyway, the rerun alone catches an ERROR | tool limit | stated in place |

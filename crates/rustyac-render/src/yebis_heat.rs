@@ -151,9 +151,8 @@ pub fn setup(elements: &[Element], view: &[f32; 16], frustum: &[f32; 16], p: &Pa
             break;
         }
     }
-    // Callback_QSort_CompareParticleZ_S 0x1403fe1e0: farther first
-    // shortcut (known gap, shortcuts.md #54): msvcr120's qsort is not stable, only particles at the same depth could come out in another order
-    out.sort_by(|a, b| b[2].partial_cmp(&a[2]).unwrap_or(std::cmp::Ordering::Equal));
+    // Callback_QSort_CompareParticleZ_S 0x1403fe1e0: farther first, through msvcr120's qsort
+    rustyac_math::qsort(&mut out, |a, b| if b[2] < a[2] { -1 } else { i32::from(a[2] < b[2]) });
     out
 }
 

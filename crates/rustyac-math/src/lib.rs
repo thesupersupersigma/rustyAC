@@ -33,6 +33,8 @@ use std::sync::OnceLock;
 pub mod pure;
 mod powf4_table;
 mod pure_tables;
+mod qsort;
+pub use qsort::qsort;
 
 /// Which implementation the runtime functions resolve to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
