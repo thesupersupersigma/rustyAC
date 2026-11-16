@@ -310,6 +310,9 @@ pub trait StepSink: Send {
     /// The simulation is paused / running again.
     fn set_paused(&mut self, _paused: bool) {}
 
+    /// Called again and again while the simulation is paused.
+    fn paused_tick(&mut self, _sim: &GameSim) {}
+
     fn finish(&mut self) -> Result<(), String> {
         Ok(())
     }
@@ -453,6 +456,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
             if replay_done {
                 shared.finished.store(true, Ordering::Relaxed);
+            }
+            for sink in &mut sinks {
+                sink.paused_tick(&sim);
             }
             // (paused, Time Attack and Drift skip their frames)
             shared.drawn_frames.lock().unwrap().clear();

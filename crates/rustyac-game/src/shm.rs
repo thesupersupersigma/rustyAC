@@ -29,7 +29,7 @@ use crate::physics_thread::StepSink;
 use crate::sim::GameSim;
 
 use rustyac_physics::race::flags::Flag;
-use rustyac_physics::race::shm::{ac_version, AC_REPLAY, referee_frame, static_page, GraphicsFrame, GraphicsWriter, OnlineStatic, StaticFacts};
+use rustyac_physics::race::shm::{ac_version, referee_frame, static_page, GraphicsFrame, GraphicsWriter, OnlineStatic, StaticFacts};
 pub use rustyac_physics::race::shm::{Kind, Page, AC_LIVE, AC_OFF, AC_PAUSE, GRAPHICS_FIELDS, GRAPHICS_SIZE, STATIC_FIELDS, STATIC_SIZE};
 
 
@@ -41,6 +41,9 @@ pub static IDEAL_LINE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// has them.
 pub static IN_REPLAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static REPLAY_TIME_MULT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
+/// The player car's replayed position, one per drawn frame of an offline replay (the physics
+/// stands, `SharedMemoryWriter::update` still writes the page every frame).
+pub static REPLAY_FRAMES: std::sync::Mutex<Vec<[f32; 3]>> = std::sync::Mutex::new(Vec::new());
 
 
 /// Is the real game running? Looks at the names of the running processes, nothing more.
@@ -203,7 +206,7 @@ impl ShmSink {
         )
     }
 
-    fn write_graphics(&mut self, sim: &GameSim) {
+    fn write_graphics(&mut self, sim: &GameSim, avatar_position: Option<[f32; 3]>) {
         let car = &sim.car.car;
         let db = &sim.lap_db;
         let last = db.laps.last().cloned().unwrap_or_default();
@@ -229,12 +232,15 @@ impl ShmSink {
                 in_pitlane: car.is_in_pit_lane(),
                 mandatory_pit_done: false,
                 time_limit_left: None,
+                avatar_position: None,
             },
         };
-        frame.paused = self.status == AC_PAUSE;
+        // (an offline replay's frame: no pause menu shows)
+        frame.paused = self.status == AC_PAUSE && avatar_position.is_none();
         frame.esc_menu = frame.paused;
         frame.ideal_line = IDEAL_LINE_ON.load(std::sync::atomic::Ordering::Relaxed);
         frame.mandatory_pit_done = sim.mandatory_pit_done();
+        frame.avatar_position = avatar_position;
         // (online the physics goes on during a replay)
         if IN_REPLAY.load(std::sync::atomic::Ordering::Relaxed) {
             frame.in_replay(f32::from_bits(REPLAY_TIME_MULT.load(std::sync::atomic::Ordering::Relaxed)), car.transponder.last_lap, sim.online.is_some());
@@ -263,9 +269,18 @@ impl StepSink for ShmSink {
         let frame = sim.referee.as_ref().map_or(sim.steps / 3, |referee| referee.frames);
         if frame != self.last_frame {
             self.last_frame = frame;
-            self.write_graphics(sim);
+            self.write_graphics(sim, None);
         }
         Ok(())
+    }
+
+    fn paused_tick(&mut self, sim: &GameSim) {
+        let frames = std::mem::take(&mut *REPLAY_FRAMES.lock().unwrap());
+        if IN_REPLAY.load(std::sync::atomic::Ordering::Relaxed) {
+            for position in frames {
+                self.write_graphics(sim, Some(position));
+            }
+        }
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -273,15 +288,8 @@ impl StepSink for ShmSink {
         self.status = if paused { AC_PAUSE } else { AC_LIVE };
         let g = &mut self.graphics;
         if replay && paused {
-            // an offline replay stands the physics still: the page as GraphicsFrame::in_replay
-            // makes it (shortcut (known gap, shortcuts.md #17): written once as the replay starts, not every frame; the
-            // later time multiplier and the replayed laps do not reach it)
-            g.set_i("status", AC_REPLAY);
-            g.set_i("position", -1);
-            g.set_f("sessionTimeLeft", -1.0);
-            g.set_f("replayTimeMultiplier", f32::from_bits(REPLAY_TIME_MULT.load(std::sync::atomic::Ordering::Relaxed)));
-            g.set_i("isEscMenuVisible", 0);
-            self.memory.graphics.write(&g.bytes);
+            // an offline replay stands the physics still: its drawn frames write the page
+            // (paused_tick)
             return;
         }
         g.set_i("status", self.status);

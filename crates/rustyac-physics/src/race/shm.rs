@@ -225,6 +225,9 @@ pub struct GraphicsFrame<'a> {
     pub mandatory_pit_done: bool,
     /// `timeLimitedTest->lastRemainingTime`; None without a time-limited test
     pub time_limit_left: Option<i32>,
+    /// the avatar's `bodyMatrix` position when it is not the physics body's (an offline replay
+    /// moves the avatar while the physics stands)
+    pub avatar_position: Option<[f32; 3]>,
 }
 
 impl GraphicsFrame<'_> {
@@ -262,8 +265,10 @@ impl GraphicsWriter {
     /// says so, except in the first 30 frames, which only remember where the car is.
     pub fn update(&mut self, page: &mut Page, car: &RollingChassis, f: &GraphicsFrame) -> bool {
         use crate::track::timing::time_to_string;
-        let p = car.core.get_position(car.body);
-        let position = [p.x, p.y, p.z];
+        let position = f.avatar_position.unwrap_or_else(|| {
+            let p = car.core.get_position(car.body);
+            [p.x, p.y, p.z]
+        });
         if self.null_counts < 30 {
             self.last_position = position;
             self.null_counts += 1;
@@ -483,6 +488,7 @@ pub fn referee_frame<'a>(referee: &'a super::Referee) -> GraphicsFrame<'a> {
         in_pitlane: referee.pit_avatar.in_pitlane,
         mandatory_pit_done: referee.pit_avatar.mandatory_pitstop_done,
         time_limit_left: None,
+        avatar_position: None,
     }
 }
 

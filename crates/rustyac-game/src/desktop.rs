@@ -2220,6 +2220,15 @@ fn run_window(options: &Options) -> Result<(), String> {
                     }
                     first.moved_object_count = count as u8;
                 }
+                // offline the physics stands: the shared memory page follows the replayed car
+                if let (false, Some(state)) = (is_online, rig.states.first()) {
+                    let m = state.world_matrix.m[3];
+                    let mut frames = rustyac_game::shm::REPLAY_FRAMES.lock().unwrap();
+                    // (bounded: with --no-shm nobody takes them)
+                    if frames.len() < 1024 {
+                        frames.push([m[0], m[1], m[2]]);
+                    }
+                }
                 renderer.set_replay_states(Some(rig.states.clone()));
                 if let Some(sound) = audio.as_mut() {
                     sound.set_replay_states(&rig.states);

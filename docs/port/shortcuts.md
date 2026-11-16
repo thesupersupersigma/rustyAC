@@ -3,7 +3,8 @@
 ## Resume here
 - Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern).
 - Step 2.2 done: #34 logf ported.
-- Step 2.3 done: #54 qsort ported. Next: step 2.4 (#17, #11, #7, #16, #24, #12, #13, #15).
+- Step 2.3 done: #54 qsort ported.
+- Step 2.4: #17 done. Next: #11, #7, #16, #24, #12, #13, #15.
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -30,6 +31,15 @@
   game's order. Proof: `same_as_the_dll` (20,000 random arrays full of ties against the real
   DLL's `qsort`, identical) and `ties_in_the_dlls_order` (the DLL's order of one array, on any
   target); shimmer row `ry3e_01` IDENTICAL.
+- **#17 replay status in shared memory**: `SharedMemoryWriter::update` 0x140186230 runs every
+  drawn frame, also in a replay (status `AC_REPLAY`, the time multiplier, the avatar's
+  `bodyMatrix` position for `carCoordinates` / `distanceTraveled`). An offline replay stands
+  rustyAC's physics still, so the desktop now hands each drawn frame's replayed position to the
+  physics thread's pause loop, which writes the page (`ShmSink::paused_tick`); before, the page
+  was written once. Proof: `rustyac.exe --track spa --autodrive --duration 18 --replay-script
+  replay@6` with `re/scratch/taskS2b/shm_watch.py` reading `Localcpmf_graphics`: in the
+  replay `packetId` advanced 582 times at the frame rate with status 1, and `carCoordinates`
+  retraced the lap from the replay's start (555 distinct positions).
 
 # Task S2 — the shortcut sweep
 
@@ -81,7 +91,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 14 | `crates/rustyac-game/src/render/ac.rs:1882` | the statistics apps get no frame numbers on wgpu (the page has no clock in | known gap | browser only. |
 | 15 | `crates/rustyac-game/src/render/gui_apps.rs:621` | the wheels' drawn matrices stand for the wheel nodes' world matrices | known gap | Suspensions app: wheels' drawn matrices stand for the wheel nodes' world matrices. |
 | 16 | `crates/rustyac-game/src/render/gui_apps.rs:760` | YEBIS's current auto exposure and the filter's [AUTO_EXPOSURE] limits are not handed to the HDR and camera editor apps (0) | known gap | HDR app: FormHDR::render 0x14032af90 graphs the camera's currentAutoExposure and the filter's limits; the port's link has 0 (needs YebisPP::updatePP readback). |
-| 17 | `crates/rustyac-game/src/shm.rs:277` | written once as the replay starts, not every frame; the | known gap | replay status in shared memory written once. |
+| 17 | `crates/rustyac-game/src/shm.rs:277` | written once as the replay starts, not every frame; the | ported (S2b) | the page is written every drawn frame of a replay, from the replayed car. |
 | 18 | `crates/rustyac-game/src/view.rs:23` | a car with more [WING_n] + [FIN_n] shows only the first 12 in the Wings app; raise if one appears | ported | FormWings::render 0x1402edff0 draws every wing; the most [WING_n]+[FIN_n] among installed cars is 23 (vrc_formula_alpha_2025): MAX_WINGS 12 -> 32. |
 | 19 | `crates/rustyac-game/src/view.rs:1054` | an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted | known gap | setup debug app for an online remote car. |
 | 20 | `crates/rustyac-game/src/view.rs:1216` | the speed of this step stands for the previous snapshot's, exact but at the 2 m/s edge | known gap | README gap (telemetry ride height). |
