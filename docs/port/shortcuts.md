@@ -4,7 +4,7 @@
 - Step 2.1 done: #38 ported (and engineDamageLevel, the same pattern).
 - Step 2.2 done: #34 logf ported.
 - Step 2.3 done: #54 qsort ported.
-- Step 2.4: #17 done. Next: #11, #7, #16, #24, #12, #13, #15.
+- Step 2.4: #17, #11, #7, #12, #13, #15 done. Next: #16, #24.
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -40,6 +40,18 @@
   replay@6` with `re/scratch/taskS2b/shm_watch.py` reading `Localcpmf_graphics`: in the
   replay `packetId` advanced 582 times at the frame rate with status 1, and `carCoordinates`
   retraced the lap from the replay's start (555 distinct positions).
+- **#11 lock_animation**: `FormDriverModel::updateForces` 0x1403218f0 (called only from the six
+  spinners' change handlers) sets `driverModel_HR->lockAnimation` once; the port set it every
+  frame, so a LOCK_VIRTUAL_STEER car leaving the cockpit view could never clear it. Now a
+  one-shot. No oracle row moves a spinner then switches view; checked by reading.
+- **#7 Net monitor**: car 1's `errorVector` is now published every physics step (the rest of
+  the online state stays every 64 steps).
+- **#12 / #13**: no change needed, the view the apps read is `physicsState` (in a replay
+  `ac_replay::view_of` puts the replayed car's world and tyre matrices in it): unreachable.
+- **#15 wheel nodes**: the Suspensions app now gets the wheel nodes' world matrices from the
+  scene (`CarAvatar::wheel_node_position`) right before the GUI draws, not the drawn wheels'
+  matrices. render_oracle's `app_suspension` builds its own link, so this glue is checked by
+  the build only.
 
 # Task S2 — the shortcut sweep
 
@@ -81,15 +93,15 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 4 | `crates/rustyac-game/src/conditions.rs:448` | rustyAC's own drivers (--autodrive, --ai-drive) keep the quick menu unless --pit-click scripts the clicks, as  | unreachable | rustyAC-only drivers (oracle / proof inputs). |
 | 5 | `crates/rustyac-game/src/input/keyboard.rs:420` | the game never stops when no point | known gap | game fault: `controls.ini [KEYBOARD]` look-ahead loops forever when no line point is ahead (or NaN); rustyAC stops after one lap. |
 | 6 | `crates/rustyac-game/src/input_file.rs:530` | an input file does not carry the special event's goals, add a key when a proof replays one | unreachable | the input file is rustyAC's own. |
-| 7 | `crates/rustyac-game/src/online.rs:206` | refreshed with the rest of this state (every 64 steps), not every frame | known gap | Net monitor's car1 error vector refreshed every 64 steps, not every step. |
+| 7 | `crates/rustyac-game/src/online.rs:206` | refreshed with the rest of this state (every 64 steps), not every frame | ported (S2b) | the error vector is published every physics step. |
 | 8 | `crates/rustyac-game/src/online.rs:792` | another car's compound is the one it last told of (tyres.ini's | known gap | where acs.exe's remote CarAvatar compound comes from was not traced (ACClient onMessageTCP); the last told compound is very likely the same. |
 | 9 | `crates/rustyac-game/src/online.rs:970` | options.ini's IGNORE_RESULT_TELEPORT is not read and there is no fade; add them if a player asks. | known gap | IGNORE_RESULT_TELEPORT now read as `ACClient::ACClient` 0x14003a2c0 does (ported); the 4 s fade before the teleport is not. |
 | 10 | `crates/rustyac-game/src/render/ac.rs:43` | std's clock panics in the browser, so the load and frame times read 0 there; use the | known gap | browser: load and frame times are 0 (no clock in the page). |
-| 11 | `crates/rustyac-game/src/render/ac.rs:1745` | set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if t | known gap | lock_animation set every frame, not on LOCK_VIRTUAL_STEER's updateForces calls. |
-| 12 | `crates/rustyac-game/src/render/ac.rs:1831` | the body's matrix of the frame's view stands for physicsState.worldMatrix; a replay's car may differ | known gap | Wings app in a replay: the view's body matrix stands for physicsState.worldMatrix. |
-| 13 | `crates/rustyac-game/src/render/ac.rs:1842` | the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ | known gap | Suspensions app in a replay: the view stands for physicsState. |
+| 11 | `crates/rustyac-game/src/render/ac.rs:1745` | set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if t | ported (S2b) | set once per spinner change, as `updateForces` does. |
+| 12 | `crates/rustyac-game/src/render/ac.rs:1831` | the body's matrix of the frame's view stands for physicsState.worldMatrix; a replay's car may differ | unreachable (S2b) | the view's body is physicsState.worldMatrix, the replayed one in a replay (`ac_replay::view_of`). |
+| 13 | `crates/rustyac-game/src/render/ac.rs:1842` | the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ | unreachable (S2b) | the view's body and tyre matrices are physicsState's, the replayed ones in a replay. |
 | 14 | `crates/rustyac-game/src/render/ac.rs:1882` | the statistics apps get no frame numbers on wgpu (the page has no clock in | known gap | browser only. |
-| 15 | `crates/rustyac-game/src/render/gui_apps.rs:621` | the wheels' drawn matrices stand for the wheel nodes' world matrices | known gap | Suspensions app: wheels' drawn matrices stand for the wheel nodes' world matrices. |
+| 15 | `crates/rustyac-game/src/render/gui_apps.rs:621` | the wheels' drawn matrices stand for the wheel nodes' world matrices | ported (S2b) | the wheel nodes' world matrices, read from the scene before the GUI draws. |
 | 16 | `crates/rustyac-game/src/render/gui_apps.rs:760` | YEBIS's current auto exposure and the filter's [AUTO_EXPOSURE] limits are not handed to the HDR and camera editor apps (0) | known gap | HDR app: FormHDR::render 0x14032af90 graphs the camera's currentAutoExposure and the filter's limits; the port's link has 0 (needs YebisPP::updatePP readback). |
 | 17 | `crates/rustyac-game/src/shm.rs:277` | written once as the replay starts, not every frame; the | ported (S2b) | the page is written every drawn frame of a replay, from the replayed car. |
 | 18 | `crates/rustyac-game/src/view.rs:23` | a car with more [WING_n] + [FIN_n] shows only the first 12 in the Wings app; raise if one appears | ported | FormWings::render 0x1402edff0 draws every wing; the most [WING_n]+[FIN_n] among installed cars is 23 (vrc_formula_alpha_2025): MAX_WINGS 12 -> 32. |

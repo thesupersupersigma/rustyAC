@@ -701,6 +701,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 let pit = sim.car.car.pit_position.m[3];
                 let in_pit = rustyac_gui::micro_sectors::is_in_pit([at[0], at[1], at[2]], [pit[0], pit[1], pit[2]]);
                 *shared.online_gui.lock().unwrap() = Some(session.gui_state(in_pit));
+            } else if let Some(gui) = shared.online_gui.lock().unwrap().as_mut() {
+                // (the Net monitor reads it every frame)
+                gui.car1_error_vector = session.car1_error_vector();
             }
             if session.net.client.is_lost() {
                 result = Err("the connection to the server is gone".to_string());

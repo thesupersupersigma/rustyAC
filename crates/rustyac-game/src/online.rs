@@ -203,7 +203,7 @@ pub struct OnlineGui {
     pub time_to_session_start: f64,
     pub player_in_pit: bool,
     /// the Net monitor's: car 1's (guid 1) `NetCarStateProvider::errorVector`
-    /// shortcut (known gap, shortcuts.md #7): refreshed with the rest of this state (every 64 steps), not every frame
+    /// (refreshed every step, the rest of this state every 64)
     pub car1_error_vector: [f32; 3],
 }
 
@@ -842,6 +842,11 @@ impl OnlineSession {
         lines
     }
 
+    /// The Net monitor's `NetCarStateProvider::errorVector` of car 1 (guid 1).
+    pub fn car1_error_vector(&self) -> [f32; 3] {
+        self.net.cars.iter().find(|car| car.guid == 1).map_or([0.0; 3], |car| car.error_vector)
+    }
+
     /// What AC's own online overlays show.
     pub fn gui_state(&self, player_in_pit: bool) -> OnlineGui {
         let accepted = &self.net.client.accepted;
@@ -855,7 +860,7 @@ impl OnlineSession {
             inverted_grid_positions: accepted.inverted_grid_positions as i32,
             session_id: self.net.client.session_id,
             net_cars,
-            car1_error_vector: self.net.cars.iter().find(|car| car.guid == 1).map_or([0.0; 3], |car| car.error_vector),
+            car1_error_vector: self.car1_error_vector(),
             session_type: self.session.session_type,
             time_to_session_start: self.session.start_time - self.now,
             player_in_pit,

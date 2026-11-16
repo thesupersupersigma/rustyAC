@@ -618,7 +618,7 @@ impl GameApps {
             stats: self.stats.clone(),
             telemetry: self.telemetry.clone(),
             tyre_debug: world.first().map(|v| v.tyre_debug),
-            // shortcut (known gap, shortcuts.md #15): the wheels' drawn matrices stand for the wheel nodes' world matrices
+            // (the wheel nodes are put in by the renderer right before the GUI is drawn)
             suspension: world.first().map(|v| rustyac_gui::app_suspension::SuspensionLink { facts: setup.suspension, wheel_nodes: v.wheels.map(|w| [w[3][0], w[3][1], w[3][2]]) }),
             tyre_tester: world.first().map(|v| rustyac_gui::app_tyre_tester::TyreTesterCar { speed: v.speed_ms, load: v.wheel_load, compound: v.compound_index }),
             setup_debug: self.setup_debug.clone(),

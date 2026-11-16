@@ -1731,6 +1731,10 @@ FILTER=default
                     // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
                     let rows = this.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
                     gui.gui.apps.gpu_profile = rows.collect();
+                    // ACSuspension: the wheel nodes' world matrices, as the 3D pass left them
+                    if let (Some(link), Some(car)) = (gui.gui.apps.suspension.as_mut(), this.cars.first()) {
+                        link.wheel_nodes = std::array::from_fn(|w| car.wheel_node_position(&this.scene, w));
+                    }
                     if drawn {
                         gui.render(&mut this.graphics, dt);
                     }
@@ -1742,8 +1746,11 @@ FILTER=default
                                 *[&mut d.max_g, &mut d.roll_max_deg, &mut d.pitch_max_deg, &mut d.yaw_max_deg, &mut d.filter][i] = v;
                             }
                         }
-                        // shortcut (known gap, shortcuts.md #11): set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if that matters
-                        d.lock_animation |= l.lock_animation;
+                        // `updateForces` sets `lockAnimation` once, when a spinner moves; a car with
+                        // LOCK_VIRTUAL_STEER may clear it again (`CarAvatar` update)
+                        if std::mem::take(&mut l.lock_animation) {
+                            d.lock_animation = true;
+                        }
                         for (dt, acc) in l.head_updates.drain(..) {
                             d.update_head_movement(&mut this.scene, dt, dt, &acc);
                         }
@@ -1828,7 +1835,7 @@ FILTER=default
             outlines.borrow_mut().frame = (shown && !wings.is_empty()).then(|| {
                 let lifts = &view.wing_states[..view.wing_state_count as usize];
                 let rows = wings.iter().zip(lifts).map(|(w, s)| rustyac_render::wings::WingOutline { position: w.position, span: w.span, chord: w.chord, is_vertical: w.is_vertical, lift_vector: [s.lift_vector.x, s.lift_vector.y, s.lift_vector.z] });
-                // shortcut (known gap, shortcuts.md #12): the body's matrix of the frame's view stands for physicsState.worldMatrix; a replay's car may differ
+                // (the view's body is physicsState.worldMatrix, in a replay the replayed one: `ac_replay::view_of`)
                 (view.body, rows.collect())
             });
         }
@@ -1839,7 +1846,7 @@ FILTER=default
             let m = |m: [[f32; 4]; 4]| rustyac_physics::vecmath::Mat44f { m };
             let keys = gui.apps.suspension_keys;
             lines.borrow_mut().frame = shown.then(|| rustyac_render::suspensions::SuspensionFrame {
-                // shortcut (known gap, shortcuts.md #13): the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ
+                // (the view's body and tyre matrices are physicsState's, in a replay the replayed ones: `ac_replay::view_of`)
                 world: m(view.body),
                 tyre_matrix: view.tyre_matrix.map(m),
                 lines: std::array::from_fn(|w| view.sus_lines[w][..view.sus_line_count[w] as usize].iter().map(|l| ([l.p0.x, l.p0.y, l.p0.z], [l.p1.x, l.p1.y, l.p1.z], l.color)).collect()),
