@@ -153,11 +153,12 @@ if part crash; then  # Task 22b: into the barrier at Spa with damage, five suspe
         keep "crash $car" || continue
         label="t22b_$car"
         record "$label" run --track spa --collide --scenario spa_crash --car "$car"
-        # Task S2b: bodyDamageLevel0's job after the crash, below the crash's level (the game sets it)
-        [ "$car" = bmw_m3_e30 ] && record "s2b_${car}_set_damage" run --track spa --collide --scenario spa_crash --car "$car" --set-damage 0@30=1
         "$CC" game-replay spa_crash --dir "$rec/$label" --exe target/release/rustyac.exe --own "$(own)" > "$out/replay_$label.txt" 2>&1
         grep -qE '^\| .spa_crash. \|.*100 %' "$out/replay_$label.txt" && verdict "game-replay $label/spa_crash" IDENTICAL \
             || verdict "game-replay $label/spa_crash" DIFFERENT "$(grep -m1 -E 'spa_crash|rror' "$out/replay_$label.txt")"
+        # Task S2b: bodyDamageLevel0's job after the crash, below the crash's level (the game sets it);
+        # after the replay check, as record() sets $label
+        [ "$car" = bmw_m3_e30 ] && record "s2b_${car}_set_damage" run --track spa --collide --scenario spa_crash --car "$car" --set-damage 0@30=1
         compare_dirs
     done
 fi
