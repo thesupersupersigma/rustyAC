@@ -274,6 +274,7 @@ impl Gui {
                     if t.borrow().driver {
                         if let (Some(d), Some(car)) = (gui.apps.ai.driver, gui.apps.cars.get(gui.apps.focused_car)) {
                             let gear_down = gui.spinner(gear_down).value;
+                            gui.apps.actions.push(AppAction::AiGearsToAutoShifter { car: car.unix_name.clone() });
                             for (section, key, value) in save_ai(&d, gear_down) {
                                 gui.apps.actions.push(profile(&format!("content/cars/{}/data/ai.ini", car.unix_name), section, key, value));
                             }
@@ -298,8 +299,7 @@ fn profile(file: &str, section: &str, key: &str, value: String) -> AppAction {
 }
 
 /// The SAVE ai lambda's `WritePrivateProfileString`s (floats as a default `std::wostream`:
-/// `%g` of six digits). shortcut (known gap, shortcuts.md #22): drivetrain.ini's AUTO_SHIFTER copy for a loose unencrypted
-/// car is not done, port it if a loose car's AI should save it.
+/// `%g` of six digits); drivetrain.ini's AUTO_SHIFTER copy is [`AppAction::AiGearsToAutoShifter`].
 pub fn save_ai(d: &AiDriverValues, gear_down: i32) -> Vec<(&'static str, &'static str, String)> {
     let g = |v: f32| format_g6(v);
     vec![

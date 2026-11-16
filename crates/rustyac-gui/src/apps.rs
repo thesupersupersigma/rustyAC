@@ -30,6 +30,10 @@ pub enum AppAction {
     /// `WritePrivateProfileStringW(section, key, value, <Documents>\Assetto Corsa\<file>)`
     /// (see [`write_profile_string`])
     WriteProfileString { file: String, section: String, key: String, value: String },
+    /// The SAVE ai lambda 0x1402df8b0, before its writes: a loose car's (no data.acd) drivetrain.ini
+    /// without `[AUTO_SHIFTER]` gets ai.ini's `[GEARS]` as that section
+    /// (`GetPrivateProfileSectionW` + `WritePrivateProfileSectionW`); `car` is the unix name.
+    AiGearsToAutoShifter { car: String },
     /// `PostProcessEffectsUpdater::loadConfigurationFile` 0x1400abb70: a post-processing filter
     /// (YEBIS')
     LoadPostProcessFilter(String),
@@ -104,6 +108,26 @@ pub enum MixLevel {
 /// ignored, an `=` in it) keeps everything up to its `=` and takes the value up to its line's
 /// end; a new key goes after the section's last line that is not empty, or at the file's end
 /// when the section is the file's last; a new section goes at the end. New lines end in CRLF.
+/// `GetPrivateProfileSectionW`'s key=value lines of the first `section` (no case, blanks
+/// ignored), in file order. shortcut: lines without `=` (comments) are left out, a section
+/// with such lines would copy fewer lines than the game.
+pub fn profile_section(file: &[u8], section: &str) -> Vec<(String, String)> {
+    let text = String::from_utf8_lossy(file);
+    let mut inside = None;
+    let mut out = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            if inside == Some(true) {
+                break;
+            }
+            inside = Some(name.trim().eq_ignore_ascii_case(section));
+        } else if let (Some(true), Some((key, value))) = (inside, line.split_once('=')) {
+            out.push((key.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    out
+}
+
 pub fn write_profile_string(file: Option<&[u8]>, section: &str, key: &str, value: &str) -> Vec<u8> {
     let text = file.unwrap_or_default();
     // the lines with their ends
@@ -549,5 +573,14 @@ mod tests {
             let got = write_profile_string(*file, "LEVELS", "MASTER", "0.700000");
             assert_eq!(String::from_utf8_lossy(&got), String::from_utf8_lossy(want), "case {i}");
         }
+    }
+}
+
+#[cfg(test)]
+mod profile_section_tests {
+    #[test]
+    fn first_section_in_order() {
+        let ini = b"[HEADER]\r\nVERSION=4\r\n[ gears ]\r\nUP = 7500\r\n; note\r\nDOWN=4000\r\n[GEARS]\r\nUP=1\r\n";
+        assert_eq!(super::profile_section(ini, "GEARS"), [("UP".to_string(), "7500".to_string()), ("DOWN".to_string(), "4000".to_string())]);
     }
 }

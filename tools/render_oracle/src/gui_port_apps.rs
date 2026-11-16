@@ -296,6 +296,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             }
             // (the GUI sequences do not click TempRun: tools/car_oracle's temp_run proves its file)
             AppAction::TempRun(_) => {}
+            // (the test cars come from data.acd: the game copies nothing)
+            AppAction::AiGearsToAutoShifter { .. } => {}
             AppAction::SetBallastKg(kg) => {
                 if let Some(b) = BALLAST.lock().unwrap().as_mut() {
                     b.0 = kg;

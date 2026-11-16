@@ -389,6 +389,21 @@ impl GameApps {
                     }
                     (file, bytes)
                 }
+                AppAction::AiGearsToAutoShifter { car } => {
+                    let read = |file: &str| rustyac_content::vfs::read(&setup.cfg_dir.join(file)).ok().or_else(|| rustyac_content::vfs::read(&setup.game.join(file)).ok());
+                    let (ai, drivetrain) = (format!("content/cars/{car}/data/ai.ini"), format!("content/cars/{car}/data/drivetrain.ini"));
+                    // (CarAvatar::openINI: m_isEncrypted when the car's data comes from data.acd)
+                    let loose = !setup.game.join(format!("content/cars/{car}/data.acd")).is_file();
+                    let Some(old) = read(&drivetrain).filter(|_| loose) else { continue };
+                    if IniReader::from_text(Path::new(&drivetrain), &String::from_utf8_lossy(&old)).has_section("AUTO_SHIFTER") {
+                        continue;
+                    }
+                    let mut bytes = old;
+                    for (key, value) in rustyac_gui::apps::profile_section(read(&ai).as_deref().unwrap_or_default(), "GEARS") {
+                        bytes = rustyac_gui::apps::write_profile_string(Some(&bytes), "AUTO_SHIFTER", &key, &value);
+                    }
+                    (drivetrain, bytes)
+                }
                 AppAction::SetKeyboardTuning { index, value } => {
                     self.keyboard_edits.push((index, value));
                     continue;

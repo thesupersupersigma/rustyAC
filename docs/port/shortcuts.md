@@ -5,7 +5,8 @@
 - Step 2.2 done: #34 logf ported.
 - Step 2.3 done: #54 qsort ported.
 - Step 2.4 done: #17, #11, #7, #12, #13, #15, #16, #24.
-- Step 2.5 done: #8. Next: step 2.6 (#22, #29–#32).
+- Step 2.5 done: #8.
+- Step 2.6 done: #22 and #30 ported; #29, #31, #32 stay known gaps (why in their rows). Next: step 1's docs moves, then step 3.
 
 ## Ported in this task
 - **#38 bodyDamageLevelN** (and **engineDamageLevel**, alike): `lambda_e938ee::operator()`
@@ -73,6 +74,16 @@
   0x14004f470 writes it into the lap. The constructor leaves it empty: the port now starts
   every remote car with "" instead of tyres.ini's default, and keeps the last told name as
   before. Checked by the build (the multiplayer goldens carry no lap compounds of remote cars).
+- **#22 AUTO_SHIFTER copy**: the SAVE ai lambda 0x1402df8b0 first opens the car's
+  drivetrain.ini with `CarAvatar::openINI`; when it is a loose file (not from data.acd) without
+  `[AUTO_SHIFTER]`, ai.ini's `[GEARS]` (`GetPrivateProfileSectionW`, read before the new
+  values go in) becomes that section. The port pushes `AppAction::AiGearsToAutoShifter` before
+  the ai.ini writes and the game's handler does the same into rustyAC's copy of the file;
+  `profile_section` has a unit test. The GUI sequences' cars come from data.acd, so nothing
+  is copied there.
+- **#30 ServicePoint idle**: the launcher's HTTP/1.1 hosts are forgotten after 100 s without a
+  request (`MaxServicePointIdleTime`), so the next request sends `Connection: Keep-Alive`
+  again. Build only (no proof waits 100 s between lobby requests).
 
 # Task S2 — the shortcut sweep
 
@@ -129,17 +140,17 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 19 | `crates/rustyac-game/src/view.rs:1054` | an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted | known gap | setup debug app for an online remote car. |
 | 20 | `crates/rustyac-game/src/view.rs:1216` | the speed of this step stands for the previous snapshot's, exact but at the 2 m/s edge | known gap | README gap (telemetry ride height). |
 | 21 | `crates/rustyac-gui/src/app_ai.rs:202` | the 3D lines of the render-finished handler (the line, the pit lane, the sides) are not drawn, port FormAI::re | known gap | AI app's 3D lines. |
-| 22 | `crates/rustyac-gui/src/app_ai.rs:301` | drivetrain.ini's AUTO_SHIFTER copy for a loose unencrypted | known gap | AI app SAVE: drivetrain.ini AUTO_SHIFTER copy for a loose unencrypted car. |
+| 22 | `crates/rustyac-gui/src/app_ai.rs:301` | drivetrain.ini's AUTO_SHIFTER copy for a loose unencrypted | ported (S2b) | AI app SAVE: drivetrain.ini AUTO_SHIFTER copy for a loose unencrypted car. |
 | 23 | `crates/rustyac-gui/src/app_ai.rs:403` | the recorder's side splines are empty here (the game fills them only when side_l/r.csv are newer than the line | unreachable | content: 10 installed tracks have side_l.csv, none newer than fast_lane.ai (the recorder writes the line, so it stays newer). |
 | 24 | `crates/rustyac-gui/src/app_camera_editor.rs:847` | the game quits (exit(2)) after a run started from assetto_corsa.ini's AUTOEXP; rustyAC goes on | ported (S2b) | FormCamera::render 0x1402f6ff0 case 9: `if (isByButton == false) exit(2)`; reachable only once #16 gives the link the live auto exposure (with 0 the run never finishes), so it comes with #16. |
 | 25 | `crates/rustyac-gui/src/app_suspension.rs:63` | the game's susGL is one static for every instance; one app is ever made | unreachable | one caller, crates/rustyac-game/src/render/gui_apps.rs (one app per name). |
 | 26 | `crates/rustyac-gui/src/time_attack.rs:138` | the game leaves the text unwritten when no time is left (never drawn so) | known gap | game fault: the frame after Still->On, timeLeft is still 0 and timeToTimeAttackString 0x1401be000 formats an uninitialised buffer; rustyAC shows 0.000". |
 | 27 | `crates/rustyac-launcher/src/files.rs:233` | the clock is a counter (no wall clock in wasm32-unknown-unknown); only the | known gap | browser: page-written files' dates come from a counter. |
 | 28 | `crates/rustyac-launcher/src/files.rs:293` | files only (the launcher renames replays), not folders | unreachable | only caller is replays.rs move_file on files. |
-| 29 | `crates/rustyac-launcher/src/online.rs:161` | one message for every other way the list does not parse, the lobby always sends a list | known gap | error text differs. |
-| 30 | `crates/rustyac-launcher/src/online.rs:169` | a ServicePoint is never let go (.NET drops it after | known gap | no ServicePoint settings. |
-| 31 | `crates/rustyac-launcher/src/online.rs:176` | redirects are not followed (.NET follows them), nothing redirects here. | known gap | redirects. |
-| 32 | `crates/rustyac-launcher/src/online.rs:311` | dotted IPv4 only, IPAddress.Parse takes more forms, the theme sends the lobby's dotted ones | known gap | only dotted IPv4 (the lobby's); a hand-typed other form IPAddress.Parse takes is refused. |
+| 29 | `crates/rustyac-launcher/src/online.rs:161` | one message for every other way the list does not parse, the lobby always sends a list | known gap | error text differs. Not small: JavaScriptSerializer's messages name the bad token and its position, which needs its parser's error paths; the lobby always sends a list. |
+| 30 | `crates/rustyac-launcher/src/online.rs:169` | a ServicePoint is never let go (.NET drops it after | ported (S2b) | no ServicePoint settings. |
+| 31 | `crates/rustyac-launcher/src/online.rs:176` | redirects are not followed (.NET follows them), nothing redirects here. | known gap | redirects. Not small: AllowAutoRedirect's rules (which codes, Location forms, the 50-hop limit, https targets this HTTP-only client cannot reach); the lobby and acServer never redirect. |
+| 32 | `crates/rustyac-launcher/src/online.rs:311` | dotted IPv4 only, IPAddress.Parse takes more forms, the theme sends the lobby's dotted ones | known gap | only dotted IPv4 (the lobby's); a hand-typed other form IPAddress.Parse takes is refused. Not small: IPv6 needs a second UDP path and the short / octal / hex IPv4 forms need .NET's parser to refuse the same strings; the theme only sends the lobby's dotted addresses. |
 | 33 | `crates/rustyac-launcher/src/profile.rs:9` | every file is read as ANSI bytes, where Windows reads a file as UTF-16 when it | unreachable | scan: 5090 .ini under the install + Documents\Assetto Corsa, none UTF-16 with BOM. |
 | 34 | `crates/rustyac-math/src/lib.rs:198` | the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a | ported (S2b) | `pure::logf`, all 2^32 inputs identical to the DLL. |
 | 35 | `crates/rustyac-math/src/lib.rs:471` | base 0.5 only and no rare path (y within +-100), the light shafts' | unreachable | only caller yebis.rs `powf4_half(k*a)` keeps the argument under ~30 < 100. |

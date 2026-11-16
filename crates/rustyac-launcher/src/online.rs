@@ -16,14 +16,14 @@ use crate::ini::IniFile;
 use crate::net;
 use crate::query::Params;
 #[cfg(windows)]
-use std::collections::HashSet;
+use std::collections::HashMap;
 #[cfg(windows)]
 use std::io::{Read, Write};
 #[cfg(windows)]
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 #[cfg(windows)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A request that waits on the network, answered on another thread.
 pub type Job = Box<dyn FnOnce() -> Answer + Send>;
@@ -166,10 +166,10 @@ fn server_list_cached(text: Option<&str>) -> Answer {
 }
 
 /// The `host:port`s that answered as HTTP/1.1 servers: .NET's `ServicePoint` sends them no
-/// `Connection: Keep-Alive`. shortcut (known gap, shortcuts.md #30): a ServicePoint is never let go (.NET drops it after
-/// 100 s idle and sends Keep-Alive again), upgrade if a proof catches it.
+/// `Connection: Keep-Alive`, until the ServicePoint is let go after `MaxServicePointIdleTime`
+/// (100 s) without a request. The value is when it was last used.
 #[cfg(windows)]
-static HTTP11: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+static HTTP11: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
 
 /// `HttpWebRequest` GET with `UserAgent = "Assetto Corsa Launcher"` and the given headers, the
 /// body read with `StreamReader` (UTF-8 unless a BOM says otherwise). `Err` stands for the
@@ -195,7 +195,7 @@ fn http_get(url: &str, headers: &[(&str, &str)], decompress: bool, timeout_ms: u
     if decompress {
         head += "Accept-Encoding: gzip, deflate\r\n";
     }
-    let known = HTTP11.lock().unwrap().get_or_insert_with(HashSet::new).contains(&host_header);
+    let known = HTTP11.lock().unwrap().get_or_insert_with(HashMap::new).get(&host_header).is_some_and(|used| used.elapsed() < Duration::from_secs(100));
     if !known {
         head += "Connection: Keep-Alive\r\n";
     }
@@ -238,7 +238,7 @@ fn http_get(url: &str, headers: &[(&str, &str)], decompress: bool, timeout_ms: u
         body.extend_from_slice(&buf[..n]);
     }
     if status.starts_with("HTTP/1.1") {
-        HTTP11.lock().unwrap().get_or_insert_with(HashSet::new).insert(host_header);
+        HTTP11.lock().unwrap().get_or_insert_with(HashMap::new).insert(host_header, Instant::now());
     }
     if !(200..300).contains(&code) {
         return Err(format!("The remote server returned an error: ({code})."));
