@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42 test app: a syntax error (the module does not load).
 import ac
 

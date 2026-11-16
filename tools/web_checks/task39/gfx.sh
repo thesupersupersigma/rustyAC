@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 39: the graphics settings' proofs. Full mode's fixed frame (f2004 at Magione from the pit,
 # 3 frames) in the page (?graphics=<spec>, headless Chrome on SwiftShader) against the native
 # full_frame example with the same video.ini on kgl's wgpu (SwiftShader) and Direct3D 11 WARP;

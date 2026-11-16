@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 39 step 0 end to end, all on 127.0.0.1, with 38e's stand-ins (fake_docker.mjs, edge.mjs):
 # the panel starts "rustyAC Montreal" (Corvette C7R at Montreal, a made-up password); the page
 # sits under /play/app/ and the router at /net/x/* on one address (tools/proofs/ondemand_site.mjs),

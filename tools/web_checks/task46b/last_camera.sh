@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 46b step 4: the last camera remembered. Two ESC-start runs of rustyac.exe on one cfg folder:
 # the first takes [LAST_CAMERA] from the Documents given (drivable view 3), drives from the ESC
 # menu (loadPreviousSessionUserCamera) and writes rustyAC's own copy at its end; the second

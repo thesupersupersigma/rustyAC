@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 import sys
 a = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
 b = open(sys.argv[2], encoding='utf-8', errors='replace').read().split('\n')

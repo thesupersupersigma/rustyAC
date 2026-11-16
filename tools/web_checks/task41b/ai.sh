@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 41b A.1: an AI race's sound (4 cars, 60 s at Laguna Seca, the desktop's tape ai/race.ryin)
 # in the page (race_node.mjs: wasm + FMOD 2.03 HTML5 in node) against the desktop's
 # `--replay --headless --audio-wav --audio-log`, plain and with the page's answers scripted in.

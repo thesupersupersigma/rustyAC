@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Multiplayer drop paths, old page (v0.38.2) against the fixed one, all on 127.0.0.1:
 # Kunos' acServer (a copy of dist-server, Laguna Seca, made-up passwords, no lobby), the
 # gateway, web/serve.py with the test pack, headless Chrome clients (web/check.mjs).

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43b step 2c: the page joins a server through AC's launcher in it (Drive -> Online, the
 # address bar's server, the Ferrari, Join), the race ends, the page leaves, and AC's launcher
 # shows its results page from the page's race_out.json. All on 127.0.0.1 (from Task 42c's

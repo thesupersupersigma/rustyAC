@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # all.sh [filter]: the 18 drives of tools/proofs/sound.sh, desktop port (FMOD 1.08) against the page (node, FMOD 2.03 HTML5)
 cd "$(dirname "$0")/../../.."
 cp web/sound.js re/scratch/task41/site/sound.js

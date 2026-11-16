@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 2: the panel's form in a headless Chrome, all on 127.0.0.1 (38e's stand-ins):
 # a new preset's sessions, then the same form made race-only (the note shows).
 #   sh tools/web_checks/task42b/s2/panel.sh

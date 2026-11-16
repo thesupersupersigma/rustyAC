@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # python wavcmp.py <desktop.wav> <page.wav> [--per-second]
 # The desktop's mix (FMOD 1.08 WAV writer) against the page's (FMOD 2.03 HTML5, caught at the
 # master group). Both are 48 kHz 16-bit stereo; their setup mixes a different number of blocks,

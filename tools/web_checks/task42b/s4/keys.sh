@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b steps 3-4: the keys proof (see mkflow.py). usage: keys.sh [name]
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC || exit 1
 here=re/scratch/task42b/s4; name=${1:-keys}

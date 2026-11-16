@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 46: rustyac.exe with the documents the page's run had (AC's own camera files, as a new
 # player's launcher copies them, and the race.ini the page's launcher wrote, its car and track): its camera
 # settings line against the page's (cams.sh first).

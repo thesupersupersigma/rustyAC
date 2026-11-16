@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 46b: F5 in the page (Full mode) (f5_flow.py), against the install.
 cd "$(dirname "$0")/../../.." || exit 1
 AC="C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"

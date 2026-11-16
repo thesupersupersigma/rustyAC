@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 2 (from 42b step 1): a race-only server (as the panel's race-only preset: one race, no practice),
 # all on 127.0.0.1: Kunos' acServer (a copy of dist-server, Laguna Seca, no lobby), the gateway,
 # web/serve.py. Desktop "a" races from the start (autodrive); while the race runs, the page

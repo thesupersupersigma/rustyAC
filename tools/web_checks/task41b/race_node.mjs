@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // node race_node.mjs <site> <ac root> <race.ini> <assists.ini> <seed> <tape> <camera> <focus> <log out> [wav out]
 // race_sound_proof (the page's wasm + sound.js + FMOD 2.03 HTML5) in node: every car of race.ini.
 import fs from 'node:fs';

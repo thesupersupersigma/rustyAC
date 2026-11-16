@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 0b: the pages of three older releases, each built in its own worktree (one at a
 # time, 4 jobs), into re/scratch/task42b/tgt_old/<tag>/site. usage: old.sh [tags...]
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC || exit 1

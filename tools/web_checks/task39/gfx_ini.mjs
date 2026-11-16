@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Task 39: the video.ini the page writes for a ?graphics= spec (the page's own helpers, cut out
 // of web/app.js), for the native full_frame runs.  usage: node gfx_ini.mjs <spec> <out file>
 import { readFileSync, writeFileSync } from 'node:fs';

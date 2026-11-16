@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42 test app: a window with every kind of control, every setter and listener of `ac`
 # called with good and bad arguments, the drawing calls in a render callback; every return
 # value, exception and listener call is logged.

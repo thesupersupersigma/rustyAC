@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # step 0: a race.ini drive from the page's own menu (no launcher): AC's ESC menu, a real click
 # on Drive, then real keys. usage: mkflow3.py <name> <race.ini> <seconds to wait after Drive>
 import json, sys

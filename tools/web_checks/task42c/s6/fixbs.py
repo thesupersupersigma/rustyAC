@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 p = 'docs/port/leftovers_42c.md'
 s = open(p, 'rb').read().decode('utf-8')
 bs = chr(92)

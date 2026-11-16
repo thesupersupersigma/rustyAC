@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b steps 3-4: real (trusted) keys and mouse buttons in a Full drive started from AC's
 # launcher. Each browser key must reach the game, not the browser (the page stays, no reload,
 # no history step); F1 / F6 change the camera; beforeunload asks during the drive and not in

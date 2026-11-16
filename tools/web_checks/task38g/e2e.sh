@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 38g end to end, all on 127.0.0.1, with 38e's stand-ins (fake_docker.mjs, edge.mjs,
 # shot.mjs): the panel on the --all pack (dist-server with index.json) saves a preset on a car
 # and a track the old two-server pack did not have (Toyota GT86 at Magione, random skins);

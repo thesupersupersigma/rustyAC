@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 7: who refuses "Session is closed to new connections", and what the page says.
 # All on 127.0.0.1: Kunos' acServer (a copy of dist-server, Laguna Seca, race only, the given
 # [RACE] IS_OPEN), the gateway, web/serve.py. Desktop "a" joins at once and drives; once the

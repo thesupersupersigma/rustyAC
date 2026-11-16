@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // node direct_probe.mjs: probe2's steps on the FMOD that sound.js loaded
 import fs from 'node:fs';
 import { createRequire } from 'node:module';

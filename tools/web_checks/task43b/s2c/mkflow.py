@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43b step 2c: the page joins a server through AC's launcher (the theme's Drive -> Online,
 # the server, the car, Join), drives the race to its end, leaves, and AC's launcher shows the
 # results page from race_out.json. The theme's own buttons are clicked inside its frame.

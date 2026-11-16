@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 1: an older pack + `web_pack --delta <its manifest.json>` == a full new pack, file for file.
 # old: F2004 at Laguna Seca and Magione; new: F2004 and Z4 at Laguna Seca (a car more, a track less),
 # and one file of the old pack is "changed" (its bytes and its manifest hash) so the delta must

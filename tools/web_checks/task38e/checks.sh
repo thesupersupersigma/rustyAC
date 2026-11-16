@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 38e: clippy every way (CI's lists + the Task 38 extras) and the --locked builds.
 cd "$(dirname "$0")/../../.." || exit 1
 O=re/scratch/task38e/checks

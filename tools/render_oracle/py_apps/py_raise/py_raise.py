@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42 test app: acMain fails with an error raised by C code (its value a str; an exception
 # object raised by Python code would crash acs.exe in PythonInterface::printErr).
 import ac

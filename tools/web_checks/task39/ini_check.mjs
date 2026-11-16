@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 const OFF_TO_ULTRA = ['Off', 'Low', 'Medium', 'Normal', 'High', 'Ultra'].map((text, i) => [String(i), text]);
 const GFX = [
   ['Resolution', 'VIDEO/WIDTH', 'resolution', false],

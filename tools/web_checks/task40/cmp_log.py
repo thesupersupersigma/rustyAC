@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # kgl logs of the GUI sequences, D3D11 vs wgpu: equal except `fw1 atlas update` lines
 import sys, re
 d, w = sys.argv[1], sys.argv[2]

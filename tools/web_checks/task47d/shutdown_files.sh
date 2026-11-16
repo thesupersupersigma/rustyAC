@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 47d step 3: the apps' files at the end of a drive, desktop vs page. One session (car, track,
 # a video.ini in triple-screen mode, the same --gui-do clicks on the Triple screen app's spinners):
 # rustyac.exe writes them into its --cfg-dir / savedData when it closes; the page's code

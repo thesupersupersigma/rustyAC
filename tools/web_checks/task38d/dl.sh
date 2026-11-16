@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Download faults, old page (v0.38.2) against the fixed one. Everything on 127.0.0.1.
 #   sh tools/web_checks/task38d/dl.sh old|new [case ...]
 # cases: clean cut wrong zero short 503x5 spoiled; one line per case in dl_<side>.txt

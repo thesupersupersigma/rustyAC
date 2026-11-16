@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b: one page run against the install. usage: page.sh <name> <query> <script.js> [check.mjs args]
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC
 S=re/scratch/task42b/s0; name=$1; q=$2; script=$3; shift 3

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A stand-in for the Docker Engine API behind the socket proxy, on 127.0.0.1 only: the panel's
 // container calls become local processes. "rustyac-acserver" = the copy of Kunos' acServer.exe
 // in re/scratch/task38e/acserver/ in a folder laid out as server/entrypoint.sh lays it out;

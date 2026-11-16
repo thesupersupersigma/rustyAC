@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 38j step 4: two headless Chromes join one server in Full mode, all on 127.0.0.1:
 # Kunos' acServer (a copy of dist-server, Laguna Seca, no lobby), the gateway, web/serve.py
 # with the test pack. Each page reports the drivers it sees and the other car's place, then

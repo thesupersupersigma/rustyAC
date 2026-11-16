@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // node bank_check.mjs <ac root> <out.tsv> [pack manifest.json]
 // Every sound bank of the install (or only the pack's) in FMOD Studio 2.03 HTML5 (the wasm the
 // page uses): loads it twice, first without ALLOW_MISSING_PLUGINS (does it name a plug-in

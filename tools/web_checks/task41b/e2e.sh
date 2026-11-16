@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 41b: Task 38g's test on this build's site (38d's old wasm no longer fits web/app.js).
 # Task 38g end to end, all on 127.0.0.1, with 38e's stand-ins (fake_docker.mjs, edge.mjs,
 # shot.mjs): the panel on the --all pack (dist-server with index.json) saves a preset on a car

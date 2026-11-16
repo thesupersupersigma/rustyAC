@@ -13,9 +13,9 @@ Copyright (c) 2026 thesupersupersigma.
 | The game, the car physics, the sound, the renderer, the game's GUI and HUD and the launcher | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/`<br>`crates/rustyac-render/`<br>`crates/rustyac-gui/`<br>`crates/rustyac-launcher/`<br>`crates/rustyac-python/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
 | The browser preview: the wasm build, its page and its server image | `crates/rustyac-web/`<br>`web/` (but `web/fonts/`)<br>`.dockerignore` | `GPL-3.0-or-later` |
 | The Selawik font for the launcher theme in the browser | `web/fonts/` | `OFL-1.1`: [web/fonts/Selawik-OFL.txt](web/fonts/Selawik-OFL.txt) |
-| Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/`<br>`tools/web_pack/`<br>`tools/launcher_oracle/` | `GPL-3.0-or-later` |
+| Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/`<br>`tools/web_pack/`<br>`tools/launcher_oracle/`<br>`tools/net_gold/`<br>the proof and browser check scripts `tools/proofs/`, `tools/web_checks/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
-| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`crates/rustyac-dxbc/` (reads compiled shaders and writes WGSL; it contains no shader)<br>`tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/math_proof/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`, and the server panel `server/panel/`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`crates/rustyac-dxbc/` (reads compiled shaders and writes WGSL; it contains no shader)<br>`tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/math_proof/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the website media scripts `tools/site_media/`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`, and the server panel `server/panel/`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
 
 **What the licenses mean in short:**
@@ -40,7 +40,9 @@ everything that links the car physics is GPL.
   `crates/rustyac-math/src/pure.rs` computes the same results: the runtime's algorithms for ten
   maths functions (AMD's LibM and Microsoft's C code), written again in Rust from the DLL's
   machine code, with the lookup tables' numbers in `pure_tables.rs`. Its second line says so:
-  `Ported from MSVCR120.dll ...`. `crates/rustyac-ode/src/rcp_table.rs` is the answers of Intel's
+  `Ported from MSVCR120.dll ...`. `crates/rustyac-math/src/powf4_table.rs` is the 2^(j/2048)
+  table of the same runtime's vector maths (`__sse2_powf4`, which acs.exe links in): the powers of
+  two at float precision. `crates/rustyac-ode/src/rcp_table.rs` is the answers of Intel's
   `rcpps` instruction, measured on a processor.
 - **FMOD Studio 1.08.12** (`fmod64.dll`, `fmodstudio64.dll`), Firelight Technologies' sound
   engine, which Assetto Corsa is built on. rustyAC only calls the player's installed copy: it
@@ -91,9 +93,31 @@ everything that links the car physics is GPL.
   proof; it is not in this repository and not in any release. The browser preview's build also
   downloads the programs `wasm-bindgen` and binaryen's `wasm-opt` (`web/build.py`).
 - The server panel (`server/panel/`) has no runtime packages; its type check and its image use
-  the npm packages `typescript` (Apache-2.0) and `@types/node` (MIT), downloaded by npm, and the
+  the npm packages `typescript` (Apache-2.0), `@types/node` (MIT) and its `undici-types` (MIT), downloaded by npm, and the
   container images `node` (MIT) and `tecnativa/docker-socket-proxy` (Apache-2.0), pulled by
   Docker. None of them is in this repository.
+
+### Every crate in the lock files
+
+These are all 152 third-party crates in `Cargo.lock` and the tools' own `tools/*/Cargo.lock`, by the
+license each one declares on crates.io (a crate under "A OR B" may be used under either). Some
+are only built for other platforms or only for the tools; none of them is in this repository.
+
+- **MIT OR Apache-2.0** (104): `allocator-api2`, `android_system_properties`, `arrayvec`, `ash`, `autocfg`, `bit-set`, `bit-vec`, `bitflags`, `bumpalo`, `cc`, `cfg-if`, `console_error_panic_hook`, `crc32fast`, `document-features`, `equivalent`, `fdeflate`, `find-msvc-tools`, `flate2`, `futures-core`, `futures-task`, `futures-util`, `getrandom`, `gpu-allocator`, `half`, `hashbrown`, `indexmap`, `jni-sys`, `jni-sys-macros`, `jpeg-decoder`, `js-sys`, `khronos-egl`, `libc`, `litrs`, `lock_api`, `log`, `naga`, `naga-types`, `ndk-sys`, `num-traits`, `once_cell`, `parking_lot`, `parking_lot_core`, `pin-project-lite`, `pkg-config`, `png`, `portable-atomic`, `portable-atomic-util`, `presser`, `proc-macro2`, `profiling`, `quote`, `range-alloc`, `raw-window-metal`, `renderdoc-sys`, `rustc-hash`, `rustls-pki-types`, `rustversion`, `scopeguard`, `serde`, `serde_core`, `serde_derive`, `shlex`, `smallvec`, `static_assertions`, `syn`, `thiserror`, `thiserror-impl`, `unicode-width`, `version_check`, `wasm-bindgen`, `wasm-bindgen-futures`, `wasm-bindgen-macro`, `wasm-bindgen-macro-support`, `wasm-bindgen-shared`, `web-sys`, `wgpu`, `wgpu-core`, `wgpu-core-deps-wasm`, `wgpu-core-deps-windows-linux-android`, `wgpu-hal`, `wgpu-naga-bridge`, `wgpu-types`, `windows`, `windows-collections`, `windows-core`, `windows-future`, `windows-implement`, `windows-interface`, `windows-link`, `windows-numerics`, `windows-result`, `windows-strings`, `windows-sys`, `windows-targets`, `windows-threading`, `windows_aarch64_gnullvm`, `windows_aarch64_msvc`, `windows_i686_gnu`, `windows_i686_gnullvm`, `windows_i686_msvc`, `windows_x86_64_gnu`, `windows_x86_64_gnullvm`, `windows_x86_64_msvc`, `zeroize`.
+- **MIT** (17): `cfg_aliases`, `crunchy`, `dlib`, `libm`, `objc2`, `objc2-encode`, `objc2-foundation`, `ordered-float`, `redox_syscall`, `simd-adler32`, `slab`, `tokio`, `wayland-sys`, `webview2-com`, `webview2-com-macros`, `webview2-com-sys`, `xml-rs`.
+- **MIT OR Apache-2.0 OR Zlib** (9): `bytemuck`, `bytemuck_derive`, `dispatch2`, `glow`, `miniz_oxide`, `objc2-core-foundation`, `objc2-metal`, `objc2-quartz-core`, `raw-window-handle`.
+- **Apache-2.0** (5): `codespan-reporting`, `gl_generator`, `glutin_wgl_sys`, `khronos_api`, `spirv`.
+- **ISC** (3): `libloading`, `rustls-webpki`, `untrusted`.
+- **Zlib** (3): `foldhash`, `slotmap`, `zlib-rs`.
+- **MIT OR Apache-2.0 OR BSD-2-Clause** (2): `zerocopy`, `zerocopy-derive`.
+- **MIT OR Unlicense** (2): `termcolor`, `winapi-util`.
+- **(MIT OR Apache-2.0) AND Unicode-3.0** (1): `unicode-ident`.
+- **Apache-2.0 AND ISC** (1): `ring`.
+- **Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT** (1): `wasi`.
+- **BSD-3-Clause** (1): `subtle`.
+- **CDLA-Permissive-2.0** (1): `webpki-roots`.
+- **MIT OR Apache-2.0 OR 0BSD** (1): `adler2`.
+- **MIT OR Apache-2.0 OR ISC** (1): `rustls`.
 
 ## FMOD (additional permission)
 

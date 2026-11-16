@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 0b: flows that measure the page's cost in three states (check.mjs --flow).
 # usage: mkperf.py <name> idle|drive  -> re/scratch/task42b/s0b/<name>_flow.json
 # Each measure: CDP Performance metrics before/after a 20 s window, the page's frame

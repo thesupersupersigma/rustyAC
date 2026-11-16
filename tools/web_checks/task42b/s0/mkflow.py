@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # writes the flows of step 0: the launcher's Start, then real keys
 import json, sys
 S = 're/scratch/task42b/s0'

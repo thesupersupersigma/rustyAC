@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # waits for the orphaned fresh.sh (pid 814) to end, then runs the game-loading areas one by one
 while kill -0 814 2>/dev/null; do sleep 30; done
 tail -n 1 target/proofs/fresh.log

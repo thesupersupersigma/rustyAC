@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 38j step 3: Full drives one after another in one page (Laguna Seca, Spa, three times
 # each), the wasm memory and the files held after each.
 # usage: mem.sh   (needs web/build.py's build; writes re/scratch/task38j/mem/)

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 //! The textures YEBIS fills on the CPU at start-up (`CTextureUtil::InitializeDevice` 0x1403e6890),
 //! with the game's float maths. The film grain and the CIE tables are read from the player's
 //! acs.exe (file offsets of acs.exe 1.16), never copied here.

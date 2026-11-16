@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 4: the page (Full mode, on a local server) with F7 (free camera; the arrows
 # move it), F1 (back), F4 (the fade back to your car), then full screen: Esc and Esc held.
 # usage: mkflow.py <out.json> <run dir>

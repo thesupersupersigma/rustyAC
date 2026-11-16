@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 41b A.3: frame rate with sound, Task 41's page (re/scratch/task41/site) against this one
 # (re/scratch/task41b/site), and sound off: Task 41's fps.sh drive (f2004 at Spa, autodrive,
 # 40 s, headless Chrome) on Task 41's pack, twice each, one at a time.

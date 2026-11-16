@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // check.mjs --script: spoils the stored copy of bmw_z4_gt3's data.acd in the browser's storage
 // (same size, every stored byte shifted: what a damaged copy looks like) and adds a file no pack
 // lists (a leftover of an older pack). Returns what it did.

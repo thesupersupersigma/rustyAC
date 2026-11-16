@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b: one --flow page run against the install. usage: flow.sh <name> <query> <flow.json>
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC
 S=re/scratch/task42b/s0; name=$1; q=$2; flow=$3

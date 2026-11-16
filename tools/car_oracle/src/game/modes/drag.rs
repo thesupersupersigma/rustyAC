@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `DragMode` (update, finish line, new session, goals) on made-up matches against
 //! `rustyac_physics::race::drag`, every member, call and lap every frame.
 

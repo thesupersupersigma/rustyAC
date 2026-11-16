@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 47d step 3, live in Chrome: the Triple screen app's save at the end of a page drive. The
 # page's Documents get Task 47c's run6 triple_screen.ini (the desktop run's start file), a Full mode
 # drive in triple mode clicks the same spinners as shutdown_files.sh, Esc ends the drive, and the

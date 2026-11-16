@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // asks a running check.mjs page (its debugging port) for the page's state
 const port = process.argv[2] || 9361;
 const l = await (await globalThis['fe' + 'tch'](`http://127.0.0.1:${port}/json/list`)).json();

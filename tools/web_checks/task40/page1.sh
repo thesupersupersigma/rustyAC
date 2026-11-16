@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 40: one page drive (copy of task38i/page1.sh) in headless Chrome.
 # usage: page1.sh <name> <query> [check.mjs args...]
 #   env FLAGS (Chrome flags, default SwiftShader WebGPU), PORT, PROFILE (Chrome profile folder),

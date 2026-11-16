@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43b step 2: a live pit stop through the old mouse menu. The game's AI never uses the menu
 # (AIDriver::stepSplineSelection puts its car into the box itself) and is not called in by its
 # own stint in a race's last two laps; here --ai-drive drives a keyboard driver's car

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 44c step 9: race_out.json after an online server starts its next race. Kunos' acServer on
 # 127.0.0.1 (a copy of dist-server, Laguna Seca), races only, LOOP_MODE=1, 1 lap, a long
 # RACE_OVER_TIME so the clients can leave between the second race's end and the third's start.

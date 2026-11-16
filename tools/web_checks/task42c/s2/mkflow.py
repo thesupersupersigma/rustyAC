@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 2: the page "b" (Full mode, autodriven) through a race's end: the results, its
 # trip to the pit box, "Drive" refused until the next session, then "Drive" again.
 # usage: mkflow.py <out.json> <run dir>

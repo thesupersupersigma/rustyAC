@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 3: the old mouse pit menu in rustyac.exe itself. A keyboard driver's controls
 # (a copy of Documents' controls.ini with INPUT_METHOD=KEYBOARD), an AI driver in the player's
 # car called in at 340 s of the run (a race of 3 laps; its start comes at about 321 s of a

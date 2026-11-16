@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 38e end to end, all on 127.0.0.1: the panel (node server/panel/src/main.ts) against
 # the Docker stand-in (fake_docker.mjs: the acServer copy and the repo's gateway as local
 # processes), behind the Access stand-in (edge.mjs); the page (web/serve.py with this task's

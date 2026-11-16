@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 4: the page alone on a local acServer copy (127.0.0.1 only) through the gateway,
 # served with a stand-in install that allows the free camera (re/scratch/task42c/s4/acroot).
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC || exit 1

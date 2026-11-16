@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # fps.sh <name> <query>: a 40 s autodrive in headless Chrome on the scratch pack
 cd "$(dirname "$0")/../../.."
 D=re/scratch/task41

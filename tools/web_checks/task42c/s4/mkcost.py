@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 4: who calls timers and rAF in each document, by calling file (stack's caller),
 # with the launcher shown, then during a Full drive, then back in the launcher.
 # usage: mkcost.py <out flow.json> <shot prefix>

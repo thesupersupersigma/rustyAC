@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! `TimeAttack` (session type 5): a time budget per sector, points at each checkpoint (a

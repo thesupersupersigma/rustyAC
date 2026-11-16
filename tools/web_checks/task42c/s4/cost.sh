@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # usage: cost.sh <name> [query]
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC
 S=re/scratch/task42c/s4; name=$1; q=${2:-backend=full}; P=8177

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 38j step 2: race.ini conditions (sun 56, time x4, heavy clouds, 9/12 C, grip 86 % +
 # 20 groove laps, wind) in Full mode. Physics: desktop record + replay, native race_proof, the
 # page's Full drive playing the tape. Picture: the page's Full fixed frame against native wgpu

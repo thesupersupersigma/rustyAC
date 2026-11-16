@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # D3D11 port side of some GUI sequences: kgl logs + DirectWrite glyphs/layouts (wgpu side)
 cd "$(dirname "$0")/../../.."
 O=re/scratch/task40/wgpu

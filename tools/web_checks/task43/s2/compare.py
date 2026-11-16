@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Task 43 step 2: rustyAC's online race_out.json (per client) against acServer's own results files.
    py -I tools/web_checks/task43/s2/compare.py re/scratch/task43/s2/run"""
 import glob

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42 test app: calls every data getter of `ac` with good and bad arguments and logs
 # every return value or exception, every frame.
 import re

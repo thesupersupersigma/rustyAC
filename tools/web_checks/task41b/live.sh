@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 41b A.1: a 2-client online session's sound. Two headless Chromes join one server, all on
 # 127.0.0.1: Kunos' acServer (a copy of dist-server, Spa, no lobby, made-up admin password), the
 # gateway, web/serve.py with Task 41's pack (FMOD 2.03 HTML5 in it). Each page keeps a sound tape

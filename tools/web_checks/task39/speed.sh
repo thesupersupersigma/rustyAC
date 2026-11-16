@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 39: the speed table. A 20 s Full drive (autodrive, f2004 at Magione from the test pack)
 # at 1920 x 1080 for each preset, on this PC's GPU and on SwiftShader.
 # usage: speed.sh [gpu|swift]...   (default: both)

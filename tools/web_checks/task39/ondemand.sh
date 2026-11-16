@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 area=browser_ondemand
 . tools/proofs/lib.sh
 # the panel's on-demand servers (Task 39): the page under /play/app/ as on rustyac.com, the router's

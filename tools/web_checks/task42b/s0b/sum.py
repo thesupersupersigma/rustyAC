@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 0b: one line per measured run (main-thread ms per s, frames, heap, calls).
 import json, sys
 for path in sys.argv[1:]:

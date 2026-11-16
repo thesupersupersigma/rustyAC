@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 40 step 2: AC's GUI in Full mode's fixed frame, the same --gui-do script three ways:
 # native full_frame on Direct3D 11, native full_frame on kgl's wgpu (GPU), the page (headless
 # Chrome on the GPU, Vulkan). Logs compared except `fw1 atlas update` lines (the glyph bytes).

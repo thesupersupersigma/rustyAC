@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 4: the chat lines and votes rustyAC sends, against the game's own sendChat /
 # sendVote. A live session on 127.0.0.1 (Kunos' acServer, a copy of dist-server, Laguna Seca):
 # rustyac.exe "a" (taped) and "b" drive; a chats and votes. Then car_oracle net hands every chat

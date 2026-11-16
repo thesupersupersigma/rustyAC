@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 46c: the page's camera keys and pointer-locked look (look_flow.py) on the fake root.
 cd "$(dirname "$0")/../../.." || exit 1
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w re/scratch/task46c/fakeac.ps1)"

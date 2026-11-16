@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // node node_proof.mjs <site> <ac root> <car> <track> <tape> <camera> <log out> [wav out]
 // sound_proof (the page's wasm + sound.js + FMOD 2.03 HTML5) in node.
 import fs from 'node:fs';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // check.mjs --script (with --launcher): the theme's server list (ac://getserverlist, the request
 // its online page makes each time it opens) before and after the panel starts a server. The
 // "ready" request tells e2e.sh (serve.py's log) to start it now; the page is not reloaded.

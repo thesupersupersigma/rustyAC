@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # run.sh <car> <track> <scenario> <camera> [build]: the page's sound proof in node
 cd "$(dirname "$0")/../../.."
 export CARGO_BUILD_JOBS=4

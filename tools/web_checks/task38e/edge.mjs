@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // What Cloudflare Access does in front of the panel, on 127.0.0.1 only, with a test key pair
 // made for this run: the team's public keys at /cdn-cgi/access/certs (port <certs>), and a
 // proxy (port <edge>) that adds a signed Cf-Access-Jwt-Assertion to every request it carries

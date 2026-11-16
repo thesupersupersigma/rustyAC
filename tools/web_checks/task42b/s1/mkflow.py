@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 1: the page "b" that joins a race in progress: what it shows, a real throttle
 # key, F1, then the race's end and the next race (every 20 s). usage: mkflow.py <out.json> <run dir>
 import json, sys

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 6: a Z4 in its "fanatec" skin (not the first by name) at Laguna Seca in Full mode,
 # from the preview pack before the change ("old") and after it (old + the delta); which suit
 # files the page fetched, and the picture.

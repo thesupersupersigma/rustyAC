@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 0b: the before/after table. Each page (three older releases, v0.42.0 + 42b's
 # fixes so far = "now", and the HUD fix = "fix" once built) measured three ways, one at a
 # time: the launcher idle, a Debug drive, a Full drive (v0.37.2 has no Full mode).

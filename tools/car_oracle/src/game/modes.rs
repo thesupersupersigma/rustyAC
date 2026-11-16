@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Task 45: the game's own special-event goals against the port's
 //! (`rustyac_physics::race::game_mode`), in-process:
 //!

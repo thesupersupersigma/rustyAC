@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 2: race_out.json after an online session. A live session on 127.0.0.1 (Kunos'
 # acServer, a copy of dist-server, Laguna Seca: practice 2 min, qualifying 2 min, a 1-lap race):
 # rustyac.exe "a" and "b" drive through all three; each writes race_out.json into its own folder

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 43 step 5: "ESC in the last 5 s before the start, online, sends you to the pits and locks
 # the controls for 20 s" (ESCMenu::render 0x1400fe420), live. Kunos' acServer on 127.0.0.1
 # (Laguna Seca, a race of 1 lap alone, WAIT_TIME 30): rustyac.exe "a" (a window) has the ESC

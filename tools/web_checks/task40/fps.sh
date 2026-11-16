@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 40: the page driving (autodrive) in Full mode with AC's HUD and 3 apps open, on the GPU:
 # frame rate per graphics preset, and a screenshot.
 # usage: sh tools/web_checks/task40/fps.sh <name> <graphics spec> [seconds] [size] [extra query]

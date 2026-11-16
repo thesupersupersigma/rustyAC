@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A screenshot of a page in a headless Chrome (web/check.mjs's flags: its own profile in the
 // repo, nothing but 127.0.0.1 reachable), after it had <seconds> to load; optional JS run first.
 //   node tools/web_checks/task38e/shot.mjs <url> <out.jpg> [seconds] [js]

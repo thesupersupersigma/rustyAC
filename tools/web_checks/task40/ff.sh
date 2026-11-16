@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Full mode's fixed frame with AC's GUI, natively on D3D11 and on wgpu (GPU), logs compared.
 # usage: sh tools/web_checks/task40/ff.sh <name> "<gui-do script>" [full_frame args...]
 cd "$(dirname "$0")/../../.." || exit 1

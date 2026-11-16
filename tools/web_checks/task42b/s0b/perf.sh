@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42b step 0b: one measured page run. usage: perf.sh <name> <site folder> <query> idle|drive
 # env FLAGS (Chrome flags, default the real GPU), PORT
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # D3D11 full_frame pictures of GUI scripts, for choosing the sequences (no compare).
 # usage: sh tools/web_checks/task40/look.sh name "script" [name "script"]...
 cd "$(dirname "$0")/../../.." || exit 1

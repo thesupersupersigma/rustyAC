@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // node replay_probe.mjs: the traced setup calls (setup_calls.txt) through sound.js with a stand-in for the page's wasm
 import fs from 'node:fs';
 import { createRequire } from 'node:module';

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # same41.sh [filter]: Task 41's 18 drives in node with this build (re/scratch/task41b/site): the
 # call log against Task 41's page log (must be identical) and against the desktop's
 cd "$(dirname "$0")/../../.."

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The session's mode object (`Sim::Sim` makes one by the first session's type): the

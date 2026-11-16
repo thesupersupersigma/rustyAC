@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // check.mjs --script for multiplayer runs: the page's multiplayer line, its log's last lines,
 // the online part of the display and this visit's diagnostics (when the page keeps them)
 const visits = JSON.parse(localStorage.getItem('rustyac.diagnostics') || '[]');

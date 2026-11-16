@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 6: Z4 at Laguna's pit box in Full mode, from the scratch preview pack and from the install
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC
 S=re/scratch/task42c/s6; P=8193

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # cmp.sh <car> <track> <scenario> <camera>: page run in node, then its log against the desktop's
 cd "$(dirname "$0")/../../.."
 cp web/sound.js re/scratch/task41/site/sound.js

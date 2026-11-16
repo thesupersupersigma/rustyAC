@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Task 42c step 3: the Python apps online. A local acServer copy (127.0.0.1 only), desktop "a" runs
 # the check app cam42c (stand-in AC folder), desktop "b" chats; the app's log and the console.
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC || exit 1

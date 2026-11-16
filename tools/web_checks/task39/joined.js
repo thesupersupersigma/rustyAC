@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // check.mjs --script for e2e.sh's joins (driving, or --menu once the join is over): the car
 // the page asked the server for, what it drives (its display), the multiplayer line, the refusal
 await new Promise((r) => setTimeout(r, 3000)); // (with --menu: the join may not have begun)
