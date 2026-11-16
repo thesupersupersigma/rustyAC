@@ -20,8 +20,8 @@ pub const MOVED_OBJECTS: usize = 8;
 /// How many other cars a [`CarView`] can show (Task 24: the debug view's boxes).
 pub const OTHER_CARS: usize = 31;
 /// Task 43c: the wings the car view carries (FormWings).
-// shortcut: a car with more [WING_n] + [FIN_n] shows only the first 12 in the Wings app; raise if one appears
-pub const MAX_WINGS: usize = 12;
+// (FormWings draws every wing; the most among installed cars is 23, vrc_formula_alpha_2025)
+pub const MAX_WINGS: usize = 32;
 
 /// What the game's `Car::getPhysicsState` @ 0x140270d70 hands the car's picture beyond the
 /// members of [`CarView`]: the values the car's visual helpers read (ground shadows, skid
@@ -1051,7 +1051,7 @@ impl CarView {
 /// What the Setup debug app reads of the focused car's `Car` (`focus`: 0 the player's, then the
 /// other cars in their order).
 pub fn setup_debug(sim: &GameSim, focus: usize) -> rustyac_gui::app_setup_debug::SetupDebugCar {
-    // shortcut: an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted
+    // shortcut (known gap, shortcuts.md #19): an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted
     let car = sim.cars().nth(focus).unwrap_or(&sim.car.car);
     let d = car.drivetrain.as_ref().map(|d| d.base());
     let gear_ratios: Vec<f64> = d.map_or(Vec::new(), |d| d.gears.iter().map(|g| g.ratio).collect());
@@ -1213,7 +1213,7 @@ pub fn telemetry_values(sim: &GameSim, names: &[String]) -> Vec<f32> {
                 "STEER_DEG" => car.get_wheel_steer_angle_deg(wheel),
                 // (Car::getPhysicsState's copies, which the main thread reads)
                 "FF_FINAL" => car.last_ff_final(),
-                // shortcut: the speed of this step stands for the previous snapshot's, exact but at the 2 m/s edge
+                // shortcut (known gap, shortcuts.md #20): the speed of this step stands for the previous snapshot's, exact but at the 2 m/s edge
                 "RIDE_HEIGHT_F" => car.ride_heights(car.speed)[0],
                 "RIDE_HEIGHT_R" => car.ride_heights(car.speed)[1],
                 // SKID_VOL SKID_PITCH: the sound's, on the display thread (GameGui::telemetry_skids)

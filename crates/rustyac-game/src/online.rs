@@ -203,7 +203,7 @@ pub struct OnlineGui {
     pub time_to_session_start: f64,
     pub player_in_pit: bool,
     /// the Net monitor's: car 1's (guid 1) `NetCarStateProvider::errorVector`
-    /// shortcut: refreshed with the rest of this state (every 64 steps), not every frame
+    /// shortcut (known gap, shortcuts.md #7): refreshed with the rest of this state (every 64 steps), not every frame
     pub car1_error_vector: [f32; 3],
 }
 
@@ -305,6 +305,8 @@ pub struct OnlineSession {
     /// `endSession.sendToPitsTimer` (5 s at the join, 0 after a new session), seconds
     result_screen_on: bool,
     send_to_pits_timer: f32,
+    /// `ACClient::ignoreResultTeleport`: options.ini `[OPTIONS] IGNORE_RESULT_TELEPORT` > 0
+    ignore_result_teleport: bool,
     /// Task 43: `ACClient`'s laps of the session, the `race_out.json` being made (once the
     /// cars are there, `start_results`), every car's tyre compound and the `players` list
     /// (by car number), the player's `physicsState.lapCount` and `bestLap`
@@ -363,6 +365,13 @@ fn number_of(map: &[(u8, usize)], slot: u8) -> Option<usize> {
     map.iter().find(|(s, _)| *s == slot).map(|(_, car)| *car)
 }
 
+/// `ACClient::ACClient` 0x14003a2c0: `hasKey` then `0 < getInt` of system/cfg/options.ini
+/// `[OPTIONS] IGNORE_RESULT_TELEPORT` (the shipped file has 0).
+fn ignore_result_teleport(root: Option<std::path::PathBuf>) -> bool {
+    let ini = root.and_then(|root| rustyac_physics::data::ini::IniReader::load(&root.join("system/cfg/options.ini")).ok());
+    ini.filter(|ini| ini.has_key("OPTIONS", "IGNORE_RESULT_TELEPORT")).is_some_and(|ini| ini.get_int("OPTIONS", "IGNORE_RESULT_TELEPORT").unwrap_or(0) > 0)
+}
+
 /// The short name of a car's `tyres.ini [COMPOUND_DEFAULT] INDEX` compound (front).
 fn default_compound(data_path: &Path) -> String {
     let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&data_path.join("tyres.ini")) else { return String::new() };
@@ -410,7 +419,7 @@ impl OnlineSession {
         // Sim::getCar order: the player's car, then the others
         let player = |car: &CarEntry| rustyac_physics::race::output::Player { name: car.driver_name.clone(), car: car.model.clone(), skin: car.skin.clone() };
         let players = cars.iter().filter(|car| car.session_id == me).map(player).chain(remote_entries.iter().map(player)).collect();
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0, laps: rustyac_net::laps::SessionLaps::default(), json: None, compounds: Vec::new(), players, local_lap_count: 0, local_best_lap: 0 }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0, ignore_result_teleport: ignore_result_teleport(crate::sim::ac_root()), laps: rustyac_net::laps::SessionLaps::default(), json: None, compounds: Vec::new(), players, local_lap_count: 0, local_best_lap: 0 }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -789,7 +798,7 @@ impl OnlineSession {
                         self.laps.sector_split(car, *sector as usize, *time);
                     }
                 }
-                // shortcut: another car's compound is the one it last told of (tyres.ini's
+                // shortcut (known gap, shortcuts.md #8): another car's compound is the one it last told of (tyres.ini's
                 // default before), not read from its CarAvatar; upgrade if the tyres differ
                 Event::Message(Message::TyreCompound { slot, compound }) => {
                     if let Some(car) = number_of(&self.car_numbers(), *slot).filter(|car| *car != 0) {
@@ -967,8 +976,12 @@ impl OnlineSession {
 
     /// Task 42b: `ACClient::update` 0x140053b30 while the race's results show: the car stops
     /// gently, and once `sendToPitsTimer` runs out it goes to its pit box (true: now).
-    /// shortcut: options.ini's IGNORE_RESULT_TELEPORT is not read and there is no fade; add them if a player asks.
+    /// options.ini's IGNORE_RESULT_TELEPORT leaves the car alone.
+    /// shortcut (known gap, shortcuts.md #9): the teleport is at once, the game's is at its 4 s fade's event.
     pub fn result_frame(&mut self, car: &mut RollingChassis, dt: f32) -> bool {
+        if self.ignore_result_teleport {
+            return false;
+        }
         // (CarAvatar::setGentleStop: on every frame of the result screen, off at a new session)
         car.is_gentle_stopping = self.result_screen_on;
         if !self.result_screen_on || !pits_due(&mut self.send_to_pits_timer, dt) {
@@ -1074,6 +1087,23 @@ fn pits_due(timer: &mut f32, dt: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ignore_result_teleport_is_a_positive_key() {
+        // ACClient::ACClient: hasKey, then 0 < getInt
+        let root = std::env::temp_dir().join(format!("rustyac_irt_{}", std::process::id()));
+        std::fs::create_dir_all(root.join("system/cfg")).unwrap();
+        let with = |text: &str| {
+            std::fs::write(root.join("system/cfg/options.ini"), text).unwrap();
+            super::ignore_result_teleport(Some(root.clone()))
+        };
+        assert!(!with("[OPTIONS]\nIGNORE_RESULT_TELEPORT=0\n"));
+        assert!(with("[OPTIONS]\nIGNORE_RESULT_TELEPORT=1\n"));
+        assert!(!with("[OPTIONS]\nIGNORE_RESULT_TELEPORT=-1\n"));
+        assert!(!with("[OPTIONS]\n"));
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(!super::ignore_result_teleport(None));
+    }
+
     #[test]
     fn sent_to_pits_once_after_the_timer() {
         // the first race's results: 5 s (ACClient::ACClient), then never again in that session
