@@ -777,7 +777,7 @@ impl Host for LiveHost {
     fn message(&mut self, text: &str, description: &str) {
         self.0.lock().unwrap().push((text.to_string(), description.to_string()));
     }
-    // shortcut: no avatar texture and no Friends Leaderboard rows on screen (the calls are
+    // shortcut (known gap, shortcuts.md #1): no avatar texture and no Friends Leaderboard rows on screen (the calls are
     // made as the game makes them), until the Friends app is wired to the GUI
     fn create_texture(&mut self, _width: u32, _height: u32, _rgba: &[u8]) -> u64 {
         0
@@ -835,7 +835,7 @@ impl Live {
     }
 
     /// Once a drawn frame: `SteamInterface::update`.
-    // shortcut: runs only where frames are drawn (the window, or headless with --drawn-frames),
+    // shortcut (unreachable, shortcuts.md #2): runs only where frames are drawn (the window, or headless with --drawn-frames),
     // until headless achievements are asked for
     pub fn frame(&mut self, sim: &crate::sim::GameSim) {
         use rustyac_physics::race::game_mode::Mode;

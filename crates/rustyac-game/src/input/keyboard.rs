@@ -417,7 +417,7 @@ impl KeyboardCarControl {
         let p = line.point_at(i as u32);
         let (z, x) = (c[2] - p[2], c[0] - p[0]);
         let mut d = root(z * z + x * x);
-        // `comiss d, dist; jb`: a NaN goes on. shortcut: the game never stops when no point
+        // `comiss d, dist; jb`: a NaN goes on. shortcut (known gap, shortcuts.md #5): the game never stops when no point
         // is far enough (or on a NaN); rustyAC stops after one lap of the line.
         let mut left = line.points_count();
         while !(d >= dist) && left > 0 {

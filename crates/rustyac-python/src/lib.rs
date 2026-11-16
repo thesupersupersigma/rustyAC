@@ -233,7 +233,7 @@ pub fn start(ac_root: &Path, documents: &Path, python_ini: &Path, gui: &mut Gui,
             let lower = section.to_lowercase();
             let name = folders.iter().find(|f| f.to_lowercase() == lower).cloned().unwrap_or(lower);
             let path = format!("apps/python/{name}/{name}.py");
-            // (an app turned off is "not found" too, as in the game; shortcut: a missing ACTIVE
+            // (an app turned off is "not found" too, as in the game; shortcut (known gap, shortcuts.md #42): a missing ACTIVE
             // reads as 0, untraced in the game; every python.ini AC writes has it)
             if !Path::new(&path).is_file() || ini.get_int(section, "ACTIVE").unwrap_or(0) == 0 {
                 println!("ERROR: Python [ERROR] File {path} not found");
@@ -349,7 +349,7 @@ pub(crate) unsafe fn print_err() {
         // (the game leaves these references as they are)
         return;
     }
-    // shortcut: the game reads the value as a str only: an exception object raised by Python
+    // shortcut (known gap, shortcuts.md #43): the game reads the value as a str only: an exception object raised by Python
     // code (`raise E("...")`) crashes acs.exe here (PyBytes_AsString of a null pointer, seen in
     // the oracle); the port prints an empty message instead
     let msg = if ac::is_str(v) { ac::text_keep_error(v) } else { String::new() };

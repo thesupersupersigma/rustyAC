@@ -1654,7 +1654,7 @@ pub fn gauss_taps(radius: f32, cutoff: f32) -> Result<usize, String> {
         Some(4) => Ok(7),
         Some(6) => Ok(11),
         Some(2) => {
-            // shortcut: the 3x3 program is not ported, the 7-tap one stands in until it is
+            // shortcut (unreachable, shortcuts.md #53): the 3x3 program is not ported, the 7-tap one stands in until it is
             refuse(format!("yebis: a bloom gaussian of radius {radius} (the 3x3) not ported"));
             Ok(7)
         }

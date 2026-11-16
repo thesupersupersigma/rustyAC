@@ -1015,7 +1015,7 @@ impl Kgl {
     }
 
     /// No timestamp queries here: the GPU profiler stays empty.
-    // shortcut: no wgpu timestamp queries, upgrade if the page's profiler is wanted.
+    // shortcut (known gap, shortcuts.md #46): no wgpu timestamp queries, upgrade if the page's profiler is wanted.
     pub fn new_query(&self, _timestamp: bool) -> Option<KglQuery> {
         None
     }

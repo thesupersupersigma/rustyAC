@@ -154,7 +154,7 @@ impl KglTexture {
 
     /// The size, mip count and format of the texture behind the view.
     pub fn describe(&self) -> Option<(u32, u32, u32, Format)> {
-        // shortcut: no caller reads the format, so it is left empty here
+        // shortcut (unreachable, shortcuts.md #47): no caller reads the format, so it is left empty here
         self.shader_resource_view.as_ref().map(Kgl::describe_view).map(|(w, h, m)| (w, h, m, Format::default()))
     }
 }

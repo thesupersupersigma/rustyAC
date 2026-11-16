@@ -222,7 +222,7 @@ fn decode_jpg(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         jpeg_decoder::PixelFormat::RGB24 => pixels.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
         jpeg_decoder::PixelFormat::L8 => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         jpeg_decoder::PixelFormat::L16 => pixels.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], 255]).collect(),
-        // shortcut: CMYK as 255 - (c + k) per channel, not WIC's colour handling; no AC texture seen is CMYK
+        // shortcut (unreachable, shortcuts.md #48): CMYK as 255 - (c + k) per channel, not WIC's colour handling; no AC texture seen is CMYK
         jpeg_decoder::PixelFormat::CMYK32 => pixels.chunks_exact(4).flat_map(|p| [255 - p[0].saturating_add(p[3]), 255 - p[1].saturating_add(p[3]), 255 - p[2].saturating_add(p[3]), 255]).collect(),
     };
     Ok((info.width as u32, info.height as u32, rgba))

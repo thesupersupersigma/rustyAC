@@ -195,7 +195,7 @@ const PURE: Crt = Crt {
     // (the DLL's log10f is not rewritten: its one reader rounds the result to a whole
     // number, the wheel speeds of a multiplayer car update)
     log10f: std_log10f,
-    // shortcut: the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a
+    // shortcut (known gap, shortcuts.md #34): the DLL's logf is not rewritten (only YEBIS's auto exposure reads it, a
     // last-bit difference moves the exposure by one ulp); port it if a pure proof shows one
     logf: std_logf,
     sin: pure_sin,
@@ -468,7 +468,7 @@ pub fn pow(x: f64, y: f64) -> f64 {
 /// `__sse2_powf4` (0x140450650, the vector `powf` Visual C++ 2013 links into acs.exe for
 /// `__vdecl_powf4`) of 0.5 and `y`: the same on every target. With x = 0.5 its logarithm is
 /// exactly -ln 2 (no `rcpps`, a zero table entry), then 2^(j/2048) from its table times one
-/// linear term. shortcut: base 0.5 only and no rare path (y within +-100), the light shafts'
+/// linear term. shortcut (unreachable, shortcuts.md #35): base 0.5 only and no rare path (y within +-100), the light shafts'
 /// one use; port the logarithm table and `__common_spow_cout_rare` for anything else.
 pub fn powf4_half(y: f32) -> f32 {
     debug_assert!(y.abs() <= 100.0, "powf4_half({y}): outside the ported range");

@@ -274,7 +274,7 @@ impl StepSink for ShmSink {
         let g = &mut self.graphics;
         if replay && paused {
             // an offline replay stands the physics still: the page as GraphicsFrame::in_replay
-            // makes it (shortcut: written once as the replay starts, not every frame; the
+            // makes it (shortcut (known gap, shortcuts.md #17): written once as the replay starts, not every frame; the
             // later time multiplier and the replayed laps do not reach it)
             g.set_i("status", AC_REPLAY);
             g.set_i("position", -1);

@@ -618,7 +618,7 @@ impl GameApps {
             stats: self.stats.clone(),
             telemetry: self.telemetry.clone(),
             tyre_debug: world.first().map(|v| v.tyre_debug),
-            // shortcut: the wheels' drawn matrices stand for the wheel nodes' world matrices
+            // shortcut (known gap, shortcuts.md #15): the wheels' drawn matrices stand for the wheel nodes' world matrices
             suspension: world.first().map(|v| rustyac_gui::app_suspension::SuspensionLink { facts: setup.suspension, wheel_nodes: v.wheels.map(|w| [w[3][0], w[3][1], w[3][2]]) }),
             tyre_tester: world.first().map(|v| rustyac_gui::app_tyre_tester::TyreTesterCar { speed: v.speed_ms, load: v.wheel_load, compound: v.compound_index }),
             setup_debug: self.setup_debug.clone(),
@@ -757,7 +757,7 @@ pub fn camera_editor_link(unix: &str, data: &Path, shape: &crate::render::scene:
         body: Mat44f::IDENTITY,
         auto_exposure: 0.0,
         use_auto_exposure_limits: false,
-        // shortcut: no YEBIS, so no auto exposure filter values (0); read the filter's [AUTO_EXPOSURE] when YEBIS is ported
+        // shortcut (known gap, shortcuts.md #16): YEBIS's current auto exposure and the filter's [AUTO_EXPOSURE] limits are not handed to the HDR and camera editor apps (0)
         auto_exposure_min: 0.0,
         auto_exposure_max: 0.0,
         auto_exposure_target: 0.0,

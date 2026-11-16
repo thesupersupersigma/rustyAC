@@ -1607,7 +1607,7 @@ mod device {
                     let offsets: Vec<[f32; 2]> = (0..taps)
                         .map(|j| if forced { [((j as f32 * dir[0] + 0.0) * su) * spread, ((j as f32 * dir[1] + 0.0) * sv) * spread] } else { [(j as f32 * dir[0] + 0.0) * su, (j as f32 * dir[1] + 0.0) * sv] })
                         .collect();
-                    // shortcut: rows past the eighth pass would read before the game's table, no shipped star gets there
+                    // shortcut (unreachable, shortcuts.md #51): rows past the eighth pass would read before the game's table, no shipped star gets there
                     let row = rows[7usize.saturating_sub(p as usize)];
                     let colours: Vec<[f32; 4]> = ws[..taps].iter().enumerate().map(|(j, &w)| (if forced { table[j] } else { row[j] }).map(|c| w * c)).collect();
                     let v = rect_vertices([tw as f32, th as f32], [0.0, 0.0, tw as f32, th as f32], &[[0.0, 0.0, su, sv]]);
@@ -2240,7 +2240,7 @@ mod device {
             // without chromatic aberration (VR) draws 2 and 6 go and the effect stays in its first surface
             let mut ca = camera.chromatic_aberration && pe.ca_enabled;
             if shimmer.is_some() && !ca && camera.chromatic_aberration {
-                // shortcut: a flat camera's shimmer without CA isn't ported, drawn with CA; port it if a filter needs it
+                // shortcut (unreachable, shortcuts.md #52): a flat camera's shimmer without CA isn't ported, drawn with CA; port it if a filter needs it
                 crate::yebis_cb::refuse("yebis: the heat shimmer with chromatic aberration off: not ported, drawn with it".into());
                 ca = true;
             }

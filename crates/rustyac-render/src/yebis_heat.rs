@@ -152,7 +152,7 @@ pub fn setup(elements: &[Element], view: &[f32; 16], frustum: &[f32; 16], p: &Pa
         }
     }
     // Callback_QSort_CompareParticleZ_S 0x1403fe1e0: farther first
-    // shortcut: msvcr120's qsort is not stable, only particles at the same depth could come out in another order
+    // shortcut (known gap, shortcuts.md #54): msvcr120's qsort is not stable, only particles at the same depth could come out in another order
     out.sort_by(|a, b| b[2].partial_cmp(&a[2]).unwrap_or(std::cmp::Ordering::Equal));
     out
 }

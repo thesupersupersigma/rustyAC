@@ -46,6 +46,7 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 **Known gaps in v1.0** (rare; the full list with sizes and plans is in [docs/port/leftovers.md](docs/port/leftovers.md)):
 - Desktop: a custom filter's heat shimmer with chromatic aberration off draws the aberration; a few glare sizes and the heat shimmer in VR skip post-processing for that frame; the Friends Leaderboard; Start Benchmark; the photo window's FOV / roll before Start; the online mouse pit menu; `MOTION_TRACKER=RIGHT_HAND` without a right controller; AI line swaps with several cars; telemetry ride height one step late at 2 m/s; start lights timed by frame times.
 - Browser: post-processing and the saturation key; saving `acos.ini`, `gameplay.ini`, `exposure.ini`, `last.ini` on exit; F5's keys-and-orbit camera; AC's two sound plug-ins, track sound occluders and online / replay sound states; font hinting and CJK fonts; Full mode on slower machines; an opponent car that won't load ends the join; Special Events sorted by name.
+- Smaller ones (developer apps' details, the HDR app's live exposure graph, game faults rustyAC handles sanely, …): every code shortcut and its verdict is in [docs/port/shortcuts.md](docs/port/shortcuts.md).
 
 Not supported: Custom Shaders Patch (CSP) features. Cars that need CSP won't load, and cars handle like **vanilla** Assetto Corsa (CSP changes the physics).
 

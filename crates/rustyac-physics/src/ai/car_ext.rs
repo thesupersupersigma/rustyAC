@@ -163,7 +163,7 @@ impl RollingChassis {
     /// at the speeds the track's `data/ideal_line.ai` was recorded with, scaled to the car's
     /// top speed (the turbos it steps do not change the result). The game crashes without
     /// that file; this is an `Err`. The game keeps the first result for the whole process
-    /// (shortcut: worked out again for each session, the same car on the same track).
+    /// (shortcut (unreachable, shortcuts.md #37): worked out again for each session, the same car on the same track).
     pub fn evaluate_time_from_track_spline(&self) -> Result<Vec<f32>, String> {
         use rustyac_content::vfs;
         let Some(track) = &self.track else { return Err("no track".to_string()) };

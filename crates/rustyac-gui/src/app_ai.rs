@@ -199,7 +199,7 @@ impl Gui {
         self.set_size(nsp, 200.0, 25.0);
         self.set_position(nsp, 300.0, 295.0);
         self.control_add_control(form, nsp);
-        // shortcut: the 3D lines of the render-finished handler (the line, the pit lane, the sides) are not drawn, port FormAI::renderSplines if wanted
+        // shortcut (known gap, shortcuts.md #21): the 3D lines of the render-finished handler (the line, the pit lane, the sides) are not drawn, port FormAI::renderSplines if wanted
         // the magic lambda 0x1402df740: AIDriver::useMagicForces
         let magic = self.new_control(painter, "magic");
         self.set_size(magic, 100.0, 25.0);
@@ -298,7 +298,7 @@ fn profile(file: &str, section: &str, key: &str, value: String) -> AppAction {
 }
 
 /// The SAVE ai lambda's `WritePrivateProfileString`s (floats as a default `std::wostream`:
-/// `%g` of six digits). shortcut: drivetrain.ini's AUTO_SHIFTER copy for a loose unencrypted
+/// `%g` of six digits). shortcut (known gap, shortcuts.md #22): drivetrain.ini's AUTO_SHIFTER copy for a loose unencrypted
 /// car is not done, port it if a loose car's AI should save it.
 pub fn save_ai(d: &AiDriverValues, gear_down: i32) -> Vec<(&'static str, &'static str, String)> {
     let g = |v: f32| format_g6(v);
@@ -400,7 +400,7 @@ impl App for AiApp {
         red(gui);
         line(gui, 200.0, &format!("{} : {}\n", translate("IS grid on"), view.grid_on as u8), 1.0);
         if !self.tags.borrow().driver {
-            // shortcut: the recorder's side splines are empty here (the game fills them only when side_l/r.csv are newer than the line), so the indices are 0
+            // shortcut (unreachable, shortcuts.md #23): the recorder's side splines are empty here (the game fills them only when side_l/r.csv are newer than the line), so the indices are 0
             red(gui);
             line(gui, 230.0, &format!("{} : 0\n", translate("RIGHT INDEX")), 1.0);
             red(gui);

@@ -389,7 +389,7 @@ pub struct GameAudio {
 
 /// A sound tape: what the sound was given, frame by frame (the cars, the events, the camera),
 /// for a run that cannot be repeated (online) to be heard again by [`GameAudio::play_tape`].
-/// shortcut: the pit crew's guns and the Audio app's actions are not on it, tape them when a proof drives them.
+/// shortcut (unreachable, shortcuts.md #3): the pit crew's guns and the Audio app's actions are not on it, tape them when a proof drives them.
 const TAPE_MAGIC: &[u8; 8] = b"RACSTP01";
 
 fn tape_u32(tape: &mut Vec<u8>, v: u32) {

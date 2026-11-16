@@ -1805,7 +1805,7 @@ impl RollingChassis {
             SetupJob::SetBallastKg { kg } => self.ballast_kg = kg,
             SetupJob::SetSteerAssist { value } => self.steer_assist = value,
             SetupJob::SetRestrictor { value } => self.set_restrictor(value),
-            // shortcut: the game compares with the frame's snapshot of the level on the GUI
+            // shortcut (known gap, shortcuts.md #38): the game compares with the frame's snapshot of the level on the GUI
             // thread, here with the car's own when the job runs (one step later at most)
             SetupJob::SetDamageLevel { zone, value } => {
                 if let Some(level) = self.damage_zone_level.get_mut(zone).filter(|level| value > **level) {

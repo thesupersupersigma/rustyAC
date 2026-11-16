@@ -135,7 +135,7 @@ impl TimeAttackHud {
         painter.gl_end(GRAPHICS_GL);
         Self::picture(painter, &self.white_clock, half - 240.0, 90.0);
         Self::picture(painter, &self.white_cup, half + 30.0, 90.0);
-        // shortcut: the game leaves the text unwritten when no time is left (never drawn so)
+        // shortcut (known gap, shortcuts.md #26): on the one frame after Still->On (timeLeft still 0) the game formats an uninitialised buffer; this shows 0.000"
         self.font.set_color(1.0, 1.0, 1.0, 1.0);
         self.font.blit_string(painter, half - 10.0, 100.0, &format!("{}\"", crate::widgets2::format_fixed(ta.time_left as f64, 3)), 0.8, ALIGN_RIGHT);
         let red = if ta.points >= 0.0 { 1.0 } else { 0.0 };

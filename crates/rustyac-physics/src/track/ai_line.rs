@@ -809,7 +809,7 @@ pub struct AiSplineRecorder {
 /// The lines a recording made while the cars run: `AISplineRecorder::onLapCompleted`
 /// @ 0x140296760 swaps `bestLapSpline` under every reader of `getBestLapSpline`. Each new set
 /// is appended and none goes before the track, so a line a reader holds stays valid.
-// shortcut: keeps every recorded lap's lines until the track goes (a few MB a lap), drop old ones once no reader can hold them if sessions record hundreds of laps
+// shortcut (unreachable, shortcuts.md #40): keeps every recorded lap's lines until the track goes (a few MB a lap), drop old ones once no reader can hold them if sessions record hundreds of laps
 #[derive(Default)]
 pub struct LiveAi(std::sync::OnceLock<Box<(AiSplineRecorder, LiveAi)>>);
 

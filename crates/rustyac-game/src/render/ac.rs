@@ -40,7 +40,7 @@ use crate::view::CarView;
 #[cfg(all(windows, not(feature = "wgpu")))]
 use std::time::Instant;
 
-/// shortcut: std's clock panics in the browser, so the load and frame times read 0 there; use the
+/// shortcut (known gap, shortcuts.md #10): std's clock panics in the browser, so the load and frame times read 0 there; use the
 /// page's `performance.now()` once those times are shown in the page (the HUD task).
 #[cfg(any(not(windows), feature = "wgpu"))]
 struct Instant;
@@ -1742,7 +1742,7 @@ FILTER=default
                                 *[&mut d.max_g, &mut d.roll_max_deg, &mut d.pitch_max_deg, &mut d.yaw_max_deg, &mut d.filter][i] = v;
                             }
                         }
-                        // shortcut: set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if that matters
+                        // shortcut (known gap, shortcuts.md #11): set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if that matters
                         d.lock_animation |= l.lock_animation;
                         for (dt, acc) in l.head_updates.drain(..) {
                             d.update_head_movement(&mut this.scene, dt, dt, &acc);
@@ -1828,7 +1828,7 @@ FILTER=default
             outlines.borrow_mut().frame = (shown && !wings.is_empty()).then(|| {
                 let lifts = &view.wing_states[..view.wing_state_count as usize];
                 let rows = wings.iter().zip(lifts).map(|(w, s)| rustyac_render::wings::WingOutline { position: w.position, span: w.span, chord: w.chord, is_vertical: w.is_vertical, lift_vector: [s.lift_vector.x, s.lift_vector.y, s.lift_vector.z] });
-                // shortcut: the body's matrix of the frame's view stands for physicsState.worldMatrix; a replay's car may differ
+                // shortcut (known gap, shortcuts.md #12): the body's matrix of the frame's view stands for physicsState.worldMatrix; a replay's car may differ
                 (view.body, rows.collect())
             });
         }
@@ -1839,7 +1839,7 @@ FILTER=default
             let m = |m: [[f32; 4]; 4]| rustyac_physics::vecmath::Mat44f { m };
             let keys = gui.apps.suspension_keys;
             lines.borrow_mut().frame = shown.then(|| rustyac_render::suspensions::SuspensionFrame {
-                // shortcut: the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ
+                // shortcut (known gap, shortcuts.md #13): the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ
                 world: m(view.body),
                 tyre_matrix: view.tyre_matrix.map(m),
                 lines: std::array::from_fn(|w| view.sus_lines[w][..view.sus_line_count[w] as usize].iter().map(|l| ([l.p0.x, l.p0.y, l.p0.z], [l.p1.x, l.p1.y, l.p1.z], l.color)).collect()),
@@ -1879,7 +1879,7 @@ FILTER=default
         // Game::evOnPreGUI: the handler of ScreenCapturer first (it was hung up first)
         // the statistics apps' numbers: Game::stats so far, GraphicsManager::stats of the 3D part
         let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - update_ms;
-        // shortcut: the statistics apps get no frame numbers on wgpu (the page has no clock in
+        // shortcut (known gap, shortcuts.md #14): the statistics apps get no frame numbers on wgpu (the page has no clock in
         // here), give them the page's performance.now() when those apps matter there
         #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {

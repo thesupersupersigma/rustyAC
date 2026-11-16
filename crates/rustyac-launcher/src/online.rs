@@ -158,7 +158,7 @@ fn server_list_cached(text: Option<&str>) -> Answer {
                 Some(_) => Thrown::Other("Cannot convert object of type 'System.Object' to type 'System.Collections.Generic.Dictionary`2[System.String,System.Object]'".into()),
                 None => Thrown::ArgumentOutOfRange,
             },
-            // shortcut: one message for every other way the list does not parse, the lobby always sends a list
+            // shortcut (known gap, shortcuts.md #29): one message for every other way the list does not parse, the lobby always sends a list
             _ => Thrown::Other("Invalid JSON primitive: .".into()),
         },
     };
@@ -166,14 +166,14 @@ fn server_list_cached(text: Option<&str>) -> Answer {
 }
 
 /// The `host:port`s that answered as HTTP/1.1 servers: .NET's `ServicePoint` sends them no
-/// `Connection: Keep-Alive`. shortcut: a ServicePoint is never let go (.NET drops it after
+/// `Connection: Keep-Alive`. shortcut (known gap, shortcuts.md #30): a ServicePoint is never let go (.NET drops it after
 /// 100 s idle and sends Keep-Alive again), upgrade if a proof catches it.
 #[cfg(windows)]
 static HTTP11: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// `HttpWebRequest` GET with `UserAgent = "Assetto Corsa Launcher"` and the given headers, the
 /// body read with `StreamReader` (UTF-8 unless a BOM says otherwise). `Err` stands for the
-/// `WebException`. shortcut: redirects are not followed (.NET follows them), nothing redirects here.
+/// `WebException`. shortcut (known gap, shortcuts.md #31): redirects are not followed (.NET follows them), nothing redirects here.
 #[cfg(windows)]
 fn http_get(url: &str, headers: &[(&str, &str)], decompress: bool, timeout_ms: u64) -> Result<String, String> {
     let rest = url.strip_prefix("http://").ok_or("not http")?;
@@ -308,7 +308,7 @@ fn ping_once(ip: Ipv4Addr, port: i32) -> [i32; 2] {
 /// `PingServer`: up to 12 tries, 150 ms apart.
 #[cfg(windows)]
 fn ping_server(ip: Option<&str>, port: i32) -> Answer {
-    // shortcut: dotted IPv4 only, IPAddress.Parse takes more forms, the theme sends the lobby's dotted ones
+    // shortcut (known gap, shortcuts.md #32): dotted IPv4 only, IPAddress.Parse takes more forms, the theme sends the lobby's dotted ones
     let Some(ip) = ip.and_then(|s| s.parse::<Ipv4Addr>().ok()) else {
         return Thrown::Other(if ip.is_none() { "Value cannot be null.\r\nParameter name: ipString".into() } else { "An invalid IP address was specified.".into() }).answer();
     };

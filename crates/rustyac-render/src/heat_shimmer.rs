@@ -87,7 +87,7 @@ impl HeatShimmer {
     /// `initPostProcessing` 0x140024ca0: a new `KGLYebisParticleManager` 0x140024a50, each set
     /// (`KGLYebisParticleSet` 0x1400247f0) initialising its particles from its volume.
     pub fn remake(&mut self, rand: &mut MsvcRand) {
-        // shortcut: the game reads past heatParticleSets[30] with more cars, here they share the last volume
+        // shortcut (known gap, shortcuts.md #45): the game reads past heatParticleSets[30] with more cars, here they share the last volume
         self.sets = (0..self.sets_number).map(|i| (0..self.max_number_per_set).map(|_| self.initialize(&self.volumes[i.min(29)].1, rand)).collect()).collect();
     }
 

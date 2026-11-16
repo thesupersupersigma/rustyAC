@@ -318,7 +318,7 @@ impl Face {
     /// A glyph drawn at `size` pixels an em on a whole-pixel origin, near DirectWrite's natural
     /// grey rendering (FW1's glyph target): each row is the outline across its middle, each
     /// pixel the share of it inside (non-zero winding). DirectWrite's glyphs are also hinted by
-    /// the font's TrueType instructions, which this does not run. shortcut: no hinting (about
+    /// the font's TrueType instructions, which this does not run. shortcut (known gap, shortcuts.md #49): no hinting (about
     /// 12/255 per pixel from DirectWrite's), port a TrueType interpreter if the text must match.
     /// Its box (left and top from the origin, y down, width and height) is DirectWrite's black
     /// box: the rows whose middles the outline spans, its columns widened by a quarter of a pixel

@@ -445,7 +445,7 @@ pub fn over_time_mult() -> f32 {
 /// Task 28b: the player's pit stop of a session: `system/cfg/pitstop.ini` of the installed
 /// game (only read; the constructor's values without it) and the pit stop presets beside
 /// A driver of the keyboard, for the pit menu (`Sim::Sim` 0x140192070: `IsKeyboardControl`).
-// shortcut: rustyAC's own drivers (--autodrive, --ai-drive) keep the quick menu unless --pit-click scripts the clicks, as they click no CONFIRM
+// shortcut (unreachable, shortcuts.md #4): rustyAC's own drivers (--autodrive, --ai-drive) keep the quick menu unless --pit-click scripts the clicks, as they click no CONFIRM
 pub fn keyboard_driver(options: &crate::cli::Options, input_method: &str) -> bool {
     input_method == "KEYBOARD" && (!options.pit_clicks.is_empty() || !(options.autodrive || options.ai_drive))
 }

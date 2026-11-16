@@ -230,7 +230,7 @@ impl Files for MemFiles {
         if entries.0.get(&k).is_some_and(|e| e.bytes.is_none()) {
             return Err(Error::from(ErrorKind::PermissionDenied));
         }
-        // shortcut: the clock is a counter (no wall clock in wasm32-unknown-unknown); only the
+        // shortcut (known gap, shortcuts.md #27): the clock is a counter (no wall clock in wasm32-unknown-unknown); only the
         // order of the times is right, which is what the launcher sorts by
         entries.1 += 1;
         let now = entries.1;
@@ -290,7 +290,7 @@ impl Files for MemFiles {
         if !MemFiles::folder_there(&entries.0, parent(&t)) {
             return Err(not_found());
         }
-        // shortcut: files only (the launcher renames replays), not folders
+        // shortcut (unreachable, shortcuts.md #28): files only (the launcher renames replays), not folders
         let mut e = entries.0.remove(&f).filter(|e| e.bytes.is_some()).ok_or_else(not_found)?;
         e.name = to.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or_default().to_string();
         entries.0.insert(t, e);

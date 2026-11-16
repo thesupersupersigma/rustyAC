@@ -60,7 +60,7 @@ impl Gui {
     /// four slip bars.
     pub fn new_suspension_app(&mut self, painter: &mut dyn Painter) -> Id {
         let form = self.new_form(painter, "ACSuspension", false);
-        // shortcut: the game's susGL is one static for every instance; one app is ever made
+        // shortcut (unreachable, shortcuts.md #25): the game's susGL is one static for every instance; one app is ever made
         let gl = painter.create_gl(0x200);
         self.form_set_title(form, &translate("Suspensions"));
         self.form_set_size(form, 500.0, 700.0);

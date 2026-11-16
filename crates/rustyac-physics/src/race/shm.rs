@@ -303,7 +303,7 @@ impl GraphicsWriter {
         page.set_i("packetId", self.packet_id);
         self.packet_id += 1;
         // CarAvatar::getTyreCompound(0, true): physicsInfo.tyreCompounds, the compounds' names
-        // (shortcut: the game's list is empty unless all four tyres have as many compounds; never so in Kunos cars)
+        // (shortcut (unreachable, shortcuts.md #39): the game's list is empty unless all four tyres have as many compounds; never so in Kunos cars)
         if let Some(tyre) = car.tyres.first() {
             if let Some(compound) = tyre.compound_defs.get(tyre.current_compound_index as usize) {
                 page.set_w("tyreCompound", &compound.name);

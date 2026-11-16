@@ -844,7 +844,7 @@ impl App for CameraEditor {
                     save_f1(gui, s);
                     save_f6(gui);
                     s.target_exp = 0.0;
-                    // shortcut: the game quits (exit(2)) after a run started from assetto_corsa.ini's AUTOEXP; rustyAC goes on
+                    // shortcut (known gap, shortcuts.md #24): the game quits (exit(2)) after a run started from assetto_corsa.ini's AUTOEXP; unreachable here until #16 (the link's auto exposure is 0, so no run gets this far)
                     s.is_by_button = false;
                 }
                 _ => {}

@@ -291,7 +291,7 @@ unsafe extern "C" fn get_position(_: Obj, args: Obj) -> R {
             let r = gui().controls[id].rect;
             floats(&[r.left, r.top])
         }
-        // shortcut: the game returns a tuple of two empty items here (Python crashes on it)
+        // shortcut (known gap, shortcuts.md #41): the game returns a tuple of two empty items here (Python crashes on it)
         None => long(-1),
     }
 }

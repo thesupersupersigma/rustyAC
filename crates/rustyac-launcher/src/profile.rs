@@ -6,7 +6,7 @@
 //! from what Windows does (re/scratch/task37/ini_probe*.ps1) and `tests/profile.rs` checks it
 //! against Windows byte for byte on generated files and edits.
 //!
-//! shortcut: every file is read as ANSI bytes, where Windows reads a file as UTF-16 when it
+//! shortcut (unreachable, shortcuts.md #33): every file is read as ANSI bytes, where Windows reads a file as UTF-16 when it
 //! starts with a byte order mark or when it guesses so (some tiny files such as "[" and a line feed); no
 //! launcher or game file is one. Upgrade if one shows up.
 

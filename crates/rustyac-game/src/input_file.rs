@@ -527,7 +527,7 @@ impl RefereeHeader {
             wind_base,
             driver_names: Vec::new(),
             pit: None,
-            // shortcut: an input file does not carry the special event's goals, add a key when a proof replays one
+            // shortcut (unreachable, shortcuts.md #6): an input file does not carry the special event's goals, add a key when a proof replays one
             game_mode: Default::default(),
         })
     }
