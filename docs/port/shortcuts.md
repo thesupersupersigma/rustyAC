@@ -5,7 +5,7 @@
 - Step 1 done: every `shortcut:` marker is in the table below with its verdict.
 - Step 2: #18 ported, #9's options.ini key ported (its fade stays a known gap); every
   other marker in `crates/` now reads `shortcut (<verdict>, shortcuts.md #N): ...`.
-- Step 3: quick lane, clippy, release v0.52.0.
+- Step 3 done: clippy six ways clean, quick lane 174/174 IDENTICAL (0 ERROR), released v0.52.0.
 
 ## Verdicts
 - **ported**: done as the game does, with its proof.
