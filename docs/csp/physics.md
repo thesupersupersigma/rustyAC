@@ -34,8 +34,8 @@ decompiles of CSP's replacement functions in `dwrite.dll` (RVAs, image base `0x1
 
 | Switch | Where | Mechanism |
 |---|---|---|
-| car | `car.ini [HEADER] VERSION=extended-N` (or `extendedV2-N`) | CSP hooks `INIReader::getInt` (acs.exe 0x140235c70, replacement RVA 0x5f0650): strips the prefix, flags the car, returns **N**. `N` is just the number acs.exe would read there; plain AC chokes on the text (`std::stoi`) and refuses the car. The flag is stored at car object +0x914 by CSP's car loader (RVA 0x32c650) |
-| track | `surfaces.ini [SURFACE_n] WAV_PITCH=extended-N` (+ `[_SCRIPTING_PHYSICS] ALLOW_*`) | same trick in `INIReader::getFloat` (RVA 0x5f1110), only for files ending in `/data/surfaces.ini`. 6 installed layouts (`*_fa_2026`) use it |
+| car | `car.ini [HEADER] VERSION=extended-N` (or `extendedV2-N`) | CSP hooks `INIReader::getInt` (acs.exe 0x140235c70, replacement RVA 0x5f0650 → 0x5e3590): strips the prefix, flags the car, returns **N**. `N` is just the number acs.exe would read there; plain AC chokes on the text (`std::stoi`) and refuses the car. The flag is stored at car object +0x914 by CSP's car loader (RVA 0x32c650 → 0x31b710) |
+| track | `surfaces.ini [SURFACE_n] WAV_PITCH=extended-N` (+ `[_SCRIPTING_PHYSICS] ALLOW_*`) | same trick in `INIReader::getFloat` (RVA 0x5f1110 → 0x5e4180), only for files ending in `/data/surfaces.ini`. 6 installed layouts (`*_fa_2026`) use it |
 | car data | `[_EXTENSION]` sections in `suspensions.ini` / `brakes.ini` / `bumpstops.ini` / `dampers.ini`, `TYPE=COSMIC`, `[HEADER] ENABLE`, `engine.ini TURBO_n EXT_*`, `tyres.ini TYPE_HINT`, `aero.ini [MAP_n]`, `colliders.ini` wear keys, `ext_car_controls.ini`, `car.ini [_EXTENSION] REQUIRED_VERSION` | ignored by plain AC (unknown keys), read by CSP's loaders |
 | user | `general.ini [PHYSICS_EXPERIMENTS] EXTENDED_PHYSICS=1` | every car and track counts as extended |
 | game mode | `FORCE_EXTENDED_PHYSICS=1` in a new-mode manifest | frozen-drive, p2p-1v1, splitscreen |

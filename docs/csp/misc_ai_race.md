@@ -45,7 +45,7 @@ fixes, with the shipped key that sets the byte (section 3 has the table of byte 
 * **Smoothing that is always on**: after the original, throttle changes are rate-limited (9.45 per second when
   brake >= 0.2, otherwise 1.89 per second, only while the engine is below 96 % of the limiter) and below 2 m/s the
   steering change per call is limited to 0.003 (0.012 above 0.5 m/s). No key. [dll]
-* **Visual smoothing** (`NEW_AI_SMOOTHING`): not in these hooks; done in `Car::getPhysicsState` (0x59e920) and
+* **Visual smoothing** (`NEW_AI_SMOOTHING`): not in these hooks; done in `Car::getPhysicsState` (0x59e920 → 0x590220) and
   `CarAvatar::setNewPhysicsState` (0x10ae290) with critically damped springs, "only visuals and audio" [ini][dll].
   Cross-reference: `physics_car_hooks.md`, `rendering_core.md`.
 * **Pit and tyre decisions**: `updateTyres` is **replaced**: the compound is chosen by (a) listeners on two event
@@ -135,7 +135,7 @@ add a handful of rules. What changes for the player:
 | **Chequered flag early** | `gui.ini SHOW_CHEQUERED_FLAG_EARLY` (default 0) | the chequered flag is shown as soon as the leader has finished (not only after the player), unless the black flag is up. [dll][ini] |
 | **Hide race flags / yellow / blue** | `HIDE_RACE_FLAGS`; new-mode manifest `DISABLE_FLAGS=YELLOW, BLUE` | flags are not drawn / `checkForYellow`, `checkForBlue` are skipped. The two checks are also throttled to once per 310 / 315 ms. [dll] |
 | **First lap armed on a hot-lap spawn** | `general.ini [PHYSICS_EXPERIMENTS] ARM_FIRST_LAP` (hidden, default 1) | true only when `race.ini [SESSION_0] SPAWN_SET=HOTLAP_START` and `TYPE` <= 2 (practice / qualifying); `TimeTransponder::init` then arms the first lap at the line. [dll] 0x138ded0 |
-| **1 ms lap times** | `PRECISE_TRANSPONDER` (default 1) | byte 0x268b680 read by `TimeTransponder::step/onTimeLinePassed` (`physics_car_hooks.md`). |
+| **1 ms lap times** | `PRECISE_TRANSPONDER` (default 1) | byte 0x268b680 → 0x27f96d8 read by `TimeTransponder::step/onTimeLinePassed` (`physics_car_hooks.md`). |
 | **Pit-box test 1.5 m** | `EQUALIZE_PITS_CHECK` (default 1) | `PitStop::isInsidePitArea` replaced: squared distance to the box < 2.25 (1.5 m). [dll] |
 | **Offline `ALLOWED_TYRES_OUT`** | none (race.ini `[LAP_INVALIDATOR] ALLOWED_TYRES_OUT`, Content Manager writes -1) | `RaceManager::initOffline` reads the key and, if it is > 0 and the session value is still the default 2, sets it; plain AC only gets it from a server. [dll] 0x10ed7c0 |
 | **Restart refused** | `small_tweaks.ini [RULES] DISABLE_SESSION_RESTART` (0), or the server rule | `restartCurrentSession` shows "Restarting session is not allowed in this race" instead. [dll][ini] |
@@ -213,7 +213,7 @@ Other replay behaviour:
   ring gradually (see below), after the original optionally zeroes the 4th additional-info byte, and with
   `ACCOUNT_FOR_PING` (default 1, offline cars driven by a net provider) re-times remote cars' frames by their ping;
   then asks the extension store for a 0x6c-byte slot (`0x11a25b0`) and fires bus 0x182697858 whose listener
-  (0x11a0ac0) fills it. `getPhysicsState` (0x11a9cb0): with `JUMP_FIX2` a pair of recorded frames more than 30 m apart is
+  (0x11a0ac0 → 0x1207720) fills it. `getPhysicsState` (0x11a9cb0 → 0x1210d00): with `JUMP_FIX2` a pair of recorded frames more than 30 m apart is
   not interpolated (teleports no longer smear). [dll]
 * **Ring** (`setFrameSize` 0x11a1510, C): capacity per car starts at `10000 + 1730 x carIndex` frames and is grown on
   demand (by 0x11a0c00, step `10000 - 1.4 x used`) unless `GRADUAL_REPLAYS_COMMIT` / the "virtual allocation" flag
@@ -441,7 +441,7 @@ The driver flags word (+0x136, global 0x268b93c) is written by a Lua binding at 
 | `::getCurrentSunAngle` | 0x140156d00 | 0x11a1dc0 | C | half-float decode of CSP's scene buffer |
 | `::clearSaved` | 0x1401559f0 | 0x11ac420 | C | background deletion |
 | `ReplayRecorder::recordFrame` | 0x1401609d0 | 0x11aa1b0 | B | see 1.5 |
-| `::getPhysicsState` | 0x14015d850 | 0x11a9cb0 | B | `JUMP_FIX2` |
+| `::getPhysicsState` | 0x14015d850 | 0x11a9cb0 → 0x1210d00 | B | `JUMP_FIX2` |
 | `::save` | 0x1402 6.. (0x1401622a0) | 0x11a1550 | B | log, "recorded frames = 1" fix |
 | `::setFrameSize` | 0x140162420 | 0x11a1510 | C | lazy ring |
 | `::~ReplayRecorder` | 0x14015ce20 | 0x2db1f0 | C | empty stub (shared by 40 symbols) |
@@ -508,7 +508,7 @@ Defaults as shipped; "->" = byte that the hooks read.
 | `general.ini [CONTROL] ALTERNATIVE_AI_DRIVER=1` -> 0x182695228 | autopilot toggling: `Sim::onKeyDown` -> 0x11be520 ("Activated"/"Deactivated", "Autopilot is not available in this session") |
 | `[CONTROL] AI_DRIVER_KEEP_SETTINGS=1` -> 0x182695229 | "stop autopilot from altering car settings"; read by 0xff5c20 (`$SmallTweaks.AIToggle`), 0xeeb890 |
 | `[PHYSICS_EXPERIMENTS] ARM_FIRST_LAP=1` (hidden) -> 0x268b682 | section 1.4 |
-| `[PHYSICS_EXPERIMENTS] PRECISE_TRANSPONDER=1` -> 0x268b680; `EQUALIZE_PITS_CHECK=1` -> 0x268bcb2 | |
+| `[PHYSICS_EXPERIMENTS] PRECISE_TRANSPONDER=1` -> 0x268b680 → 0x27f96d8; `EQUALIZE_PITS_CHECK=1` -> 0x268bcb2 → 0x27f9dda | |
 | `[PHYSICS_EXPERIMENTS_DONE] ALTERNATIVE_OPTIMAL_BRAKE=1` (hidden) -> 0x2695097 | `getOptimalBrake` |
 | `[LAP_TIMES] KEEP_AI_LAPS=0`, `KEEP_ALTERED_LAPS=0` | "keep laps set with autopilot / with altered physics (affects ghost)"; **the key strings are not in the image (hashed)**, enforcement site not found |
 | `[REPLAY]` (12) | `SPEED_UP_REPLAY_ACTIVATION` -> 0x1825a2e21, `EXTRA_LARGE` -> 0x1825a2e22 (4 GB), `LOOP_INSTEAD_OF_PAUSE=0` -> ..e23, `JUMP_FIX2=1` -> ..e24, `ACCOUNT_FOR_PING=1` -> ..e25, `KEEP_CAMERA=1` -> ..e26, `CLIP_DURATION=30` s, `ALLOW_REPLAYS_ONLINE=1`, hidden `EXT_RECORD`, `EXT_SAVE`, `EXT_LOAD` (not in the image: hashed) |
