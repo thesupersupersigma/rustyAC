@@ -12,9 +12,53 @@ the ignored `oracle/` (saved game recordings of Tasks 9 to 34, as they always we
     bash tools/proofs/run_all.sh --rerecord         # the same, the game's results made again and held against the kept ones
     bash tools/proofs/run_all.sh gui                # one area
     RENDER_ONLY='r21_.*' bash tools/proofs/render.sh    # part of one area
+    tools/proof_tui/target/release/proof_tui            # in a second terminal: watch a run (Task T1)
 
 `tools/proofs/README.md` says what each area compares and needs; `re/gold/README.md` how each
 file under `re/gold/` was made and how to make it again.
+
+## Task T1: a progress screen for proof runs (v1.0.1)
+
+`tools/proof_tui` is a screen that watches a `run_all.sh` run. It only reads `target/proofs/`
+(or the folder given as its argument, or `$PROOF_OUT`); it never starts, stops or changes a proof.
+It shows the elapsed time, a bar of cases done out of the total, the time left, each lane side
+by side with each area's bar, counts (identical, diff, err, skip), time and time left, the case
+running now in each lane, every DIFFERENT or ERROR in red as it happens with its log, free disk on
+C: and free RAM (red under 18 GB and 12 GB, the floors of the rules), and at the end the same table
+and ERROR / skipped / vanished lists that `run_all.sh` prints. `q`, Esc or Ctrl+C closes it.
+
+    cd tools/proof_tui && cargo build --release --locked    # once
+    bash tools/proofs/run_all.sh --quick                    # terminal 1, as always
+    tools/proof_tui/target/release/proof_tui                # terminal 2 (Git Bash or Windows Terminal)
+    tools/proof_tui/target/release/proof_tui --plain        # a line every 10 s instead of the screen
+
+- **Where it draws.** Windows Terminal: the full screen. Git Bash's mintty: the full screen
+  too, typed at the bash prompt or started as `mintty -e` (Git for Windows gives programs a real
+  console through ConPTY). When its output is not a console (a pipe, `| tee`, an old mintty without
+  ConPTY) it falls back to plain text by itself: a progress line every 10 s, each DIFFERENT /
+  ERROR in red when it happens, the summary at the end, then it exits.
+- **What the runner writes for it** (nothing else changed: no verdict, no output line, no exit
+  code): `run.status` (mode, start, the lanes after the memory check, `end` when done),
+  `<area>/now` (the case `keep()` just let through) and, after a run, each area's `times.tsv` kept
+  as `cases/<mode>/<area>.times`. The screen says "waiting" until the shared builds are done.
+- **Time left.** From the last run of the same mode, per case: each area's left time is the last
+  run's time of its cases still to come, times how much slower or faster this run's finished cases
+  were (clamped to 0.25 to 4), minus the time already on the running case; an area without last
+  times uses this run's average. The run's time left is the longest lane.
+- **Replay test.** `python tools/proof_tui/replay.py <kept run> <out> --speed 30` plays a kept run
+  back into a folder, 30 times faster, each area 0.75 to 1.35 times as fast as the kept times, and
+  turns one case into DIFFERENT (gui `pit_menu`), one into ERROR (net `laguna_a_net_block wasm`) and
+  one into skipped (render `r22_01`). Played the v1.0.0 quick run (47 min, 175 cases, kept in
+  `re/scratch/taskT1/src_run`): the screen showed each of the three, and the end it predicted (elapsed
+  + left) was 94, 99, 96, 111, 101, 120, 120, 113, 114, 115, 114 s at 3 to 104 s; the replay ended at
+  115 s. Early on it is off by up to 18 %; from 60 % done it is within 6 s.
+- **With and without the screen.** `run_all.sh --quick python shaders launcher` twice, once alone
+  and once with the screen in Windows Terminal: python 1, shaders 4, launcher 1 IDENTICAL both times,
+  the same `cases.log` lines, the same table (but the times), the same other output, exit 0 both times.
+- New crates: `ratatui` 0.29 (with its `crossterm` 0.28) and `windows-sys` 0.59, 34 more names in
+  the lock files, listed in `LICENSING.md`; `THIRD_PARTY_NOTICES.txt` made again with `tools/notices.py`.
+- Screenshots (not committed): `re/scratch/taskT1/wt_mid.png`, `wt_end.png` (the replay in Windows
+  Terminal), `mintty_bash_mid.png`, `mintty_end.png` (mintty), `real_mid.png`, `real_end.png` (the real run).
 
 ## Milestone M2: every proof on v0.47.3, and its clean-up (v0.47.4)
 
