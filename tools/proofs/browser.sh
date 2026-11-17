@@ -10,6 +10,11 @@ area=browser
 wt=$repo/target/web-tools/wasmtime/bin/wasmtime.exe
 need "$wt" "wasmtime (docs/port/web.md)"
 need target/wasm-sysroot "the wasm sysroot (docs/port/web.md)"
+# docs/flags.md names what the page reads from its address and what web_pack accepts, and nothing else
+r=$(python tools/proofs/url_params.py 2>&1 | tr -d '\r'; exit "${PIPESTATUS[0]}") && verdict "docs/flags.md, the page's address parameters" IDENTICAL "$r" ||
+    verdict "docs/flags.md, the page's address parameters" DIFFERENT "the lists differ: $(echo "$r" | head -n 4 | tr '\n' ' ')"
+cargo test --release --locked --quiet --manifest-path tools/web_pack/Cargo.toml usage_and_docs > "$out/web_pack_test.txt" 2>&1 && verdict "docs/flags.md, web_pack's options" IDENTICAL ||
+    verdict "docs/flags.md, web_pack's options" DIFFERENT "the lists differ: $(grep -m1 -A2 'assertion' "$out/web_pack_test.txt" | tr '\n' ' ')"
 build replay_hash cargo build --release --locked --quiet -p rustyac-game --bin replay_hash
 CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
     cargo build --release --locked --quiet -p rustyac-game --bin replay_hash --target wasm32-wasip1 || exit 2

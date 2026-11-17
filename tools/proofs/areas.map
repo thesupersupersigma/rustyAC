@@ -4,6 +4,7 @@
 # a file wins; a file no rule matches runs every area.
 
 # what changes nothing the proofs look at
+docs/flags.md                 browser
 docs/*                        none
 prompts/*                     none
 .github/*                     none
