@@ -55,7 +55,7 @@ TOOLS = {
 SITE_FILES = ['index.html', 'app.js', 'sound.js', 'style.css', 'servers.json', 'launcher.js', 'theme_glue.js', 'sw.js',
               'fonts/selawik-regular.ttf', 'fonts/selawik-light.ttf', 'fonts/selawik-bold.ttf', 'fonts/Selawik-OFL.txt']
 # everything a site (and so a release's web zip) holds; anything else in it stops the build
-SITE_CONTENT = sorted(SITE_FILES + ['LICENSE-GPL', 'LICENSING.md', 'pkg/rustyac_web.js', 'pkg/rustyac_web_bg.wasm'])
+SITE_CONTENT = sorted(SITE_FILES + ['LICENSE-GPL', 'LICENSING.md', 'THIRD_PARTY_NOTICES.txt', 'pkg/rustyac_web.js', 'pkg/rustyac_web_bg.wasm'])
 
 
 def say(text):
@@ -203,7 +203,7 @@ def main():
     for name in SITE_FILES:
         os.makedirs(os.path.dirname(os.path.join(out, name)), exist_ok=True)
         shutil.copyfile(os.path.join(ROOT, 'web', name), os.path.join(out, name))
-    for name in ['LICENSE-GPL', 'LICENSING.md']:
+    for name in ['LICENSE-GPL', 'LICENSING.md', 'THIRD_PARTY_NOTICES.txt']:
         shutil.copyfile(os.path.join(ROOT, name), os.path.join(out, name))
 
     files = []

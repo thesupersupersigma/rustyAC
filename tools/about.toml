@@ -1,0 +1,20 @@
+# cargo-about's settings for tools/notices.py: every license the crates in the lock files declare
+# (LICENSING.md, "Every crate in the lock files"); a crate under "A OR B" is listed under the first
+# of these it allows.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Zlib",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+
+# rustyAC's own crates (publish = false) are not third-party
+[private]
+ignore = true

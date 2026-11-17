@@ -26,6 +26,9 @@
    for m in tools/*/Cargo.toml; do cargo build --release --manifest-path $m; done
    ```
 
+   If a lock file changed, make `THIRD_PARTY_NOTICES.txt` again (`python tools/notices.py`, with
+   cargo-about 0.9.3 installed: see LICENSING.md); `packaging/package.ps1` and `web/build.py` ship it.
+
 3. Rerun the proofs (needs the ignored `oracle/` and `re/gold/` folders and the AC install,
    nothing in `re/scratch/`); every area must have 0 different (table in target/proofs/table.md):
 

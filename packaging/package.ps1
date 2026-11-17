@@ -31,6 +31,7 @@ $files = [ordered]@{
     "target/release/rustyac-launcher.exe" = "rustyac-launcher.exe"
     "README.md"                      = "README.md"
     "LICENSING.md"                   = "LICENSING.md"
+    "THIRD_PARTY_NOTICES.txt"        = "THIRD_PARTY_NOTICES.txt"
     "LICENSE-GPL"                    = "LICENSE-GPL"
     "LICENSE-MIT"                    = "LICENSE-MIT"
     "LICENSE-APACHE"                 = "LICENSE-APACHE"

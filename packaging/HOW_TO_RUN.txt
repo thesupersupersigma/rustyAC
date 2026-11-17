@@ -183,8 +183,9 @@ feedback (low strength).
 
 rustyac.exe is free software under the GNU General Public License, version 3 or
 later (LICENSE-GPL); parts of it are under MIT / Apache-2.0 and BSD-3-Clause.
-LICENSING.md says which part is under which license. The source of this exact
-build is the tag @TAG@ of the repository above.
+LICENSING.md says which part is under which license, and THIRD_PARTY_NOTICES.txt
+holds the license texts and copyright notices of the Rust libraries it is built
+with. The source of this exact build is the tag @TAG@ of the repository above.
 
 Assetto Corsa is a trademark of its owners. rustyAC is not affiliated with them
 and is not endorsed by them. FMOD is a trademark of Firelight Technologies Pty
