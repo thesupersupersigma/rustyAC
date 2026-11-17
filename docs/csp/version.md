@@ -21,7 +21,7 @@ The zip as downloaded and its unpacked `dwrite.dll` + `extension/` are kept outs
 | `extension/` (754 files, 71,103,399 bytes) | | `4392224ce2c2b6032df79d9a512d9e56db256c439449dd63f48702b6d5afb197` |
 
 The `extension/` hash is the SHA-256 of a list with one line per file, `relative path,size,sha256`
-(paths relative to `extension/` with forward slashes, sorted byte-wise, `LC_ALL=C sort`).
+(paths starting with `extension/`, forward slashes, sorted byte-wise, `LC_ALL=C sort`).
 
 What identifies the build:
 
