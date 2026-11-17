@@ -74,6 +74,9 @@ Open a console (cmd or PowerShell) in this folder.
     rustyac.exe --list-devices               the pads and wheels found, and the bindings
     rustyac.exe --help                       every option
 
+Every option of every program, the browser page's address parameters and the
+settings, explained: https://github.com/thesupersupersigma/rustyAC/blob/master/docs/flags.md
+
 Or start Assetto Corsa's own launcher, with your game's own theme:
 
     rustyac-launcher.exe                     pick car, track and session, then Start:

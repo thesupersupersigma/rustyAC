@@ -21,7 +21,7 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 **Windows** needs Windows 10 or 11 (64-bit, Direct3D 11) and your own **Assetto Corsa 1.16** (the Steam version); rustyAC finds it in your Steam libraries, or set `AC_ROOT`.
 1. Get the newest zip from the **[Releases page](https://github.com/thesupersupersigma/rustyAC/releases)** and unzip it somewhere you can write to (not `Program Files`).
 2. Run **`rustyac-launcher.exe`**. It opens Assetto Corsa's own launcher menu, so you can pick a car, track and session (practice, quick race, race weekend, hotlap, online, special events, career), then press Drive.
-3. `rustyac.exe` also runs on its own from the command line, or from a Content Manager `race.ini`. Run `rustyac.exe --help` for the options.
+3. `rustyac.exe` also runs on its own from the command line, or from a Content Manager `race.ini`. Run `rustyac.exe --help` for the options; every option, URL parameter and setting is explained in [docs/flags.md](docs/flags.md).
 
 **Browser:** play at **[rustyac.com/play/app](https://rustyac.com/play/app/)**. Same physics as the desktop build, compiled to WebAssembly, with keyboard and gamepad. Each release also has a `-web.zip` you can host yourself (see [docs/web.md](docs/web.md)).
 
