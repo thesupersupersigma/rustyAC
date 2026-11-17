@@ -197,6 +197,29 @@ FILTER=default
 const INIREADER_CTOR: usize = 0x1_4023_40a0;
 const INIREADER_HAS_SECTION: usize = 0x1_4023_70b0;
 const INIREADER_SIZE: usize = 0x68;
+const INIREADER_GET_INT: usize = 0x1_4023_5c70;
+
+// the car load of car_oracle (tools/car_oracle/src/game.rs, new_engine and World::build's flat track)
+const CRASH_GUARD_CTOR: usize = 0x1_4021_8800; // CrashGuard::CrashGuard(const wstring&), wWinMain's first object
+const CRASH_GUARD_SIZE: usize = 0x10;
+const VA_PHYSICS_ENGINE_CTOR: usize = 0x1_4026_2430;
+const VA_TRACK_CTOR: usize = 0x1_4027_7100;
+const VA_TRACK_INIT_AI_SPLINE: usize = 0x1_4027_82a0;
+const VA_CAR_CTOR: usize = 0x1_4026_bf00;
+const VA_CAR_INIT_COLLIDER_MESH: usize = 0x1_4027_3b20;
+const VA_INIREADERDOCUMENTS_INITIALIZED: usize = 0x1_4155_a588;
+const VA_IS_USING_QPT: usize = 0x1_4151_d140;
+const VA_TIMER_START: usize = 0x1_4155_a590;
+const VA_TIMER_FREQUENCY: usize = 0x1_4155_a598;
+const VA_IS_TEST_MODE: usize = 0x1_4155_a770;
+const PE_SIZE: usize = 0x278;
+const PE_PHYSICS_TIME: usize = 0x20;
+const PE_GAME_TIME: usize = 0xf8;
+const PE_AMBIENT_TEMPERATURE: usize = 0x100;
+const PE_ROAD_TEMPERATURE: usize = 0x104;
+const TRACK_SIZE: usize = 0x148;
+const CAR_SIZE: usize = 0x3ea0;
+const CAR_PHYSICS_GUID: usize = 0x3238;
 
 struct Host {
     root: String,
@@ -401,6 +424,31 @@ unsafe extern "system" fn query_performance_counter(out: *mut u64) -> i32 {
 unsafe extern "system" fn query_performance_frequency(out: *mut u64) -> i32 {
     *out = acs::CLOCK_FREQUENCY;
     1
+}
+
+// CSP's static CRT looks RtlGenRandom up by name (SystemFunction036) for std::random_device, which
+// seeds its per-thread xoshiro (RVA 0x13fae20; e.g. the random wheel start angle of its Tyre::init
+// detour): it gets a fixed byte stream per thread, like the clock (rule 18)
+thread_local! {
+    static RANDOM: Cell<u64> = const { Cell::new(0) };
+}
+
+unsafe extern "system" fn system_function_036(buffer: *mut u8, length: u32) -> u8 {
+    for i in 0..length as usize {
+        let n = RANDOM.with(|n| {
+            n.set(n.get() + 1);
+            n.get()
+        });
+        *buffer.add(i) = (n.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 56) as u8;
+    }
+    1
+}
+
+unsafe extern "system" fn get_proc_address(module: Handle, name: *const u8) -> *mut c_void {
+    if name as usize > 0xffff && from_ansi(name) == "SystemFunction036" {
+        return system_function_036 as *const () as *mut c_void;
+    }
+    GetProcAddress(module, name)
 }
 
 extern "system" fn get_tick_count_64() -> u64 {
@@ -631,6 +679,7 @@ fn answer_for(name: &str) -> Option<usize> {
         "QueryPerformanceCounter" => query_performance_counter as *const () as usize,
         "QueryPerformanceFrequency" => query_performance_frequency as *const () as usize,
         "GetTickCount64" => get_tick_count_64 as *const () as usize,
+        "GetProcAddress" => get_proc_address as *const () as usize,
         "GetSystemTimeAsFileTime" => get_system_time_as_file_time as *const () as usize,
         // the fixed clock is its own time zone
         "GetSystemTime" | "GetLocalTime" => get_system_time as *const () as usize,
@@ -775,6 +824,22 @@ fn place(address: usize) -> String {
     let length = unsafe { GetModuleFileNameW(module, name.as_mut_ptr(), 512) } as usize;
     let path = String::from_utf16_lossy(&name[..length]);
     format!("{}+{:#x}", path.rsplit('\\').next().unwrap_or("?").to_lowercase(), address - module as usize)
+}
+
+/// The call log of one game function: its entry, then each jump (`e9 rel32`, `ff 25 [rip]`) a
+/// patch put there, down to the code that runs.
+unsafe fn through(address: usize) -> String {
+    let mut hops = vec![place(address)];
+    let mut at = address;
+    for _ in 0..4 {
+        at = match (read::<u8>(at), read::<u8>(at + 1)) {
+            (0xe9, _) => (at as isize + 5 + read::<i32>(at + 1) as isize) as usize,
+            (0xff, 0x25) => read::<usize>((at as isize + 6 + read::<i32>(at + 2) as isize) as usize),
+            _ => break,
+        };
+        hops.push(place(at));
+    }
+    hops.join(" -> ")
 }
 
 /// Says where a fault happened and which code addresses are on the stack above it, then lets
@@ -951,6 +1016,156 @@ unsafe fn has_section(acs: &Acs, reader: *mut u8, section: &str) -> bool {
     function(reader, wstring(acs, section)) & 1 != 0
 }
 
+unsafe fn put<T>(base: *mut u8, offset: usize, value: T) {
+    std::ptr::write_unaligned(base.add(offset) as *mut T, value);
+}
+
+/// car_oracle's car load (game.rs `new_engine`, the flat track, `Car::Car`, the box collider),
+/// with the game's own functions, so CSP's patches in them run.
+unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>) -> (*mut u8, *mut u8) {
+    std::env::set_current_dir(car_root).expect("the car root can be entered");
+    let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
+    srand(1);
+    acs::reset_clock();
+    assert_eq!(acs.global::<u8>(VA_IS_USING_QPT), 1, "ksTimer is not in QueryPerformanceCounter mode");
+    assert_eq!(acs.global::<u8>(VA_IS_TEST_MODE), 0, "PhysicsEngine::isTestMode is set");
+    acs.set_global(VA_TIMER_START, 0i64);
+    acs.set_global(VA_TIMER_FREQUENCY, acs::CLOCK_FREQUENCY as i64);
+    acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
+
+    let engine = acs.alloc(PE_SIZE);
+    let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_PHYSICS_ENGINE_CTOR));
+    ctor(engine);
+    put(engine, PE_PHYSICS_TIME, 60_000.0f64);
+    put(engine, PE_GAME_TIME, 60_000.0f64);
+    put(engine, PE_AMBIENT_TEMPERATURE, 26.0f32);
+    put(engine, PE_ROAD_TEMPERATURE, 30.0f32);
+    println!("PhysicsEngine built");
+
+    let track = acs.alloc(TRACK_SIZE);
+    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_CTOR));
+    ctor(track, engine, wstring(acs, "flat"), wstring(acs, ""));
+    let init_ai_spline: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_TRACK_INIT_AI_SPLINE));
+    init_ai_spline(track);
+    println!("Track built");
+
+    if let Some(dll) = csp {
+        // CSP's CarAvatar::CarAvatar detour makes the car's extension context (current-context
+        // global at RVA 0x2817d90) before the game builds the car; its Car detours read it unchecked.
+        // shortcut: a zeroed CarAvatar with only unixName (+0x138) set, upgrade if a detour reads more of it
+        // CSP's car config reads its RaceManager global (RVA 0x281a270, set by its RaceManager::RaceManager
+        // detour) for the lights' session rule: a zeroed RaceManager whose sim (+0x168) and GameObject
+        // game pointer (+8) are zeroed stand-ins
+        // shortcut: stand-ins instead of the game's Sim / RaceManager, upgrade if a physics seam reads them
+        let race_manager = acs.alloc(0x218);
+        put(race_manager, 8, acs.alloc(0x100));
+        put(race_manager, 0x168, acs.alloc(0x2d0));
+        *((dll + 0x281_a270) as *mut *mut u8) = race_manager;
+        let avatar = acs.alloc(0x12a8);
+        std::ptr::copy_nonoverlapping(wstring(acs, car_name), avatar.add(0x138), 32);
+        let push_context: extern "C" fn(*mut u8) = std::mem::transmute(dll + 0xf3_2f90);
+        push_context(avatar);
+        println!("CSP car context made: {}", read::<usize>(dll + 0x281_7d90) != 0);
+    }
+
+    // CarAvatar::initCommon's car.ini [HEADER] VERSION read: CSP wraps initCommon (arm byte RVA 0x2815087)
+    // and its INIReader::getInt detour (RVA 0x5e3590) turns "extended-N" into N and builds the car's
+    // physics extension at context+0xe0, which its Car::Car detour then uses
+    let reader = ini_reader(acs, &format!("content/cars/{car_name}/data/car.ini"));
+    if let Some(dll) = csp {
+        *((dll + 0x281_5087) as *mut u8) = 1;
+    }
+    let get_int: extern "system" fn(*mut u8, *const u8, *const u8) -> i32 = std::mem::transmute(acs.va(INIREADER_GET_INT));
+    // Vanilla's getInt is std::stoi: "extended-N" throws std::invalid_argument, which ends this process
+    println!("reading car.ini [HEADER] VERSION with INIReader::getInt: {}", through(acs.va(INIREADER_GET_INT)));
+    let version = get_int(reader, wstring(acs, "HEADER"), wstring(acs, "VERSION"));
+    if let Some(dll) = csp {
+        *((dll + 0x281_5087) as *mut u8) = 0;
+        let context = read::<usize>(dll + 0x281_7d90);
+        println!("car.ini VERSION read as {version}, CSP car physics extension made: {}", read::<usize>(context + 0xe0) != 0);
+        // the game builds cars while CSP's loading flag (RVA 0x26bad10) is up; Car::Car's detour reads
+        // the current context only then
+        *((dll + 0x26b_ad10) as *mut u8) = 1;
+    } else {
+        println!("car.ini VERSION read as {version}");
+    }
+
+    // the wing rule: CSP's hasSection detour (RVA 0x5dfd20) hides a DYNAMIC_CONTROLLER_ section whose
+    // WING_n is missing, armed only inside its NetCarStateProvider::initWings wrapper (RVA 0x61e6f0,
+    // byte RVA 0x27f9201); the oracle arms the byte the way that wrapper does around its call
+    std::fs::write("wing_rule.ini", "[DYNAMIC_CONTROLLER_0]\nWING=3\n[DYNAMIC_CONTROLLER_1]\nWING=0\n[WING_0]\nNAME=X\n").expect("wing_rule.ini can be written");
+    let reader = ini_reader(acs, "wing_rule.ini");
+    println!("hasSection: {}", through(acs.va(INIREADER_HAS_SECTION)));
+    if let Some(dll) = csp {
+        *((dll + 0x27f_9201) as *mut u8) = 1;
+    }
+    let (missing, present) = (has_section(acs, reader, "DYNAMIC_CONTROLLER_0"), has_section(acs, reader, "DYNAMIC_CONTROLLER_1"));
+    if let Some(dll) = csp {
+        *((dll + 0x27f_9201) as *mut u8) = 0;
+    }
+    println!("wing rule: hasSection(DYNAMIC_CONTROLLER_0, WING=3 missing) = {missing}, hasSection(DYNAMIC_CONTROLLER_1, WING=0) = {present}");
+
+    println!("Car::Car: {}", through(acs.va(VA_CAR_CTOR)));
+    let car = acs.alloc(CAR_SIZE);
+    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_CTOR));
+    ctor(car, engine, wstring(acs, car_name), wstring(acs, ""));
+    assert_eq!(read::<u32>(car as usize + CAR_PHYSICS_GUID), 0, "the car is not car 0");
+    // rule 18: colliderManager.observer.lastFileTime (Car+0x2b0) is the game's uninitialised stack when
+    // the watched file is missing (FileChangeObserver::observe: CreateFileW fails with -1, not 0, so
+    // GetFileTime fails and its output local is copied); zeroed here
+    put(car, 0x2b0, 0u64);
+    println!("Car built");
+
+    // a mesh collider is mandatory (Car::updateColliderStatus reads mesh 0 unchecked): car_oracle's box
+    let mesh = acs.alloc(0x168);
+    // Node padding +0xdc: CSP's Node::Node detour keeps its extended-data index there, -1 = none
+    put(mesh, 0xdc, -1i32);
+    let mut vertices = vec![0f32; 8 * 11];
+    for i in 0..8 {
+        vertices[i * 11] = if i & 1 == 0 { -0.3 } else { 0.3 };
+        vertices[i * 11 + 1] = if i & 2 == 0 { 0.3 } else { 0.5 };
+        vertices[i * 11 + 2] = if i & 4 == 0 { -0.5 } else { 0.5 };
+    }
+    let indices: Vec<u16> = vec![0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7, 0, 4, 1, 1, 4, 5, 2, 3, 6, 3, 7, 6, 0, 2, 4, 2, 6, 4, 1, 5, 3, 3, 5, 7];
+    let vp = vertices.leak().as_mut_ptr().cast::<u8>();
+    put(mesh, 0x108, vp);
+    put(mesh, 0x110, vp.add(8 * 0x2c));
+    put(mesh, 0x118, vp.add(8 * 0x2c));
+    let ip = indices.leak().as_mut_ptr().cast::<u8>();
+    put(mesh, 0x120, ip);
+    put(mesh, 0x128, ip.add(36 * 2));
+    put(mesh, 0x130, ip.add(36 * 2));
+    let identity: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let init_mesh: extern "C" fn(*mut u8, *mut u8, *const [f32; 16]) = std::mem::transmute(acs.va(VA_CAR_INIT_COLLIDER_MESH));
+    init_mesh(car, mesh, &identity);
+    println!("collider mesh set");
+    if let Some(dll) = csp {
+        *((dll + 0x26b_ad10) as *mut u8) = 0;
+    }
+
+    // the loaded car's memory, word by word, for run-to-run and Vanilla-to-CSP compares; a word that
+    // reads as a readable address is a pointer (heap addresses move between runs) and is written as "ptr"
+    // shortcut: no state snapshot or physics step (both need car_oracle's controls device and avatar
+    // set-up), upgrade when Part B steps physics
+    let mut words = String::new();
+    let mut pointers = 0;
+    for offset in (0..CAR_SIZE).step_by(8) {
+        let value = read::<u64>(car as usize + offset);
+        let mut probe = 0u8;
+        if value != 0 && ReadProcessMemory(GetCurrentProcess(), value as usize, &mut probe, 1, std::ptr::null_mut()) != 0 {
+            pointers += 1;
+            words.push_str(&format!("{offset:#06x} ptr
+"));
+        } else {
+            words.push_str(&format!("{offset:#06x} {value:016x}
+"));
+        }
+    }
+    std::fs::write("car_words.txt", &words).expect("car_words.txt can be written");
+    println!("car memory: {} words, {pointers} pointers, hash {:016x}", CAR_SIZE / 8, fnv(&words));
+    (engine, car)
+}
+
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -965,9 +1180,20 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()
 }
 
 fn main() {
-    let arguments: Vec<String> = std::env::args().collect();
+    let mut arguments: Vec<String> = std::env::args().collect();
+    // --car <name>: load that car after CSP's start-up; --vanilla: the same without CSP
+    let car_name = arguments.iter().position(|a| a == "--car").map(|i| {
+        arguments.remove(i);
+        arguments.remove(i)
+    });
+    let vanilla = arguments.iter().position(|a| a == "--vanilla").map(|i| arguments.remove(i)).is_some();
+    // --car-data <folder>: the car's plain data files (default cardata/<name>), as car_oracle reads them
+    let car_data = arguments.iter().position(|a| a == "--car-data").map(|i| {
+        arguments.remove(i);
+        arguments.remove(i)
+    });
     if arguments.len() != 3 && arguments.len() != 4 {
-        eprintln!("usage: csp_oracle <ac root> <run folder> [cfg folder]");
+        eprintln!("usage: csp_oracle <ac root> <run folder> [cfg folder] [--car <name> [--vanilla]]");
         std::process::exit(2);
     }
     let root = full_path(&arguments[1]);
@@ -1013,6 +1239,18 @@ fn main() {
     for name in ["AC_CFG_PROGRAM_NAME", "AC_CFG_RACE_INI", "_NT_SYMBOL_PATH", "_NT_ALT_SYMBOL_PATH"] {
         std::env::remove_var(name);
     }
+    // the car's root, as car_oracle's prepare_root: plain data files and a physics without a thread pool
+    let car_root = format!("{run}\\car_root");
+    if let Some(car) = &car_name {
+        let from = car_data.clone().unwrap_or(format!("cardata/{car}"));
+        copy_tree(std::path::Path::new(&from), std::path::Path::new(&format!("{car_root}\\content\\cars\\{car}\\data"))).expect("the car's data can be copied");
+        std::fs::create_dir_all(format!("{car_root}\\system\\cfg")).unwrap();
+        std::fs::write(
+            format!("{car_root}\\system\\cfg\\assetto_corsa.ini"),
+            "[PHYSICS_THREADING]\nTHREADS=0\n[FF_EXPERIMENTAL]\nENABLE_GYRO=0\nDAMPER_MIN_LEVEL=0\nDAMPER_GAIN=1\n[LOW_SPEED_FF]\nSPEED_KMH=3\nMIN_VALUE=0.01\n",
+        )
+        .unwrap();
+    }
     let command_line = format!("\"{exe}\"");
     let _ = HOST.set(Host { command_line_wide: wide(&command_line), command_line_ansi: (command_line + "\0").into_bytes(), root: root.clone(), run: run.clone(), exe: exe.clone() });
     THREADS.lock().unwrap().push(unsafe { GetCurrentThreadId() });
@@ -1046,6 +1284,10 @@ fn main() {
         let reader = build();
         ask("Vanilla", reader);
         let before = snapshot(base);
+        if let (Some(car), true) = (&car_name, vanilla) {
+            load_car(&acs, car, &car_root, None);
+            stop(0, "end of the run");
+        }
 
         // asked for by name: the loader declares it with its own handler type
         let add_handler: extern "system" fn(u32, usize) -> *mut c_void = std::mem::transmute(GetProcAddress(GetModuleHandleA(c"kernel32.dll".as_ptr().cast()), c"AddVectoredExceptionHandler".as_ptr().cast()));
@@ -1076,6 +1318,19 @@ fn main() {
         ask("with CSP, reader built before CSP", reader);
         ask("with CSP, reader built now", build());
         checkpoint("called", &before, &functions);
+
+        if let Some(car) = &car_name {
+            // wWinMain's first object: CSP's detour of its constructor does the set-up the game's
+            // log shows after "Starting loading…" (race configuration, core modules)
+            let guard = acs.alloc(CRASH_GUARD_SIZE);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(CRASH_GUARD_CTOR));
+            ctor(guard, wstring(&acs, ""));
+            println!("CrashGuard built");
+            checkpoint("crash guard", &before, &functions);
+            load_car(&acs, car, &car_root, Some(dll as usize));
+            checkpoint("car", &before, &functions);
+            stop(0, "end of the run");
+        }
 
         // real time for CSP's own threads, to see what they do when left alone
         Sleep(1500);
