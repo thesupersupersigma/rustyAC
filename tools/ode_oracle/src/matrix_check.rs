@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The maths routines on their own, each called directly in the game and in the Rust port and
 //! compared bit for bit:

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Spike oracle for Custom Shaders Patch (Task C1): can CSP's `dwrite.dll` be loaded next to an
 //! `acs.exe` image that was mapped by hand, without the game ever running as a program?

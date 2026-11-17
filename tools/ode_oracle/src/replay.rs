@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Replay of the car_oracle recordings (`oracle/car/*.carrec`) through the Rust port.
 //!
