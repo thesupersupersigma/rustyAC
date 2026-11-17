@@ -58,6 +58,10 @@ areas=$(echo $areas)
 echo "mode $mode: ${areas:-no area}"
 [ -n "$areas" ] && [ -z "$dry" ] || exit 0
 
+# one proof run at a time on this PC, whatever the checkout (a second one waits here)
+. "$here/lock.sh"
+proof_lock "$repo"
+
 rm -f "$out"/rows/*.row "$out/run.status"
 # each lane's areas of this run, in the lane's order
 picked_lanes=$(echo "$lanes" | tr '|' '\n' | while read -r lane; do

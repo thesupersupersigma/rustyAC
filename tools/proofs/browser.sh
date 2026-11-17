@@ -46,7 +46,7 @@ python web/serve.py --port 8139 --pack "$gold/web/pack" > "$out/serve.txt" 2>&1 
 sp=$!
 node tools/proofs/ondemand_site.mjs 8140 8139 tools/proofs/ondemand_servers.json > "$out/site.txt" 2>&1 &
 fp=$!
-trap 'kill $sp $fp 2>/dev/null' EXIT
+trap 'kill $sp $fp 2>/dev/null; proof_unlock' EXIT
 sleep 5
 # a profile folder per page: a browser of the page before can still hold its folder for a while
 page() { node web/check.mjs --url "http://127.0.0.1:8140/play/app/?$1" $2 --script tools/proofs/ondemand_page.js --profile "$out/chrome_profile_$(echo "$1" | cksum | cut -d" " -f1)" --port 9339 --timeout 600 2> "$out/page.err" | node -e 'let t="";process.stdin.on("data",(d)=>(t+=d)).on("end",()=>{const r=JSON.parse(t||"{}");console.log(JSON.stringify(r.script??r.error??null))})'; }

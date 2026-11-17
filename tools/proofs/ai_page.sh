@@ -19,7 +19,7 @@ cmp -s "$out/native/race_out.json" "$q/race_out.json" && verdict "native race_pr
 python web/build.py > "$out/build.txt" 2>&1 || { verdict "page build" DIFFERENT "$(tail -n 1 "$out/build.txt")"; summary; exit; }
 python web/serve.py --port 8137 --pack "$gold/web/pack" > "$out/serve.txt" 2>&1 &
 sp=$!
-trap 'kill $sp 2>/dev/null' EXIT
+trap 'kill $sp 2>/dev/null; proof_unlock' EXIT
 sleep 5
 js() { node -e 'process.stdout.write(JSON.stringify(require("fs").readFileSync(process.argv[1],"utf8")))' "$1"; }
 {

@@ -14,6 +14,12 @@ A crash, out of memory or error exit is ERROR, not DIFFERENT: run_all.sh runs ea
 alone at the end, and with less than 12 GB free it runs half the lanes (lib.sh's `room` holds a heavy
 case until 6 GB are free). A case the game cannot run on purpose is listed in `expected_skips.txt`
 with its reason and counted as an expected skip, not red; any other skip is red.
+
+One proof run at a time on this PC, whatever the checkout (`lock.sh`): `run_all.sh` in any mode, and
+an area run by itself, first take the lock folder `%USERPROFILE%\.rustyac\proof.lock` (the repo's
+path, the PID, the start time). A second run prints `waiting for the proof run in <path> (started
+<time>)` and looks again every 30 s; a lock whose run is gone is taken over, and the log says so.
+`tools/proof_tui` shows who has the lock in its last line.
 `--dry-run` only says which areas would run (and, with `--changed`, why: each changed file and
 the rule of `areas.map` it matched; a file no rule matches runs every area; a `Cargo.toml` or
 `Cargo.lock` whose only change is rustyAC's own version asks for nothing; any other `Cargo.lock`

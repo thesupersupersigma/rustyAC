@@ -274,7 +274,13 @@ fn draw(f: &mut ratatui::Frame, dir: &Path, run: &Option<Run>) {
     ])
     .areas(f.area());
     f.render_widget(Paragraph::new(Line::from(head)), h);
-    f.render_widget(Line::styled("watches target/proofs only · q quits", Style::new().fg(Color::DarkGray)), foot);
+    // the PC's proof lock (tools/proofs/lock.sh): which checkout's run has it, a waiting run's answer
+    let lock = read(&Path::new(&std::env::var("USERPROFILE").unwrap_or_default()).join(".rustyac/proof.lock/owner"));
+    let owner = match lock.lines().collect::<Vec<_>>()[..] {
+        [repo, pid, start, ..] => format!("proof lock: {repo} (PID {pid}, started {start})"),
+        _ => "proof lock: free".into(),
+    };
+    f.render_widget(Line::styled(format!("watches target/proofs only · q quits · {owner}"), Style::new().fg(Color::DarkGray)), foot);
     let Some(r) = run else { return };
     let (n, tot) = r.cases();
     let red = !r.bad.is_empty();

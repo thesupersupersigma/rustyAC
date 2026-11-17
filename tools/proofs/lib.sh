@@ -8,6 +8,10 @@
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 # in Windows form (C:/...) for the programs no MSYS path conversion reaches
 repo_w=$(cd "$repo" && { pwd -W 2>/dev/null || pwd; })
+# an area run alone waits for the proof run of any checkout (inside run_all.sh: nothing to do);
+# before the rm below, so that a waiting run deletes nothing of the running one
+. "$repo/tools/proofs/lock.sh"
+proof_lock "$repo"
 ac=${AC_ROOT:-"C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"}
 gold=$repo/re/gold
 # what a run writes: build output, deleted and remade by every run of the area
