@@ -63,6 +63,7 @@ base 0x180000000).
 
 ## Resume here
 
-Task C0 (setup) and Task C1 (the in-process spike) done. [`inprocess.md`](inprocess.md) has the
-verdict: GO with conditions, CSP starts next to a hand-mapped `acs.exe` in `tools/csp_oracle/`.
-Next: the lead chat's choice (the plan is rewritten from that verdict).
+Task C0 (setup), Task C1 (the in-process spike) and Task C2 (a car with CSP live) done.
+[`inprocess.md`](inprocess.md) Part 3 has the current state and its own "Resume here". The rows
+C3 and C4 need in the area files read `0x<4184> → 0x<4305>` (inprocess.md 3.7); other addresses
+are still build 4184's.

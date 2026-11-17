@@ -4,7 +4,7 @@ Can Custom Shaders Patch 0.3.2-preview2 (build 4305, the frozen build of
 [`version.md`](version.md)) be loaded next to an `acs.exe` image that an oracle mapped by hand,
 without the game ever running as a program? Part 1 is what the DLL needs from its host between
 being loaded and its "functions were found" log line, read from the disassembly only. Part 2 is
-what happened when it was tried, and the verdict.
+what happened when it was tried, and the verdict. Part 3 loads a car with CSP live (Task C2).
 
 Addresses: `dwrite.dll RVA 0x...` (add `0x180000000` for a VA). Markers: `[dll]` seen in
 `dwrite.dll`, `[pe]` read from the file's headers, `[log-csp]` seen in a CSP log of a normal game
@@ -246,7 +246,8 @@ Notes:
 - The call through is CSP's `hasSection` hook (RVA `0x5dfd20`): it hides the section
   `THREADING` of exactly that file. The two calls suggested in the task (`VERSION=extended-N`,
   the wing controller rule) only act while the game is inside one particular call (a flag set
-  and cleared by RVA `0x61e6f0`), so a bare reader cannot show them. `[dll]`
+  and cleared by RVA `0x61e6f0`), so a bare reader cannot show them. `[dll]` (Corrected in
+  3.1: 0x61e6f0 arms only the wing rule; Part 3 shows both through car loading.)
 - Nothing had to be zeroed for repeatability. What differs between runs: line 1 of CSP's log (a
   random symbol and the main thread's ID) and the DLL's load address. The jump bytes do not
   depend on that address (the trampolines are placed near `acs.exe`). `[run]`
@@ -369,3 +370,161 @@ functions itself, in order, with CSP's patches in them. That is the unknown in b
 - **C4** (the physics baseline): 5 to 8 sessions. CSP replaces the physics engine's set-up and
   step, uses thread-local state, and needs the worker count settled (condition 5) and the
   1-worker against 7-worker measurement.
+
+## Part 3. A car with CSP live (Task C2)
+
+`tools/csp_oracle` now builds one car through the patched game code: physics engine, flat track,
+`Car::Car` and the collider mesh, with CSP's detours in them, and compares that with the same
+run without CSP (`--vanilla`). Run: `csp_oracle.exe re/csp/fakeac <run folder> <cfg folder>
+--car <name> [--car-data <folder>] [--vanilla]` from the repo root; the car's data is copied
+into `<run>/car_root/content/cars/<car>/data` (default source `cardata/<car>`), which is the
+working directory while the car loads. Scratch: `re/scratch/taskC2/` (`final.sh` = the runs
+below, `py/rematch.py` + `py/annotate.py` = Part C).
+
+### Resume here
+
+Task C2 done: Part A (car stage, three call-throughs, repeatable), Part B static reading only
+(stepping is the next step, 3.6), Part C (106 of 116 addresses re-matched, 3.7). Next: the lead
+chat's choice between C3 and the B measurement (3.8).
+
+### 3.1 What the game runs between "Starting loading…" and a ready car
+
+In the game, CSP's car set-up happens inside the game functions it patches, in this order
+(`[dll]`, build 4305 RVAs; acs.exe VAs from the pdb):
+
+| # | Game function | CSP detour (RVA) | What CSP does there | Oracle |
+|---|---|---|---|---|
+| 1 | `CrashGuard::CrashGuard` 0x140218800 | 0x6bcc30 | crash dumps; logs "Race configuration is checked", "Core modules are created" | driven (C1) |
+| 2 | `RaceManager::RaceManager` | 0x1151720 | stores the race manager in global 0x281a270 (CSP finds the Sim through it: +8 → +0x168) | stand-in objects written to 0x281a270 |
+| 3 | `Sim::Sim` 0x140192070 | several | the whole race set-up, cameras, apps | skipped: only the pointers CSP reads are given |
+| 4 | `PhysicsEngine::PhysicsEngine` 0x140262430 | registrar 0x23c900 | engine-side set-up | driven |
+| 5 | track loading (`Track::Track` 0x140277100, `initAISpline`) | (surfaces, Embree) | `surfaces.ini` extension, raycaster | flat track as in car_oracle; KN5 / surfaces / Embree skipped |
+| 6 | `CarAvatar::CarAvatar` 0x1400cd1a0 / 0x1400cddc0 | 0x10e040 / 0x10e480 | **pushes the "current car" context** (0xf32f90 → global 0x2817d90) | stand-in avatar (0x12a8 bytes, unix name at +0x138) + call 0xf32f90 |
+| 7 | `CarAvatar::initCommon` 0x1400d56e0 | 0x10e630 | sets byte 0x2815087 around the original: **arms the `extended-N` reading** | driven as one `getInt` call with the byte set (3.3) |
+| 8 | loading flag | 0xb687d0 | byte 0x26bad10 = 1 while loading ("Loading is finished in %.3f s" when cleared) | set around `Car::Car` and the collider mesh |
+| 9 | `Car::Car` 0x14026bf00 | 0x587180 → 0x5871b0 | with an extension (context +0xe0, or list 0x28213f0[Car+0x3e9c] after loading): `suspensions.ini [_EXTENSION]`, custom suspension types (COSMIC) | driven |
+| 10 | inside 9: `Tyre::init` 0x140280650 | 0x69e2f0 | compound value into Tyre+0x40c, random wheel start angle (3.4) | runs |
+| 11 | `Car::initColliderMesh` 0x140273b20 | 0x58e720 | `colliders.ini [_EXTENSION]` through the context's config (no null check: faults at dwrite+0xf32f0c without step 6) | driven; the mesh's CSP node index (+0xdc) set to -1 |
+| 12 | `CarAvatar::initPhysics` 0x1400d7660, visuals, sound | many | graphics and sound of the car | skipped (not physics) |
+| 13 | `PhysicsAvatar::startPhysics` 0x1401223a0, "New thread AC: physics" | 0x676560 | physics thread, thread-local state | skipped: no stepping yet (3.6) |
+
+The stand-in avatar gives one harmless CSP log line, "type must be string, but is null" (a json
+field of the real avatar), and the -1 node index one "Accessing extended data of disposed node"
+warning. Neither changes the car.
+
+Correction to 2.3: RVA 0x61e6f0 (`NetCarStateProvider::initWings` wrapper) arms only the wing
+rule. `extended-N` is armed by the `CarAvatar::initCommon` wrapper 0x10e630 (row 7).
+
+### 3.2 The cars
+
+| Car | `VERSION` | Vanilla | CSP |
+|---|---|---|---|
+| `ks_ferrari_f2004` (cardata) | 1 | built | built, no extension |
+| `vrc_formula_lithium_2023_csp` (unpacked from its `data.acd` into the scratch folder) | extended-2 | refused (3.3) | built, extension made |
+| `vrc_formula_alpha_2026_csp` (cardata, suspensions `TYPE=COSMIC`) | extended-2 | refused (3.3) | built, extension made, COSMIC accepted |
+
+### 3.3 Call-throughs
+
+Each line of the oracle names the chain from the acs.exe function to where it ends (jumps
+followed, `-> outside every module ->` is CSP's trampoline).
+
+| Seam | Vanilla | CSP | Evidence |
+|---|---|---|---|
+| `car.ini [HEADER] VERSION=extended-2` | `INIReader::getInt` (acs.exe+0x235c70) uses `std::stoi`: "invalid stoi argument" exception, the run aborts (exit 127; in the game it leaves `CarAvatar::initCommon`) | `getInt` → dwrite+0x5e3590 → **2**, and the CSP car physics extension is made (0x5e32e0, context +0xe0) | `final/lith_*.log`, `final/alpha_*.log` |
+| same, `VERSION=1` (F2004) | 1 | 1, no extension | `final/f2004_*.log` |
+| wing rule: `hasSection(DYNAMIC_CONTROLLER_0)` whose `WING=3` has no `[WING_3]`; `DYNAMIC_CONTROLLER_1` with `WING=0` present | true / true | `hasSection` → dwrite+0x5dfd20 → **false** / true (armed by byte 0x27f9201, set by the `initWings` wrapper 0x61e6f0) | `wing rule:` line of every log |
+| custom suspension type (`Car::Car`, `physics_car_core.md` seam) | "ERROR: Cannot create suspension type: COSMIC for wheel:0", `exit(1)` (run made before the `VERSION` read was added) | `Car::Car` → dwrite+0x587180: car built, collider mesh set | `re/scratch/taskC2/a_van.log` l.52-53, `final/alpha_csp.log` |
+
+### 3.4 Repeatability
+
+`final.sh` runs every car twice and compares stdout (run name removed) and the car's memory
+(2004 words of `Car`, words that are addresses written as "ptr"): **all same**, Vanilla and CSP.
+Two things had to be fixed (rule 18):
+
+1. **CSP's random numbers.** CSP's `Tyre::init` detour gives every wheel a random start angle
+   (sets Tyre+0x2fc angular velocity to `rand*100+1`, steps `Tyre::stepRotationMatrix` once,
+   restores: Tyre+0x5b8 `localWheelRotation` differs). The random source is a per-thread
+   xoshiro256 (0x13faf90 / 0x13fae20) seeded from `std::random_device` (`RtlGenRandom`, which
+   CSP's static CRT looks up by the name `SystemFunction036`) XOR the performance counter. The
+   oracle answers that `GetProcAddress` with a fixed per-thread byte stream; the counter is
+   already the oracle's clock.
+2. **Car+0x2b0** (`colliderManager.observer.lastFileTime`) is the game's uninitialised stack,
+   in Vanilla too: `FileChangeObserver::observe` checks `CreateFileW` against 0, not -1, so
+   with no file `GetFileTime` fails and its output local is copied. Zeroed after `Car::Car`.
+
+What still differs run to run and is not a result: thread IDs in CSP's log, and call counts in
+`imports_*.txt` (e.g. `HeapAlloc` ±14, `VirtualQuery` ±3, `ReadDirectoryChangesW` ±1), from
+CSP's background threads (file monitoring, thread pool).
+
+CSP's own writes in the car (F2004, against Vanilla): Car+0x278 = 1, the high dword of Car+0x2d8
+= -1, per tyre Tyre+0x40c = compound value (padding in acs's layout) and Tyre+0x64e (int16
+compound index), plus the wheel angle. CSP keeps per-car data in acs's padding, so a car
+compare has to name those words.
+
+### 3.5 Part B: the multi-thread physics (static)
+
+Stepping needs what car_oracle builds around a car (controls device with its RTTI, controls
+provider at Car+0x3d80, aids; `game.rs` 1737-1760): without it Vanilla's `Car::step` faults at
++0x1df. That is more than Part A (rule 32), so B.2/B.3 were not run; the reading:
+
+- **World step** 0x92e4a0 (behind `PhysicsEngine::step` → 0x67ede0). With `MT_ODE_STEP` (byte
+  0x2803222) and workers (dword 0x267b338) ≠ 0 it uses ODE's island builder 0x168d1c0
+  (`ode-fresh/ode/src/ode.cpp`): a list of islands, 20 bytes each (body start, joint start, body
+  count, joint count, quickstep flag). The **thread count** is min(workers, islands, the measured
+  solve time of earlier steps / a fixed unit): it depends on the clock, so it changes run to run.
+- **Island task** 0x938c50 → 0x92ebd0: each task takes the next island from an atomic counter
+  and solves it in its own worker's arena (reset per island). An island is solved with
+  `dInternalStepIsland` 0x16c24b0 (the `dWorldStep` solver, the one AC uses:
+  `PhysicsCore::step` calls `dWorldStep`), or with quickstep 0x16bd3f0 when every body of the
+  island has body flag 0x200 (not a stock ODE flag; who sets it was not found).
+- **Shared state found: one.** Quickstep reorders constraints at iterations 8, 16, …
+  (0x16c0900) with ODE's process-wide seed (dword 0x284dc20, updated by compare-exchange):
+  islands on different threads interleave their draws, so the order each island gets depends on
+  timing. Only quickstep islands use it. The `dWorldStep` path shares nothing between islands
+  (no common bodies or joints; scratch memory per worker); the only accumulators are timing sums
+  (feeding the thread count).
+- **Cars step** 0x67e2e0 (pool 0x5864f0 with per-car tasks 0x67eb80): cars step in parallel
+  when there are 2+ cars and workers ≠ 0. With `PARALLELIZED_CONTACTS` (byte 0x27f8df5) and 10+
+  cars, the pool's "before" task 0x67e6d0 runs the collision step on the calling thread at the
+  same time as the car tasks. Whether car tasks read other cars (slipstream, AI) during the step
+  was not read.
+- **The third pool user** 0xbb2d40 is texture work (`missing_mips\{:x}.bin`), not physics.
+
+Verdict from reading only: **identical with a fixed rule** for car islands solved by
+`dWorldStep` (any worker count, if per-car tasks do not read each other mid-step), **order
+dependent** wherever a quickstep island exists (flag 0x200) with more than one thread. To be
+measured (B.2): 3 cars in contact at workers 0 / 1 / 7, 10 runs at 7, every body every step.
+
+### 3.6 What stepping needs
+
+The controls device and aids from car_oracle, then `PhysicsEngine::step` with CSP live (it goes
+to 0x67ede0), the physics-thread set-up CSP does in `PhysicsDriveThread::run` (0x67d840, one-time
+init 0x67d6a0, thread-local air density) done on the oracle's thread, and the state read through
+`getPhysicsState` (→ 0x590220). The worker count dword 0x267b338 is set by 0x15d8110 from the CPU
+count the host reports (2.6).
+
+### 3.7 Part C: addresses re-matched
+
+The rows C3 and C4 need (extended-N parsing, feature flags, `surfaces.ini` / `WAV_PITCH`,
+air density, ABS, brake temperatures, surfaces, transponder, AI sleep, `getPhysicsState`) now
+read `0x<4184> → 0x<4305>` in `physics.md`, `physics_car_core.md`, `physics_config_and_api.md`,
+`physics_powertrain_aero.md`, `misc_core.md`, `misc_ai_race.md`, `rendering_content.md` and
+`plan.md`. How: the 4184 instructions with their rip-relative and branch fields masked, grown
+until they occur once in 4305 (54); when the code changed, the function between the two nearest
+uniquely matched neighbours in `.pdata` order (8); data through the instructions that reference
+it (44). Checked against IDA where known (`0x918c80 → 0x90d9f0`, `0x32c650 → 0x31b710`,
+`0x5f0650 → 0x5e3590`, `0x59e920 → 0x590220`, `0x26ae290 → 0x28213f0`, the transponder byte
+`0x268b680 → 0x27f96d8` read by the settings reader 0x1402bd0). Table:
+`re/scratch/taskC2/rematch.tsv`.
+
+Not found (10, all data): `0x228bac8`, `0x268aaa0`, `0x268aad0`, `0x268b411`, `0x268b688`,
+`0x269508b`, `0x269514c`, `0x26951ca`, `0x26a6de8`, `0x26a74c0` (mostly hook slots of hooks that
+are "never called", referenced only by their registrar).
+
+### 3.8 Estimates now
+
+- **C3**: 2 sessions (was 2-3). The car side is solved: the oracle reads `VERSION` through CSP's
+  hook and builds extended cars. Left: the same call-through for `surfaces.ini WAV_PITCH`
+  (`getFloat` → 0x5e4180, track side), feature flags, the port and its tables.
+- **B measurement**: 1.5-2 sessions (controls device + 3 cars in contact under CSP).
+- **C4**: 5-7 sessions (was 5-8), the B measurement included as its first part.
