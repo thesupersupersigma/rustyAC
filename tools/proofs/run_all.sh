@@ -58,7 +58,7 @@ areas=$(echo $areas)
 echo "mode $mode: ${areas:-no area}"
 [ -n "$areas" ] && [ -z "$dry" ] || exit 0
 
-rm -f "$out"/rows/*.row
+rm -f "$out"/rows/*.row "$out/run.status"
 # each lane's areas of this run, in the lane's order
 picked_lanes=$(echo "$lanes" | tr '|' '\n' | while read -r lane; do
     l=$(for a in $lane; do case " $areas " in *" $a "*) printf '%s ' "$a" ;; esac; done)
@@ -107,6 +107,8 @@ if [ "${free_kb:-0}" -lt 12582912 ] && [ "$(echo "$picked_lanes" | grep -c .)" -
 fi
 n=$(echo "$picked_lanes" | grep -c .)
 export CARGO_BUILD_JOBS=$(( jobs / n > 0 ? jobs / n : 1 ))
+# run.status: what tools/proof_tui watches (the mode, the start, each lane; "end" when done)
+{ echo "mode $mode"; echo "start $start_all"; echo "$picked_lanes" | sed 's/^/lane /'; } > "$out/run.status"
 
 # row <area> <PROOF line> <seconds>: the area's row of the table
 row() {
@@ -182,8 +184,10 @@ for a in $areas; do
     [ -f "$out/cases/$mode/$a.txt" ] && sort -u -o "$out/cases/$mode/$a.txt" "$out/cases/$mode/$a.txt" && comm -23 "$out/cases/$mode/$a.txt" "$out/cases/$mode/$a.new" |
         grep -vxF -f <(sed -nE "s/^$a ([^|]*[^ |]) *\|.*/\1/p" "$here/retired.txt") | sed "s/^/$a /"
     mv "$out/cases/$mode/$a.new" "$out/cases/$mode/$a.txt"
+    cp "$out/$a/times.tsv" "$out/cases/$mode/$a.times" 2> /dev/null  # for proof_tui's next ETA
 done > "$out/vanished.txt"
 n=$(grep -c '' "$out/vanished.txt")
 if [ "$n" -gt 0 ]; then printf '\n\033[31m%s cases vanished since the last %s run\033[0m (%s):\n' "$n" "$mode" "$out/vanished.txt"; sed 's/^/  /' "$out/vanished.txt"
 else printf '0 cases vanished since the last %s run\n' "$mode"; fi
+echo "end $(date +%s)" >> "$out/run.status"
 ! ls "$out"/rows/*.bad > /dev/null 2>&1

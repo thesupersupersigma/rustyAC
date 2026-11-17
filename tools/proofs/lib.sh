@@ -71,8 +71,8 @@ quick_re=$out/quick.re
 grep -vE '^\s*(#|$)' "${PROOF_QUICK_RE:-$repo/tools/proofs/quick/$area.txt}" > "$quick_re" 2>/dev/null
 # keep <key>: whether a case runs (always, unless this is a quick run and the key is not listed)
 keep() {
-    [ -z "$PROOF_QUICK" ] || printf '%s
-' "$1" | grep -qxE -f "$quick_re"
+    { [ -z "$PROOF_QUICK" ] || printf '%s
+' "$1" | grep -qxE -f "$quick_re"; } && { echo "$1" 2> /dev/null > "$out/now"; true; }  # now: for proof_tui
 }
 
 # The game's recordings, kept (xz) in re/gold/fresh/rec/<name>/<key>/ (made once, byte for byte
