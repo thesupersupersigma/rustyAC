@@ -54,6 +54,13 @@ foreach ($source in $files.Keys) {
         throw "$source is missing (build first: cargo build --release --workspace)"
     }
 }
+# the version info the two programs carry (packaging/version_res.rs) must be this release's
+foreach ($exe in @("rustyac.exe", "rustyac-launcher.exe")) {
+    $info = (Get-Item (Join-Path $root "target/release/$exe")).VersionInfo
+    if ($info.ProductVersion -ne $Version -or $info.ProductName -ne "rustyAC") {
+        throw "$exe says '$($info.ProductName) $($info.ProductVersion)', not 'rustyAC $Version': build again"
+    }
+}
 
 # the text file gets Windows line ends, whatever git checked out
 $text = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "HOW_TO_RUN.txt"))
