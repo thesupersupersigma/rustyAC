@@ -163,7 +163,7 @@ are read from Assetto Corsa's own settings (see "VR, screens and input").
 | Option | Default | What it does |
 |---|---|---|
 | `--join <host:port>` | | Joins a Kunos acServer (its TCP port), as Assetto Corsa does. The server names the track and gives you a car. `--join ws://...` or `--join wss://...` goes through a WebSocket gateway next to the server (see "rustyac-gateway"). Without it, a start without `--car` and `--track` joins the server Content Manager wrote into race.ini. |
-| `--name <name>` | your Windows user name | Your driver name. |
+| `--name <name>` | your Steam name, else your Windows user name | Your driver name. |
 | `--team <name>` | none | Your team. |
 | `--password <text>` | none | The server's password. |
 | `--guid <id>` | Steam's, else rustyAC's own | The player id to send. |
@@ -377,6 +377,7 @@ Docker containers. See [server/README.md](../server/README.md).
 | `PANEL_DATA_DIR` | `/srv/rustyac/panel` | Where the panel keeps its data. |
 | `PANEL_SITE_URL`, `PANEL_GAME_HOST` | empty | The site's address and the name players reach the servers by. |
 | `PANEL_MAX_SERVERS` | 3 | The most servers the panel starts at once. |
+| `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | empty | The Cloudflare Access team domain and application tag the panel checks sign-ins against (see the kit's README). |
 | `PANEL_GAME_PORTS`, `PANEL_HTTP_PORTS`, `PANEL_GATEWAY_PORTS` | 9620-9629, 9630-9639, 9640-9649 | The port ranges of the panel's servers. |
 
 A server's container also reads `AC_SERVER` (the kit folder, default `spa`), `AC_PACK` (default
@@ -468,7 +469,7 @@ rustyAC; `--controls` wins over it, and it wins over Assetto Corsa's controls.in
 | `CF_ACCESS_HOST`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | A Cloudflare Access service token for `--join wss://...`: sent only over `wss://` and only to that host. |
 | `GATEWAY_NAME`, `GATEWAY_LISTEN`, `GATEWAY_SERVER`, `GATEWAY_UDP_PORT`, `GATEWAY_ORIGINS`, `GATEWAY_MAX_CLIENTS`, `GATEWAY_MAX_MESSAGE`, `GATEWAY_IDLE_TIMEOUT`, `GATEWAY_PING_INTERVAL` | The gateway's options (see "rustyac-gateway"). |
 | `RUSTYAC_WGPU_ADAPTER` | In the builds that draw with wgpu: `gpu` or `swiftshader`. **checks** |
-| `RUSTYAC_MATH` | `std`: the standard library's maths instead of the game's own. Results then differ from the game's in the last digits. **checks** |
+| `RUSTYAC_MATH` | Which maths functions are used. Default: the game's own (its `MSVCR120.dll`), or rustyAC's exact copy of them when the DLL is missing. `pure`: the copy. `no-dll`: as if the DLL were missing. `std`: the standard library's; results then differ from the game's in the last digits. **checks** |
 | `RUSTYAC_PROOF_RUN` | Set by the proof scripts: rustyac.exe then refuses to start without `--cfg-dir` and `--documents`, and never asks Steam. **checks** |
 | `RUSTYAC_AUDIO_VERBOSE` | More lines from the sound engine. **checks** |
 | `RUSTYAC_DISPLAY_MODES` | The launcher's list of display sizes, fixed (`1920x1080,1280x720`). **checks** |
