@@ -51,6 +51,16 @@ The install can change whenever Content Manager updates CSP, so CSP oracle runs 
 root with the frozen build: `tools/csp/fakeac_csp.ps1` makes `re/csp/fakeac/` (remove it only with
 `tools/csp/fakeac_csp_rm.ps1`).
 
+## The local disassembly database (built 2026-11-17)
+
+Made from a copy of the frozen `dwrite.dll` in batch mode, kept local and
+never committed: 560 s wall time (527 s auto-analysis), 477,029,429 bytes,
+76,361 functions, 50,067 strings. The export directory names the module
+`accRenderingAdv.release.dll`, as in build 4184. The start-up log string
+` functions were found successfully` (`attach.md` 1.x) is at 0x182379e10,
+used once, by the function at 0x18157a7c0 (build 4184: 0x14fa3a0; image
+base 0x180000000).
+
 ## Resume here
 
 Task C0 (setup) done. Next: the first task of [`plan.md`](plan.md), re-matching the addresses it
