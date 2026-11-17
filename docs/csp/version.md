@@ -63,5 +63,6 @@ base 0x180000000).
 
 ## Resume here
 
-Task C0 (setup) done. Next: the first task of [`plan.md`](plan.md), re-matching the addresses it
-needs against build 4305.
+Task C0 (setup) and Task C1 (the in-process spike) done. [`inprocess.md`](inprocess.md) has the
+verdict: GO with conditions, CSP starts next to a hand-mapped `acs.exe` in `tools/csp_oracle/`.
+Next: the lead chat's choice (the plan is rewritten from that verdict).

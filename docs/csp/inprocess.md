@@ -167,3 +167,205 @@ rest of this list into a measurement. `[interp]`
 | WINHTTP, WS2_32 | network | refused |
 | Other modules by name (sound, Steam, Direct3D) | registry rows naming their exports | present, or logged by CSP as failed |
 | Threads | pools started after the hook set-up | listed, checked against the result |
+
+## Part 2. What happened when it was tried, and the verdict
+
+Extra markers: `[run]` measured in the spike host on 2026-11-17, `[cfg]` the comment next to a key
+in CSP's own `extension/config/general.ini`.
+
+**Verdict: GO with conditions.** CSP build 4305 starts next to a hand-mapped `acs.exe`, finds
+the same 1557 functions as in the game, patches them, and answers a call through a patched game
+function, the same way on every run. The conditions are in 2.8.
+
+### 2.1 The host
+
+`tools/csp_oracle/` (`csp_oracle <ac root> <run folder> [cfg folder]`), run against
+`re/csp/fakeac/`. It reuses car_oracle's loader as a shared module (`#[path]`, no copied code).
+
+- `acs.exe` is mapped by that loader, as in every oracle. It never runs as a program.
+- **The DLL is loaded by Windows, not mapped by hand.** This is the one departure from the plan
+  of part 1 (1.7 rows "TLS slot…" and "Unwind tables"). With the Windows loader the TLS slot
+  exists on every thread, the unwind tables are registered, and the DLL is in the module list
+  that dbghelp walks. The host still answers on purpose: a loader notification patches the DLL's
+  entry point before it runs, and the hook points every one of the 455 static imports at a
+  counting thunk, with the host's own function where an answer is needed. The price: the DLL's
+  two TLS callbacks run before the hook (the start-up then went through with no fault `[run]`),
+  and delay-loaded imports (dbghelp) are not counted.
+- The run folder is new for each run and becomes Documents, the temp folder and the local /
+  roaming application-data folders. `[cfg folder]` is copied in as the user's `cfg`.
+- Writes are refused outside the run folder and `<ac root>\cache` (most folders of
+  `re/csp/fakeac/` are links into the real game folder). Network DLLs do not load. A Direct3D
+  device, a DXGI factory, a message box or a process exit stops the run with its own exit code.
+- 1.6 said the host "stops on any import it was not told about". It does not: it **counts**
+  every import and stops only on the ones just named. The counts are the measurement.
+
+### 2.2 What start-up needed
+
+| Dependency | Host's answer | Measured `[run]` |
+|---|---|---|
+| Main module file name / handle | the fake root's `acs.exe` / the mapped image | asked 4 + 7 times; accepted |
+| DLL's own folder | true | current directory set to it once |
+| Documents | the run folder (`SHGetFolderPathW`, folder 5) | asked once; `SHGetKnownFolderPath` never |
+| `acs.pdb` | next to the exe; dbghelp loads | all names found; the layout cache was **not** written (`cache\` stayed empty) |
+| The game's own DLLs | `fmod64`, `fmodstudio64`, `steam_api64` (copied into the fake root), `wsock32`, `d3dx11_43`, `xinput1_3` (Windows) loaded before the DLL | **needed**: the function table also names functions these DLLs export; without them CSP shows "Failed to tweak Assetto Corsa" with 109+ names |
+| `race.ini`, `video.ini` in the user's `cfg` | small ones written by the host | **needed**: the race-configuration reader (RVA `0x124f650`) refuses to go on without them |
+| Clock | fixed, per thread | 14 + 2 + 2 + 1 + 1 queries; log dated 2020.01.01 |
+| MXCSR | recorded | `0x1f80` before the entry point, `0x9fe0` after |
+| Network | DLLs refused | never asked for |
+| Registry, Direct3D, DXGI, message box, new process | stop or refuse | never asked for |
+| Window | message-only window refused | asked once, by the hot-key thread (2.5) |
+| Faults | car_oracle's crash reporter left on | 7 C++ exceptions thrown and caught inside CSP; no fault |
+
+CSP called 80 of its 455 static imports. Its only writes were the folder
+`cfg\extension\state` and its log. `[run]`
+
+Two things cost a run each and are worth knowing:
+
+- Until "functions were found", CSP reports its own errors through a game function it has not
+  looked up yet. An early error therefore shows as a jump to address 0, not as a message. `[run]`
+- **The function count depends on the settings.** No user settings: 1558. The player's CSP
+  settings only: 1556. The player's game settings only: 1559. Both: 1557, the game's number.
+  A reference run is only comparable with the same `cfg` folder. `[run]`
+
+The task's note that the fake root has no fmod / Steam / MSVC DLLs "so that should not matter":
+the first two do matter (table above); `tools/csp/fakeac_csp.ps1` now copies them. The MSVC
+run-time DLLs come from Windows, as for car_oracle.
+
+### 2.3 Go criteria
+
+| Criterion | Result | Evidence `[run]` |
+|---|---|---|
+| Log reaches "functions were found" with the game's count | yes | "All 1557 functions were found successfully", then "Base settings are ready", "Orchestrator is ready", "Starting loading…", as in the game's log |
+| Detours really in `acs.exe` | yes | 1055 functions patched. `kglInitFonts` `48 83 ec 38 48` → `e9 84 89 f5 ff`; `INIReader::hasSection` `48 89 5c 24 10` → `e9 de 95 d8 ff`; `GameTime::update` `40 53 48 83` → `e9 ff 48 b7` |
+| One call through | yes | `INIReader::hasSection("THREADING")` on `system/cfg/assetto_corsa.ini`: `true` before CSP, `false` after (the file has the section). `PHYSICS_THREADING`: `true` both times |
+| Repeatable | yes | three runs: report files identical; standard output identical but for the DLL's load address (Windows moved it once); CSP's log identical but for line 1 |
+| Threads | yes | one thread started, it ends at once and touches nothing the call reads (2.5) |
+
+Notes:
+
+- The call through is CSP's `hasSection` hook (RVA `0x5dfd20`): it hides the section
+  `THREADING` of exactly that file. The two calls suggested in the task (`VERSION=extended-N`,
+  the wing controller rule) only act while the game is inside one particular call (a flag set
+  and cleared by RVA `0x61e6f0`), so a bare reader cannot show them. `[dll]`
+- Nothing had to be zeroed for repeatability. What differs between runs: line 1 of CSP's log (a
+  random symbol and the main thread's ID) and the DLL's load address. The jump bytes do not
+  depend on that address (the trampolines are placed near `acs.exe`). `[run]`
+- The host's log differs from the game's in two lines: an extra "CSP version changed from 0 to
+  4305" (the run folder is new) and the DPI line (in the game it was already set before CSP).
+  The game's log goes on ("Race configuration is checked", "Cores: …", the pool threads) with
+  things that happen once the game itself runs. `[run]` `[log-csp]`
+
+### 2.4 Part 1's open points
+
+- 1.4, the identity of a hand-mapped image: no problem. CSP took the mapped image as the main
+  module and found every name. `[run]`
+- 1.5, later detour installs: none in the spike. The patched functions are the same at
+  "functions were found", after the call through and 1.5 s later. The later installers of 1.5
+  need the game to run. `[run]` `[interp]`
+- 1.6, the conditional thread: it is the hot-key thread of 2.5. `[run]` `[dll]`
+
+### 2.5 Threads
+
+- **T1, the only thread CSP starts** (routine RVA `0x13fc9b0`, from the settings routine):
+  it registers a window class, makes a message-only window, registers F10 and F12 as
+  system-wide hot keys with every modifier, and pumps messages until shutdown. The host refuses
+  the window (system-wide hot keys on the owner's PC are not acceptable), and the thread then
+  returns at once. It reads and writes nothing the call through uses. `[dll]` `[run]`
+- At all three check points the process has 4 threads: the host's own and three workers of the
+  Windows loader. No CSP pool exists yet. `[run]`
+- In tool-run mode (2.6) T1 is not started at all. `[run]`
+
+### 2.6 How the physics uses threads (static)
+
+Read in build 4305; nothing here was run.
+
+**The worker count** (RVA `0x15d8110`, once): 0 when the single-thread flag is set or the PC
+has 2 logical processors or fewer; otherwise performance cores minus 1 (minus 2 with
+`[OPTIMIZATIONS_CPU] HYPERTHREADING_FIX=1` on a PC with hyper-threading), at least 2. The log
+line "Cores: 16, physical: 8, perf.: 8, workers: 7" is this routine. `[dll]` `[log-csp]`
+
+**The pool** (dispatcher RVA `0x5864f0`): threads named "LLTP (n)" are made the first time they
+are needed, never more than the worker count. A dispatch has a number of work items; the
+calling thread and the woken workers each take the next item until none is left, so which
+thread runs which item is not fixed. The caller then waits, first spinning with `Sleep(0)`,
+then with timed waits. With no work items for the pool, everything runs on the calling thread.
+`[dll]`
+
+**Cars** (RVA `0x67e2e0`): with more than one car and a worker count above 0, one work item
+per car goes to the pool. Otherwise the cars are stepped one after another in list order. A
+one-car session is serial here. `[dll]`
+
+**The rigid-body step** (RVA `0x92e4a0`) has two paths: `[dll]`
+
+- Parallel, when `[OTHER_EXPERIMENTS] MT_ODE_STEP` is on (default 1, "Parallel joints solver"
+  `[cfg]`) and the worker count is above 0: CSP builds the island list itself
+  (RVA `0x168d1c0`), then gives the islands to the pool. **The number of threads it asks for
+  depends on measured time**: at most the worker count and the island count, and further
+  limited by a running average of how long earlier steps took on the wall clock.
+- Otherwise the island processing of the ODE library itself (RVA `0x16c6d00`), through ODE's
+  threading interface.
+
+**Contacts**: `[PHYSICS_EXPERIMENTS_DONE] PARALLELIZED_CONTACTS` (default 1) lets the contact
+search run while the cars are being computed `[cfg]`. Its code was not read.
+
+**Forcing one thread**:
+
+- The environment variable `AC_TOOL_RUN` (`true` or a non-zero number) turns on "tool run":
+  headless, single thread, worker count 0. Tried in the host: CSP logs "Starting tool run",
+  finds 1604 functions (1084 patched) and does not start T1. So it works, but it is **a
+  different configuration from the game's** (47 more functions looked up, other switches set
+  with it). `[dll]` `[run]`
+- `[HEADLESS_MODE] ENABLED` and `SINGLE_THREAD` are read by the same routine
+  (RVA `0x13fcd80`); the condition that leads there was not read. `[dll]`
+- `MT_ODE_STEP=0` alone removes the timing-dependent path but leaves the cars on the pool.
+- A host can also report 2 logical processors, which gives worker count 0 with no other
+  setting changed. Not tried. `[interp]`
+
+**Compared with Vanilla.** Vanilla's pool gives the same result whatever the timing, and
+rustyAC matches it bit for bit. In CSP the pool's schedule is open: which worker takes which
+car or island, and how many threads an island step gets, depend on timing. Whether the
+**numbers** then differ was not shown either way: islands are independent by construction and
+a car's step mostly writes its own state `[interp]`, but the parallel solver's tasks
+(RVA `0x938c50`) and the parallel contact search were not read. With a worker count of 0 every
+dispatch runs in list order on one thread; that is the only mode the code shows to be
+repeatable.
+
+### 2.7 What cannot be bit-exact
+
+From the code, not a guess:
+
+1. **CSP against Vanilla.** CSP replaces the rigid-body core with a double-precision one;
+   `acs.exe`'s is single precision `[prior]`. A CSP run is compared with a CSP oracle, never
+   with the Vanilla one.
+2. **A multi-thread CSP run against another one**, until measured: the thread count of the
+   island step follows wall-clock time, and work items are taken in no fixed order (2.6). The
+   worker count also depends on the PC's processor.
+3. **Timing statistics** kept by the step routines (smoothed wall-clock durations). They feed
+   item 2 and nothing else that was read.
+4. **Line 1 of the log**, and load addresses.
+
+Everything on the start-up path, and the one call through, is bit-exact between runs.
+
+### 2.8 Conditions, and the estimate
+
+Conditions of the GO:
+
+1. The DLL is loaded by Windows with its entry point caught, not mapped by hand (2.1).
+2. The `cfg` folder is an input of every run; a reference run uses the same one (2.2).
+3. The game's own DLLs are in the AC root (2.2).
+4. The hot-key window stays refused, and the write guard stays on (2.1, 2.5).
+5. Physics runs with a worker count of 0 until a measurement shows that 7 workers give the same
+   numbers. If they do not, the multi-thread physics is the "statistical" part and nothing
+   else is.
+
+What the spike does not cover: everything after "Starting loading…". In the game, CSP's later
+set-up runs from inside patched game functions as the game starts (the lines after it in the
+game's log). An oracle that builds a car or steps the physics has to drive those game
+functions itself, in order, with CSP's patches in them. That is the unknown in both estimates.
+
+- **C3** (`extended-N` reading): 2 to 3 sessions. The reader rules only act inside the game's
+  car loading, so the oracle has to load a car through the patched game code, which car_oracle
+  already does without CSP.
+- **C4** (the physics baseline): 5 to 8 sessions. CSP replaces the physics engine's set-up and
+  step, uses thread-local state, and needs the worker count settled (condition 5) and the
+  1-worker against 7-worker measurement.
