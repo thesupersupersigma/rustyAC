@@ -23,7 +23,7 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 2. Run **`rustyac-launcher.exe`**. It opens Assetto Corsa's own launcher menu, so you can pick a car, track and session (practice, quick race, race weekend, hotlap, online, special events, career), then press Drive.
 3. `rustyac.exe` also runs on its own from the command line, or from a Content Manager `race.ini`. Run `rustyac.exe --help` for the options.
 
-**Browser:** play at **[rustyac.com/play](https://rustyac.com/play)**. Same physics as the desktop build, compiled to WebAssembly, with keyboard and gamepad. Each release also has a `-web.zip` you can host yourself (see [docs/web.md](docs/web.md)).
+**Browser:** play at **[rustyac.com/play/app](https://rustyac.com/play/app/)**. Same physics as the desktop build, compiled to WebAssembly, with keyboard and gamepad. Each release also has a `-web.zip` you can host yourself (see [docs/web.md](docs/web.md)).
 
 ---
 
@@ -39,7 +39,8 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 | **UI** | The in-game HUD, menus, setup editor, pit strategy, telemetry and the player apps, pixel-identical to the game. |
 | **Launcher** | AC's own launcher, with Kunos' theme from your install. |
 | **Game modes** | Practice, quick race, race weekend, hotlap, Time Attack, Drift, Drag Race, special events and career. |
-| **Cameras and hardware** | Every camera (chase, cockpit, the car's own, track and replay cameras, free camera), triple screens, VR (OpenVR and Oculus), TrackIR, force feedback, and Steam achievements (off by default). |
+| **Cameras and hardware** | Every camera (chase, cockpit, the car's own, track and replay cameras, free camera), triple screens, VR (OpenVR and Oculus), TrackIR, force feedback, and Steam achievements (off by default). VR, triple screens, TrackIR and Steam are proven against the game's own code with stand-in devices, but haven't been tried on real hardware yet: reports welcome. |
+| **Shared memory** | AC's physics, graphics and static pages, as the game writes them, so SimHub, Crew Chief, motion rigs and other telemetry tools work with rustyAC. |
 | **Apps** | AC's Python app API, so Python apps from your install run, and the dev apps. |
 | **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
 | **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view; post-processing (YEBIS) is not available in the browser), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
@@ -83,7 +84,7 @@ Each task's proof is written up in [`docs/port/`](docs/port).
 
 ## Build from source
 
-Windows, Rust stable:
+Windows, Rust through [rustup](https://rustup.rs) (the exact compiler version is pinned in `rust-toolchain.toml` and installed automatically):
 
 ```
 git clone https://github.com/thesupersupersigma/rustyAC
