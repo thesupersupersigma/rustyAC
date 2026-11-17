@@ -1,5 +1,7 @@
 # CSP porting plan (proposal)
 
+> This map was made from 0.3.0-preview649 (build 4184); the port targets 0.3.2-preview2 (build 4305), see [version.md](version.md). Addresses here are build 4184's until re-matched.
+
 An ordered list of porting tasks of about 4-5 hours each, the way `docs/port/` was done for
 `acs.exe`: what each delivers, how it is **proven**, what it depends on and what can block it.
 Nothing here is built; every statement about CSP is in the area files this plan links to.

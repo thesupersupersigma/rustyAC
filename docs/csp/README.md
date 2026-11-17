@@ -1,5 +1,7 @@
 # Custom Shaders Patch (CSP) 0.3.0-preview649 — atlas
 
+> This map was made from 0.3.0-preview649 (build 4184); the port targets 0.3.2-preview2 (build 4305), see [version.md](version.md). Addresses here are build 4184's until re-matched.
+
 A map of CSP, the third-party mod that most of today's Assetto Corsa content is built for, written
 for rustyAC. It is a **map, not a port**: what CSP is, how it attaches to `acs.exe`, which game parts
 it replaces, which keys and Lua functions it exposes, which of the owner's installed content needs
