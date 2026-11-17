@@ -24,7 +24,8 @@ const USAGE: &str = "rustyac-launcher [options]: Assetto Corsa's launcher, with 
   --transcript <requests> <out>   no window: the bridge's answers to a list of requests
   --pure-ini             ini files through rustyAC's pure copy of the Win32 calls, as in the browser
   --fixed-host           with --transcript: the same screen, times and player everywhere, as the
-                         transcript example does in wasm";
+                         transcript example does in wasm
+  --help, -h             print this text";
 
 #[cfg(windows)]
 fn main() {
@@ -125,4 +126,35 @@ fn main() {
 #[cfg(not(windows))]
 fn main() {
     eprintln!("{USAGE}\nrustyac-launcher runs on Windows only (the launcher's browser is WebView2).");
+}
+
+#[cfg(test)]
+mod tests {
+    /// USAGE and docs/flags.md against the parser's own source: an option added, renamed or
+    /// removed in one of the three and not in the others fails here
+    #[test]
+    fn usage_and_docs_flags_md_name_the_parsers_options() {
+        use std::collections::BTreeSet;
+        let source = include_str!("main.rs");
+        let accepted: BTreeSet<&str> = source[..source.find("#[cfg(test)]").unwrap()]
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.starts_with("\"-") || l.starts_with("\"/"))
+            .filter_map(|l| l.split_once("=>"))
+            .flat_map(|(names, _)| names.split('|').map(|n| n.trim().trim_matches('"')))
+            .collect();
+        assert!(accepted.len() > 10, "the parser's arms were not found");
+        let word = |c: char| c.is_ascii_alphanumeric() || "-/?".contains(c);
+        let usage: BTreeSet<&str> = super::USAGE.split(|c| !word(c)).filter(|w| w.starts_with("--") || ["-h", "/?"].contains(w)).collect();
+        let page = include_str!("../../../docs/flags.md");
+        let section = page.split("\n## ").find(|s| s.starts_with("rustyac-launcher.exe\n")).expect("the page's section");
+        // on the page an option is the first word of a `code` piece
+        let documented: BTreeSet<&str> =
+            section.split('`').skip(1).step_by(2).filter_map(|code| code.split_whitespace().next()).filter(|w| w.starts_with('-') || *w == "/?").collect();
+        let none = Vec::<&&str>::new();
+        assert_eq!(accepted.difference(&usage).collect::<Vec<_>>(), none, "accepted by the parser, not in USAGE");
+        assert_eq!(usage.difference(&accepted).collect::<Vec<_>>(), none, "in USAGE, not accepted by the parser");
+        assert_eq!(accepted.difference(&documented).collect::<Vec<_>>(), none, "accepted by the parser, not in docs/flags.md");
+        assert_eq!(documented.difference(&accepted).collect::<Vec<_>>(), none, "in docs/flags.md, not accepted by the parser");
+    }
 }

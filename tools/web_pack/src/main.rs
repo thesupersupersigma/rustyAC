@@ -655,12 +655,14 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+const USAGE: &str = "usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run] [--delta <live manifest.json>] [--help, -h]
+--delta: write only the files that are new or changed against that manifest, plus the new manifest.json, into an empty --out
+the config: --config, else web/my_pack.toml when it exists, else web/preview.toml";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run] [--delta <live manifest.json>]");
-        println!("--delta: write only the files that are new or changed against that manifest, plus the new manifest.json, into an empty --out");
-        println!("the config: --config, else web/my_pack.toml when it exists, else web/preview.toml");
+        println!("{USAGE}");
         return;
     }
     if let Err(message) = run(&args) {
@@ -732,5 +734,29 @@ mod tests {
         assert_eq!(expand(&list(&["imola/*"]), &tracks), list(&["imola"]));
         assert_eq!(megabytes(1_500_000), "1.5 MB");
         assert_eq!(one_line("C:\\ac\\content\\cars\\a\\data\\x.ini: bad\n  value\n", Path::new("C:\\ac")), "content\\cars\\a\\data\\x.ini: bad value");
+    }
+
+    /// USAGE and docs/flags.md against the parser's own source: an option added, renamed or
+    /// removed in one of the three and not in the others fails here
+    #[test]
+    fn usage_and_docs_flags_md_name_the_options() {
+        use std::collections::BTreeSet;
+        let source = include_str!("main.rs");
+        // this program has no match over its options: they are the "--x" words of its code
+        let code = &source[..source.find("#[cfg(test)]").unwrap()];
+        let accepted: BTreeSet<&str> = code.split('"').skip(1).step_by(2).filter(|w| w.starts_with("--") && !w.contains(' ') || *w == "-h").collect();
+        assert!(accepted.len() >= 5, "the options were not found");
+        let word = |c: char| c.is_ascii_alphanumeric() || "-/?".contains(c);
+        let usage: BTreeSet<&str> = USAGE.split(|c| !word(c)).filter(|w| w.starts_with("--") || ["-h", "/?"].contains(w)).collect();
+        let page = include_str!("../../../docs/flags.md");
+        let section = page.split("\n## ").find(|s| s.starts_with("web_pack\n")).expect("the page's section");
+        // on the page an option is the first word of a `code` piece
+        let documented: BTreeSet<&str> =
+            section.split('`').skip(1).step_by(2).filter_map(|code| code.split_whitespace().next()).filter(|w| w.starts_with('-') || *w == "/?").collect();
+        let none = Vec::<&&str>::new();
+        assert_eq!(accepted.difference(&usage).collect::<Vec<_>>(), none, "accepted by the parser, not in USAGE");
+        assert_eq!(usage.difference(&accepted).collect::<Vec<_>>(), none, "in USAGE, not accepted by the parser");
+        assert_eq!(accepted.difference(&documented).collect::<Vec<_>>(), none, "accepted by the parser, not in docs/flags.md");
+        assert_eq!(documented.difference(&accepted).collect::<Vec<_>>(), none, "in docs/flags.md, not accepted by the parser");
     }
 }

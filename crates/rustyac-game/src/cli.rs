@@ -598,6 +598,7 @@ usage: rustyac [options]
   --no-audio            no sound (the sound is Assetto Corsa's own: its FMOD DLLs and sound banks are
                         loaded from its folder; without them rustyAC is silent)
   --volume <0..1>       master volume instead of [LEVELS] MASTER of Documents\\Assetto Corsa\\cfg\\audio.ini
+  --audio-ini <file>    the sound settings from this file instead of Documents\\Assetto Corsa\\cfg\\audio.ini
   --audio-wav <file>    write the mix to a WAV file instead of playing it (FMOD's non-real-time writer:
                         one 1/60 s block per 1/60 s of driving, whatever the PC's speed; also with --headless)
   --audio-log <file>    write every FMOD call to a text file
@@ -619,6 +620,9 @@ usage: rustyac [options]
                         lap in the same wind as the lap just driven in the game
   --setup <name|file>   a saved setup: a file, or a name in Documents\\Assetto Corsa\\setups\\
                         <car>\\<track> (then ...\\generic), loaded as the game's setup screen does
+  --setups-dir <folder> where the setup screen saves (default: setups beside rustyac.exe; never
+                        Assetto Corsa's own folders)
+  --no-ac-setups        the setups of Documents\\Assetto Corsa\\setups are not listed
   --damage <percent>    mechanical damage whatever assists.ini says (its DAMAGE: 0 off, 100 full).
                         At 0 a crash bends no suspension, wears no engine and no tyre can burst;
                         Content Manager and the launcher write the file anew for every session
@@ -662,6 +666,10 @@ usage: rustyac [options]
                         (off unless this or cfg\\rustyac.ini [STEAM] ACHIEVEMENTS=1 turns them on;
                         they need Steam running)
   --net-identity <file> take rustyAC's own player id from this file (a second player on one PC)
+  --name <name>         multiplayer: your driver name (default: your Windows user name)
+  --team <name>         multiplayer: your team
+  --password <text>     multiplayer: the server's password
+  --guid <id>           multiplayer: the player id to send (default: Steam's, else rustyAC's own)
   --net-tape <file>     write every message of the online session to this file at its end
                         (your player id and the server's password are blanked in it;
                         names and chat lines of everybody are in it)
@@ -697,6 +705,23 @@ usage: rustyac [options]
   --drawn-frames <seed> with --headless: Time Attack, Drift, Drag on drawn frames of uneven
                         length (5 to 40 ms, seeded), each frame into mode_frames.txt of --out-dir
   --stand-in-drivers    race.ini's other cars with rustyAC's line follower, not the AI
+  --no-race-cars        race.ini's other cars ([CAR_1] ...) are left out
+  --focus <n>           the car the camera is on at the start (0: yours)
+  --sessions <list>     the sessions without a race.ini: p10,q5,r3 is a practice of 10 minutes, a
+                        qualifying of 5 and a race of 3 laps; rt20 a race of 20 minutes, rt20+ the
+                        same and the lap after
+  --no-referee          no race rules
+  --penalties <0|1>     race.ini's PENALTIES whatever the file says
+  --jump-start <0|1|2>  race.ini's JUMP_START_PENALTY whatever the file says
+  --pit-window <open>,<close>
+                        a mandatory pit stop window (the leader's laps; minutes in a timed race)
+  --no-pit-stop         no pit stop for your car
+  --out-dir <folder>    where race_out.json and laps.ini go (default: out beside rustyac.exe; never
+                        Assetto Corsa's own folders)
+  --esc-start, --no-esc-start
+                        the session begins in the ESC menu with the car held until Drive, as in the
+                        game, or it does not (default: it does for a drive at the wheel in a window;
+                        not for replays, unattended drives, pictures and online)
   --physics-threads <n> worker threads that step the cars (0: none; with 1 the game's split
                         leaves the worker nothing). Default: as the game, [PHYSICS_THREADING]
                         THREADS of its assetto_corsa.ini (half the logical processors; none
@@ -874,6 +899,22 @@ for checks, without anybody at the controls:
   --bench-render        with --headless: also draw frames off screen and report their rate
   --bench-shot <png>    with --headless --bench-render: write the last frame drawn to a PNG
   --no-focus            show the window without activating it and keep running unfocused
+  --pose-out <file>     with --screenshot: also write the car's state the picture is made from
+  --focus-script <list> the focus keys by the clock, seconds since the window opened:
+                        next@2,previous@4,player@6 (also track: F3, random: F2, onboard: F5)
+  --ai-pit-at <s>       call the AI driver of your car (--ai-drive) in for a pit stop after s
+                        seconds (repeat it for more)
+  --pit-key <key>@<s>   a key of the pit menu pressed after s seconds: left, up, right, down, or
+                        drive (the ESC menu's Drive); repeat it for more
+  --pit-click <control>@<s>
+                        a click in the old mouse pit menu after s seconds: tyre:2, fuel_up,
+                        gauge:<bits>, confirm ... (repeat it for more)
+  --next-session-at <s>, --restart-session-at <s>
+                        the referee's two buttons pressed after s seconds (repeat them for more)
+  --audio-oracle-camera <cockpit|chase|trackside>
+                        the place the sound is heard from, as tools/audio_oracle sets it
+  --audio-script <log>  another run's answers to the sound events' state questions
+  --help, -h, /?        print this text
 ";
 
 /// A path option made absolute now: the program may change its working directory later (the
@@ -1281,5 +1322,35 @@ mod tests {
         for bad in ["1,2", "1,2,3/4,5", "1,2,3/1,2,3", "1,2,3/0,0,0/0", "1,2,3/0,0,0/60/1", "a,b,c"] {
             assert!(parse(&format!("--screenshot a.png --free-camera {bad}")).is_err(), "{bad}");
         }
+    }
+
+    /// USAGE and docs/flags.md against the parser's own source: an option added, renamed or
+    /// removed in one of the three and not in the others fails here
+    #[test]
+    fn usage_and_docs_flags_md_name_the_parsers_options() {
+        use std::collections::BTreeSet;
+        let source = include_str!("cli.rs");
+        let parser = &source[source.find("pub fn parse(").unwrap()..source.find("#[cfg(test)]").unwrap()];
+        let mut accepted: BTreeSet<&str> = parser
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.starts_with("\"-") || l.starts_with("\"/"))
+            .filter_map(|l| l.split_once("=>"))
+            .flat_map(|(names, _)| names.split('|').map(|n| n.trim().trim_matches('"')))
+            .collect();
+        accepted.insert("--race-ini"); // taken before the match: its file is optional
+        assert!(accepted.len() > 150, "the parser's arms were not found");
+        let word = |c: char| c.is_ascii_alphanumeric() || "-/?".contains(c);
+        let usage: BTreeSet<&str> = USAGE.split(|c| !word(c)).filter(|w| w.starts_with("--") || ["-h", "/?"].contains(w)).collect();
+        let page = include_str!("../../../docs/flags.md");
+        let section = page.split("\n## ").find(|s| s.starts_with("rustyac.exe\n")).expect("the page's section");
+        // on the page an option is the first word of a `code` piece
+        let documented: BTreeSet<&str> =
+            section.split('`').skip(1).step_by(2).filter_map(|code| code.split_whitespace().next()).filter(|w| w.starts_with('-') || *w == "/?").collect();
+        let none = Vec::<&&str>::new();
+        assert_eq!(accepted.difference(&usage).collect::<Vec<_>>(), none, "accepted by the parser, not in USAGE");
+        assert_eq!(usage.difference(&accepted).collect::<Vec<_>>(), none, "in USAGE, not accepted by the parser");
+        assert_eq!(accepted.difference(&documented).collect::<Vec<_>>(), none, "accepted by the parser, not in docs/flags.md");
+        assert_eq!(documented.difference(&accepted).collect::<Vec<_>>(), none, "in docs/flags.md, not accepted by the parser");
     }
 }

@@ -15,6 +15,9 @@
 
 use rustyac_gateway::gateway::{self, Config, Gateway};
 
+/// the options with a value: `--<name> <value>`, or the environment's `GATEWAY_<NAME>`
+const OPTIONS: [&str; 9] = ["name", "listen", "server", "udp-port", "origins", "max-clients", "max-message", "idle-timeout", "ping-interval"];
+
 const HELP: &str = "rustyac-gateway: carries Assetto Corsa clients over WebSockets to an acServer
 
   --name <text>           a short name for the log lines            [gateway]
@@ -31,6 +34,7 @@ const HELP: &str = "rustyac-gateway: carries Assetto Corsa clients over WebSocke
   --ping-interval <s>     ping every client this often              [20]
   --quiet                 no log lines
   --check [addr:port]     ask a running gateway's /healthz and exit (0: it answers)
+  --help, -h              print this text
 
 GET /healthz answers \"ok\". The log never holds what is carried: no player id, no
 password, no name, no chat.";
@@ -63,7 +67,6 @@ fn main() {
         "ping-interval" => config.ping_interval_s = number(name, &value),
         _ => unreachable!(),
     };
-    const OPTIONS: [&str; 9] = ["name", "listen", "server", "udp-port", "origins", "max-clients", "max-message", "idle-timeout", "ping-interval"];
     for name in OPTIONS {
         if let Some(value) = env(&format!("GATEWAY_{}", name.replace('-', "_").to_uppercase())) {
             set(&mut config, name, value);
@@ -114,5 +117,38 @@ fn main() {
             eprintln!("{why}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// HELP and docs/flags.md against the parser's own source: an option added, renamed or
+    /// removed in one of the three and not in the others fails here
+    #[test]
+    fn help_and_docs_flags_md_name_the_parsers_options() {
+        use std::collections::BTreeSet;
+        let source = include_str!("main.rs");
+        let with_value: Vec<String> = super::OPTIONS.iter().map(|o| format!("--{o}")).collect();
+        let mut accepted: BTreeSet<&str> = source[..source.find("#[cfg(test)]").unwrap()]
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| l.starts_with("\"-") || l.starts_with("\"/"))
+            .filter_map(|l| l.split_once("=>"))
+            .flat_map(|(names, _)| names.split('|').map(|n| n.trim().trim_matches('"')))
+            .collect();
+        assert!(accepted.len() >= 4, "the parser's arms were not found");
+        accepted.extend(with_value.iter().map(String::as_str));
+        let word = |c: char| c.is_ascii_alphanumeric() || "-/?".contains(c);
+        let usage: BTreeSet<&str> = super::HELP.split(|c| !word(c)).filter(|w| w.starts_with("--") || ["-h", "/?"].contains(w)).collect();
+        let page = include_str!("../../../docs/flags.md");
+        let section = page.split("\n## ").find(|s| s.starts_with("rustyac-gateway\n")).expect("the page's section");
+        // on the page an option is the first word of a `code` piece
+        let documented: BTreeSet<&str> =
+            section.split('`').skip(1).step_by(2).filter_map(|code| code.split_whitespace().next()).filter(|w| w.starts_with('-') || *w == "/?").collect();
+        let none = Vec::<&&str>::new();
+        assert_eq!(accepted.difference(&usage).collect::<Vec<_>>(), none, "accepted by the parser, not in HELP");
+        assert_eq!(usage.difference(&accepted).collect::<Vec<_>>(), none, "in HELP, not accepted by the parser");
+        assert_eq!(accepted.difference(&documented).collect::<Vec<_>>(), none, "accepted by the parser, not in docs/flags.md");
+        assert_eq!(documented.difference(&accepted).collect::<Vec<_>>(), none, "in docs/flags.md, not accepted by the parser");
     }
 }
