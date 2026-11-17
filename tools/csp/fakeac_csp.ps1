@@ -4,7 +4,8 @@
 # whatever Content Manager does to the real install. Like re/scratch/task46c/fakeac.ps1: junctions
 # to the AC folder's directories and system/cfg copied. Unlike it: extension/ copied from the
 # frozen folder, cache/ a new empty folder, dwrite.dll from the frozen folder, acs.exe + acs.pdb
-# copied (CSP resolves acs.exe's functions by name through the PDB next to the exe).
+# copied (CSP resolves acs.exe's functions by name through the PDB next to the exe), and the three
+# DLLs of the AC folder that acs.exe imports (CSP looks functions up in them too).
 # Makes re/csp/fakeac/. Remove only with fakeac_csp_rm.ps1 (a recursive delete follows junctions).
 $ErrorActionPreference = 'Stop'
 $ac = 'C:\Program Files (x86)\Steam\steamapps\common\assettocorsa'
@@ -18,4 +19,4 @@ Get-ChildItem $ac -Directory | Where-Object { $_.Name -notin 'system', 'extensio
 Get-ChildItem "$ac\system" -Directory | Where-Object { $_.Name -ne 'cfg' } | ForEach-Object { J "$f\system\$($_.Name)" $_.FullName }
 Copy-Item "$ac\system\cfg" "$f\system\cfg" -Recurse
 Copy-Item "$csp\extension" "$f\extension" -Recurse
-Copy-Item "$csp\dwrite.dll", "$ac\acs.exe", "$ac\acs.pdb" $f
+Copy-Item "$csp\dwrite.dll", "$ac\acs.exe", "$ac\acs.pdb", "$ac\fmod64.dll", "$ac\fmodstudio64.dll", "$ac\steam_api64.dll" $f

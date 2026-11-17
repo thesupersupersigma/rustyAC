@@ -1,0 +1,15 @@
+[package]
+name = "csp_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Spike oracle for Custom Shaders Patch: loads CSP's dwrite.dll next to an acs.exe image mapped by hand (never executed as a program), with the host's answers under control, and reports what CSP patched, started and asked for"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+
+# standalone crate, not part of the parent workspace
+[workspace]
