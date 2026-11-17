@@ -1,0 +1,17 @@
+[package]
+name = "proof_tui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Progress screen for tools/proofs/run_all.sh: watches the files a run writes under target/proofs, changes nothing"
+
+[dependencies]
+ratatui = "0.29"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemInformation"] }
+
+[profile.release]
+opt-level = 3
+
+# standalone crate, not part of the parent workspace
+[workspace]
