@@ -1,0 +1,29 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# cargo in a RUSTYAC_PREBUILT=1 run (tools/proofs/prebuilt/env.sh puts this folder first on PATH):
+# the programs were built by tools/proofs/prebuild.sh and checked against its manifest, so `build`
+# does nothing, `run --bin|--example <name>` runs that exe and `test --test <name>` its test
+# program (from the package's folder, as cargo does). Anything else was not prebuilt: it stops.
+repo=$(cd "$(dirname "$0")/../../.." && pwd)
+cmd=$1; shift
+pkg= kind= name= other=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --) shift; break ;;
+        -p) pkg=$2; shift ;;
+        --bin|--example|--test) kind=${1#--}; name=$2; shift ;;
+        --features) shift ;;
+        --release|--locked|--quiet) ;;
+        *) other="$other $1" ;;
+    esac
+    shift
+done
+case $cmd/$kind in
+    build/*) exit 0 ;;
+    run/bin) [ -z "$other" ] && exec "$repo/target/release/$name.exe" "$@" ;;
+    run/example) [ -z "$other" ] && exec "$repo/target/release/examples/$name.exe" "$@" ;;
+    test/test) [ -z "$other" ] && cd "$repo/crates/$pkg" && exec "$repo/target/prebuilt/tests/$name.exe" "$@" ;;
+esac
+echo "cargo $cmd${kind:+ --$kind $name}$other: not prebuilt (tools/proofs/prebuild.sh)" >&2
+exit 2

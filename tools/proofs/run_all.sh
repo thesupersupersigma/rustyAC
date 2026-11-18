@@ -68,6 +68,8 @@ picked_lanes=$(echo "$lanes" | tr '|' '\n' | while read -r lane; do
     l=$(for a in $lane; do case " $areas " in *" $a "*) printf '%s ' "$a" ;; esac; done)
     [ -n "$l" ] && echo "$l"
 done)
+# RUSTYAC_PREBUILT=1: the programs of tools/proofs/prebuild.sh (the builds below do nothing)
+. "$here/prebuilt/env.sh"
 jobs=${CARGO_BUILD_JOBS:-8}
 export CARGO_BUILD_JOBS=$jobs
 start_all=$(date +%s)

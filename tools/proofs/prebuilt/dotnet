@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# dotnet in a RUSTYAC_PREBUILT=1 run: tools/proofs/prebuild.sh restored and built launcher_oracle,
+# and its files are in the manifest, so restore and build have nothing left to do.
+exit 0

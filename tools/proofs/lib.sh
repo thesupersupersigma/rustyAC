@@ -13,6 +13,8 @@ repo_w=$(cd "$repo" && { pwd -W 2>/dev/null || pwd; })
 . "$repo/tools/proofs/lock.sh"
 proof_lock "$repo"
 ac=${AC_ROOT:-"C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"}
+# RUSTYAC_PREBUILT=1: the programs of tools/proofs/prebuild.sh, no cargo, dotnet or git
+. "$repo/tools/proofs/prebuilt/env.sh"
 gold=$repo/re/gold
 # what a run writes: build output, deleted and remade by every run of the area
 out=${PROOF_OUT:-$repo/target/proofs}/$area
@@ -90,8 +92,9 @@ cache=$gold/fresh/rec
 # side only reads a few of their files); a stale result shows as a difference, and `--rerecord`
 # holds every kept result against a new one.
 salt_of() {
-    { git ls-tree -r HEAD -- "tools/$1" | grep -v 'Cargo\.lock$'
-      git diff HEAD -- "tools/$1" ":!tools/$1/Cargo.lock"; install_key; } 2>/dev/null | sha1sum | cut -c1-16
+    { if [ -n "$RUSTYAC_PREBUILT" ]; then cat "$repo/target/prebuilt/src/$1.txt"  # git's lines, saved by prebuild.sh
+      else git ls-tree -r HEAD -- "tools/$1" | grep -v 'Cargo\.lock$'
+        git diff HEAD -- "tools/$1" ":!tools/$1/Cargo.lock"; fi; install_key; } 2>/dev/null | sha1sum | cut -c1-16
 }
 # maths_path: FMA3 or SSE2, the bodies MSVCR120.dll runs here. Its __fma3_lib_init sets
 # __use_fma3_lib from CPUID leaf 1 ECX bit 12 alone, and _set_FMA3_enable(1) returns that flag

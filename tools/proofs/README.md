@@ -103,3 +103,16 @@ The lists say for each line where it came from; where a lost script's exact valu
 a `--set` frame) could not be read back from the reports they were chosen anew, so call counts can
 differ from a report's numbers while the proof (game = port) is the same. `docs/port/proofs.md`
 has the table of every scratch path the reports named and what replaces it.
+
+## Prebuilt programs and the proof farm (Task F2)
+
+`bash tools/proofs/prebuild.sh` builds every program the areas run except browser's and ai_page's,
+with the areas' own commands, and writes `target/prebuilt/` (a `sha256sum -c` manifest, the git
+lines `salt_of` reads, the test programs, the dumps area's release tag). A run with
+`RUSTYAC_PREBUILT=1` then needs no cargo, dotnet or git: `prebuilt/env.sh` puts the stand-ins of
+`prebuilt/` first on PATH (`cargo build` does nothing, `cargo run --bin|--example` and `cargo test
+--test` run the built programs, anything else stops with "not prebuilt") and stops the run when a
+file is not the manifest's. Not prebuilt: browser (`web_pack`'s unit test, the wasm builds) and
+ai_page (they stay on the PC); the dumps area's old release must have been built once on the PC.
+`FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [part ...]` sends a part's files to
+the farm with robocopy, only what changed. docs/proof_farm.md has the rest.
