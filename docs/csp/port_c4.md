@@ -12,9 +12,9 @@ CSP mode is defined in [port_c3.md](port_c3.md): physics worker count 0 and
 | Step | State |
 |---|---|
 | 0. leftovers (areas_test lock, `StepInput::to_bytes`, car short name) | done, f20f03f / 6d64b98 / 71cb25e |
-| A. `csp_oracle --drive`: the game's car stepped with CSP live, repeatable, threads check | done (this commit) |
-| B. the CSP-2 items: addresses, what changes, defaults, plain-session effect | next |
-| C. CSP air density ported under `--csp`, proven bit-exact against CSP's own functions | after B |
+| A. `csp_oracle --drive`: the game's car stepped with CSP live, repeatable, threads check | done, f61c273d; csp area 45/45 IDENTICAL after it |
+| B. the CSP-2 items: addresses, what changes, defaults, plain-session effect | done (table below) |
+| C. CSP air density ported under `--csp`, proven bit-exact against CSP's own functions | next: oracle makes the car's CSP record, logs the law's inputs and outputs |
 | Finish: quick run, clippy, README features row (no release: decision below) | last |
 
 Decision (lead, during C4a): no whole-car comparison and no release in C4a. `--csp` physics is CSP's
@@ -65,3 +65,24 @@ Found on the way: in `csp_oracle` the car's air density (`Car+0xae8`) is the sto
 the law only when the car's CSP record (vector at RVA `0x28213f0`, by physics GUID) exists and its
 `+0x228` points at the car's state (`+0x320` CarAvatar, `+0x418` position). Nothing in the oracle
 makes that record yet (Part C).
+
+## Part B: the CSP-2 items
+
+Addresses: acs function, then CSP's 4305 detour (each found registered by its hook set-up function
+in IDA, read in the decompile; earlier notes in [physics_powertrain_aero.md](physics_powertrain_aero.md)
+and [physics_car_core.md](physics_car_core.md)). "Plain session": one stock Kunos car alone on a
+Kunos track, practice, CSP defaults.
+
+| Item | acs → CSP 4305 | What changes against acs | Key (default) | Plain session? | Task |
+|---|---|---|---|---|---|
+| Air density | `Car::updateAirPressure` 0x140276ae0 → `0x588850`; law `0xb10410`; near-ground temperature `0xb0fcc0`; altitude `0x118ed80` / `0x118e6c0`, table `0x1237c50` | stock `1.2922 - 0.0041 * ambient`; CSP: barometric law at pit altitude + car height, temperature blended from road and air by height above ground, times a per-car multiplier (Lua `physics.setAirDensityMultiplier`); falls back to stock when the car has no CSP record (`0x28213f0[guid]+0x228`) | none, always | yes (aero and drag of every car) | C4a part C |
+| Engine thread-local density | `Engine::step` 0x1402880e0 → `0x5bdfa0` | writes the thread-local density (law × multiplier, 1.1839 with `ext+0x6cf`) around the original step; engine torque post-multipliers are 1.0 for stock data | none, always | yes, when the car has a CSP record | C4a part C (density only) |
+| `ABS::isInAction` | 0x14028f5d0 → `0x556dd0` (thunk to `0x556d60`) | `speed (Car+0x3e90) > 1 && any absOverride < 0.9`; stock: any `absOverride != 1`, no speed gate | none, always | yes, but it feeds only pedal vibration, the HUD light and sound, not physics | C4b |
+| Brake temps while the AI drives car 0 | `BrakeSystem::step` 0x14028e640 → `0x10f15f0` | after the original, GUID 0 with temperature data and `tyres[0].aiMult > 1` (`Car+0x1060`): CSP calls `BrakeSystem::stepTemps`, which acs skips while the AI drives | none, always | only while the AI drives the player's car (session end, auto pit, `--ai-drive`) | C4b |
+| `FIX_SURFACE_TYPES` | `SurfacesManager::getSurface` 0x1401af340 → `0x1189b60` | a mesh whose surface lookup fails: skip leading digits, take the longest registered key that prefixes the rest (unless `WALL`) | `[PHYSICS_EXPERIMENTS_DONE] FIX_SURFACE_TYPES=1` (hidden) | only on a track with a mis-named mesh; not checked over every Kunos track (C4b: track_survey can list the failed lookups) | C4b |
+| 1 ms transponder | `TimeTransponder::step` 0x1402911f0 → `0x69a3a0`, `onTimeLinePassed` 0x140290c20 → `0x69a0a0` | lap timing per time line from the tyre positions; crossing interpolated between two steps, lap timer adjusted by up to ±3 ms | `PRECISE_TRANSPONDER=1` | yes (lap and sector times) | C4b |
+| 250-step AI sleep | `Car::step` wrapper → GUID-0 pre-step `0x58a8d0`, GUID ≠ 0 branch | `framesToSleep` (Car+0x3e28) = 250 for every car but the player's (acs 50): a stopped AI or remote car freezes after 0.75 s instead of 0.15 s | none, always | no (one car) | C4b |
+| `getPhysicsState` low-pass | `Car::getPhysicsState` 0x140270d70 → `0x590220` (#2) and `0x58f8a0` (#1) | after the original: tyre block rewrite, accG low-pass 0.25, local angular velocity low-pass 0.02 (flag 0x4), sleeping flag while stationary, state flags | none, always | yes, but only the exported state (shared memory, HUD, apps), never the physics | C4b |
+
+Only air density changes the physics of a plain single-car session on a Kunos track; that is why
+part C takes it.
