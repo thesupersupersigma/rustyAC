@@ -31,8 +31,8 @@ check "$all" Cargo.lock
 check "$all" some/new/folder/file.rs
 check "$all" tools/proofs/lib.sh docs/port/proofs.md
 check "" tools/proofs/quick/gui.txt tools/proofs/areas.map
-# since v0.38.3 car_oracle's lock changed only rustyAC's version; Cargo.toml without a tag still asks for all
-PROOF_SINCE=v0.38.3 check "" tools/car_oracle/Cargo.lock
+# since v1.0.0 car_oracle's lock changed only rustyAC's version (since v0.38.3 it also gained rustyac-content); Cargo.toml without a tag still asks for all
+PROOF_SINCE=v1.0.0 check "" tools/car_oracle/Cargo.lock
 PROOF_SINCE=v0.38.3 check "net" crates/rustyac-gateway/Cargo.toml server/panel/src/main.ts
 # a Cargo.lock change: the crates whose dependencies changed (v0.38.8: jpeg-decoder for rustyac-render,
 # rustyac-render and png for rustyac-web); v0.38.3 to v0.38.4 changed only the version
