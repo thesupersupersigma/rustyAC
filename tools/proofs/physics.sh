@@ -7,6 +7,9 @@
 # The recordings are the durable ones in the ignored oracle/ folder; nothing comes from re/scratch.
 area=physics
 . "$(dirname "$0")/lib.sh"
+# every recording was made by the game on MSVCR120's FMA3 bodies (the PC): off FMA3 the port takes
+# their exact Rust copies (pure.rs), not the DLL's SSE2 ones (docs/proof_farm.md, F2 part 3)
+[ "$maths_path" = FMA3 ] || export RUSTYAC_MATH=pure
 tool chassis_compare
 tool car_oracle
 need oracle/car "the Task 9 recordings"
@@ -24,7 +27,7 @@ for dir in oracle/car*/; do
     ' "$out/$(basename "$dir").txt" | tee -a "$log"
 done
 
-find oracle -name '*.mcrec' | sort | while read -r rec; do
+find oracle/ -name '*.mcrec' | sort | while read -r rec; do
     keep "$rec" || continue
     name=$(echo "$rec" | tr '/' '_')
     # a deliberate fault of Task 34, not a proof (retired.txt)
