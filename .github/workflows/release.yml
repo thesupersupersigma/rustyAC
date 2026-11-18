@@ -116,8 +116,12 @@ jobs:
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
           if [ "$highest" = "$TAG" ]; then latest=--latest; else latest=--latest=false; fi
           echo "highest released version: $highest, this release: $TAG -> $latest"
+          # the written notes in docs/releases/<tag>.md when there are some, GitHub's generated ones otherwise
+          notes=--generate-notes
+          if [ -f "docs/releases/$TAG.md" ]; then notes="--notes-file=docs/releases/$TAG.md"; fi
+          echo "release notes: $notes"
           gh release create "$TAG" "$zip" "$zip.sha256" "$web" "$web.sha256" \
             --verify-tag \
             --title "rustyAC $TAG" \
-            --generate-notes \
+            "$notes" \
             "$latest"
