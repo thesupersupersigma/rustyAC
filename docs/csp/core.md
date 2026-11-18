@@ -16,8 +16,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5b 1. `csp_oracle --track` on Spa, repeatability, ray path | done |
 | C5b 2. three-car origin contacts | done: car 0 of three = one car |
 | C5b plan update | done (Plan) |
+| C5c 0. release notes from `docs/releases/<tag>.md` | done |
+| C5c A. CSP's ODE release | done: ODE master `66615b8a` (2025-01-05), [below](#task-c5c-csps-ode-release) |
+| C5c B. `rustyac-ode` generic, f64 proofs | not started: the release is too far from 0.13.1, split into parts 3 and 4 (rule 32) |
 
-Next: plan part 3.
+Next: plan part 3, step 1 (`rustyac-ode` generic over the number type, Vanilla bit-identical).
 
 ## The core in one paragraph
 
@@ -175,14 +178,14 @@ density: same inputs through CSP's function and the port, every output compared 
 |---|---|---|---|
 | 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | **done in C5b** |
 | 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
-| 3 | `rustyac-ode` in double next to float (one generic number type or a second module; the float path's results must not move) | 3-4 | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
-| 4 | newer ODE pieces CSP uses: threaded quickstep with reordering and its seed, libccd pairs; find the ODE release | 2-3 | per-stage in-process compare |
+| 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ray-vs-trimesh, hinge / ball / fixed rows (C5c) | 2-3 | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
+| 4 | the `66615b8a` code 0.13.1 does not have (C5c): QuickStep as rewritten since 2017 (threaded stages, dynamic iteration count, reorder and its `dRandInt` seed; about 3,600 C++ lines, none ported yet) 3-4; contact `getInfo2` and the box / trimesh colliders that changed 1-2; `odemath` / `matrix` changes 0.5; libccd pairs 1; the new LDLT / LCP solvers only if CSP steps a world with `dWorldStep` (open question) +1-2 | 6-9 (+1-2) | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback | 2-3 | contact lists identical per step |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5b** | **15-22** (C5a: 14-23 with parts 1-2 and Embree optional) | |
+| | **Total left after C5c** | **18-27** (C5b: 15-22; C5c found QuickStep from 2025, not 0.13.1's) | |
 
 Later, not counted: COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -198,7 +201,9 @@ hash spaces (all off or unused for stock cars by default).
 ### Risks
 
 - The ODE release behind `ode-fresh` may be a CSP-modified tree; parts 3-4 then compare against
-  CSP's machine code instead of a source tarball (slower).
+  CSP's machine code instead of a source tarball (slower). **C5c:** it is ODE master `66615b8a`
+  with at least the island-builder and contact-reduction changes listed there; every other
+  function still has to be checked against that commit as parts 3-4 reach it.
 - Island jobs on several threads: islands are independent, but CSP's measured-time worker rule
   makes the thread count vary run to run; part 5 must show the result does not depend on it.
 - The float-to-double split in `rustyac-ode` could move the float path's last bits; part 3 guards
@@ -253,3 +258,55 @@ thread and never ran, so all three cars sat at the world origin inside each othe
 too). With the physics thread the cars start at x = 0 / 20 / 40, no contact batch or `+0x587cc0`
 call is left, and car 0 of three equals one car in car words and physics state for 2000 of 2000
 steps (`car_random.ryin`, workers 0), CSP and Vanilla alike.
+
+## Task C5c: CSP's ODE release
+
+**Answer: ODE's `master` branch at commit `66615b8a` (2025-01-05, "Improve speed, accuracy, and
+readability of dCollideBoxPlane"), double precision, plus CSP's own changes.** No tagged release
+matches: the 0.16.x tags sit on a side branch and lack every feature below. How sure: high for
+the lower bound (two independent body checks), medium-high for the upper bound (one missing
+string, which CSP could have removed by hand).
+
+| Evidence in `dwrite.dll` | Oldest ODE commit with it | Newest without it |
+|---|---|---|
+| strings `Stage4LCP_*`, `Stage6a` sync names | 0.13.2 | |
+| asserts `!row1_norm_fault` (odemath), `nj < ~((atomicord32)0) / dJCB__MAX` (step) | 0.15 | |
+| world set-up writes QuickStep's dynamic iteration fields (`qs` +172 = `(int)(+176 * 48)`, +200 = "dynamic on") | master `7811250d` (2019-02-21), not in any tag | |
+| `dGetConfiguration` lists `ODE_CCD_IMPL_internal` and the `ODE_CCD_COLL_*` pairs | master `197ed3ff` (2020-02-19) | |
+| `dWorldCreate` (`+0x168cf90`, 312 bytes): after `body_flags` / `islands_max_threads` come two more `unsigned` (0 = unlimited, then 1) before `wmem`: `stepping_max_threads`, `solving_max_threads` | master `2cebd640` (2024-12-29) | |
+| box-vs-plane collider (`+0x169c2c0`, `colliders[1][4]` of the table the init at `+0x1686990` fills) sorts the three projected sides, writes the deepest corner first and goes on past four contacts | master `66615b8a` (2025-01-05) | |
+| `dGetConfiguration` has no `ODE_EXT_inelastic_collisions` | | master `aff542d5` (2025-01-14) |
+
+No `ode/src` commit lies between `66615b8a` and `aff542d5`, so the snapshot is exactly one tree.
+`ODE_THR_builtin_impl` is missing too: ODE's thread pool was built out, CSP runs islands on its
+own job pool (C5a).
+
+### CSP's changes to that tree (known so far)
+
+- Island builder (`+0x168d1c0`): asserts `islandCount <= (sizeint)INT_MAX`, a string in no ODE
+  commit on any branch, so CSP edited the function.
+- Contact reduction after `dCollide` (`+0x169fd90`, `+0x169f060`, C5a): CSP's own, not ODE.
+- Build: `ODE_EXT_no_debug`, double, OPCODE 16-bit indices, no GIMPACT, no built-in threads.
+
+Not done: a function-by-function compare of every ODE function in `dwrite.dll` against
+`66615b8a`. Parts 3 and 4 do it function by function as the in-process proofs reach each one; a
+differing proof is then either a CSP change or a port bug, and the source of `66615b8a` tells which.
+
+### Size of the gap to `rustyac-ode` (0.13.1 in float)
+
+`git diff -w 0.13.1 66615b8a`, ignoring line endings, per file:
+
+| File | + / - lines | Goes to |
+|---|---|---|
+| `rotation.cpp` | 0 | part 3 |
+| `mass.cpp` | 3 / 3 | part 3 |
+| `collision_kernel.cpp`, `collision_trimesh_ray.cpp`, `util.cpp` (islands) | 21-63 each | part 3 |
+| joints `ball` / `fixed` / `hinge` | 9-33 each | part 3 |
+| `odemath.cpp` / `matrix.cpp` | 174 / 71, 211 / 125 | part 3 (unchanged functions), part 4 (changed) |
+| `joints/contact.cpp` | 206 / 198 | part 4 |
+| `box.cpp`, `collision_trimesh_box.cpp`, `collision_trimesh_opcode.cpp` | 309 / 26, 169 / 237, 446 / 574 | part 4 |
+| `quickstep.cpp` | 2668 / 786 (3,587 lines; `rustyac-ode` has no QuickStep) | part 4 |
+| `step.cpp`, `lcp.cpp` + new `fast*_impl.h` LDLT solvers (~4,500 lines) | 620 / 408, 452 / 353 | part 4, only if CSP uses `dWorldStep` |
+
+Vanilla AC steps with `dWorldStep` (Dantzig LCP); CSP sets QuickStep's iteration count to 48 in
+its world set-up, so the CSP path needs a QuickStep port that `rustyac-ode` never had.
