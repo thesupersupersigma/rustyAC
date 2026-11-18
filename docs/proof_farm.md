@@ -10,13 +10,17 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 - Done: step 1 (part 1), step 2 (part 2: the physics area on the VM, bit-exact; the maths
   checks).
 - Done: step 3 (part 2b, on paper) and step 4 (part 2c: GO with conditions). F1 is finished.
-- **F2** (part F2 below): part 1 committed (paths from the environment, the maths path in the
-  cache key, a correctly rounded fma in `pure.rs`), but its quick run is **incomplete**: Claude Code
-  stopped it for low memory after 8 areas (all IDENTICAL); fresh, ai_page, csp, sound, replays and
-  launcher are still to run (`run_all.sh --quick fresh ai_page csp sound replays launcher`, with
-  more memory free). The VM has a share `rustyac-farm` (that folder only) for robocopy; the PC
-  needs the farm account's credential stored once (Super). Resume there, then F2 part 2 step 1
-  (prebuilt programs).
+- **F2**: part 1 done (paths from the environment, the maths path in the cache key, a correctly
+  rounded fma; its quick run finished: every area IDENTICAL except csp's two `refused` cases, which
+  fail on master too). Part 2 done: `RUSTYAC_PREBUILT=1` with `prebuild.sh`, `farm_sync.sh`; the
+  physics part of the copy is on the VM, the rest of the one-time copy (~85 GB) waits: SMB gave
+  5.3 MB/s over Wi-Fi. Part 3 step 1 done: the full physics area is 121/121 IDENTICAL on the VM
+  with `RUSTYAC_MATH=pure` (94/121 on the DLL path).
+- **Resume here: part 3 step 2** (session 0: copy one render case's, one gui case's and the
+  launcher's data, run them over ssh; then a scheduled task in the logged-in session if needed),
+  then step 3 (the other areas, cheapest first: each needs its data copied; ask Super about
+  ethernet before the big copy), part 4 (`run_all.sh --farm`, areas.map "farm", lanes: physics
+  split into lanes), part 5.
 
 ## Part 1: what the processor changes (from the code)
 
@@ -415,12 +419,143 @@ for low memory (`ai_page`'s headless Chrome GPU process held about 8 GB) after t
 | fresh | stopped after 50 | 50 | |
 | ai_page | stopped after 2 | 2 | |
 
-csp, sound, replays and launcher did not start. Every verdict so far is IDENTICAL.
+The rest, in F2's second session (`run_all.sh --quick fresh ai_page csp sound replays launcher`,
+15 GB free, after the main folder's run that held the lock):
+
+| area | cases | identical | time |
+|---|---|---|---|
+| fresh | 63 | 63 | 21m54s |
+| ai_page | 9 | 9 | 26m40s |
+| csp | did not build (below), then alone: 49 | 47 | 6m11s |
+| sound | 4 | 4 | 0m35s |
+| replays | 6 | 6 | 4m44s |
+| launcher | 1 | 1 | 0m46s |
+
+Memory stayed above 2.5 GB free this time (ai_page ran beside fresh only).
+
+- **csp_oracle did not build**: part 1 made `car_oracle`'s `acs.rs` (which `csp_oracle` includes by
+  path) call `crate::repo_root()`, and `csp_oracle` had none (part 1's clippy list missed it).
+  Fixed with the same `repo_root()` as the other oracles.
+- **csp's two DIFFERENT cases are not F2's**: `refused off` and `refused csp` are DIFFERENT in the
+  main folder's quick run of the same day (master, Task C5a) as well. `acd_check` finds
+  `cardata/rss_formula_rss_3_v6/car.ini` (ignored, extracted) no longer equal to the car's
+  `data.acd` (car.ini changed 2026-11-17 23:14, after the archive), so that car fails both
+  modes and the `RESULT` line is missing. Left for Super / the CSP tasks.
+- **physics found no `.mcrec` in this worktree**: `oracle` is a junction here, and `find oracle
+  -name '*.mcrec'` does not enter a starting point that is a link. The area ran only the
+  `oracle/car*/` folders (part 1's "4 cases"; master, a real folder, runs 9). Now `find oracle/`;
+  the keys are the same.
 
 Clippy `-D warnings --all-targets`: the workspace (native, wasm32-unknown-unknown, wasm32-wasip1),
 `math_proof`, `audio_oracle` (one old `needless_range_loop` fixed), `chassis_compare`,
-`tyre_oracle`, `render_oracle`: clean. `car_oracle` (66), `ode_oracle` and `sctm_oracle` fail on
-errors that were there before (newer clippy lints such as `manual_is_multiple_of` and
-`redundant_guards`, none on a line F2 changed); left as they are, since rewriting an oracle's
-arithmetic for a lint can move its bits.
+`tyre_oracle`, `render_oracle`, `csp_oracle`: clean. `car_oracle`, `ode_oracle` and `sctm_oracle`
+failed on errors that were there before (newer lints, none on a line F2 changed); they now have
+crate-level `#![allow(...)]` for exactly those lints, with a comment, since rewriting an oracle's
+arithmetic or extern declarations for a lint can move its bits: `car_oracle` `dead_code`,
+`clashing_extern_declarations`, `assign_op_pattern`, `excessive_precision`, `if_same_then_else`,
+`manual_clamp`, `manual_is_multiple_of`, `missing_transmute_annotations`, `needless_late_init`,
+`needless_range_loop`, `ptr_eq`, `redundant_closure`, `too_many_arguments`, `type_complexity`,
+`unnecessary_cast`, `unnecessary_sort_by`, `wrong_self_convention`; `ode_oracle`
+`manual_is_multiple_of`, `needless_range_loop`, `neg_cmp_op_on_partial_ord`,
+`wrong_self_convention`; `sctm_oracle` `needless_lifetimes`, `redundant_guards`. All three are clean
+with them.
 
+
+## F2 part 2: prebuilt programs and the copy
+
+### Prebuilt programs (`RUSTYAC_PREBUILT=1`)
+
+`bash tools/proofs/prebuild.sh` (on the PC) builds every program the areas run, with the areas' own
+`cargo` commands so the bytes are the same, and writes `target/prebuilt/`:
+
+- `manifest.txt`: SHA-256 and repo-relative path of 24 files, 113 MB: the five oracles
+  (`car_oracle`, `chassis_compare`, `render_oracle`, `audio_oracle`, `csp_oracle`); `rustyac`,
+  `replay_hash`, `track_survey`, `acd_check`, `rustyac-launcher`; the examples fresh, shaders and net
+  run (`start_camera_check`, `steam_check`, `mirror_check`, `achievements_check`, `shader_table`,
+  `shader_proof` with `wgpu`, `net_golden` native and wasm32-wasip1); wasmtime; shaders' test program
+  `dxbc_reflect`; `launcher_oracle` (restored from NuGet on the PC); the dumps area's last release.
+- `src/<tool>.txt`: the `git ls-tree` / `git diff` lines `salt_of` hashes, for every tool, so a
+  machine without the repository's history makes the same keys.
+- `tests/`, `dumps_tag`.
+
+With `RUSTYAC_PREBUILT=1`, `run_all.sh` and `lib.sh` source `tools/proofs/prebuilt/env.sh`: it puts
+`tools/proofs/prebuilt/` first on PATH, checks every manifest file once a run (a changed file stops
+the run), and sets `DUMPS_OLD`. There, `cargo` is a stand-in: `build` does nothing, `run
+--bin|--example <name>` runs the built exe, `test --test <name>` runs the test program from the
+package's folder (as cargo does), anything else stops with "not prebuilt"; `dotnet` does nothing.
+A PATH stand-in (not a shell function) also reaches scripts the areas start with `sh`
+(`tools/net_gold/check.sh`). Nothing else in an area needs git (only `--changed` does).
+
+**Not prebuilt** (they stay on the PC anyway): browser (`cargo test` of `web_pack`'s unit tests,
+the wasm builds of `replay_hash` and `math_proof`) and ai_page (Chrome, the web pack). Helper scripts
+outside the areas (`render_wgpu.sh`, `launcher_record.sh`) still need cargo. The dumps area's old
+release must have been built once on the PC (`prebuild.sh` says so when it is missing).
+
+Checked on the PC (`RUSTYAC_PREBUILT=1 run_all.sh --quick physics shaders net launcher dumps fresh`):
+every area IDENTICAL (4, 4, 16, 1, 6, 63 cases), 21 min. The keys are the PC's: `salt_of car_oracle`
+from git and from `src/car_oracle.txt` are both `c1af0ef52f0411a5`, and fresh's key listing
+(`PROOF_LIST_KEYS`) gives the same 26 keys in both modes, every one already kept.
+
+### The copy (`tools/proofs/farm_sync.sh`)
+
+`FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [programs] [physics]` copies over SMB
+with robocopy (`/MT:8 /J /XO`; a file of the same size and time is skipped), into `<share>\repo` (for
+`RUSTYAC_REPO`) and `<share>\ac` (for `AC_ROOT`). Only `repo\tools\proofs` and `repo\target\prebuilt`
+are mirrored (deletions); everything else only gains files, so results made on the VM stay. Every
+source is named in the script, so nothing under a served folder goes. Parts so far:
+
+- `programs`: the manifest's files folder by folder with the PC's `msvcr120.dll` and
+  `vcruntime140.dll` beside each (F1), `tools/proofs`, `tools/net_gold`, `target/prebuilt`,
+  `cardata/`, AC's `system/` and `acs.exe`: 187 MB the first time, about 1 MB after.
+- `physics`: every `oracle/car*/` folder, the top level of every folder holding a `.mcrec`, the
+  tracks the recordings name (`track=` in their header: bahrain_international_circuit, imola,
+  ks_drag, ks_vallelunga, magione, mugello, spa) and every car's `collider.kn5`: 15.8 GB.
+
+The share must be given as `//<vm>/rustyac-farm` (or `\\<vm>\...`); anything else stops the script,
+and so does a share without a `repo` folder. (A lost backslash in the first try made robocopy write
+8.8 GB to `C:\<vm>\...` on the PC; Super deleted it.) F1's padded folders on the VM were renamed to
+`repo` and `ac` to reuse what was there.
+
+**Speed: 5.3 MB/s** (the physics part, 15.8 GB in 47 min; the first GB, `oracle/car`, 974 MB in
+175 s), over the laptop's Wi-Fi. That is under the 20 MB/s the plan wanted, so the one-time copy
+stopped after the physics part: the other ~85 GB would take about 4.5 h at this speed. Many small
+files are slower still (`cardata/`, 11 MB in 113 s). Ethernet first, then the rest.
+
+## F2 part 3: the areas on the VM
+
+### The full physics area (F1's condition 3)
+
+`RUSTYAC_PREBUILT=1 run_all.sh --full physics` in the VM's copy (`re/scratch/taskF2/vm_run.sh`:
+the farm's own home folder and lock, `RUSTYAC_REPO` and `AC_ROOT` pointing into it), 121 cases (the
+area has grown since F1's 113), against the recordings the game made on the PC:
+
+| maths in the port | identical | different | error | time (one lane) |
+|---|---|---|---|---|
+| MSVCR120.dll (the default: SSE2 bodies on the VM) | 94 | 25 | 2 | 60m38s |
+| `RUSTYAC_MATH=pure` (pure.rs, the FMA3 bodies) | **121** | 0 | 0 | 93m25s |
+
+**On the DLL path the PC's recordings do not hold.** 25 recordings differ, each by one ulp first
+in a wheel rotation or a body's orientation late in the drive (`pt_protect` step 3317 of 3334:
+`tyre.lr.localWheelRotation.M23` 0xbf78718b against 0xbf78718c): sinf/cosf inputs where the SSE2
+and FMA3 bodies disagree, which F1's 9 quick cases happened not to meet. They were
+`car_pt/pt_protect`, `car_tight_stops/random`, `car_wc_488/wc_stops` and 22 `.mcrec` recordings
+(the pile-up, rear-end and field drives of `multi` and `t24b`, the AI drives of `t27`/`t27f`, the
+race-rules drives of `t28`). Every one is IDENTICAL with `RUSTYAC_MATH=pure` (`car_pt` alone first,
+then the whole area), which needs part 1's correctly rounded fma. So `physics.sh` now sets
+`RUSTYAC_MATH=pure` whenever `maths_path` is not FMA3: every recording was made on FMA3, and the
+port then takes the exact Rust copies of those bodies. **Areas where the game runs in the same
+process (csp, render, gui, python, sound, fresh's new recordings) must keep the DLL path** there,
+since the game takes SSE2 too; areas against kept results need the same switch when they move.
+
+The two ERRORs were the harness: `t27/v6` and `t27f/v6_line` drive an old AI line kept in
+`re/gold/roots/t27_v6`, and their header's `ai_folder` is the PC's absolute path. A recording
+replayed on another machine now finds that folder in its own repository (the longest tail of the
+path that exists there, `engine/record.rs`, with a unit test), as `track_folder` already did with
+the game's folder; `farm_sync.sh physics` sends `re/gold/roots`.
+
+**Time.** Pure maths is slower on the Westmere (libm's software fma, no FMA instruction): 93 min in
+one lane, where the PC's last full run took 85 min for this area in its four-lane run. The area's
+cases are independent, so part 4's lanes split it (the longest case, `rc_weekend_q`, is 6m44s).
+
+Not done yet in part 3: session 0 (one render, one gui case, the launcher) and the other areas,
+which wait for their data on the VM (the rest of the one-time copy, after ethernet).
