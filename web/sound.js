@@ -63,6 +63,7 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
   };
   const obj = (word) => objects.get(word);
   // a loaded bank's file in FMOD's in-memory file system (bank word -> name): freed with the bank
+  // (state.bankFiles: the browser proofs count what is left after a drive)
   const bankFiles = new Map();
   const dropBankFile = (word) => {
     const name = bankFiles.get(word);
@@ -73,7 +74,7 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
   const handed = (r, o, key) => (r === FMOD.OK ? [r, give(o.val, key)] : [r]);
   const one = (r, o) => [r, o.val | 0];
 
-  const state = { volume: 1, muted: false, gameVolume: 1, drivers: null, banks: 0, studio: null };
+  const state = { volume: 1, muted: false, gameVolume: 1, drivers: null, banks: 0, studio: null, bankFiles };
   const applyVolume = () => {
     const master = keyed.has('master') ? obj(keyed.get('master')) : null;
     if (master) master.setVolume(state.gameVolume * (state.muted ? 0 : state.volume));

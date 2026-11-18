@@ -298,6 +298,11 @@ try {
         }
       } catch (error) {
         const why = String(error.message || error);
+        // (a step with `may_fail`: noted, and the flow goes on; a click into a page that hangs)
+        if (step.may_fail) {
+          report.flow.push({ at, failed_as_allowed: why });
+          continue;
+        }
         report.flow.push({ at, failed: why, stack: why.startsWith('hung') ? await stackOfHungPage() : undefined });
         failed = true;
         break;

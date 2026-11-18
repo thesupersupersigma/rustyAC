@@ -61,6 +61,12 @@ r=$(page "join=x-proof-laguna&name=proof39" --menu)
 echo "$r" | grep -qF '"server":"x-proof-laguna"' && echo "$r" | grep -qF 'no connection to ws://127.0.0.1:8140/net/x/proof-laguna' && verdict "?join of a listed on-demand server" IDENTICAL "$r" || verdict "?join of a listed on-demand server" DIFFERENT "$r"
 r=$(page "join=x-not-running&name=proof39" --menu)
 echo "$r" | grep -qF 'x-not-running is not running now' && ! echo "$r" | grep -qF 'connecting' && verdict "?join of an unlisted server" IDENTICAL "$r" || verdict "?join of an unlisted server" DIFFERENT "$r"
+# the way back to AC's launcher (Task W1): 3 drives with sound left by AC's Exit (FMOD's late mix
+# once hung the page there), then 3 reloads from the launcher and 3 from a drive
+python tools/proofs/roundtrip_flow.py "$out/roundtrip_flow.json" 3 3 ks_ferrari_f2004@spa
+node web/check.mjs --url "http://127.0.0.1:8139/?" --flow "$out/roundtrip_flow.json" --profile "$out/chrome_profile_roundtrip" --port 9341 --timeout 1800 \
+    --flags "--enable-features=Vulkan" > "$out/roundtrip.json" 2> "$out/roundtrip.err"
+while IFS='|' read -r name v what; do verdict "$name" "$v" "$what"; done < <(node tools/proofs/roundtrip_verdicts.mjs < "$out/roundtrip.json" | tr -d '\r')
 kill $sp $fp 2>/dev/null
 rm -rf "$out"/chrome_profile*
 summary

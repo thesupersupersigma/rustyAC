@@ -13,13 +13,16 @@ fixed. All runs are headless Chrome on this PC (Radeon Pro 5500M through Vulkan,
 
 ## Resume here
 
-- Done: problem 1's cause and fix (FMOD's worklet port), the two memory leaks behind it (FMOD's
-  bank files, the GPU device), `web/check.mjs --flow` hang-proofed (every step bounded, the
-  hung page's stack, `reload` and `processes` steps).
-- Next: prove the leak fixes over 10 trips; reloads from the launcher, a session and the old
-  hung state (`re/scratch/taskW1/mkflow.py reloads`); the round-trip and reload checks into
-  `tools/proofs/browser.sh`; then problem 3 (step 1's frame-time table per preset), problem 4,
-  the missing-features list (step 5) and step 6.
+- Done (steps 1 and 2 for problems 1 and 2): the hang's cause and fix (FMOD's worklet port),
+  the two leaks (FMOD's bank files, the GPU device), proven over 10 trips; reloads from the
+  launcher, a drive and the old hung state measured; `tools/proofs/browser.sh` runs
+  `roundtrip_flow.py` (3 trips, 3 + 3 reloads) through `roundtrip_verdicts.mjs`: 4 lines, all
+  IDENTICAL alone. `web/check.mjs --flow`: every step bounded, a hung page's stack, `reload`,
+  `processes`, `may_fail`.
+- Next: problem 3 (step 1's frame-time table per preset, then the cause), problem 4 (top 5 frame
+  costs, cheap wins), step 5 (the missing-features list), step 6 (browser area, wasm clippy,
+  rebase on master).
+- This PC crashed (a blue screen) with a page run and a wasm clippy at once: run them one at a time.
 
 ## How it was driven
 
@@ -37,6 +40,33 @@ New in `check.mjs --flow` for this:
 - `{ reload: true }` (the browser's reload; a drive's "leave the page?" is answered yes);
 - `{ processes: true }` (the browser's processes by kind and their private memory, Windows);
 - each step is printed on stderr as it starts, so a long flow can be watched.
+
+## Problem 2: reloading fails
+
+### Reproduced
+
+10 reloads from each state (F2004 at Spa from the test pack, with sound), each to come back to
+the launcher within 180 s:
+
+| state | page | back | seconds to the launcher |
+|---|---|---|---|
+| the launcher | fixed | 10 of 10 | 7.7 to 33.1 |
+| in a drive | fixed | 10 of 10 | 3.0 to 6.0 |
+| hung at AC's Exit | before W1 | 0 of 1 (the run stops there) | never: the page still answers nothing after 180 s |
+| hung, and no `beforeunload` listener (a probe) | before W1 | 0 of 1 | never |
+
+### Cause
+
+Problem 1. The reload is a same-site navigation, which goes to the same renderer process; its
+main thread spins in FMOD's mixer and never takes the new document. The page's `beforeunload`
+listener is not the cause (the probe without it stays hung too): nothing the page does can
+rescue a reload once its main thread is spinning. A new tab worked because it gets a renderer
+of its own.
+
+### Fix
+
+Problem 1's fix: the page no longer hangs, so there is no hung state to reload from. Reloads
+from the launcher and from a drive came back 10 of 10 each (above).
 
 ## Problem 1: back to the launcher hangs
 
