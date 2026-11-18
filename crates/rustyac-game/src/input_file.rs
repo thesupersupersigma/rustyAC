@@ -130,7 +130,7 @@ pub struct StepInput {
 }
 
 impl StepInput {
-    pub fn to_bytes(&self) -> [u8; RECORD_SIZE] {
+    pub fn to_bytes(self) -> [u8; RECORD_SIZE] {
         let c = &self.controls;
         let flags = c.gear_up as u32 | (c.gear_dn as u32) << 1 | (c.drs as u32) << 2 | (c.kers as u32) << 3 | (self.headlights as u32) << 4;
         let words = [
