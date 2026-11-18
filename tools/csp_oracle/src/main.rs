@@ -869,6 +869,75 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
     0
 }
 
+// ---- the breakpoint log: CSP_ORACLE_BREAK=rva,rva,... (CSP DLL offsets, hex) -----------------
+// each listed instruction gets an int3; a hit logs (step, thread, rva, caller, rcx rdx r8 r9; an rva
+// ending in "d" also the 12 doubles at rdx), puts the byte back,
+// single-steps it and re-arms. shortcut: another thread passing during that one instruction is not
+// logged, upgrade if a count looks short
+
+static BREAKS: Mutex<Vec<(usize, u8, bool)>> = Mutex::new(Vec::new());
+static BREAK_LOG: Mutex<String> = Mutex::new(String::new());
+static BREAK_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
+thread_local!(static REARM: Cell<usize> = const { Cell::new(0) });
+
+unsafe fn arm_breaks(dll: usize) {
+    let Ok(list) = std::env::var("CSP_ORACLE_BREAK") else { return };
+    let mut breaks = BREAKS.lock().unwrap();
+    for rva in list.split(',').filter(|rva| !rva.is_empty()) {
+        let (rva, doubles) = rva.trim().strip_suffix('d').map_or((rva.trim(), false), |rva| (rva, true));
+        let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
+        breaks.push((address, read::<u8>(address), doubles));
+        let mut old = 0;
+        // left writable: hits on two threads must not race a protection change back to read-only
+        VirtualProtect(address as *mut c_void, 1, 0x40, &mut old);
+        set_byte(address, 0xcc);
+    }
+    let add_handler: extern "system" fn(u32, usize) -> *mut c_void = std::mem::transmute(GetProcAddress(GetModuleHandleA(c"kernel32.dll".as_ptr().cast()), c"AddVectoredExceptionHandler".as_ptr().cast()));
+    add_handler(1, break_hit as *const () as usize);
+    println!("{} breakpoints armed", breaks.len());
+}
+
+unsafe fn set_byte(address: usize, byte: u8) {
+    *(address as *mut u8) = byte;
+    FlushInstructionCache(GetCurrentProcess(), address as *const c_void, 1);
+}
+
+unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
+    let record = *pointers as usize;
+    let context = *pointers.add(1) as usize;
+    let (code, at) = (read::<u32>(record), read::<usize>(record + 0x10));
+    let flags = (context + 0x44) as *mut u32; // EFlags; Rip at 0xf8, Rsp at 0x98
+    if code == 0x8000_0004 {
+        let rearm = REARM.with(|cell| cell.replace(0));
+        if rearm == 0 {
+            return 0;
+        }
+        set_byte(rearm, 0xcc);
+        *flags &= !0x100;
+        return -1; // EXCEPTION_CONTINUE_EXECUTION
+    }
+    let (original, doubles) = match BREAKS.lock().unwrap().iter().find(|(address, ..)| *address == at) {
+        Some(&(_, byte, doubles)) if code == 0x8000_0003 => (byte, doubles),
+        _ => return 0,
+    };
+    let step = BREAK_STEP.load(Ordering::Relaxed);
+    if step != usize::MAX {
+        let caller = read::<usize>(read::<usize>(context + 0x98));
+        let [rcx, rdx, r8, r9] = [0x80, 0x88, 0xb8, 0xc0].map(|offset| read::<usize>(context + offset));
+        let mut line = format!("{step} {} {:#x} {} {rcx:#x} {rdx:#x} {r8:#x} {r9:#x}", tag_of(GetCurrentThreadId()), at - DLL_BASE.load(Ordering::Relaxed), place(caller));
+        if doubles {
+            (0..12).for_each(|i| line.push_str(&format!(" {}", read::<f64>(rdx + i * 8))));
+        }
+        line.push('\n');
+        BREAK_LOG.lock().unwrap().push_str(&line);
+    }
+    set_byte(at, original);
+    *((context + 0xf8) as *mut usize) = at;
+    *flags |= 0x100; // trap after this one instruction, then re-arm
+    REARM.with(|cell| cell.set(at));
+    -1
+}
+
 struct Section {
     name: String,
     start: usize,
@@ -1388,6 +1457,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         if let Some(air) = &mut air {
             air.before(i);
         }
+        BREAK_STEP.store(i, Ordering::Relaxed);
         let time = 60_000.0 + (i + 1) as f64 * 3.0;
         step(engine, 0.003, time, time);
         if let Some(dll) = csp {
@@ -1418,6 +1488,10 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         }
     }
     std::fs::write("steps.txt", &lines).expect("steps.txt can be written");
+    BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
+    if !BREAKS.lock().unwrap().is_empty() {
+        std::fs::write("breaks.txt", &*BREAK_LOG.lock().unwrap()).expect("breaks.txt can be written");
+    }
     for (i, &car) in cars.iter().enumerate() {
         std::fs::write(format!("car{i}_words_end.txt"), words_of(car, CAR_SIZE, &mut pages).0).expect("the end words can be written");
     }
@@ -1935,6 +2009,7 @@ fn main() {
             stop(2, &format!("Windows did not load {root}\\dwrite.dll: error {}", GetLastError()));
         }
         println!("CSP's DLL loaded at {:#x}, size {:#x}", dll as usize, DLL_SIZE.load(Ordering::Relaxed));
+        arm_breaks(dll as usize);
         checkpoint("loaded", &before, &functions);
 
         ask("with CSP, reader built before CSP", reader);
