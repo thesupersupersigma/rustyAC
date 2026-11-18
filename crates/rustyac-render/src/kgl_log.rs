@@ -98,6 +98,10 @@ pub fn set_name(key: usize, name: &str) {
 
 /// The name of the object at `key`: `-` for none, `?` for one no name was given to.
 pub fn name(key: Option<usize>) -> String {
+    // (only a line's text: its arguments are made even when no capture runs)
+    if !on() {
+        return String::new();
+    }
     match key {
         None | Some(0) => "-".into(),
         Some(k) => with(|l| l.names.get(&k).cloned().unwrap_or_else(|| "?".into())),
@@ -112,6 +116,10 @@ pub fn sampler_name(kind: i32, clamp: bool, max_anisotropy: i32, mip_lod_bias: f
 
 /// FNV-1a of bytes, for the data a call carries.
 pub fn hash(bytes: &[u8]) -> u64 {
+    // (only a line's text: every vertex upload was hashed for no capture at all)
+    if !on() {
+        return 0;
+    }
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for b in bytes {
         h ^= *b as u64;
@@ -124,12 +132,16 @@ pub fn hash(bytes: &[u8]) -> u64 {
 mod tests {
     #[test]
     fn names_and_lines() {
+        // (no capture: a line's names and hashes are not made)
+        super::new_name(0x2000, "zz");
+        assert_eq!((super::name(Some(0x2000)), super::hash(b"x")), (String::new(), 0));
+        super::begin("t");
         let a = super::new_name(0x1000, "zz");
         let b = super::new_name(0x2000, "zz");
         assert_ne!(a, b);
         assert_eq!(super::name(Some(0x2000)), b);
         assert_eq!(super::name(None), "-");
-        super::begin("t");
+        assert_ne!(super::hash(b"x"), 0);
         super::line(format_args!("draw {}", 3));
         let text = super::end();
         assert!(text.ends_with("draw 3\n"), "{text}");

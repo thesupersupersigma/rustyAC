@@ -294,6 +294,14 @@ enum Call {
     Indexed(u32, u32, i32),
 }
 
+/// What a cached bind group binds (the key keeps its views and samplers alive, so a key's
+/// resources can never be another's).
+#[derive(PartialEq, Eq, Hash)]
+enum GroupKey {
+    Textures(wgpu::BindGroupLayout, Vec<(u32, wgpu::TextureView)>),
+    Samplers(wgpu::BindGroupLayout, Vec<(u32, wgpu::Sampler)>),
+}
+
 struct Draw {
     pipeline: Rc<wgpu::RenderPipeline>,
     program: Rc<Program>,
@@ -343,6 +351,9 @@ pub struct Kgl {
     dummy_depth: wgpu::TextureView,
     /// depth targets for pixel shaders that write depth with none bound, by size and samples
     scratch_depths: RefCell<HashMap<(u32, u32, u32), View>>,
+    /// a draw's texture and sampler bind groups, by layout and what they bind: the same every
+    /// frame (made new for every draw, they were a quarter of the page's frame)
+    groups: RefCell<HashMap<GroupKey, wgpu::BindGroup>>,
     dummy_ms: wgpu::TextureView,
     default_sampler: Sampler,
     next_id: Cell<u32>,
@@ -518,6 +529,7 @@ impl Kgl {
             dummy_cube,
             dummy_depth,
             scratch_depths: RefCell::new(HashMap::new()),
+            groups: RefCell::new(HashMap::new()),
             dummy_ms,
             default_sampler,
             next_id: Cell::new(0),
@@ -1878,23 +1890,44 @@ impl Kgl {
         }
         use wgpu::util::DeviceExt;
         let buffer = (!upload.is_empty()).then(|| self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("kgl upload"), contents: &upload, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::VERTEX }));
+        let mut cache = self.groups.borrow_mut();
+        // shortcut: emptied whole at 4096 groups (views made for one frame would fill it), upgrade to dropping the oldest if a profile shows the refills
+        if cache.len() > 4096 {
+            cache.clear();
+        }
+        let make = |layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindGroupEntry]| self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries });
         let groups: Vec<[wgpu::BindGroup; 3]> = pass
             .draws
             .iter()
             .map(|d| {
-                let cb: Vec<wgpu::BindGroupEntry> = d
-                    .cbuffers
-                    .iter()
-                    .map(|(slot, offset, size)| wgpu::BindGroupEntry {
-                        binding: *slot,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: buffer.as_ref().unwrap(), offset: *offset, size: wgpu::BufferSize::new(*size) }),
-                    })
-                    .collect();
-                let tx: Vec<wgpu::BindGroupEntry> = d.textures.iter().map(|(slot, v)| wgpu::BindGroupEntry { binding: *slot, resource: wgpu::BindingResource::TextureView(v) }).collect();
-                let sm: Vec<wgpu::BindGroupEntry> = d.samplers.iter().map(|(slot, s)| wgpu::BindGroupEntry { binding: *slot, resource: wgpu::BindingResource::Sampler(s) }).collect();
-                [cb, tx, sm].iter().enumerate().map(|(i, e)| self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &d.program.groups[i], entries: e })).collect::<Vec<_>>().try_into().unwrap()
+                let [cb_layout, tx_layout, sm_layout] = &d.program.groups;
+                // (the constant buffers point into this pass's upload: made new; a group that
+                // binds none is the same every time)
+                let cb = if d.cbuffers.is_empty() {
+                    cache.entry(GroupKey::Textures(cb_layout.clone(), Vec::new())).or_insert_with(|| make(cb_layout, &[])).clone()
+                } else {
+                    let entries: Vec<wgpu::BindGroupEntry> = d
+                        .cbuffers
+                        .iter()
+                        .map(|(slot, offset, size)| wgpu::BindGroupEntry {
+                            binding: *slot,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: buffer.as_ref().unwrap(), offset: *offset, size: wgpu::BufferSize::new(*size) }),
+                        })
+                        .collect();
+                    make(cb_layout, &entries)
+                };
+                let tx = cache
+                    .entry(GroupKey::Textures(tx_layout.clone(), d.textures.clone()))
+                    .or_insert_with(|| make(tx_layout, &d.textures.iter().map(|(slot, v)| wgpu::BindGroupEntry { binding: *slot, resource: wgpu::BindingResource::TextureView(v) }).collect::<Vec<_>>()))
+                    .clone();
+                let sm = cache
+                    .entry(GroupKey::Samplers(sm_layout.clone(), d.samplers.clone()))
+                    .or_insert_with(|| make(sm_layout, &d.samplers.iter().map(|(slot, s)| wgpu::BindGroupEntry { binding: *slot, resource: wgpu::BindingResource::Sampler(s) }).collect::<Vec<_>>()))
+                    .clone();
+                [cb, tx, sm]
             })
             .collect();
+        drop(cache);
         let encoder = Kgl::encoder(&self.device, &mut replay);
         let color = pass.color.as_ref().map(|v| wgpu::RenderPassColorAttachment { view: &v.0.view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } });
         let depth = pass.depth.as_ref().map(|v| wgpu::RenderPassDepthStencilAttachment { view: &v.0.view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None });
