@@ -20,13 +20,18 @@ CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
     cargo build --release --locked --quiet -p rustyac-game --bin replay_hash --target wasm32-wasip1 || exit 2
 # conditions_spa_setup_launch names its setup under the deleted re/scratch/task15: the kept copy is in re/gold/fresh
 t15=$repo_w/re/scratch/task15
+# a checkout made by tools/worktree/make_web.ps1 has oracle/, re/ and cardata/ as junctions, which
+# wasmtime does not follow out of its folders ("Operation not permitted"): their own folders are
+# given as well, under /repo and under . (the test cars are read as ./cardata/<car>)
+links=()
+for d in oracle re cardata; do [ -L "$d" ] && links+=(--dir "$(cd "$d" && pwd -W)::/repo/$d" --dir "$(cd "$d" && pwd -W)::$d"); done
 for f in oracle/game/*.ryin; do
     keep "$f" || continue  # quick keys: oracle/game/<drive>.ryin
     g=$(drive "$f")  # a drive naming the player's setup: a copy naming the kept one in re/gold/docs
     r=$(target/release/replay_hash.exe "$g" --remap "$t15=$repo_w/re/gold/fresh" 2>&1)
     d=$(echo "$r" | grep -o "hash.*")
     s=$(echo "$r" | grep -o "^[0-9]* steps")
-    w=$(MSYS_NO_PATHCONV=1 "$wt" run --env AC_ROOT=/ac --dir "$repo_w::/repo" --dir "$repo_w::." --dir "$ac::/ac" \
+    w=$(MSYS_NO_PATHCONV=1 "$wt" run --env AC_ROOT=/ac --dir "$repo_w::/repo" "${links[@]}" --dir "$repo_w::." --dir "$ac::/ac" \
         target/wasm32-wasip1/release/replay_hash.wasm "/repo/$g" \
         --remap "$ac=/ac" --remap "$t15=/repo/re/gold/fresh" --remap "$repo_w=/repo" 2>&1 | grep -o "hash.*")
     if [ -n "$d" ] && [ "$d" = "$w" ]; then verdict "$f" IDENTICAL "$s $d"; else verdict "$f" DIFFERENT "desktop [$d] wasm [$w]"; fi
