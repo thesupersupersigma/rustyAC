@@ -24,11 +24,11 @@ build track_survey cargo build --release --locked --quiet -p rustyac-physics --b
 CSP=tools/csp_oracle/target/release/csp_oracle.exe
 need re/csp/fakeac/dwrite.dll "the AC folder with CSP, a junction made by Task C1 (re/csp/fakeac)"
 
-# the cars CSP makes loadable (docs/csp/content_needs.md, acd_check), then three plain cars
+# the cars CSP makes loadable (docs/csp/content_needs.md, acd_check), then plain cars (rss_formula_rss_3_v6 is plain since its reinstall of 2026-11-17)
 extended="bdc_streetspec_350z_v4 bdc_streetspec_ae86_v4 bdc_streetspec_altezza_v4 bdc_streetspec_aristo_v4
 bdc_streetspec_e36_v4 bdc_streetspec_miata_v4 bdc_streetspec_r32_v4 bdc_streetspec_rx7_v4 bdc_streetspec_s13_v4
-bdc_streetspec_s14_v4 rss_formula_2010 rss_formula_hybrid_2026 rss_formula_rss_3_v6 rss_formula_rss_3_v6_2026 vrc_formula_lithium_2023_csp"
-plain="ks_ferrari_f2004 bmw_m3_e30 bmw_z4_gt3"
+bdc_streetspec_s14_v4 rss_formula_2010 rss_formula_hybrid_2026 rss_formula_rss_3_v6_2026 vrc_formula_lithium_2023_csp"
+plain="ks_ferrari_f2004 bmw_m3_e30 bmw_z4_gt3 rss_formula_rss_3_v6"
 still_refused="urd_darche_992_23 vrc_formula_alpha_2025_csp vrc_formula_alpha_2026_csp vrc_formula_beta_2024_csp"
 layouts="ks_barcelona/layout_moto_fa_2026 ks_red_bull_ring/layout_gp_fa_2026 ks_silverstone/gp_fa_2026
 montreal/montreal_fa_2026 monza/monza_fa_2026 spa/spa_fa_2026"
@@ -48,10 +48,14 @@ oracle() {
     rm -rf "$r"; mkdir -p "$out/runs"
     timeout 300 "$CSP" re/csp/fakeac "$r" "$cfg" "$@" > "$r.txt" 2>&1
 }
+# stale <car>: the install's data.acd no longer matches its copy in cardata/ (the car was reinstalled
+# or updated): its cases say so instead of DIFFERENT
+stale() { target/release/acd_check.exe --steps 1 --only "$1" 2>&1 | grep -q "^FAILED $1: files differ"; }
 
 for car in $extended $plain; do
     keep "words $car" || continue
     [ -f "cardata/$car/car.ini" ] || { skip "words $car" "no cardata/$car (tools/acd_extract.py)"; continue; }
+    stale "$car" && { skip "words $car" "content changed: $car, refresh cardata/"; continue; }
     # the Vanilla build reads the same data with car.ini's VERSION=extended-N as plain N
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
@@ -67,6 +71,7 @@ done
 for car in $extended $plain; do
     keep "car $car" || continue
     [ -f "cardata/$car/car.ini" ] || { skip "car $car" "no cardata/$car"; continue; }
+    stale "$car" && { skip "car $car" "content changed: $car, refresh cardata/"; continue; }
     rm -rf "$out/rec"
     if "$CO" run --car "$car" --scenario wc_stops --out "$out/rec" --root "$out/root" > "$out/rec_$car.txt" 2>&1; then
         "$CC" run --dir "$out/rec" > "$out/cmp_$car.txt" 2>&1
@@ -95,7 +100,10 @@ for mode in off csp; do
         want=$(echo $still_refused | tr ' ' '\n' | sort | tr '\n' ' ')
         bad=$(echo "$got" | grep -v 'urd_darche_992_23.*encrypted for Custom Shaders Patch by its maker' | grep -vc 'COSMIC suspension: a later rustyAC version')
     fi
-    if [ "$names" = "$want" ] && [ "$bad" = 0 ] && grep -q '^RESULT' "$out/acd_$mode.txt"; then
+    changed=$(grep -o '^FAILED [^:]*: files differ' "$out/acd_$mode.txt" | awk '{sub(":", "", $2); print $2}' | sort -u | tr '\n' ' ')
+    if [ -n "$changed" ]; then
+        skip "refused $mode" "content changed: ${changed% }, refresh cardata/"
+    elif [ "$names" = "$want" ] && [ "$bad" = 0 ] && grep -q '^RESULT' "$out/acd_$mode.txt"; then
         verdict "refused $mode" IDENTICAL "$(echo "$names" | wc -w) refused, each with the expected reason"
     else
         verdict "refused $mode" DIFFERENT "refused: $names(want $want), $bad with another reason"
