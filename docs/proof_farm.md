@@ -8,7 +8,18 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 ## Resume here
 
 - Done: step 1 (part 1 below, from the code).
-- Next: step 2, the physics area on the VM.
+- Stopped before step 2 (2026-11-18): the VM is missing every prerequisite step 2 needs.
+  - **Git Bash**: not installed (no `C:\Program Files\Git`, no `bash` on PATH).
+  - **Python 3**: not installed (`python` and `python3` are only the Microsoft Store
+    shortcuts, which print "Python was not found").
+  - **Visual C++ 2013 x64 runtime**: not installed (no `msvcr120.dll` or `msvcp120.dll` in
+    System32, and no `VisualStudio\12.0\VC\Runtimes\x64` registry key).
+  - The VM also shows **2 logical processors** (2 sockets × 1 core), not the planned 12.
+    That caps step 2's lane test at 2, and the farm's speed with it.
+  - Windows 10 19045, 30 GB of memory free, 242 GB free on C:, OpenSSH works.
+    `C:\rustyac-farm` does not exist yet.
+- Next: once those three are installed and the VM has its 12 vCPUs, run step 2, the
+  physics area on the VM.
 
 ## Part 1: what the processor changes (from the code)
 
