@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `track_survey [--list]`: every track and layout installed under the game's
+//! `track_survey [--list] [--csp [--wav-pitch]]`: every track and layout installed under the game's
 //! `content/tracks`, loaded the way the game does, as one markdown table: who made it, its
 //! model files, physics meshes, surfaces, spawn sets, timing lines, AI line, pit boxes, loose
 //! objects, DRS zones, and whatever is unusual about it (or why it is refused).
 //!
 //! `--list` prints only `<track> <layout>` per line ("-" for no layout), for scripts.
+//! `--csp` reads the tracks in Custom Shaders Patch mode; `--wav-pitch` then prints, per layout
+//! that has them, the `WAV_PITCH=extended-N` values read (`<track> <layout> SURFACE_n <bits>`).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -130,11 +132,23 @@ fn row(entry: &TrackEntry) -> String {
 
 fn main() {
     let list_only = std::env::args().any(|a| a == "--list");
+    rustyac_physics::csp::set_enabled(std::env::args().any(|a| a == "--csp"));
     let Some(root) = rustyac_content::install::ac_root() else {
         eprintln!("{}", rustyac_content::install::not_found_hint());
         std::process::exit(1);
     };
     let entries = catalog::installed(&root);
+    if std::env::args().any(|a| a == "--wav-pitch") {
+        // (only the layouts whose surfaces file has the extended form are loaded)
+        let extended = |entry: &&TrackEntry| std::fs::read_to_string(entry.folder.join(&entry.layout).join("data").join("surfaces.ini")).is_ok_and(|text| text.contains("extended-"));
+        for entry in entries.iter().filter(extended).filter(|entry| catalog::check(entry).is_ok()) {
+            let Ok((track, _)) = load_track(&entry.folder, &entry.layout) else { continue };
+            for (section, pitch) in &track.csp.wav_pitch {
+                println!("{} {} {section} {:08x}", entry.track, if entry.layout.is_empty() { "-" } else { &entry.layout }, pitch.to_bits());
+            }
+        }
+        return;
+    }
     if list_only {
         for entry in &entries {
             println!("{} {}", entry.track, if entry.layout.is_empty() { "-" } else { &entry.layout });

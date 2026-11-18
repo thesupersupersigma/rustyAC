@@ -55,6 +55,7 @@ there is no such file. `rustyac.exe --help` prints the same list in short.
 | `--list-tracks` | | Prints every installed track and layout (and why some are refused), then stops. |
 | `--flat` | on | The endless flat road. |
 | `--spawn <hotlap\|pit\|start>` | where race.ini's session starts, else `hotlap` | Where the car starts on a track: just before the line, in the pits, or on the grid. |
+| `--csp` | off | Custom Shaders Patch mode: cars with `VERSION=extended-N` in car.ini and layouts with `WAV_PITCH=extended-N` load as CSP reads them (COSMIC suspensions and CSP-encrypted cars are still refused, with the reason). Off, every file is read as plain Assetto Corsa reads it. Also `[CSP] ENABLED=1` in `cfg\rustyac.ini`. |
 
 ### Session and conditions
 
@@ -450,11 +451,12 @@ For the project's tests (**checks**):
 ## cfg\rustyac.ini
 
 rustyAC's own settings file, in the folder of `--cfg-dir` (default: `cfg` beside rustyac.exe).
-You make it yourself; one key is read.
+You make it yourself; two keys are read.
 
 | Key | Default | What it does |
 |---|---|---|
 | `[STEAM] ACHIEVEMENTS` | 0 | 1: the game's Steam achievements, stats and Friends Leaderboard scores are on. `--steam-achievements on` or `off` wins. |
+| `[CSP] ENABLED` | 0 | 1: Custom Shaders Patch mode, as `--csp`. |
 
 Two more files of rustyAC's own sit beside the program and are not for editing by hand:
 `rustyac_net.ini` (your own player id, made once) and `rustyac_controls.ini` (bindings saved by

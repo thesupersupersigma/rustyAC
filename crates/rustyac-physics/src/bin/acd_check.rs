@@ -13,7 +13,9 @@
 //!
 //! Nothing is written anywhere: the decrypted bytes only ever exist in memory.
 //!
-//!     acd_check [--cardata <folder>] [--steps N] [--only <car>] [--verbose]
+//! `--csp`: Custom Shaders Patch mode (car.ini VERSION read as CSP reads it).
+//!
+//!     acd_check [--cardata <folder>] [--steps N] [--only <car>] [--verbose] [--refused] [--csp]
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +29,8 @@ const CLOCK: f64 = 60_000.0;
 
 /// Builds the car and drives it: the traced values of every step, or the port's refusal.
 fn drive(data: &Path, steps: usize) -> Result<Vec<Vec<u64>>, String> {
+    // the game reads car.ini [HEADER] VERSION before the car (CarAvatar::initCommon)
+    rustyac_physics::csp::CspFeatures::for_car(data)?;
     let mut car = VanillaCar::new(data, ChassisEnvironment::default(), Box::new(Ground::Flat), 1, CLOCK, ScriptedDevice::default())?;
     car.car.autoclutch.use_auto_on_start = true;
     car.car.autoclutch.use_auto_on_change = true;
@@ -54,6 +58,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let verbose = args.iter().any(|a| a == "--verbose");
+    rustyac_physics::csp::set_enabled(args.iter().any(|a| a == "--csp"));
     let steps: usize = value("--steps").and_then(|s| s.parse().ok()).unwrap_or(300);
     let only = value("--only");
     let cardata = value("--cardata").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata"));

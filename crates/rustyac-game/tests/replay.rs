@@ -244,15 +244,21 @@ fn an_unsupported_car_is_refused_with_the_physics_message() {
         }
     };
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let input = folder.join("refused.ryin");
-    InputFile { setup, steps: vec![StepInput::default()] }.write(&input).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_rustyac")).args(["--replay", input.to_str().unwrap(), "--headless", "--no-shm"]).output().unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // the same message, wherever the car's files were found (the program reads the game's own
-    // data.acd, this test the extracted folder)
-    let message = direct.rsplit_once(".ini").unwrap().1;
-    assert!(stderr.contains(message), "stderr {stderr:?} does not hold {message:?}");
+    let refused = |setup: SimSetup, name: &str| {
+        let input = folder.join(name);
+        InputFile { setup, steps: vec![StepInput::default()] }.write(&input).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_rustyac")).args(["--replay", input.to_str().unwrap(), "--headless", "--no-shm"]).output().unwrap();
+        assert!(!output.status.success());
+        String::from_utf8_lossy(&output.stderr).to_string()
+    };
+    // plain AC: CarAvatar::initCommon's car.ini VERSION read refuses it first (Task C3)
+    let stderr = refused(SimSetup { csp: false, ..setup.clone() }, "refused.ryin");
+    assert!(stderr.contains("VERSION=extended-2: invalid stoi argument"), "stderr {stderr:?}");
+    // CSP mode: the physics crate's message, wherever the car's files were found (the program
+    // reads the game's own data.acd, this test the extracted folder), with CSP mode's reason
+    let stderr = refused(SimSetup { csp: true, ..setup }, "refused_csp.ryin");
+    let message = direct.rsplit_once(".ini").unwrap().1.split(" (").next().unwrap();
+    assert!(stderr.contains(message) && stderr.contains("(COSMIC suspension: a later rustyAC version)"), "stderr {stderr:?} does not hold {message:?}");
 }
 
 // ---------------------------------------------------------------------------------------------

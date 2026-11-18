@@ -556,6 +556,8 @@ impl RefereeHeader {
 pub struct SimSetup {
     /// The car: its folder name in the game's `content/cars` (or under `cardata/`), or a path.
     pub car: String,
+    /// Task C3: Custom Shaders Patch mode (`--csp`); the run is replayed in the same mode.
+    pub csp: bool,
     /// `srand` seed of the C runtime when the car is built.
     pub seed: u32,
     /// What the picture's `rand()` starts from once the track is loaded (smoke, flames, clouds,
@@ -638,6 +640,7 @@ impl Default for SimSetup {
     fn default() -> SimSetup {
         SimSetup {
             car: "ks_ferrari_f2004".to_string(),
+            csp: false,
             seed: 1,
             render_seed: 1,
             clock_start_ms: 60_000.0,
@@ -757,6 +760,10 @@ impl SimSetup {
         }
         if self.drs_zones {
             put("drs_zones", "1".to_string());
+        }
+        if self.csp {
+            // (only a CSP run has the key: older files read as before)
+            put("csp", "1".to_string());
         }
         if self.ai_record {
             put("ai_record", "1".to_string());
@@ -967,6 +974,7 @@ impl SimSetup {
                 "esc_start" => setup.esc_start = flag(),
                 "drs_zones" => setup.drs_zones = flag(),
                 "ai_record" => setup.ai_record = flag(),
+                "csp" => setup.csp = flag(),
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,

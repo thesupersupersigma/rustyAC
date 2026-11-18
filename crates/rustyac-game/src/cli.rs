@@ -74,6 +74,8 @@ pub struct Options {
     /// `--warp`: AC's renderer on WARP, Microsoft's software rasteriser (slow; the same pixels
     /// on every machine).
     pub warp: bool,
+    /// `--csp`: Custom Shaders Patch mode (else `[CSP] ENABLED` in `cfg\rustyac.ini`; off by default).
+    pub csp: bool,
     /// `--gpu-log <file>`: write the Direct3D command log of the second frame.
     pub gpu_log: Option<PathBuf>,
     /// `--skin <folder>`: the car's skin (default: race.ini's, else the first one).
@@ -418,6 +420,7 @@ impl Default for Options {
             free_camera: None,
             debug_view: false,
             warp: false,
+            csp: false,
             gpu_log: None,
             skin: None,
             video_ini_exact: false,
@@ -816,6 +819,7 @@ for checks, without anybody at the controls:
   --dump-states <file>  with --replay --headless: write the car's state after every step
   --debug-view          the debug view (own shader, fast, shows the physics) instead of Assetto Corsa's renderer
   --warp                draw with WARP, Windows' software rasteriser (slow; no graphics card needed)
+  --csp                 Custom Shaders Patch mode: CSP's extended car and track data (also [CSP] ENABLED=1 in cfg\\rustyac.ini)
   --gpu-log <file>      write the Direct3D command log of the second frame
   --skin <folder>       the car's skin (default: race.ini's, else the first one)
   --video-ini-exact     follow video.ini also where plain acs.exe cannot make a proper picture with
@@ -1021,6 +1025,7 @@ impl Options {
                 }
                 "--debug-view" => o.debug_view = true,
                 "--warp" => o.warp = true,
+                "--csp" => o.csp = true,
                 "--gpu-log" => o.gpu_log = Some(absolute(value("--gpu-log")?)),
                 "--skin" => o.skin = Some(value("--skin")?),
                 "--video-ini-exact" => o.video_ini_exact = true,

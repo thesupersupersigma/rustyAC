@@ -951,6 +951,35 @@ fn build_car(
     driver: Driver,
     track: Option<&Arc<Track>>,
     spawn: &SpawnPose,
+    engine: Option<&mut PhysicsEngine>,
+    slot: usize,
+    rules: Option<&ServerRules>,
+) -> Result<VanillaCar<Driver>, String> {
+    // CarAvatar::initCommon @ 0x1400d56e0 reads car.ini [HEADER] VERSION first (CSP's way with --csp)
+    let csp = rustyac_physics::csp::CspFeatures::for_car(data_path)?;
+    let mut car = build_physics_car(setup, data_path, physics_time, driver, track, spawn, engine, slot, rules)?;
+    car.csp = csp;
+    Ok(car)
+}
+
+/// CSP's TimeTransponder::init detour (dwrite+0x69a070): with SESSION_0 SPAWN_SET=HOTLAP_START and
+/// TYPE <= 2 it arms the first lap too; Vanilla arms a hot-lap session's (RaceManager::initOffline).
+fn arms_first_lap(setup: &SimSetup, session_type: i32) -> bool {
+    setup.session.arm_first_lap.unwrap_or_else(|| first_lap_armed(rustyac_physics::csp::enabled(), &setup.spawn, session_type))
+}
+
+fn first_lap_armed(csp: bool, spawn: &str, session_type: i32) -> bool {
+    session_type == 4 || csp && spawn == "hotlap" && session_type <= 2
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_physics_car(
+    setup: &SimSetup,
+    data_path: &Path,
+    physics_time: f64,
+    driver: Driver,
+    track: Option<&Arc<Track>>,
+    spawn: &SpawnPose,
     mut engine: Option<&mut PhysicsEngine>,
     slot: usize,
     rules: Option<&ServerRules>,
@@ -988,8 +1017,7 @@ fn build_car(
     // session's start): `session_env`
     let env = session_env(setup, physics_time, track.is_some(), rules);
     let session = &setup.session;
-    // RaceManager::initOffline: a file with a hot-lap session arms the first lap
-    let arm_first_lap = session.arm_first_lap.unwrap_or(env.session_type == 4);
+    let arm_first_lap = arms_first_lap(setup, env.session_type);
     // the track's loose objects are made with the track, before the car
     let with_objects = setup.track_objects || setup.oracle.as_ref().and_then(|o| o.track.as_ref()).is_some_and(|t| t.objects);
     let objects: &[rustyac_physics::track::TrackObjectDef] = match track {
@@ -1268,6 +1296,7 @@ impl GameSim {
     }
 
     fn build(setup: SimSetup, source: Box<dyn DriverSource>, online: Option<OnlineSession>) -> Result<GameSim, String> {
+        rustyac_physics::csp::set_enabled(setup.csp);
         let rules = online.as_ref().map(|session| ServerRules::of(&session.net.client.accepted));
         let data_path = find_car_data(&setup.car)?;
         let driver = Driver::new(source, setup.ff_gain);
@@ -1928,7 +1957,7 @@ impl GameSim {
             let spawn = self.spawn;
             let keep_laps = std::mem::take(&mut self.keep_laps);
             // (the game's restart leaves the armed flag of a hot-lap file as it is)
-            let armed = self.track.is_some() && self.setup.session.arm_first_lap.unwrap_or(self.car.car.env.session_type == 4);
+            let armed = self.track.is_some() && arms_first_lap(&self.setup, self.car.car.env.session_type);
             self.car.car.queue(move |car| {
                 car.force_rotation(&spawn.tail);
                 car.force_position(&spawn.position);
@@ -2405,5 +2434,21 @@ impl GameSim {
     pub fn step_recorded(&mut self, step: &StepInput) -> Result<(), String> {
         self.car.device.source.load(step);
         self.step().map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn first_lap_armed_vanilla_and_csp() {
+        use super::first_lap_armed;
+        // Vanilla: a hot-lap session only
+        assert!(first_lap_armed(false, "pit", 4));
+        assert!(!first_lap_armed(false, "hotlap", 1));
+        // CSP: also SPAWN_SET=HOTLAP_START with TYPE <= 2 (csp_oracle's race.ini: Car+0x278 = 1)
+        assert!(first_lap_armed(true, "hotlap", 1));
+        assert!(first_lap_armed(true, "hotlap", 2));
+        assert!(!first_lap_armed(true, "hotlap", 3));
+        assert!(!first_lap_armed(true, "pit", 1));
     }
 }

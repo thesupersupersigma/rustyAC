@@ -273,6 +273,14 @@ pub fn special_event(guid: i32) -> Option<Vec<u8>> {
     decrypt_simple(&vfs::read(&path).ok()?, &format!("ARUMBA_SPECIAL_EVENT_{guid}"))
 }
 
+/// The file names of a data folder: its archive's when it has one, else the plain folder's files.
+pub fn names(data_folder: &Path) -> Result<Vec<String>, String> {
+    match archive_of(&data_folder.join("car.ini")) {
+        Some(archive) => Ok(archive?.names().map(str::to_string).collect()),
+        None => Ok(vfs::read_dir(data_folder).map(|entries| entries.into_iter().filter(|(_, dir)| !dir).map(|(name, _)| name).collect()).unwrap_or_default()),
+    }
+}
+
 /// Why the archive of a data folder cannot be used, if it has one that cannot.
 pub fn archive_error(data_folder: &Path) -> Option<String> {
     archive_of(&data_folder.join("car.ini"))?.err()

@@ -66,6 +66,8 @@ pub struct Track {
     /// `name`, `config`: the track's folder name and its layout ("" for none).
     pub name: String,
     pub config: String,
+    /// The CSP data of its surfaces files (Task C3).
+    pub csp: crate::csp::CspFeatures,
     /// `dataFolder`: `content/tracks/<name>[/<config>]`
     pub data_folder: PathBuf,
     /// `PhysicsCore::spaceStatic` with the track's meshes.

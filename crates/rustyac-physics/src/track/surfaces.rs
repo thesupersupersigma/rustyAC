@@ -41,6 +41,8 @@ pub struct SurfacesManager {
     pub surfaces: BTreeMap<String, SurfaceType>,
     /// Files that were asked for and not found (the game prints a warning for each).
     pub missing: Vec<String>,
+    /// The CSP data of the surfaces files (`WAV_PITCH=extended-N`, CSP's own sections).
+    pub csp: crate::csp::CspFeatures,
 }
 
 /// What every surface is before its keys are read: zeros.
@@ -91,7 +93,7 @@ impl SurfacesManager {
     /// `SurfacesManager::SurfacesManager` @ 0x1401ae9b0: the built-in wall, the game's own
     /// `system/data/surfaces.ini`, then the track's `data/surfaces.ini` (same keys replace).
     pub fn new(system_surfaces: &Path, track_surfaces: &Path) -> Result<SurfacesManager, String> {
-        let mut manager = SurfacesManager { surfaces: BTreeMap::new(), missing: Vec::new() };
+        let mut manager = SurfacesManager { surfaces: BTreeMap::new(), missing: Vec::new(), csp: Default::default() };
         manager.surfaces.insert(
             "WALL".to_string(),
             SurfaceType { def: SurfaceDef { grip_mod: 1.0, collision_category: 2, is_valid_track: true, vibration_length: 1.5, ..blank() }, wav: String::new() },
@@ -114,6 +116,9 @@ impl SurfacesManager {
 
     /// The loop of `loadSurfaceDefinitions` over an ini that was read.
     pub fn read_surface_definitions(&mut self, ini: &IniReader) -> Result<(), String> {
+        if crate::csp::enabled() {
+            self.csp.add_sections(&ini.filename.to_string_lossy(), ini);
+        }
         for n in 0.. {
             let section = format!("SURFACE_{n}");
             if !ini.has_section(&section) {
@@ -124,7 +129,19 @@ impl SurfacesManager {
             d.grip_mod = ini.get_float(&section, "FRICTION")?;
             d.collision_category = 1;
             let wav = ini.get_string(&section, "WAV");
-            d.wav_pitch_speed = ini.get_float(&section, "WAV_PITCH")?;
+            // CSP's getFloat detour (dwrite+0x5e4180) while a track loads: WAV_PITCH=extended-N is N
+            let csp_pitch = if crate::csp::enabled() && ini.filename.to_string_lossy().replace('\\', "/").ends_with("/data/surfaces.ini") {
+                crate::csp::wav_pitch(&ini.get_string(&section, "WAV_PITCH"))
+            } else {
+                None
+            };
+            d.wav_pitch_speed = match csp_pitch {
+                Some(pitch) => {
+                    self.csp.wav_pitch.push((section.clone(), pitch));
+                    pitch
+                }
+                None => ini.get_float(&section, "WAV_PITCH")?,
+            };
             d.black_flag_time = ini.get_float(&section, "BLACK_FLAG_TIME")?;
             d.is_valid_track = ini.get_int(&section, "IS_VALID_TRACK")? != 0;
             d.sin_height = ini.get_float(&section, "SIN_HEIGHT")?;
@@ -167,7 +184,7 @@ mod tests {
     use super::*;
 
     fn manager(track_ini: &str) -> SurfacesManager {
-        let mut manager = SurfacesManager { surfaces: BTreeMap::new(), missing: Vec::new() };
+        let mut manager = SurfacesManager { surfaces: BTreeMap::new(), missing: Vec::new(), csp: Default::default() };
         manager.surfaces.insert(
             "WALL".to_string(),
             SurfaceType { def: SurfaceDef { grip_mod: 1.0, collision_category: 2, is_valid_track: true, vibration_length: 1.5, ..blank() }, wav: String::new() },

@@ -213,6 +213,8 @@ pub struct VanillaCar<P: ControlsProvider> {
     pub car: RollingChassis,
     /// `Car::controlsProvider`
     pub device: P,
+    /// The car's CSP data (set by the game layer when it loads the car).
+    pub csp: crate::csp::CspFeatures,
 }
 
 impl<P: ControlsProvider> VanillaCar<P> {
@@ -252,7 +254,7 @@ impl<P: ControlsProvider> VanillaCar<P> {
         car.install_drivetrain()?;
         car.install_aids()?;
         car.install_telemetry()?;
-        Ok(VanillaCar { car, device })
+        Ok(VanillaCar { car, device, csp: Default::default() })
     }
 
     /// Wraps a chassis that already has every system.
@@ -267,7 +269,7 @@ impl<P: ControlsProvider> VanillaCar<P> {
                 return Err(format!("the chassis has no {name}: not a whole car"));
             }
         }
-        Ok(VanillaCar { car, device })
+        Ok(VanillaCar { car, device, csp: Default::default() })
     }
 
     /// One physics step as `PhysicsEngine::step` @ 0x140264760 runs it for one car:

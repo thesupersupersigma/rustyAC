@@ -1226,10 +1226,12 @@ impl RollingChassis {
                     return Err(format!(
                         "{}: ERROR: Cannot create suspension type: {kind}  for wheel:{index}{}",
                         data_path.join("suspensions.ini").display(),
-                        if kind == "COSMIC" {
+                        if kind == "COSMIC" && crate::csp::enabled() {
+                            " (COSMIC suspension: a later rustyAC version)"
+                        } else if kind == "COSMIC" {
                             " (COSMIC is Custom Shaders Patch's own suspension: this car needs CSP)"
                         } else if kind.is_empty() && !suspensions_ini.has_section(section) {
-                            " (the file has no readable sections: this car's data is encrypted for Custom Shaders Patch)"
+                            " (the file has no readable sections: this car's data is encrypted for Custom Shaders Patch by its maker, and rustyAC does not decrypt it)"
                         } else {
                             ""
                         }
