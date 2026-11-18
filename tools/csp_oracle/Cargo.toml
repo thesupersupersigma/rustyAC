@@ -7,6 +7,9 @@ license = "GPL-3.0-or-later"
 description = "Spike oracle for Custom Shaders Patch: loads CSP's dwrite.dll next to an acs.exe image mapped by hand (never executed as a program), with the host's answers under control, and reports what CSP patched, started and asked for"
 
 [dependencies]
+# Task C4a: the air density port and the maths it calls, held against CSP's own in the process
+rustyac-math = { path = "../../crates/rustyac-math" }
+rustyac-physics = { path = "../../crates/rustyac-physics" }
 
 [profile.release]
 opt-level = 3

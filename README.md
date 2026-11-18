@@ -44,7 +44,7 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 | **Apps** | AC's Python app API, so Python apps from your install run, and the dev apps. |
 | **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
 | **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view; post-processing (YEBIS) is not available in the browser), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
-| **CSP** | Switch and extended car data, v1.1.0. |
+| **CSP** | Switch and extended car data, v1.1.0. CSP's air density (altitude, near-ground temperature) for extended cars, bit-exact against CSP's own code. |
 
 **Post-processing (YEBIS, desktop):** exact for every filter AC ships, at every post-processing setting, proven by a sweep of all ten filters against the game. Not yet: the **airy disc** of the b&w and sepia filters, which the game draws only with depth of field on and a replay track camera zoomed in to about 1° or less (rustyAC writes a line to its log when that happens); and **custom filters** that use keys or values no shipped filter uses: rustyAC draws those without the key's effect and names the key once on AC's message banner and in its log (the [key table](docs/port/yebis.md) lists each key's status). Both come after v1.0.
 

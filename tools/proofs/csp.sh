@@ -10,6 +10,9 @@
 #   refused off|csp  every installed car through acd_check: which are refused, with which reason
 #   layouts        track_survey without and with --csp: exactly the six *_fa_2026 layouts load with it
 #   wav <track> <layout>  their WAV_PITCH=extended-N read by the port and by CSP's getFloat
+#   air <track>|still  CSP's air density (Task C4a, docs/csp/port_c4.md): the game's car driven 60 s with
+#                  CSP live, CSP's own density law, near-ground temperature, ground plane and altitude
+#                  table called at every step against crates/rustyac-physics/src/csp/air.rs, bit for bit
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -53,7 +56,8 @@ for car in $extended $plain; do
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
     if oracle "${car}_van" --car "$car" --car-data "$out/plain/$car" --vanilla && oracle "${car}_csp" --car "$car"; then
-        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '' | grep -m1 '^PRESSURES ')
+        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '
+' | grep -m1 '^PRESSURES ')
         line=$(python tools/proofs/csp_words.py "$out/runs/${car}_van/car_root/car_words.txt" "$out/runs/${car}_csp/car_root/car_words.txt" "$port")
         verdict "words $car" "${line%% |*}" "${line#* | }"
     else
@@ -134,6 +138,27 @@ for l in $layouts; do
         fi
     else
         verdict "wav $t $y" DIFFERENT "csp_oracle failed: $(why "$out/runs/wav_$t.txt" 'error|panic|exit')"
+    fi
+done
+
+# air <case>: track:ambient:road:wind, the highest and the lowest table tracks installed beside Spa, an
+# unstable (road warmer), a calm and a stable (road colder) case; still = the car standing
+tape=oracle/game/car_random.ryin
+for c in spa:spa:14:20:3 ks_black_cat_county:ks_black_cat_county:26:38:0 ks_zandvoort:ks_zandvoort:18:16:6 still:spa:14:20:3; do
+    name=${c%%:*}; spec=${c#*:}
+    keep "air $name" || continue
+    [ -f "$tape" ] || { skip "air $name" "no $tape (car_oracle run --scenario random)"; continue; }
+    flag=; [ $name = still ] && flag=--still
+    if oracle "air_$name" --car ks_ferrari_f2004 --drive "$(cygpath -w "$tape")" $flag --air "$spec"; then
+        log=$out/runs/air_$name.txt
+        line=$(tr -d '\r' < "$log" | grep -m1 '^air: [0-9]* steps')
+        if grep -q '^air: altitude table: .* all as CSP' "$log" && [ "$(grep -c '^air: grid: .* 0 differ' "$log")" = 2 ]             && echo "$line" | grep -q '^air: 20001 steps, differ: plane 0, height 0, temperature 0, density 0'; then
+            verdict "air $name" IDENTICAL "${line#air: }"
+        else
+            verdict "air $name" DIFFERENT "$(why "$log" '^air|error|panic|fault')"
+        fi
+    else
+        verdict "air $name" DIFFERENT "csp_oracle failed: $(why "$out/runs/air_$name.txt" 'error|panic|fault|exit')"
     fi
 done
 

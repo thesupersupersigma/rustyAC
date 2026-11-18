@@ -998,8 +998,25 @@ fn build_car(
     // CarAvatar::initCommon @ 0x1400d56e0 reads car.ini [HEADER] VERSION first (CSP's way with --csp)
     let csp = rustyac_physics::csp::CspFeatures::for_car(data_path)?;
     let mut car = build_physics_car(setup, data_path, physics_time, driver, track, spawn, engine, slot, rules)?;
+    if rustyac_physics::csp::enabled() && csp.extended.is_some() {
+        // CSP's air density law (dwrite+0x588850) only for a car with its physics extension
+        // shortcut: no FORCE_EXTENDED_PHYSICS / server EXTENDED_PHYSICS, Lua multiplier 1, acs's slipstream (CSP's differs with a car ahead), upgrade in C4b
+        let altitude = track.map_or(0.0, |track| csp_altitude(track));
+        car.car.env.csp_air = Some(rustyac_physics::csp::air::CarAir { altitude, ..Default::default() });
+    }
     car.csp = csp;
     Ok(car)
+}
+
+/// CSP's base altitude (dwrite+0x118e6c0): `[_EXTENSION] PIT_ALTITUDE`, else `[ALTITUDE] BASE`, of
+/// the track's surfaces.ini, else its table, less the world Y of the node `AC_PIT_0`.
+fn csp_altitude(track: &Track) -> f32 {
+    let key = rustyac_physics::data::ini::IniReader::load(&track.data_folder.join("data").join("surfaces.ini")).ok().and_then(|ini| {
+        [("_EXTENSION", "PIT_ALTITUDE"), ("ALTITUDE", "BASE")].into_iter().find(|(s, k)| ini.has_key(s, k)).map(|(s, k)| ini.get_string(s, k))
+    });
+    // shortcut: the node's loaded world matrix stands for CSP's scene matrix, upgrade if a track's pit node has a moved parent
+    let pit_y = track.helper_nodes.iter().find(|node| node.name == "AC_PIT_0").map(|node| node.world.m[3][1]);
+    rustyac_physics::csp::air::track_altitude(key.as_deref(), &track.name, &track.config, pit_y)
 }
 
 /// CSP's TimeTransponder::init detour (dwrite+0x69a070): with SESSION_0 SPAWN_SET=HOTLAP_START and

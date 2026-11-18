@@ -122,6 +122,10 @@ pub struct ChassisEnvironment {
     /// static pressure`; a recording of the game with Custom Shaders Patch shows `10.97 +
     /// 0.084 * (core - 26)` for the F2004 on a 14 deg C day (a gas law).
     pub experiment_tyre_pressure_law: Option<(f32, f32)>,
+    /// Custom Shaders Patch's air for an extended-physics car (`--csp`): the track's pit
+    /// altitude and the car's last ground plane, density worked out at each `Car::step`
+    /// (`dwrite+0x588850`, `+0x5bdfa0`). `None`: the game's formula.
+    pub csp_air: Option<crate::csp::air::CarAir>,
 }
 
 /// The cockpit's engine-brake and hybrid settings as the game's main thread keeps them
@@ -185,6 +189,7 @@ impl Default for ChassisEnvironment {
             air_density_override: None,
             experiment_mesh_on_ground: false,
             experiment_tyre_pressure_law: None,
+            csp_air: None,
         }
     }
 }
@@ -192,9 +197,10 @@ impl Default for ChassisEnvironment {
 impl ChassisEnvironment {
     /// `PhysicsEngine::getAirDensity` @ 0x140263a60, kg/m^3 (or the experiment's fixed value).
     pub fn air_density(&self) -> f32 {
-        match self.air_density_override {
-            Some(density) => density,
-            None => super::engine::get_air_density(self.ambient_temperature),
+        match (self.air_density_override, self.csp_air) {
+            (Some(density), _) => density,
+            (None, Some(air)) => air.density,
+            (None, None) => super::engine::get_air_density(self.ambient_temperature),
         }
     }
 
@@ -1943,6 +1949,13 @@ impl RollingChassis {
         self.step_pre_cache_values();
 
         // --- Car::step ---------------------------------------------------------------------
+        // CSP's Car::step wrapper (dwrite+0x58afc0) takes the body's position first; its air law
+        // uses it with the ground plane of the step before
+        let e = self.env;
+        if let Some(air) = &mut self.env.csp_air {
+            let p = self.core.get_position(self.body);
+            air.density = crate::csp::air::air_density(air.altitude, p.y, e.ambient_temperature, e.road_temperature, e.wind_speed, crate::csp::air::plane_height(&air.plane, &p));
+        }
         // the first car softens its joints' error correction below 1 m/s
         if self.env.is_first_car {
             let v = self.core.get_velocity(self.body);
@@ -2345,6 +2358,11 @@ impl RollingChassis {
         self.update_collider_status();
         if self.env.is_first_car {
             self.step_jump_start();
+        }
+        // CSP's wrapper again: the ground plane under the tyres for the next step's air
+        if let Some(air) = &mut self.env.csp_air {
+            let t = &self.tyres;
+            air.plane = crate::csp::air::ground_plane([t[0].contact_point, t[1].contact_point, t[2].contact_point, t[3].contact_point]);
         }
     }
 

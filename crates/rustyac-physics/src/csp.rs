@@ -7,6 +7,8 @@
 //! CSP mode is CSP as it runs with a physics worker count of 0 (every dispatch in list order, one
 //! thread) and `RANDOMIZE_WHEEL_ANGLES=0` (docs/csp/port_c3.md).
 
+pub mod air;
+
 use crate::data::ini::IniReader;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};

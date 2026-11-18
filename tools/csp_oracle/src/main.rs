@@ -1048,7 +1048,7 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
     // shortcut: the rest of the TrackAvatar is zero, upgrade if a physics seam reads more of it
     let track_avatar = acs.alloc(0x308);
     let track = track_avatar.add(0xf8);
-    debug_assert!(TRACK_SIZE <= 0x308 - 0xf8);
+    const { assert!(TRACK_SIZE <= 0x308 - 0xf8) };
     let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_CTOR));
     ctor(track, engine, wstring(acs, "flat"), wstring(acs, ""));
     let init_ai_spline: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_TRACK_INIT_AI_SPLINE));
@@ -1088,8 +1088,15 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
         // word is a zeroed 0x12a8 stand-in
         // shortcut: CSP's own object is made by set-up code the oracle does not run, upgrade if a physics
         // seam reads more of it
+        // one per car GUID: the car collision hook (dwrite+0x587cc0) follows slot+0x440 to a box it
+        // reads at +0x90..+0xa4 and the slot's first word to a CarAvatar (+0xe18 audio), all zero here
         let state = acs.alloc(0x1000);
-        put(state, 0, acs.alloc(0x12a8));
+        for guid in 0..count {
+            let slot = acs.alloc(0x1000);
+            put(slot, 0, acs.alloc(0x12a8));
+            put(slot, 0x440, acs.alloc(0x100));
+            put(state, 8 * guid, slot);
+        }
         *((dll + 0x282_13d8) as *mut *mut u8) = state;
     }
     let cars: Vec<*mut u8> = (0..count).map(|guid| build_car(acs, engine, car_name, csp, guid as u32)).collect();
@@ -1298,7 +1305,10 @@ extern "C" fn device_set_engine_rpm(_this: *mut u8, _rpm: f32, _limiter: f32) {}
 
 /// Drives `cars` with the records of `ryin` (car_oracle's flat-road scenarios), `steps` of them at
 /// most, and writes steps.txt: per step and car the hash of the car's words and of its state.
-unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps: usize) {
+/// `still`: every record's pedals and wheel zero. `air` (CSP's dll, `track:ambient:road:wind`): per
+/// step CSP's own air density of car 0 against rustyac_physics::csp::air (see AirCheck).
+#[allow(clippy::too_many_arguments)]
+unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps: usize, still: bool, csp: Option<usize>, air: Option<&str>) {
     let bytes = std::fs::read(ryin).expect("the .ryin file can be read");
     let end = bytes.windows(5).position(|w| w == b"\nend\n").expect("the .ryin file has an end line") + 5;
     let header: BTreeMap<String, String> = std::str::from_utf8(&bytes[..end])
@@ -1353,7 +1363,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         }
         // side by side 4 m apart, nose towards +z
         force_rotation(car, &[0.0, 0.0, -1.0]);
-        force_position(car, &[4.0 * i as f32, 0.0, 0.0], 1);
+        force_position(car, &[20.0 * i as f32, 0.0, 0.0], 1);
         set_damage_level(car, 0.0);
         reset_suspension_damage(car);
         // shortcut: no session-start setup round trip (car_oracle's session_start_setup), upgrade when
@@ -1366,13 +1376,35 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     let mut pages = HashMap::new();
     let mut lines = String::new();
     let count = steps.min(records.len() / 40);
+    let mut air = air.map(|spec| AirCheck::new(acs, csp.expect("--air needs CSP"), spec, cars[0]));
     for (i, record) in records.chunks_exact(40).take(count).enumerate() {
         if record_bytes_word(record, 7) != 0 || record_bytes_word(record, 8) != 0 {
             stop(2, &format!("step {i}: events or brake-bias clicks, which csp_oracle does not drive"));
         }
         *RECORD.lock().unwrap() = record.try_into().unwrap();
+        if still {
+            RECORD.lock().unwrap()[..20].fill(0); // gas, brake, steer, clutch, hand brake
+        }
+        if let Some(air) = &mut air {
+            air.before(i);
+        }
         let time = 60_000.0 + (i + 1) as f64 * 3.0;
         step(engine, 0.003, time, time);
+        if let Some(dll) = csp {
+            // CSP's PhysicsEngine::step leaves the world step to its drive thread while this byte is set
+            // (0x67ca40): the thread clears it, steps the core with 0.003 after the cars, sets it again
+            let late = (dll + 0x280_3210) as *mut u8;
+            if *late != 0 {
+                *late = 0;
+                let core = read::<*mut u8>(engine as usize + 0x190);
+                let world: extern "C" fn(*mut u8, f32) = std::mem::transmute(read::<usize>(read::<usize>(core as usize) + 0x10));
+                world(core, 0.003);
+                *late = 1;
+            }
+        }
+        if let Some(air) = &mut air {
+            air.after(i);
+        }
         lines.push_str(&i.to_string());
         for &car in cars {
             get_physics_state(car, state);
@@ -1390,6 +1422,243 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         std::fs::write(format!("car{i}_words_end.txt"), words_of(car, CAR_SIZE, &mut pages).0).expect("the end words can be written");
     }
     println!("drove {count} steps, {} cars, steps hash {:016x}", cars.len(), fnv(&lines));
+    if let Some(air) = air {
+        air.finish();
+    }
+}
+
+type V3 = rustyac_physics::vecmath::Vec3f;
+
+/// Task C4a part C: CSP's air density of an extended car (docs/csp/port_c4.md), held against the
+/// port in rustyac_physics::csp::air with CSP's own inputs. The car steps as a plain car (an
+/// extended one's step needs CSP's track objects); around each step the oracle does what CSP's
+/// Car::step wrapper (dwrite+0x58afc0) does for an extended car's record: the body's position
+/// before the step into record+0x418, the tyres' ground plane after it into record+0x424
+/// (dwrite+0x1150520). Before the step it calls the law (dwrite+0xb10410, the physics' flag 1)
+/// with the record in CSP's record vector and the track's altitude and conditions in place of the
+/// engine's, for that call only, and the near-ground temperature (dwrite+0xb0fcc0) on its own.
+/// Every value is compared bit for bit; nothing of the drive changes.
+struct AirCheck {
+    dll: usize,
+    car: *mut u8,
+    pe: *mut u8,
+    record: *mut u8,
+    slot: *mut usize,
+    altitude: f32,
+    ambient: f32,
+    road: f32,
+    wind: f32,
+    plane: [f32; 4],
+    lines: String,
+    differ: [usize; 4],
+    first: Vec<String>,
+}
+
+impl AirCheck {
+    unsafe fn new(acs: &Acs, dll: usize, spec: &str, car: *mut u8) -> AirCheck {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let [track, ambient, road, wind] = parts[..] else { stop(2, "--air takes track:ambient:road:wind") };
+        let number = |text: &str| text.parse::<f32>().unwrap_or_else(|_| stop(2, "--air takes numbers after the track"));
+        // flat road: no AC_PIT_0 node, so Y 0 (dwrite+0x118e6c0)
+        let known = table(dll, track, "");
+        let csp_altitude = if known == rustyac_physics::csp::air::UNKNOWN_ALTITUDE { 294.0 } else { known };
+        let altitude = rustyac_physics::csp::air::track_altitude(None, track, "", None);
+        if csp_altitude.to_bits() != altitude.to_bits() {
+            stop(3, &format!("air: {track}: CSP's altitude {csp_altitude}, the port's {altitude}"));
+        }
+        // the whole table: its names, then each guessed word (and pair) in a made-up folder name, as
+        // written, in capitals and with a pair the wrong way round
+        let mut names: Vec<(String, &str)> = ["ks_barcelona", "ks_black_cat_county", "ks_brands_hatch", "ks_drag", "drift", "ks_highlands", "imola", "ks_laguna_seca", "magione", "monza", "ks_monza66", "mugello", "ks_nordschleife", "ks_nurburgring", "ks_red_bull_ring", "ks_silverstone", "ks_silverstone1967", "spa", "trento-bondone", "ks_vallelunga", "ks_zandvoort", "india", "grandsambuc", "forliring", "greatwall", "korea", "la_canyons", "auto24ring", "monaco_1966", "hong_kong", "nowhere", "", "Spa"]
+            .iter().map(|id| (id.to_string(), "")).collect();
+        names.push(("ks_nordschleife".into(), "touristenfahrten"));
+        for (a, b, _) in rustyac_physics::csp::air::GUESSED_WORDS {
+            names.push((format!("x_{a}_{b}"), ""));
+            names.push((format!("X_{}_{}", a.to_uppercase(), b.to_uppercase()), ""));
+            if !b.is_empty() {
+                names.push((format!("x_{b}_{a}"), ""));
+            }
+        }
+        for (id, layout) in &names {
+            let (csp, port) = (table(dll, id, layout), rustyac_physics::csp::air::known_altitude(id, layout));
+            if csp.to_bits() != port.to_bits() {
+                stop(3, &format!("air: altitude table: {id}/{layout}: CSP {csp}, the port {port}"));
+            }
+        }
+        println!("air: altitude table: {} names, all as CSP's", names.len());
+        let pe = read::<*mut u8>(dll + 0x281_4e40);
+        assert!(!pe.is_null(), "CSP's physics engine global is set");
+        grid(dll, pe);
+        let record = acs.alloc(0x6f0);
+        let avatar = acs.alloc(0x1000);
+        let engineer = acs.alloc(0x40);
+        put(engineer, 8, car); // RaceEngineer::car, whose GUID CSP's ground-height hook looks up
+        put(avatar, 0xf80, engineer);
+        put(record, 0x320, avatar);
+        let slot = acs.alloc(16) as *mut usize;
+        *slot = record as usize;
+        assert_eq!(read::<u32>(car as usize + 0x3e9c), 0, "car 0 has CSP's GUID 0");
+        println!("air: {track} altitude {altitude} m, ambient {ambient}, road {road}, wind {wind}");
+        AirCheck { dll, car, pe, record, slot, altitude, ambient: number(ambient), road: number(road), wind: number(wind), plane: [0.0; 4], lines: String::new(), differ: [0; 4], first: Vec::new() }
+    }
+
+    unsafe fn before(&mut self, i: usize) {
+        let body = read::<*mut u8>(self.car as usize + 0x118);
+        // the body's position (vtable+0xa0, interpolation 0), as the wrapper reads it
+        let get_position: extern "C" fn(*mut u8, *mut [f32; 3], f32) -> *mut [f32; 3] = std::mem::transmute(read::<usize>(read::<usize>(body as usize) + 0xa0));
+        let mut pos = [0.0f32; 3];
+        get_position(body, &mut pos, 0.0);
+        put(self.record, 0x418, pos);
+        let dll = self.dll;
+        let pe = self.pe as usize;
+        let saved_vector = (read::<usize>(dll + 0x282_13f0), read::<usize>(dll + 0x282_13f8));
+        let saved_pe = (read::<f32>(pe + 0x100), read::<f32>(pe + 0x104), read::<f32>(pe + 0x164));
+        let saved_altitude = read::<f32>(dll + 0x27f_a4e0);
+        *((dll + 0x282_13f0) as *mut usize) = self.slot as usize;
+        *((dll + 0x282_13f8) as *mut usize) = self.slot.add(1) as usize;
+        put(self.pe, 0x100, self.ambient);
+        put(self.pe, 0x104, self.road);
+        put(self.pe, 0x164, self.wind);
+        *((dll + 0x27f_a4e0) as *mut f32) = self.altitude;
+        let law: extern "C" fn(*const [f32; 3], *mut u8, u8) -> f32 = std::mem::transmute(dll + 0xb1_0410);
+        let height_hook: extern "C" fn(*mut u8, *const [f32; 3]) -> f32 = std::mem::transmute(dll + 0x115_0ae0);
+        let csp_density = law(self.record.add(0x418) as *const [f32; 3], self.record, 1);
+        let csp_height = height_hook(read::<*mut u8>(read::<usize>(self.record as usize + 0x320) + 0xf80), &pos);
+        *((dll + 0x282_13f0) as *mut usize) = saved_vector.0;
+        *((dll + 0x282_13f8) as *mut usize) = saved_vector.1;
+        put(self.pe, 0x100, saved_pe.0);
+        put(self.pe, 0x104, saved_pe.1);
+        put(self.pe, 0x164, saved_pe.2);
+        *((dll + 0x27f_a4e0) as *mut f32) = saved_altitude;
+        let z: extern "C" fn(f32, f32, f32, f32) -> f32 = std::mem::transmute(dll + 0xb0_fcc0);
+        let csp_temperature = z(self.road, self.ambient, self.wind.abs(), csp_height);
+
+        use rustyac_physics::csp::air;
+        let p = V3::new(pos[0], pos[1], pos[2]);
+        let height = air::plane_height(&self.plane, &p);
+        let temperature = air::near_ground_temperature(self.road, self.ambient, self.wind.abs(), height);
+        let density = air::air_density(self.altitude, p.y, self.ambient, self.road, self.wind, height);
+        self.lines.push_str(&format!(
+            "{i} y {:08x} height {:08x} temperature {:08x} density {:08x}\n",
+            pos[1].to_bits(),
+            csp_height.to_bits(),
+            csp_temperature.to_bits(),
+            csp_density.to_bits()
+        ));
+        for (k, (name, csp, port)) in [("height", csp_height, height), ("temperature", csp_temperature, temperature), ("density", csp_density, density)].into_iter().enumerate() {
+            self.compare(k + 1, i, name, &[csp], &[port]);
+        }
+    }
+
+    unsafe fn after(&mut self, i: usize) {
+        let plane: extern "C" fn(*mut u8, *mut [f32; 4]) = std::mem::transmute(self.dll + 0x115_0520);
+        plane(self.car, self.record.add(0x424) as *mut [f32; 4]);
+        let csp = read::<[f32; 4]>(self.record as usize + 0x424);
+        // the four tyres' contact points (Car+0xb28 tyres, 0x858 apart, contactPoint at +0x3f4)
+        let contact = |at: usize| {
+            let v = read::<[f32; 3]>(self.car as usize + at);
+            V3::new(v[0], v[1], v[2])
+        };
+        self.plane = rustyac_physics::csp::air::ground_plane([contact(0xf1c), contact(0x1774), contact(0x1fcc), contact(0x2824)]);
+        let port = self.plane;
+        self.compare(0, i, "plane", &csp, &port);
+    }
+
+    fn compare(&mut self, k: usize, i: usize, name: &str, csp: &[f32], port: &[f32]) {
+        if csp.iter().map(|v| v.to_bits()).ne(port.iter().map(|v| v.to_bits())) {
+            self.differ[k] += 1;
+            if self.first.len() < 8 {
+                self.first.push(format!("step {i} {name}: CSP {csp:?}, port {port:?}"));
+            }
+        }
+    }
+
+    fn finish(self) {
+        std::fs::write("air.txt", &self.lines).expect("air.txt can be written");
+        for line in &self.first {
+            println!("air: {line}");
+        }
+        let [plane, height, temperature, density] = self.differ;
+        println!(
+            "air: {} steps, differ: plane {plane}, height {height}, temperature {temperature}, density {density}, air hash {:016x}",
+            self.lines.lines().count(),
+            fnv(&self.lines)
+        );
+    }
+}
+
+/// CSP's altitude table (dwrite+0x1237c50) for a track folder and layout, given as MSVC wstrings.
+/// CSP's near-ground temperature and its law (without a car: base altitude dwrite+0x27fa488, 0.5 m
+/// above the ground) over a grid of every input, held against the port's.
+unsafe fn grid(dll: usize, pe: *mut u8) {
+    use rustyac_physics::csp::air::{air_density, near_ground_temperature};
+    let z: extern "C" fn(f32, f32, f32, f32) -> f32 = std::mem::transmute(dll + 0xb0_fcc0);
+    let law: extern "C" fn(*const [f32; 3], *mut u8, u8) -> f32 = std::mem::transmute(dll + 0xb1_0410);
+    let temperatures: Vec<f32> = (0..=29).map(|i| -15.0 + 2.5 * i as f32).chain([20.0 + 1e-7, 20.0 + 3e-7]).collect();
+    let winds: Vec<f32> = (0..=20).map(|i| i as f32).chain([-3.0, 0.25, 1e-8]).collect();
+    let heights = [-1.0f32, 0.0, 1e-5, 1e-4, 0.001, 0.003, 0.01, 0.05, 0.1, 0.3, 0.5, 1.0, 2.0, 5.0, 40.0];
+    let (mut count, mut differ) = (0usize, 0usize);
+    for &road in &temperatures {
+        for &ambient in &temperatures {
+            for &wind in &winds {
+                for &height in &heights {
+                    let (csp, port) = (z(road, ambient, wind, height), near_ground_temperature(road, ambient, wind, height));
+                    count += 1;
+                    if csp.to_bits() != port.to_bits() {
+                        if differ < 8 {
+                            println!("air: grid: temperature({road}, {ambient}, {wind}, {height}): CSP {csp} {:08x}, port {port} {:08x}", csp.to_bits(), port.to_bits());
+                        }
+                        differ += 1;
+                    }
+                }
+            }
+        }
+    }
+    println!("air: grid: near-ground temperature, {count} inputs, {differ} differ");
+    let saved: [u32; 3] = [read(pe as usize + 0x100), read(pe as usize + 0x104), read(pe as usize + 0x164)];
+    let base = (dll + 0x27f_a488) as *mut f32;
+    let saved_base = *base;
+    let (mut count, mut differ) = (0usize, 0usize);
+    for altitude in [-400.0f32, 0.0, 5.0, 294.0, 395.011, 418.0, 1250.0, 2863.0, 9000.0, 44000.0, 60000.0, f32::NAN] {
+        for y in [-200.0f32, -1.0, 0.0, 0.3, 1.0, 22.9886, 800.0] {
+            for &road in temperatures.iter().step_by(3) {
+                for &ambient in temperatures.iter().step_by(3) {
+                    for wind in [0.0f32, 2.0, -7.0] {
+                        *base = altitude;
+                        put(pe, 0x100, ambient);
+                        put(pe, 0x104, road);
+                        put(pe, 0x164, wind);
+                        let csp = law(&[0.0, y, 0.0], std::ptr::null_mut(), 0);
+                        let port = air_density(if altitude.is_nan() { 0.0 } else { altitude }, if altitude.is_nan() { 0.0 } else { y }, ambient, road, wind, 0.5);
+                        count += 1;
+                        if csp.to_bits() != port.to_bits() {
+                            if differ < 8 {
+                                println!("air: grid: density({altitude}, {y}, {ambient}, {road}, {wind}): CSP {csp} {:08x}, port {port} {:08x}", csp.to_bits(), port.to_bits());
+                            }
+                            differ += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    *base = saved_base;
+    put(pe, 0x100, saved[0]);
+    put(pe, 0x104, saved[1]);
+    put(pe, 0x164, saved[2]);
+    println!("air: grid: density, {count} inputs, {differ} differ");
+}
+
+unsafe fn table(dll: usize, id: &str, layout: &str) -> f32 {
+    let wstring = |text: &str| {
+        let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
+        let length = wide.len() - 1;
+        let heap = Box::leak(wide.into_boxed_slice()).as_ptr() as usize;
+        // capacity over 7 characters: the first word is the heap pointer
+        [heap, 0, length, length.max(8)]
+    };
+    let (id, layout) = (wstring(id), wstring(layout));
+    let table: extern "C" fn(*const [usize; 4], *const [usize; 4]) -> f32 = std::mem::transmute(dll + 0x123_7c50);
+    table(&id, &layout)
 }
 
 fn record_bytes_word(record: &[u8], k: usize) -> u32 {
@@ -1439,8 +1708,65 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()
     Ok(())
 }
 
+/// Task C4a: every f32 through the C runtime functions CSP's air density calls (its own static
+/// copies) and through rustyac_math's pure ports and MSVCR120's, run with the calling thread's
+/// MXCSR; prints the number of inputs whose result bits differ.
+unsafe fn maths(dll: usize) {
+    type F1 = extern "C" fn(f32) -> f32;
+    let csr = mxcsr() & 0xffc0;
+    let one = |name: &str, csp: Box<dyn Fn(f32) -> f32 + Sync>, pure: fn(f32) -> f32, dll_fn: fn(f32) -> f32| {
+        let (mut bad_pure, mut bad_dll, mut first) = (0u64, 0u64, Vec::new());
+        let parts: Vec<(u64, u64, Vec<String>)> = std::thread::scope(|scope| {
+            let chunks: Vec<_> = (0..16u64)
+                .map(|part| {
+                    let (csp, pure, dll_fn) = (&csp, pure, dll_fn);
+                    scope.spawn(move || {
+                        std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
+                        let (mut a, mut b, mut list) = (0u64, 0u64, Vec::new());
+                        for bits in (part << 28)..((part + 1) << 28) {
+                            let x = f32::from_bits(bits as u32);
+                            let want = csp(x).to_bits();
+                            let (p, d) = (pure(x).to_bits(), dll_fn(x).to_bits());
+                            if p != want {
+                                a += 1;
+                                if list.len() < 3 {
+                                    list.push(format!("{:#010x}: csp {want:#010x} pure {p:#010x}", bits));
+                                }
+                            }
+                            if d != want {
+                                b += 1;
+                            }
+                        }
+                        (a, b, list)
+                    })
+                })
+                .collect();
+            chunks.into_iter().map(|c| c.join().unwrap()).collect()
+        });
+        for (a, b, list) in parts {
+            bad_pure += a;
+            bad_dll += b;
+            first.extend(list);
+        }
+        first.truncate(6);
+        println!("maths {name}: 2^32 inputs, {bad_pure} differ from rustyac_math::pure, {bad_dll} from MSVCR120 {first:?}");
+    };
+    let f = |rva: usize| std::mem::transmute::<usize, F1>(dll + rva);
+    let (expf, atanf, logf) = (f(0x1db_8350), f(0x1dc_7150), f(0x1dc_9b50));
+    let powf: extern "C" fn(f32, f32) -> f32 = std::mem::transmute(dll + 0x1db_47a0);
+    println!("maths: MXCSR {csr:#06x}, expf(1) {} atanf(1) {} logf(2) {} powf(2, 3) {}", expf(1.0), atanf(1.0), logf(2.0), powf(2.0, 3.0));
+    one("expf", Box::new(move |x| expf(x)), rustyac_math::pure::expf, rustyac_math::expf);
+    one("atanf", Box::new(move |x| atanf(x)), rustyac_math::pure::atanf, rustyac_math::atanf);
+    one("logf", Box::new(move |x| logf(x)), rustyac_math::pure::logf, rustyac_math::logf);
+    // the law's only exponent (0x238ba88)
+    const Y: f32 = f32::from_bits(0x40a8_2f53);
+    one("powf(x, 5.2557769)", Box::new(move |x| powf(x, Y)), |x| rustyac_math::pure::powf(x, Y), |x| rustyac_math::powf(x, Y));
+}
+
 fn main() {
     let mut arguments: Vec<String> = std::env::args().collect();
+    // --maths: CSP's C runtime functions of the air density against rustyac_math (Task C4a)
+    let maths_check = arguments.iter().position(|a| a == "--maths").map(|i| arguments.remove(i)).is_some();
     // --car <name>: load that car after CSP's start-up; --vanilla: the same without CSP
     let car_name = arguments.iter().position(|a| a == "--car").map(|i| {
         arguments.remove(i);
@@ -1469,6 +1795,12 @@ fn main() {
     let drive_tape = arguments.iter().position(|a| a == "--drive").map(|i| {
         arguments.remove(i);
         full_path(&arguments.remove(i))
+    });
+    // --still: zero pedals and wheel; --air track:ambient:road:wind: CSP's air density each step (part C)
+    let still = arguments.iter().position(|a| a == "--still").map(|i| arguments.remove(i)).is_some();
+    let air_spec = arguments.iter().position(|a| a == "--air").map(|i| {
+        arguments.remove(i);
+        arguments.remove(i)
     });
     if arguments.len() != 3 && arguments.len() != 4 {
         eprintln!("usage: csp_oracle <ac root> <run folder> [cfg folder] [--car <name> [--drive <file.ryin> [--steps n] [--cars n] [--workers n]] | --surfaces <file>] [--vanilla]");
@@ -1570,7 +1902,7 @@ fn main() {
         if let (Some(car), true) = (&car_name, vanilla) {
             let (engine, cars) = load_car(&acs, car, &car_root, None, cars);
             if let Some(tape) = &drive_tape {
-                drive(&acs, engine, &cars, tape, steps);
+                drive(&acs, engine, &cars, tape, steps, still, None, None);
             }
             stop(0, "end of the run");
         }
@@ -1608,6 +1940,10 @@ fn main() {
         ask("with CSP, reader built before CSP", reader);
         ask("with CSP, reader built now", build());
         checkpoint("called", &before, &functions);
+        if maths_check {
+            maths(dll as usize);
+            stop(0, "end of the run");
+        }
 
         if let Some(car) = &car_name {
             // wWinMain's first object: CSP's detour of its constructor does the set-up the game's
@@ -1631,7 +1967,7 @@ fn main() {
             let (engine, cars) = load_car(&acs, car, &car_root, Some(dll), cars);
             checkpoint("car", &before, &functions);
             if let Some(tape) = &drive_tape {
-                drive(&acs, engine, &cars, tape, steps);
+                drive(&acs, engine, &cars, tape, steps, still, Some(dll as usize), air_spec.as_deref());
                 checkpoint("drive", &before, &functions);
             }
             stop(0, "end of the run");
