@@ -62,6 +62,14 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
     for (const [key, w] of keyed) if (w === word) keyed.delete(key);
   };
   const obj = (word) => objects.get(word);
+  // a loaded bank's file in FMOD's in-memory file system (bank word -> name): freed with the bank
+  const bankFiles = new Map();
+  const dropBankFile = (word) => {
+    const name = bankFiles.get(word);
+    if (name === undefined) return;
+    bankFiles.delete(word);
+    FMOD.FS_unlink('/' + name);
+  };
   const handed = (r, o, key) => (r === FMOD.OK ? [r, give(o.val, key)] : [r]);
   const one = (r, o) => [r, o.val | 0];
 
@@ -188,7 +196,21 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
     studio_register_plugin: () => [FMOD.OK],
     studio_update: (a) => [obj(a[0]).update()],
     studio_flush_commands: (a) => [obj(a[0]).flushCommands()],
-    studio_release: (a) => { const r = obj(a[0]).release(); forget(a[0]); state.studio = null; return [r]; },
+    studio_release: (a) => {
+      const r = obj(a[0]).release();
+      forget(a[0]);
+      state.studio = null;
+      // FMOD's output closes its AudioWorklet node but leaves the node's port listening: a mix
+      // request the worklet had already sent then runs the released mixer, which never returns
+      // (the page hung going back to the launcher). The next system makes a node of its own.
+      if (FMOD.mWorkletNode) {
+        FMOD.mWorkletNode.port.onmessage = null;
+        FMOD.mWorkletNode.port.close();
+      }
+      // (release unloads every bank: their files go too)
+      for (const word of [...bankFiles.keys()]) dropBankFile(word);
+      return [r];
+    },
     studio_get_cpu_usage: () => [FMOD.OK, 0],
     studio_get_buffer_usage: () => [FMOD.OK, 0],
     studio_get_listener_attributes: (a) => {
@@ -218,9 +240,18 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
       const name = `bank${state.banks++}.bank`;
       FMOD.FS_createDataFile('/', name, bytes, true, false);
       const o = {};
-      return handed(obj(a[0]).loadBankFile('/' + name, a[1], o), o);
+      const answer = handed(obj(a[0]).loadBankFile('/' + name, a[1], o), o);
+      // (the file lives as long as its bank: FMOD reads sample data from it later)
+      if (answer.length > 1) bankFiles.set(answer[1], name);
+      else FMOD.FS_unlink('/' + name);
+      return answer;
     },
-    bank_unload: (a) => { const r = obj(a[0]).unload(); forget(a[0]); return [r]; },
+    bank_unload: (a) => {
+      const r = obj(a[0]).unload();
+      dropBankFile(a[0]);
+      forget(a[0]);
+      return [r];
+    },
     // --- EventDescription ---
     description_load_sample_data: (a) => [obj(a[0]).loadSampleData()],
     description_unload_sample_data: (a) => [obj(a[0]).unloadSampleData()],

@@ -169,6 +169,14 @@ pub struct Gpu {
     calls: Vec<DrawCall>,
 }
 
+impl Drop for Gpu {
+    /// The drive's GPU memory goes now: a dropped device is only a JavaScript object, whose
+    /// memory the browser frees whenever it collects it (the GPU process grew every drive).
+    fn drop(&mut self) {
+        self.device.destroy();
+    }
+}
+
 fn texture_format(format: u32) -> Option<(wgpu::TextureFormat, bool)> {
     Some(match format {
         dds::R8G8B8A8_UNORM => (wgpu::TextureFormat::Rgba8Unorm, false),
