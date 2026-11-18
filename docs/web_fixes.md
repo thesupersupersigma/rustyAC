@@ -22,9 +22,37 @@ fixed. All runs are headless Chrome on this PC (Radeon Pro 5500M through Vulkan,
 - Done (steps 3 to 5): problem 3 measured and not reproduced (Low cheaper than High here);
   problem 4's top costs, two cheap wins (bind groups kept, the call log's arguments) with the
   frame and kgl log proven the same, before / after; the missing-features list.
-- Next: step 6: rebase `web` on `master`, rebuild, clippy (native rustyac-render and both wasm
-  targets), the browser area, `run_all.sh --quick` (rustyac-render is shared), "ready to merge".
+- Done (step 6): `web` rebased on `master` (v1.1.0), clippy clean, the browser area and
+  `run_all.sh --quick` all IDENTICAL (see Checks). Ready to merge.
+- Open: problem 3 on Super's machine; the GPU process still creeps a little per trip (below).
 - This PC crashed (a blue screen) with a page run and a wasm clippy at once: run them one at a time.
+
+## Checks (step 6)
+
+After `web` was rebased on `master` (v1.1.0):
+
+- clippy `-D warnings --all-targets`: rustyac-web for wasm32-unknown-unknown and native,
+  rustyac-render native with and without `backend-wgpu`: clean. rustyac-render does not build
+  for wasm32-wasip1 at all (off Windows it needs `backend-wgpu`; `replay_hash` there does not use it).
+- `cargo test -p rustyac-render --lib kgl_log`: passes (the test now also holds that a line's
+  names and hashes are not made without a capture).
+- the browser area (`tools/proofs/browser.sh`): 237 IDENTICAL, 0 not, with the four new page
+  lines (3 Esc round trips with sound, no bank file left, the GPU process under 1500 MB after
+  each, 6 reloads). Two runs before that one failed only for the worktree: wasmtime does not
+  follow the junctions `oracle/`, `re/` and `cardata/` out of its folders; browser.sh now gives
+  their own folders too.
+- `run_all.sh --quick` (1 h 16 min): physics 4, fresh 63, csp 45, sound 4, render 18, gui 29,
+  python 1, replays 6, browser 15, shaders 4, launcher 1, dumps 6: all IDENTICAL. Two areas
+  needed a fix first, neither in the game:
+  - ai_page: its page `frameProof` ERROR'd after 120 s: W1's hang guard in `check.mjs` had
+    bounded every page answer, also a `--script` that takes minutes. Now that limit is the
+    run's `--timeout` outside a flow (120 s or the step's own in a flow): 9 of 9 IDENTICAL on
+    run_all's retry.
+  - net: the wasm way could not open `re/gold/net` through the worktree's junction
+    (tools/net_gold/check.sh, as browser.sh): the area alone afterwards, 16 of 16 IDENTICAL.
+
+The web zip: no file is new or renamed (the site's allowlist does not change); `sound.js` and
+the wasm changed.
 
 ## How it was driven
 
