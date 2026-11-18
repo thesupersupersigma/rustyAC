@@ -188,6 +188,7 @@ marker now with `grep -rn "shortcuts.md #N" crates`.
 | 52 | `crates/rustyac-render/src/yebis.rs:2243` | a flat camera's shimmer without CA isn't ported, drawn with CA; port it if a filter needs it | unreachable | as #51. |
 | 53 | `crates/rustyac-render/src/yebis_cb.rs:1657` | the 3x3 program is not ported, the 7-tap one stands in until it is | unreachable | as #51. |
 | 54 | `crates/rustyac-render/src/yebis_heat.rs:155` | msvcr120's qsort is not stable, only particles at the same depth could come out in another order | ported (S2b) | `rustyac_math::qsort`, the DLL's algorithm; tested against the DLL with ties. |
+| 55 | `crates/rustyac-physics/src/tyre/vanilla_tyre.rs:336` | CSP mode: the `Tyre::reset` detour's own reset for cars with a CSP physics extension is not ported | CSP gap (C3) | at build it leaves the same car memory as the Vanilla reset (csp area, `words vrc_formula_lithium_2023_csp`); later resets of such cars wait for plan.md CSP-8. |
 | T1 | `tools/proofs/dumps.sh:30` | files a drive names (a setup .ini) are not in the key; a changed one shows as a difference | tool limit | stated in place |
 | T2 | `tools/proofs/lib.sh:85` | the port crates an oracle links are not in the key (they change every task, the game's | tool limit | stated in place |
 | T3 | `tools/proofs/lib.sh:183` | gives up waiting after 30 min and starts anyway, the rerun alone catches an ERROR | tool limit | stated in place |

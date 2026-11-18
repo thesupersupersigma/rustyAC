@@ -110,6 +110,9 @@ pub struct VanillaTyre {
     pub tyre_model: Box<dyn TyreModel>,
     /// `explosionTemperature`
     pub explosion_temperature: f32,
+    /// CSP mode only: the static pressure every `Tyre::reset` starts from (CSP's Tyre+0x40c,
+    /// see [`VanillaTyre::reset`]); `None` without CSP.
+    pub csp_reset_pressure: Option<f32>,
     /// `blanketTemperature`
     pub blanket_temperature: f32,
     /// `pressureTemperatureGain`
@@ -217,6 +220,7 @@ impl VanillaTyre {
             flat_spot_k: 0.15,
             tyre_model,
             explosion_temperature: 350.0,
+            csp_reset_pressure: None,
             blanket_temperature: 80.0,
             pressure_temperature_gain: 0.16,
             local_mx: 0.0,
@@ -282,6 +286,16 @@ impl VanillaTyre {
             self.thermal_model.camber_spread_k = value;
         }
         self.compound_defs = tyres.compound_defs;
+        // CSP mode: its Tyre constructor detour (dwrite+0x69de90) reads tyres.ini
+        // [COMPOUND_DEFAULT] INDEX as an int16 (dwrite+0x15fbb20, the parse of csp::parse_int), and
+        // its Tyre::initCompounds detour (dwrite+0x69e2f0) keeps that compound's static pressure,
+        // compound 0's for an index that does not exist
+        self.csp_reset_pressure = crate::csp::enabled().then(|| {
+            let ini = crate::data::ini::IniReader::load(&data_path.join("tyres.ini")).ok();
+            let text = ini.map(|ini| ini.get_string("COMPOUND_DEFAULT", "INDEX")).unwrap_or_default();
+            let default = crate::csp::parse_int(&text, 0) as i16 as i32 as u32 as usize;
+            self.compound_defs.get(default).unwrap_or(&self.compound_defs[0]).pressure_static
+        });
         Ok(())
     }
 
@@ -314,8 +328,17 @@ impl VanillaTyre {
         true
     }
 
-    /// `Tyre::reset` @ 0x140283380
+    /// `Tyre::reset` @ 0x140283380. In CSP mode its detour (dwrite+0x69e8d0) first sets both
+    /// pressures to the default compound's (so a reset, also the one in `setCompound`, never keeps
+    /// another compound's pressure).
     pub fn reset(&mut self, hub: &mut dyn Suspension, car: Option<&dyn TyreCar>) {
+        if let Some(pressure) = self.csp_reset_pressure {
+            // shortcut (CSP gap, shortcuts.md #55): the detour's own reset for cars with a CSP physics extension is not ported
+            // (at build it leaves the same memory: csp area, words vrc_formula_lithium_2023_csp);
+            // port it with the extended tyre data (plan.md CSP-8)
+            self.status.pressure_static = pressure;
+            self.status.pressure_dynamic = pressure;
+        }
         self.status.last_grain = self.status.grain as f32;
         self.status.last_blister = self.status.blister as f32;
         self.status.is_locked = true;

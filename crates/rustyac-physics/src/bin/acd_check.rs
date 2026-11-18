@@ -14,8 +14,10 @@
 //! Nothing is written anywhere: the decrypted bytes only ever exist in memory.
 //!
 //! `--csp`: Custom Shaders Patch mode (car.ini VERSION read as CSP reads it).
+//! `--pressures`: one line per built car, `PRESSURES <data folder>` and each tyre's static and
+//! dynamic pressure bits as the car is built (the csp proof area holds them against CSP's build).
 //!
-//!     acd_check [--cardata <folder>] [--steps N] [--only <car>] [--verbose] [--refused] [--csp]
+//!     acd_check [--cardata <folder>] [--steps N] [--only <car>] [--verbose] [--refused] [--csp] [--pressures]
 
 use std::path::{Path, PathBuf};
 
@@ -32,6 +34,10 @@ fn drive(data: &Path, steps: usize) -> Result<Vec<Vec<u64>>, String> {
     // the game reads car.ini [HEADER] VERSION before the car (CarAvatar::initCommon)
     rustyac_physics::csp::CspFeatures::for_car(data)?;
     let mut car = VanillaCar::new(data, ChassisEnvironment::default(), Box::new(Ground::Flat), 1, CLOCK, ScriptedDevice::default())?;
+    if std::env::args().any(|a| a == "--pressures") {
+        let bits: Vec<String> = car.car.tyres.iter().map(|t| format!("{:08x} {:08x}", t.status.pressure_static.to_bits(), t.status.pressure_dynamic.to_bits())).collect();
+        println!("PRESSURES {} {}", data.display(), bits.join(" "));
+    }
     car.car.autoclutch.use_auto_on_start = true;
     car.car.autoclutch.use_auto_on_change = true;
     car.car.auto_shifter.is_active = true;
