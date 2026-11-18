@@ -22,6 +22,21 @@
 #[path = "../../car_oracle/src/acs.rs"]
 #[allow(dead_code)]
 mod acs;
+// car_oracle's real track (Task C5b): the game's Track, SurfacesManager and collision meshes
+#[path = "../../car_oracle/src/track.rs"]
+#[allow(dead_code)]
+mod track;
+#[path = "../../car_oracle/src/setup_screen.rs"]
+mod setup_screen;
+/// What track.rs takes from car_oracle's game.rs.
+mod game {
+    pub unsafe fn wr<T>(base: *mut u8, offset: usize, value: T) {
+        base.add(offset).cast::<T>().write_unaligned(value);
+    }
+    pub unsafe fn rd<T: Copy>(base: *const u8, offset: usize) -> T {
+        base.add(offset).cast::<T>().read_unaligned()
+    }
+}
 
 use acs::Acs;
 use std::cell::Cell;
@@ -871,11 +886,12 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 
 // ---- the breakpoint log: CSP_ORACLE_BREAK=rva,rva,... (CSP DLL offsets, hex) -----------------
 // each listed instruction gets an int3; a hit logs (step, thread, rva, caller, rcx rdx r8 r9; an rva
-// ending in "d" also the 12 doubles at rdx), puts the byte back,
+// ending in "d" also the 12 doubles at rdx; ending in "g" the ODE geoms at rcx and rdx: 8 qwords from +0
+// and the 3 doubles at the position pointer +0x28), puts the byte back,
 // single-steps it and re-arms. shortcut: another thread passing during that one instruction is not
 // logged, upgrade if a count looks short
 
-static BREAKS: Mutex<Vec<(usize, u8, bool)>> = Mutex::new(Vec::new());
+static BREAKS: Mutex<Vec<(usize, u8, char)>> = Mutex::new(Vec::new());
 static BREAK_LOG: Mutex<String> = Mutex::new(String::new());
 static BREAK_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
 thread_local!(static REARM: Cell<usize> = const { Cell::new(0) });
@@ -884,9 +900,13 @@ unsafe fn arm_breaks(dll: usize) {
     let Ok(list) = std::env::var("CSP_ORACLE_BREAK") else { return };
     let mut breaks = BREAKS.lock().unwrap();
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
-        let (rva, doubles) = rva.trim().strip_suffix('d').map_or((rva.trim(), false), |rva| (rva, true));
+        let rva = rva.trim();
+        let (rva, dump) = match rva.chars().last() {
+            Some(kind @ ('d' | 'g')) => (&rva[..rva.len() - 1], kind),
+            _ => (rva, ' '),
+        };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
-        breaks.push((address, read::<u8>(address), doubles));
+        breaks.push((address, read::<u8>(address), dump));
         let mut old = 0;
         // left writable: hits on two threads must not race a protection change back to read-only
         VirtualProtect(address as *mut c_void, 1, 0x40, &mut old);
@@ -916,8 +936,8 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         *flags &= !0x100;
         return -1; // EXCEPTION_CONTINUE_EXECUTION
     }
-    let (original, doubles) = match BREAKS.lock().unwrap().iter().find(|(address, ..)| *address == at) {
-        Some(&(_, byte, doubles)) if code == 0x8000_0003 => (byte, doubles),
+    let (original, dump) = match BREAKS.lock().unwrap().iter().find(|(address, ..)| *address == at) {
+        Some(&(_, byte, dump)) if code == 0x8000_0003 => (byte, dump),
         _ => return 0,
     };
     let step = BREAK_STEP.load(Ordering::Relaxed);
@@ -925,8 +945,18 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         let caller = read::<usize>(read::<usize>(context + 0x98));
         let [rcx, rdx, r8, r9] = [0x80, 0x88, 0xb8, 0xc0].map(|offset| read::<usize>(context + offset));
         let mut line = format!("{step} {} {:#x} {} {rcx:#x} {rdx:#x} {r8:#x} {r9:#x}", tag_of(GetCurrentThreadId()), at - DLL_BASE.load(Ordering::Relaxed), place(caller));
-        if doubles {
+        if dump == 'd' {
             (0..12).for_each(|i| line.push_str(&format!(" {}", read::<f64>(rdx + i * 8))));
+        }
+        if dump == 'g' {
+            for geom in [rcx, rdx] {
+                line.push_str(" |");
+                (0..8).for_each(|i| line.push_str(&format!(" {:x}", read::<usize>(geom + i * 8))));
+                let pos = read::<usize>(geom + 0x28);
+                if pos != 0 {
+                    (0..3).for_each(|i| line.push_str(&format!(" {}", read::<f64>(pos + i * 8))));
+                }
+            }
         }
         line.push('\n');
         BREAK_LOG.lock().unwrap().push_str(&line);
@@ -1092,7 +1122,10 @@ unsafe fn put<T>(base: *mut u8, offset: usize, value: T) {
 
 /// car_oracle's car load (game.rs `new_engine`, the flat track, `Car::Car`, the box collider),
 /// with the game's own functions, so CSP's patches in them run.
-unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>, count: usize) -> (*mut u8, Vec<*mut u8>) {
+/// `track_folder`: a real track (car_oracle's track.rs, ghost: only the tyres' rays meet it, as in
+/// car_oracle's track runs without --collide) in place of the flat road; `car_root` was prepared
+/// for it (track::prepare_root).
+unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>, count: usize, track_folder: Option<&std::path::Path>) -> (*mut u8, Vec<*mut u8>) {
     std::env::set_current_dir(car_root).expect("the car root can be entered");
     let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
     srand(1);
@@ -1112,30 +1145,6 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
     put(engine, PE_ROAD_TEMPERATURE, 30.0f32);
     println!("PhysicsEngine built");
 
-    // the Track sits in a zeroed TrackAvatar (0x308) at +0xf8 (physicsTrack): CSP's TrackAvatar global
-    // (RVA 0x2820268) is read in the car step for the track's ray cast (+0xf8 vtable +8) and timeLines (+0x120)
-    // shortcut: the rest of the TrackAvatar is zero, upgrade if a physics seam reads more of it
-    let track_avatar = acs.alloc(0x308);
-    let track = track_avatar.add(0xf8);
-    const { assert!(TRACK_SIZE <= 0x308 - 0xf8) };
-    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_CTOR));
-    ctor(track, engine, wstring(acs, "flat"), wstring(acs, ""));
-    let init_ai_spline: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_TRACK_INIT_AI_SPLINE));
-    init_ai_spline(track);
-    // car_oracle's flat road (game.rs track_ray_cast): one surface, the track answers the tyres' rays
-    // itself through a copy of its vtable (RTTI pointer in front) with rayCast and createRayCaster ours
-    let surface = acs.alloc(0xc8);
-    put(surface, 0x90, 1.0f32); // gripMod
-    put(surface, 0x9c, 1u32); // collisionCategory
-    put(surface, 0xa0, 1u8); // isValidTrack
-    SURFACE.store(surface as usize, Ordering::Relaxed);
-    let original = read::<*const usize>(track as usize);
-    let mut table: Vec<usize> = (0..5).map(|i| *original.offset(i - 1)).collect();
-    table[2] = track_ray_cast as *const () as usize;
-    table[4] = track_create_ray_caster as *const () as usize;
-    put(track, 0, Box::leak(table.into_boxed_slice()).as_mut_ptr().add(1));
-    println!("Track built");
-
     if let Some(dll) = csp {
         // CSP's car config reads its RaceManager global (RVA 0x281a270, set by its RaceManager::RaceManager
         // detour) for the lights' session rule: a zeroed RaceManager whose sim (+0x168) and GameObject
@@ -1151,7 +1160,6 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
         let sim = read::<*mut u8>(race_manager as usize + 0x168);
         put(sim, 8, acs.alloc(0x278));
         *((dll + 0x282_0e60) as *mut *mut u8) = sim;
-        *((dll + 0x282_0268) as *mut *mut u8) = track_avatar;
         // the same pre-step reads byte +0x2fb of the object global RVA 0x28213d8 points to (whose first
         // word other code follows to a CarAvatar-sized object, +0x1168 → Car): a zeroed object whose first
         // word is a zeroed 0x12a8 stand-in
@@ -1167,6 +1175,25 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
             put(state, 8 * guid, slot);
         }
         *((dll + 0x282_13d8) as *mut *mut u8) = state;
+        if let Some(folder) = track_folder {
+            // CSP's AI-line detour (dwrite+0x5f2920) builds a lookup grid of the AI line and caches it as
+            // ai_grids\{track}_{layout}_{hash}.bin in its cache folder (the run's own local folder here),
+            // naming it from the track-info global RVA 0x2821430: track (+0x68) and layout (+0x88) wstrings
+            // shortcut: the rest of the track info is zero, upgrade if a physics seam reads more of it
+            let info = acs.alloc(0x200);
+            let name = folder.file_name().expect("the track folder has a name").to_string_lossy();
+            std::ptr::copy_nonoverlapping(wstring(acs, &name), info.add(0x68), 32);
+            std::ptr::copy_nonoverlapping(wstring(acs, ""), info.add(0x88), 32);
+            *((dll + 0x282_1430) as *mut *mut u8) = info;
+        }
+    }
+    // the Track sits in its TrackAvatar (0x308) at +0xf8 (physicsTrack): CSP's TrackAvatar global
+    // (RVA 0x2820268) is read in the car step for the track's ray cast (+0xf8 vtable +8) and timeLines (+0x120)
+    // after the Sim stand-in: CSP's AI-line detour (dwrite+0x5f1d60, reached from AISpline::loadFast)
+    // reads the Sim global's +0x128 (the track's scene: none here, so it reverses nothing)
+    let track_avatar = if let Some(folder) = track_folder { real_track(acs, engine, folder) } else { flat_track(acs, engine) };
+    if let Some(dll) = csp {
+        *((dll + 0x282_0268) as *mut *mut u8) = track_avatar;
     }
     let cars: Vec<*mut u8> = (0..count).map(|guid| build_car(acs, engine, car_name, csp, guid as u32)).collect();
 
@@ -1176,6 +1203,73 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
     std::fs::write("car_words.txt", &words).expect("car_words.txt can be written");
     println!("car memory: {} words, {pointers} pointers, hash {:016x}", CAR_SIZE / 8, fnv(&words));
     (engine, cars)
+}
+
+/// car_oracle's flat road (game.rs track_ray_cast) in a zeroed TrackAvatar: one surface, the track
+/// answers the tyres' rays itself through a copy of its vtable (RTTI pointer in front) with rayCast and
+/// createRayCaster ours.
+/// shortcut: the rest of the TrackAvatar is zero, upgrade if a physics seam reads more of it
+unsafe fn flat_track(acs: &Acs, engine: *mut u8) -> *mut u8 {
+    let track_avatar = acs.alloc(0x308);
+    let track = track_avatar.add(0xf8);
+    const { assert!(TRACK_SIZE <= 0x308 - 0xf8) };
+    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_CTOR));
+    ctor(track, engine, wstring(acs, "flat"), wstring(acs, ""));
+    let init_ai_spline: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_TRACK_INIT_AI_SPLINE));
+    init_ai_spline(track);
+    let surface = acs.alloc(0xc8);
+    put(surface, 0x90, 1.0f32); // gripMod
+    put(surface, 0x9c, 1u32); // collisionCategory
+    put(surface, 0xa0, 1u8); // isValidTrack
+    SURFACE.store(surface as usize, Ordering::Relaxed);
+    let original = read::<*const usize>(track as usize);
+    let mut table: Vec<usize> = (0..5).map(|i| *original.offset(i - 1)).collect();
+    table[2] = track_ray_cast as *const () as usize;
+    table[4] = track_create_ray_caster as *const () as usize;
+    put(track, 0, Box::leak(table.into_boxed_slice()).as_mut_ptr().add(1));
+    println!("Track built");
+    track_avatar
+}
+
+/// A real track as car_oracle's track runs build it (game.rs World::build without --collide): the game's
+/// Track inside a TrackAvatar stand-in with its name, layout and SurfacesManager (track.rs), every mesh
+/// through Track::addSurface with collision category 0 (ghost: only the tyres' rays meet it), the time
+/// lines from the AC_TIME_n nodes, penalties on with two tyres allowed out. The tyres' rays are the game's
+/// own Track::createRayCaster / rayCast.
+/// shortcut: the TrackAvatar's other members are zero (no AI, no timing, no track objects), upgrade if a
+/// physics seam reads them
+unsafe fn real_track(acs: &Acs, engine: *mut u8, folder: &std::path::Path) -> *mut u8 {
+    let plan = track::BuildPlan { in_avatar: true, ..Default::default() };
+    let built = track::GameTrack::build_with(acs, engine, folder, "", true, &plan).unwrap_or_else(|e| stop(2, &format!("the track: {e}")));
+    if !built.surface_mismatches.is_empty() {
+        stop(2, &format!("the game's surfaces differ from the port's: {:?}", built.surface_mismatches));
+    }
+    let place = |name: &str| -> Option<[f32; 3]> {
+        let m = built.rust.helper_nodes.iter().find(|h| h.name == name)?.local.m;
+        Some([m[3][0], m[3][1], m[3][2]])
+    };
+    let add_time_line: extern "C" fn(*mut u8, *const [f32; 3], *const [f32; 3], i32) = std::mem::transmute(acs.va(0x1_4027_8040));
+    let mut lines = 0;
+    while let (Some(left), Some(right)) = (place(&format!("AC_TIME_{lines}_L")), place(&format!("AC_TIME_{lines}_R"))) {
+        add_time_line(built.track, &left, &right, 0);
+        lines += 1;
+    }
+    if let [Some(sl), Some(sr), Some(fl), Some(fr)] = ["AC_AB_START_L", "AC_AB_START_R", "AC_AB_FINISH_L", "AC_AB_FINISH_R"].map(place) {
+        add_time_line(built.track, &sl, &sr, 1);
+        add_time_line(built.track, &fl, &fr, 2);
+        lines += 2;
+    }
+    if let (Some(left), Some(right)) = (place("AC_OPEN_FINISH_L"), place("AC_OPEN_FINISH_R")) {
+        add_time_line(built.track, &left, &right, 0);
+        lines += 1;
+    }
+    assert_eq!(lines, built.rust.time_lines.len(), "the port found other timing lines");
+    put(engine, 0xd4, 1i32); // penaltyMode
+    put(engine, 0xd0, 2i32); // allowedTyresOut
+    println!("Track built: {} ({} meshes, {lines} time lines, ghost)", folder.display(), built.objects.len());
+    let avatar = built.track.sub(track::TA_PHYSICS_TRACK); // the track sits inside the avatar (BuildPlan::in_avatar)
+    Box::leak(Box::new(built));
+    avatar
 }
 
 /// One `Car::Car` on `engine` (physics GUID `guid`) with CSP's per-car set-up around it.
@@ -1376,8 +1470,10 @@ extern "C" fn device_set_engine_rpm(_this: *mut u8, _rpm: f32, _limiter: f32) {}
 /// most, and writes steps.txt: per step and car the hash of the car's words and of its state.
 /// `still`: every record's pedals and wheel zero. `air` (CSP's dll, `track:ambient:road:wind`): per
 /// step CSP's own air density of car 0 against rustyac_physics::csp::air (see AirCheck).
+/// `track`: the real track load_car built (its name): the tape's spawn, armed first lap and the session
+/// start's setup as car_oracle's track runs, and (without CSP) body0.txt, the chassis body after each step.
 #[allow(clippy::too_many_arguments)]
-unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps: usize, still: bool, csp: Option<usize>, air: Option<&str>) {
+unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps: usize, still: bool, csp: Option<usize>, air: Option<&str>, track: Option<(&str, &str)>) {
     let bytes = std::fs::read(ryin).expect("the .ryin file can be read");
     let end = bytes.windows(5).position(|w| w == b"\nend\n").expect("the .ryin file has an end line") + 5;
     let header: BTreeMap<String, String> = std::str::from_utf8(&bytes[..end])
@@ -1394,6 +1490,18 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     let records = &bytes[end..];
     assert_eq!(records.len() % 40, 0, "the .ryin records are not 40 bytes each");
+    let tape_track = header.get("oracle_track_folder").and_then(|f| std::path::Path::new(f).file_name()).map(|n| n.to_string_lossy().into_owned());
+    if tape_track.as_deref() != track.map(|t| t.0) {
+        stop(2, &format!("{ryin}: the tape's track is {tape_track:?}, csp_oracle drives {:?}", track.map(|t| t.0)));
+    }
+    if track.is_some() && cars.len() != 1 {
+        stop(2, "a real track takes one car (its tape's spawn)");
+    }
+    // the tape's spawn: f32 bits, three per vector
+    let vector = |key: &str| -> [f32; 3] {
+        let bits: Vec<u32> = header.get(key).map(|v| v.split(',').map(|w| u32::from_str_radix(w, 16).expect("a spawn word")).collect()).unwrap_or_default();
+        <[u32; 3]>::try_from(bits).unwrap_or_else(|_| stop(2, &format!("{ryin}: {key} is not three words"))).map(f32::from_bits)
+    };
 
     let keyboard = acs.va(0x1_404c_5d50) as *const usize; // KeyboardCarControl's vtable
     let table: Vec<usize> = vec![
@@ -1430,13 +1538,35 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         if header.get("auto_shifter").map(String::as_str) == Some("1") {
             put(car, 0x33e8, 1u8); // autoShifter.isActive
         }
-        // side by side 4 m apart, nose towards +z
-        force_rotation(car, &[0.0, 0.0, -1.0]);
-        force_position(car, &[20.0 * i as f32, 0.0, 0.0], 1);
+        if track.is_some() {
+            if header.get("oracle_armed").map(String::as_str) == Some("1") {
+                put(car, 0x1f8 + 0x80, 1u8); // CarAvatar::armFirstLap (transponder)
+            }
+            force_rotation(car, &vector("oracle_spawn_tail"));
+            force_position(car, &vector("oracle_spawn_position"), 1);
+        } else {
+            // side by side 4 m apart, nose towards +z
+            force_rotation(car, &[0.0, 0.0, -1.0]);
+            force_position(car, &[20.0 * i as f32, 0.0, 0.0], 1);
+        }
         set_damage_level(car, 0.0);
         reset_suspension_damage(car);
-        // shortcut: no session-start setup round trip (car_oracle's session_start_setup), upgrade when
-        // a csp_oracle drive is compared with a car_oracle or rustyAC one
+        if let Some((_, car_name)) = track {
+            // car_oracle's session_start_setup: the default compound (Tyre::setCompound), then the setup screen
+            use rustyac_physics::data::ini::IniReader;
+            let data = std::path::Path::new("content/cars").join(car_name).join("data");
+            let compound = IniReader::load(&data.join("tyres.ini")).expect("the car's tyres.ini").get_int("COMPOUND_DEFAULT", "INDEX").unwrap_or(0);
+            let set_compound: extern "C" fn(*mut u8, i32) -> u8 = std::mem::transmute(acs.va(0x1_4028_34e0));
+            for wheel in 0..4 {
+                set_compound(car.add(0xb28 + wheel * 0x858), compound);
+            }
+            if let Ok(setup) = IniReader::load(&data.join("setup.ini")) {
+                let changes = setup_screen::apply_setup_screen_defaults(car, &setup);
+                println!("session start setup: compound {compound}, {} changes {changes:?}", changes.len());
+            }
+        }
+        // shortcut: no session-start setup round trip on the flat road (car_oracle's session_start_setup),
+        // upgrade when a flat csp_oracle drive is compared with a car_oracle or rustyAC one
     }
 
     let step: extern "C" fn(*mut u8, f32, f64, f64) = std::mem::transmute(acs.va(0x1_4026_4760));
@@ -1444,6 +1574,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     let state = acs.alloc(0x2000);
     let mut pages = HashMap::new();
     let mut lines = String::new();
+    let mut body0 = String::new();
     let count = steps.min(records.len() / 40);
     let mut air = air.map(|spec| AirCheck::new(acs, csp.expect("--air needs CSP"), spec, cars[0]));
     for (i, record) in records.chunks_exact(40).take(count).enumerate() {
@@ -1483,11 +1614,27 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             lines.push_str(&format!(" {:016x} {:016x}", fnv(&car_words), fnv(&state_words)));
         }
         lines.push('\n');
+        if track.is_some() && csp.is_none() {
+            // Vanilla's dxBody (f32): pos +0xc0, q +0x100, lvel +0x110, avel +0x120, as car_oracle's body.post.*
+            let body = read::<usize>(read::<usize>(cars[0] as usize + 0x118) + 0x8);
+            let words = |at: usize, n: usize| (0..n).map(|k| format!(" {:08x}", read::<u32>(body + at + 4 * k))).collect::<String>();
+            body0.push_str(&format!("{i}{}{}{}{}\n", words(0xc0, 3), words(0x100, 4), words(0x110, 3), words(0x120, 3)));
+        }
         if (i + 1) % 2000 == 0 {
             println!("step {}: {}", i + 1, lines.lines().last().unwrap_or(""));
         }
     }
     std::fs::write("steps.txt", &lines).expect("steps.txt can be written");
+    if let Some(dll) = csp {
+        // after the drive: which ray path the tyres took (docs/csp/core.md, switches): Embree when this byte is 1, which
+        // CSP sets from ODE_BATCH_RAYCAST=0 in general.ini or from the forcing flag
+        let flags = read::<usize>(dll + 0x282_1078);
+        let forcing = if flags == 0 { "no flags object".to_string() } else { read::<u8>(flags + 0x16).to_string() };
+        println!("Embree switch {} (BYTE3 of +0x28031fc, set when ODE_BATCH_RAYCAST is 0), forcing flag [+0x2821078]+0x16: {forcing}", read::<u8>(dll + 0x280_31ff));
+    }
+    if !body0.is_empty() {
+        std::fs::write("body0.txt", &body0).expect("body0.txt can be written");
+    }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     if !BREAKS.lock().unwrap().is_empty() {
         std::fs::write("breaks.txt", &*BREAK_LOG.lock().unwrap()).expect("breaks.txt can be written");
@@ -1872,6 +2019,13 @@ fn main() {
     });
     // --still: zero pedals and wheel; --air track:ambient:road:wind: CSP's air density each step (part C)
     let still = arguments.iter().position(|a| a == "--still").map(|i| arguments.remove(i)).is_some();
+    // --track <folder>: the car on that real track (Task C5b, car_oracle's track.rs), ghost, in place of the flat road
+    let track_folder = arguments.iter().position(|a| a == "--track").map(|i| {
+        arguments.remove(i);
+        std::path::PathBuf::from(arguments.remove(i))
+    });
+    let track_name = track_folder.as_ref().map(|f| f.file_name().expect("the track folder has a name").to_string_lossy().into_owned());
+    let drive_track = track_name.as_deref().zip(car_name.as_deref());
     let air_spec = arguments.iter().position(|a| a == "--air").map(|i| {
         arguments.remove(i);
         arguments.remove(i)
@@ -1934,6 +2088,9 @@ fn main() {
             "[PHYSICS_THREADING]\nTHREADS=0\n[FF_EXPERIMENTAL]\nENABLE_GYRO=0\nDAMPER_MIN_LEVEL=0\nDAMPER_GAIN=1\n[LOW_SPEED_FF]\nSPEED_KMH=3\nMIN_VALUE=0.01\n",
         )
         .unwrap();
+        if let Some(folder) = &track_folder {
+            track::prepare_root(std::path::Path::new(&car_root), folder, "").unwrap_or_else(|e| stop(2, &format!("the track's root: {e}")));
+        }
     }
     let track_root = format!("{run}\\track_root");
     if let Some(file) = &surfaces {
@@ -1974,9 +2131,9 @@ fn main() {
         ask("Vanilla", reader);
         let before = snapshot(base);
         if let (Some(car), true) = (&car_name, vanilla) {
-            let (engine, cars) = load_car(&acs, car, &car_root, None, cars);
+            let (engine, cars) = load_car(&acs, car, &car_root, None, cars, track_folder.as_deref());
             if let Some(tape) = &drive_tape {
-                drive(&acs, engine, &cars, tape, steps, still, None, None);
+                drive(&acs, engine, &cars, tape, steps, still, None, None, drive_track);
             }
             stop(0, "end of the run");
         }
@@ -2039,10 +2196,10 @@ fn main() {
             first_job();
             println!("CSP worker count {} set to {workers}", read::<u32>(dll + 0x267_b338));
             *((dll + 0x267_b338) as *mut u32) = workers as u32;
-            let (engine, cars) = load_car(&acs, car, &car_root, Some(dll), cars);
+            let (engine, cars) = load_car(&acs, car, &car_root, Some(dll), cars, track_folder.as_deref());
             checkpoint("car", &before, &functions);
             if let Some(tape) = &drive_tape {
-                drive(&acs, engine, &cars, tape, steps, still, Some(dll as usize), air_spec.as_deref());
+                drive(&acs, engine, &cars, tape, steps, still, Some(dll as usize), air_spec.as_deref(), drive_track);
                 checkpoint("drive", &before, &functions);
             }
             stop(0, "end of the run");

@@ -43,6 +43,7 @@ mod collide;
 mod game;
 mod record;
 mod scenario;
+mod setup_screen;
 mod sites;
 mod track;
 mod track_driver;
@@ -1494,7 +1495,7 @@ fn rays(args: &Args) -> Result<(), String> {
         }
         None => None,
     };
-    let plan = track::BuildPlan { space0_every: args.space0, late_from };
+    let plan = track::BuildPlan { space0_every: args.space0, late_from, in_avatar: false };
     let (report, ok) = track::rays(&acs, engine, &folder, &args.layout, args.count, args.seed, &plan)?;
     let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let path = track::results_path(&repo, &name, &args.layout, &plan);

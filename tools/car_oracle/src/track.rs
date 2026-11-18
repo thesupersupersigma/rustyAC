@@ -35,6 +35,8 @@ const TRACK_AVATAR_SIZE: usize = 0x308;
 const TA_NAME: usize = 0x10;
 const TA_CONFIG: usize = 0xa0;
 const TA_SURFACES_MANAGER: usize = 0x250;
+pub const TA_PHYSICS_TRACK: usize = 0xf8;
+const _: () = assert!(TA_PHYSICS_TRACK + TRACK_SIZE <= TA_SURFACES_MANAGER);
 pub const SURFACE_SIZE: usize = 0xc8;
 const SD_WAV_PITCH_SPEED: usize = 0x80;
 const SD_GRIP_MOD: usize = 0x90;
@@ -242,6 +244,10 @@ pub struct BuildPlan {
     pub space0_every: usize,
     /// The meshes from this index on are added after a first ray was cast.
     pub late_from: Option<usize>,
+    /// The `Track` is built inside its `TrackAvatar` at +0xf8 (physicsTrack) as in the game, for
+    /// code that reaches the track through the avatar (csp_oracle); car_oracle's own runs keep the
+    /// two apart. Not a build of its own: [`BuildPlan::active`] ignores it.
+    pub in_avatar: bool,
 }
 
 impl BuildPlan {
@@ -319,12 +325,13 @@ impl GameTrack {
         }
         let started = std::time::Instant::now();
         unsafe {
-            let track = acs.alloc(TRACK_SIZE);
+            let in_avatar = if plan.in_avatar { acs.alloc(TRACK_AVATAR_SIZE) } else { std::ptr::null_mut() };
+            let track = if plan.in_avatar { in_avatar.add(TA_PHYSICS_TRACK) } else { acs.alloc(TRACK_SIZE) };
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_CTOR));
             ctor(track, engine, wstring(acs, &rust.name), wstring(acs, layout));
 
             // a TrackAvatar of which only the name, the layout and the surfaces exist
-            let avatar = acs.alloc(TRACK_AVATAR_SIZE);
+            let avatar = if plan.in_avatar { in_avatar } else { acs.alloc(TRACK_AVATAR_SIZE) };
             wstring_at(acs, avatar.add(TA_NAME), &rust.name);
             wstring_at(acs, avatar.add(TA_CONFIG), layout);
             let manager_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SURFACES_MANAGER_CTOR));
