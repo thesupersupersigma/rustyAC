@@ -24,7 +24,7 @@ need re/csp/fakeac/dwrite.dll "the AC folder with CSP, a junction made by Task C
 # the cars CSP makes loadable (docs/csp/content_needs.md, acd_check), then three plain cars
 extended="bdc_streetspec_350z_v4 bdc_streetspec_ae86_v4 bdc_streetspec_altezza_v4 bdc_streetspec_aristo_v4
 bdc_streetspec_e36_v4 bdc_streetspec_miata_v4 bdc_streetspec_r32_v4 bdc_streetspec_rx7_v4 bdc_streetspec_s13_v4
-bdc_streetspec_s14_v4 rss_formula_2010 rss_formula_hybrid_2026 rss_formula_rss_3_v6_2026 vrc_formula_lithium_2023_csp"
+bdc_streetspec_s14_v4 rss_formula_2010 rss_formula_hybrid_2026 rss_formula_rss_3_v6 rss_formula_rss_3_v6_2026 vrc_formula_lithium_2023_csp"
 plain="ks_ferrari_f2004 bmw_m3_e30 bmw_z4_gt3"
 still_refused="urd_darche_992_23 vrc_formula_alpha_2025_csp vrc_formula_alpha_2026_csp vrc_formula_beta_2024_csp"
 layouts="ks_barcelona/layout_moto_fa_2026 ks_red_bull_ring/layout_gp_fa_2026 ks_silverstone/gp_fa_2026
