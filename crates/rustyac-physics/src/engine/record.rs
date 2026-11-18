@@ -630,8 +630,13 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
     };
     let (mut track, _report) = crate::track::load_track(&folder, layout)?;
     if let Some(ai_folder) = recording.get("ai_folder") {
-        // Task 27: the run had another fast lane (a line of an old version)
-        for message in track.replace_ai_line(Path::new(ai_folder))? {
+        // Task 27: the run had another fast lane (a line of an old version), kept in the repository
+        // that made the recording: on another machine, the same folder in this one (cardata's parent)
+        let ai_folder = match paths.cardata.parent() {
+            Some(repo) if !Path::new(ai_folder).is_dir() => relocated(ai_folder, repo).unwrap_or_else(|| PathBuf::from(ai_folder)),
+            _ => PathBuf::from(ai_folder),
+        };
+        for message in track.replace_ai_line(&ai_folder)? {
             eprintln!("{message}");
         }
     }
@@ -640,6 +645,20 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
         track.init_ai()?;
     }
     Ok(Arc::new(track))
+}
+
+/// A folder another machine wrote down (either kind of slash), inside `repo`: the longest tail
+/// of its path that is a folder there.
+fn relocated(recorded: &str, repo: &Path) -> Option<PathBuf> {
+    let parts: Vec<&str> = recorded.split(['/', '\\']).filter(|part| !part.is_empty() && !part.contains(':')).collect();
+    (0..parts.len()).map(|first| parts[first..].iter().fold(repo.to_path_buf(), |path, part| path.join(part))).find(|path| path.is_dir())
+}
+
+#[test]
+fn relocated_finds_the_tail_inside_the_repository() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_eq!(relocated(r"D:\elsewhere\rustyAC\crates\rustyac-physics\src", &repo), Some(repo.join("crates").join("rustyac-physics").join("src")));
+    assert_eq!(relocated("/home/x/rustyAC/crates/no_such_folder", &repo), None);
 }
 
 impl ReplayWorld {
