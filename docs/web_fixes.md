@@ -19,9 +19,11 @@ fixed. All runs are headless Chrome on this PC (Radeon Pro 5500M through Vulkan,
   `roundtrip_flow.py` (3 trips, 3 + 3 reloads) through `roundtrip_verdicts.mjs`: 4 lines, all
   IDENTICAL alone. `web/check.mjs --flow`: every step bounded, a hung page's stack, `reload`,
   `processes`, `may_fail`.
-- Next: problem 3 (step 1's frame-time table per preset, then the cause), problem 4 (top 5 frame
-  costs, cheap wins), step 5 (the missing-features list), step 6 (browser area, wasm clippy,
-  rebase on master).
+- Done (steps 3 to 5): problem 3 measured and not reproduced (Low cheaper than High here);
+  problem 4's top costs, two cheap wins (bind groups kept, the call log's arguments) with the
+  frame and kgl log proven the same, before / after; the missing-features list.
+- Next: step 6: rebase `web` on `master`, rebuild, clippy (native rustyac-render and both wasm
+  targets), the browser area, `run_all.sh --quick` (rustyac-render is shared), "ready to merge".
 - This PC crashed (a blue screen) with a page run and a wasm clippy at once: run them one at a time.
 
 ## How it was driven
@@ -177,6 +179,35 @@ After: bind groups are 17 % of Full's main thread (from 27 %).
 | wasm-to-JS crossings for every WebGPU call | fewer calls: state set only when it changes between draws (`set_pipeline`, `set_vertex_buffer`, `set_viewport`), or render bundles for the static scene | a session |
 | the sound bridge (3.6 to 4.9 ms a frame) | the batch is text parsed in JavaScript and FMOD's embind objects per call; a binary batch, and FMOD's mixer on the worklet's thread (a cross-origin-isolated page: COOP/COEP headers, which the site's nginx must send) | a session, plus the site's headers |
 | `Kgl::record` and `Scene::render` | the scene walk itself (AC's own order is kept for the call log) | not cheap: the same code as the desktop |
+
+## What the browser cannot do yet (step 5; for W2, nothing built here)
+
+Checked in the page (this branch, F2004 at Spa and the launcher's BMW M3 at Laguna Seca):
+**the setup screen is there**: the wrench in AC's ESC menu opens it, in a drive started from
+the menu and from AC's launcher (Setup I/O, Gears, Tyres, the car's status, Load, Reset To
+Default, Delete, Save). If Super sees none on rustyac.com, the site runs an older build, or the
+drive was one where AC greys the wrench (out of the pits): to be looked at with him. What was
+not shown working is below.
+
+| what (desktop has it) | in the browser | what it would take | size |
+|---|---|---|---|
+| saving a setup by name | in one run the typed name did not show in "Save current setup as" and no setup appeared in the list (keys reach the GUI: `gui_char`); not proven either way | a page run that types into the field and saves; then that the file reaches the player's documents (`setups_dir` = the page's Documents `setups`) and survives a reload (the launcher's documents snapshot) | small (a session with the fix) |
+| the setup screen's presets page, the online fixed setup | not done on the desktop either (Task 31) | the port first (desktop), then the page | a session |
+| AC replays: record, save, load, watch (`.acreplay`) | none: the page records no replay (crates/rustyac-web/src/full.rs:143) | the replay recorder and player are in rustyac-game; the page needs the frame loop's replay mode and somewhere to keep files (OPFS) | 2 sessions |
+| post-processing (YEBIS) and the saturation key | not in the page (README) | YEBIS's shaders on WebGPU: the DXBC translation exists (rustyac-dxbc), the passes and their targets do not | 3+ sessions |
+| Python apps | not made in the page: they need the player's python33.dll | a Python in wasm (and the game's API across it) | large, several sessions |
+| apps fed by the physics thread or Direct3D 11 counters: telemetry, setupdebug, volumes, ffb, eyes, gamestats, rstats | hidden (`PAGE_HIDDEN_APPS`, full.rs:108) | each its own: the page's physics feed for telemetry/setupdebug (small each); gamestats/rstats need the page's clock (shortcuts.md #10, #14) | 1 session for the lot |
+| F8 screenshots | the page reads no picture back | a `mapAsync` read of the frame and a download | small |
+| the benchmark | the theme says "not available in the browser version yet" (web/theme_glue.js:307) | the benchmark's replay and timing: after replays | 1 session after replays |
+| saving `acos.ini`, `gameplay.ini`, `exposure.ini`, `last.ini` on exit | not saved (README) | the same as the apps' shutdown files (`shutdown_files`, Task 47d) | small |
+| F5's keys-and-orbit camera | not in the page (README) | the free camera's key input in the page's loop | small |
+| AC's two sound plug-ins, track sound occluders, online and replay sound states | left out (FMOD's HTML5 build runs no plug-in from a bank) | needs FMOD's HTML5 build to; occluders and states are the page's work | 1 session for what we can do |
+| font hinting, CJK fonts | none (README; shortcuts.md #49) | a hinting rasteriser in ttf.rs, CJK fonts from the player's Windows fonts (the page has none) | 1 session |
+| pit strategy (online) | not checked in this task | a page run on a local server copy with the strategy page | check: small |
+| Special Events sorted by name, an opponent car that will not load ends the join | as the README says | small each | small |
+
+Hardware the browser cannot reach at all (VR, TrackIR, triple screens' windows, Steam) is
+left out of the list.
 
 ## Problem 1: back to the launcher hangs
 
