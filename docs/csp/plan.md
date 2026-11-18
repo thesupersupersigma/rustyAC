@@ -16,12 +16,18 @@ Decisions that follow from the map (a short list for the owner):
    per-car state in our own modules. What matters is the behaviour behind each seam.
 2. **One exe, a run-time switch** (brainstorm 1.9a): every CSP behaviour is an option under a master
    `--csp`; CSP off stays Vanilla and bit-exact. Physics options are written into recordings.
-3. **Prove statistically, not bit-exactly.** CSP replaces ODE with its own double-precision build
-   (libccd, threads); there will be no bit-exact oracle for CSP physics. Acceptance is per-quantity
-   tolerances against recordings. Pure functions (air density, config expansion, parse rules) can be
-   exact.
-4. Closed parts are out of scope: the VRC cars' physics scripts (scrambled inside `data.acd`),
-   `urd_darche_992_23` (encrypted), obfuscated `patch.lua` / `user.lua`.
+3. **Superseded (2026-11-17): bit-exact by default.** The original text said CSP physics could only
+   be proven statistically. Task C1 showed CSP runs inside our oracle with its patches live
+   (`inprocess.md`), so CSP is proven **bit for bit, like Vanilla**. A part is proven statistically
+   only where CSP's own code makes it unrepeatable even in the real game, with the reason written
+   down. The one known case: multi-island physics on several threads (ODE's shared reorder seed),
+   which is why rustyAC's CSP mode is defined as CSP at a worker count of 0. A part that is simply
+   **not ported yet** (e.g. CSP's double-precision core, CSP-6) is not a reason for statistics:
+   whole-car proofs wait for it.
+4. **Superseded (2026-11-17):** the VRC cars' scrambled physics scripts and CSP's obfuscated Lua are
+   **in scope**: with the author's permission, rustyAC may decrypt the player's own files in memory at
+   run time (never written anywhere) and run the scripts in its own Lua host. Other mod makers'
+   encrypted content (e.g. `urd_darche_992_23`) stays out of scope.
 
 ## 1. The proof method I recommend
 
