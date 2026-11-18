@@ -675,6 +675,46 @@ pub struct CarInfo {
     pub ai_controlled: bool,
 }
 
+impl CarInfo {
+    /// `CarAvatar::initCommon` 0x1400d56e0's `guiShortName`: with an `[INFO]` section in car.ini,
+    /// its `SHORT_NAME` when `[HEADER] VERSION` (1 without the key) is above 1, else its
+    /// `SCREEN_NAME`, empty when missing; empty without the section or the file.
+    pub fn gui_short_name(&self) -> String {
+        rustyac_physics::data::ini::IniReader::load(&self.data_path.join("car.ini")).map_or_else(|_| String::new(), |ini| gui_short_name(&ini, rustyac_physics::csp::enabled()))
+    }
+}
+
+fn gui_short_name(ini: &rustyac_physics::data::ini::IniReader, csp: bool) -> String {
+    if !ini.has_section("INFO") {
+        return String::new();
+    }
+    // (a VERSION the game throws on is refused by build_car first)
+    let version = rustyac_physics::csp::car_version(ini, csp).map_or(1, |(version, _)| version as i16);
+    ini.get_string("INFO", if version > 1 { "SHORT_NAME" } else { "SCREEN_NAME" })
+}
+
+#[cfg(test)]
+mod short_name_tests {
+    use super::gui_short_name;
+    use rustyac_physics::data::ini::IniReader;
+
+    fn name(text: &str, csp: bool) -> String {
+        gui_short_name(&IniReader::from_text(std::path::Path::new("car.ini"), text), csp)
+    }
+
+    #[test]
+    fn short_name_only_from_version_2() {
+        let info = "[INFO]\nSCREEN_NAME=Porsche 918 Spyder\nSHORT_NAME=918 Spyder\n";
+        assert_eq!(name(&format!("[HEADER]\nVERSION=1\n{info}"), false), "Porsche 918 Spyder");
+        assert_eq!(name(info, false), "Porsche 918 Spyder");
+        assert_eq!(name(&format!("[HEADER]\nVERSION=2\n{info}"), false), "918 Spyder");
+        assert_eq!(name(&format!("[HEADER]\nVERSION=extended-1\n{info}"), true), "Porsche 918 Spyder");
+        assert_eq!(name(&format!("[HEADER]\nVERSION=extended-2\n{info}"), true), "918 Spyder");
+        assert_eq!(name("[HEADER]\nVERSION=2\n[INFO]\nSCREEN_NAME=X\n", false), "");
+        assert_eq!(name("[HEADER]\nVERSION=2\n", false), "");
+    }
+}
+
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
 /// `CarPhysicsInfo`): from the first step on a turbo's controller has rewritten the boost
 /// these two come from.

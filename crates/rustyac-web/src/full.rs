@@ -154,15 +154,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
                 })
             })
             .collect(),
-        // CarAvatar::initCommon 0x1400d56e0: car.ini [INFO] SHORT_NAME, else the screen name
-        short_names: cars
-            .iter()
-            .map(|car| {
-                let ini = car_ini(car);
-                let key = |name: &str| ini.as_ref().filter(|ini| ini.has_key("INFO", name)).map(|ini| ini.get_string("INFO", name)).filter(|text| !text.is_empty());
-                key("SHORT_NAME").or_else(|| key("SCREEN_NAME")).unwrap_or_else(|| car.name.clone())
-            })
-            .collect(),
+        short_names: cars.iter().map(|car| car.gui_short_name()).collect(),
         setup_snapshot: info.setup.as_deref().cloned(),
         pit_page: info.pit_page.as_deref().cloned(),
         telemetry_car: info.telemetry,

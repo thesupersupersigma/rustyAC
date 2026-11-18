@@ -420,15 +420,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                     })
                 })
                 .collect(),
-            // CarAvatar::initCommon 0x1400d56e0: car.ini [INFO] SHORT_NAME, else the screen name
-            short_names: cars
-                .iter()
-                .map(|car| {
-                    let ini = rustyac_physics::data::ini::IniReader::load(&car.data_path.join("car.ini")).ok();
-                    let key = |name: &str| ini.as_ref().filter(|ini| ini.has_key("INFO", name)).map(|ini| ini.get_string("INFO", name)).filter(|text| !text.is_empty());
-                    key("SHORT_NAME").or_else(|| key("SCREEN_NAME")).unwrap_or_else(|| car.name.clone())
-                })
-                .collect(),
+            short_names: cars.iter().map(|car| car.gui_short_name()).collect(),
             cfg_dir: cfg_dir(options),
             // (not over a recorded drive: its jobs are the recording's)
             setup_snapshot: if options.replay.is_some() { None } else { info.setup.as_deref().cloned() },
