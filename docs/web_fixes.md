@@ -51,6 +51,12 @@ After `web` was rebased on `master` (v1.1.0):
   - net: the wasm way could not open `re/gold/net` through the worktree's junction
     (tools/net_gold/check.sh, as browser.sh): the area alone afterwards, 16 of 16 IDENTICAL.
 
+These ran on `master` at 6d64b98. While they ran, `master` gained 4 commits (CSP docs, the CSP
+oracle's `--drive`, and the car's short name read as `CarAvatar::initCommon`); `web` was
+rebased onto them (38571b0) without conflicts, and not rebuilt or rerun there: the main
+folder's proof run held the shared lock, and a build beside it would break rule 13. A rerun of
+the browser area on the new base is the one check left.
+
 The web zip: no file is new or renamed (the site's allowlist does not change); `sound.js` and
 the wasm changed.
 
