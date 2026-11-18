@@ -131,6 +131,12 @@ does something else on purpose, each with its reason and the report that has the
   `.y` from stack it never writes, so the game's value changes from run to run; the shader never
   reads it. rustyAC uploads 0, and the oracle's game side clears the stack before that call so
   the logs match. (yebis.md, Task Y5c)
+- A track `SurfaceDef` holds stack bytes no code sets (the wav name after its NUL, the padding
+  after its two bools and its last float), and `Car::getPhysicsState` copies them into the state.
+  csp_oracle zeroes them after `getSurfaceDescFromMeshName` (`BuildPlan::clean_surfaces`), so its
+  state hash repeats; nothing reads them. (csp/core.md, Task C5b)
+- With CSP, the oracle starts a drive when CSP's job pool is idle (loading jobs such as AI grids
+  change the car when they land), as the game's loading screen would. (csp/core.md, Task C5b)
 
 ## Online
 

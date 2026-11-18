@@ -2,7 +2,8 @@
 
 Plan row **CSP-3** follow-up ([plan.md](plan.md), [port_c4.md](port_c4.md)). CSP 0.3.2-preview2, build
 4305 ([version.md](version.md)). Every `dwrite+0x…` offset is build 4305's, relative to the DLL's base.
-Nothing is ported in C5a: this page is the map and the plan.
+Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan parts 1 and 2
+([below](#task-c5b-a-real-track-and-three-cars)).
 
 ## Resume here
 
@@ -11,6 +12,12 @@ Nothing is ported in C5a: this page is the map and the plan.
 | 0. release v1.1.1 | done (tag `v1.1.1`) |
 | 1. IDA survey + breakpoint log in `csp_oracle` | done (this page) |
 | 2. plan | done (last section) |
+| C5b 0. stale `cardata/` copy of `rss_formula_rss_3_v6` | done: proof area `csp` says "content changed" |
+| C5b 1. `csp_oracle --track` on Spa, repeatability, ray path | done |
+| C5b 2. three-car origin contacts | done: car 0 of three = one car |
+| C5b plan update | done (Plan) |
+
+Next: plan part 3.
 
 ## The core in one paragraph
 
@@ -20,8 +27,8 @@ ODE in double precision, newer than 0.13.1**, built from CSP's own tree (`C:\Dev
 with trimesh (OPCODE, 16-bit indices, new collider), libccd (internal, cylinder / capsule / convex
 pairs), multithreaded collisions and ODE's threading interface but **no** built-in thread pool: CSP
 runs islands on its own job pool. The car-side objects are `cphys::` wrappers around ODE bodies,
-geoms and joints. Tyre rays go through CSP's raycaster, which uses Intel Embree 3.13.4 only when the
-batch-raycast switch is on; otherwise it is ODE's ray-vs-trimesh.
+geoms and joints. Tyre rays go through CSP's raycaster, which uses Intel Embree 3.13.4 unless
+`ODE_BATCH_RAYCAST=1` asks for ODE's ray-vs-trimesh (the installed default is Embree, C5b).
 
 ## Types (vtables and creators)
 
@@ -72,7 +79,7 @@ part 4 by comparing stage functions with the 0.14–0.16.x sources.
 | `HASH_SPACE_TRACK` (1 / 2 pick two space kinds) | 0 | |
 | `HASH_SPACE_CARS`, `ISOLATE_CARS`, `WHEEL_CAR_CONTACTS` | 0 | |
 | `TRIMESH_OBB_PREFILTER`, `TRIMESH_AABB_TEST` | 1, 8 | copied into ODE's trimesh globals by the core's creator |
-| `ODE_BATCH_RAYCAST` | 0 (forced 1 by a flag at `[+0x2821078]+0x16`) | `BYTE3(+0x28031fc)` |
+| `ODE_BATCH_RAYCAST` | 0 | `BYTE3(+0x28031fc)` = use Embree: set when the key is 0, or always when the flag `[+0x2821078]+0x16` is set (`+0x13fdd06` in `+0x13fcd80`). C5a had this the wrong way round |
 | `INTEL_EMBREE_ROBUST` | 0 | |
 
 The `PHYSICS_EXPERIMENTS` keys are read only for an unlocked session (two config bytes clear and a
@@ -124,7 +131,7 @@ run's `steps.txt`. The steps are byte-identical with and without the log. Result
 | Tasking | Embree's internal tasking system, device created with `threads=1` |
 | Geometry | triangles only; scene quality HIGH; `RTC_SCENE_FLAG_ROBUST` only with `INTEL_EMBREE_ROBUST=1`; meshes added in the order of CSP's mesh list `+0x2885370` |
 | Dispatch | at run time, by CPU: best of SSE2 / AVX / AVX2. CSP also picks its packet width from the device (8 if native RAY8, 4 if RAY4, else 1) |
-| Used | only by the raycaster when `ODE_BATCH_RAYCAST` is 1 (`rtcIntersect1` in `+0x932900`); otherwise ODE's ray |
+| Used | by the raycaster when `BYTE3(+0x28031fc)` is set, i.e. `ODE_BATCH_RAYCAST` is 0, the default (`rtcIntersect1` in `+0x932900`); otherwise ODE's ray (`+0x926270`) |
 
 **Does a hit depend on the CPU?** Not measured. The AVX2 kernels use FMA and AVX traverses BVH8
 where SSE2 uses BVH4, so the last bits of a hit distance, and a tie between two triangles, can
@@ -139,7 +146,8 @@ tasking), `threads=1`, quality HIGH, robust off, same geometry order, float vert
 track mesh exactly as CSP converts them. Cost: a C++ build (CMake, MSVC) inside the tools, and no
 browser build (Embree is SIMD C++; the browser keeps the ODE ray path). A Rust port of a HIGH-quality
 SAH build with spatial splits, bit-exact, is several sessions on its own and is not worth it while
-the default path does not use Embree. Do it only if part 1 shows Embree is on for the cars we prove.
+the default path does not use Embree. Do it only if part 1 shows Embree is on for the cars we prove:
+**it is** (C5b: every tyre ray of the F2004 and of the extended `rss_formula_rss_3_v6_2026` on Spa).
 
 Other open-source pieces: ODE itself (BSD-3, `rustyac-ode` already has 0.13.1's `dWorldStep`, LCP,
 OPCODE and the box / trimesh colliders in float), libccd (BSD-3, inside ODE: not in `rustyac-ode`),
@@ -155,8 +163,8 @@ linked, so the browser gets them.
   every step at fixed points near the world origin and feed every car's collision callback; one car
   has none. They stay at the origin when the cars are moved away, so they come from geoms that do
   not follow the cars, most likely per-car colliders the oracle's stand-ins leave at their zeroed
-  default. Not proven: part 2 finds each contact geom's owner and what `+0x587cc0` changes. Until
-  then multi-car CSP runs are not a reference.
+  default. **C5b: wrong guess.** The geoms were the cars' own collision meshes, all three left at
+  the world origin because CSP's `Car::forcePosition` never ran (section C5b). Fixed in the oracle.
 
 ## Plan
 
@@ -165,23 +173,24 @@ density: same inputs through CSP's function and the port, every output compared 
 
 | # | Part | Sessions | Proof |
 |---|---|---|---|
-| 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | the run repeats bit-exact; ray path logged |
-| 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | car 0 of three = one car while apart |
+| 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | **done in C5b** |
+| 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
 | 3 | `rustyac-ode` in double next to float (one generic number type or a second module; the float path's results must not move) | 3-4 | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
 | 4 | newer ODE pieces CSP uses: threaded quickstep with reordering and its seed, libccd pairs; find the ODE release | 2-3 | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback | 2-3 | contact lists identical per step |
-| 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension | 2-3 | body states identical after set-up and per step |
-| 8 | tyre rays: ODE ray path (1); Embree linked only if part 1 needs it (2-3) | 1-3 | hit points identical |
+| 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
+| 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total** | **14-23** (14-20 without Embree) | |
+| | **Total left after C5b** | **15-22** (C5a: 14-23 with parts 1-2 and Embree optional) | |
 
 Later, not counted: COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
 
 ### Decisions
 
-- Port ODE, link Embree (only if needed). ODE runs in the browser; Embree cannot.
+- Port ODE, link Embree (needed: C5b found it on for every car). ODE runs in the browser; Embree
+  cannot, so the browser's CSP mode takes ODE's ray and is not bit-exact with the desktop's default.
 - Prove each part in-process against CSP's own function before the whole car: a whole-car diff
   without them only says "different".
 - Proofs on this PC only until a part shows no CPU dependence (Embree, FMA).
@@ -194,4 +203,53 @@ hash spaces (all off or unused for stock cars by default).
   makes the thread count vary run to run; part 5 must show the result does not depend on it.
 - The float-to-double split in `rustyac-ode` could move the float path's last bits; part 3 guards
   with the existing proofs.
-- Multi-car CSP references wait for part 2.
+- CSP's loading jobs change the car's physics when they land (C5b). Which value they feed is not
+  known yet; part 7 finds it.
+
+## Task C5b: a real track and three cars
+
+### Step 0: a stale `cardata/` copy
+
+`rss_formula_rss_3_v6` was reinstalled (2026-11-17) and is no longer a CSP car (`car.ini` `VERSION=1`,
+was `extended-1`); the git-ignored `cardata/` copy was the old one, so two `csp` cases said DIFFERENT.
+The copy was remade the way it was made (`python tools/acd_extract.py --car <AC>/content/cars/<car>
+--out cardata/<car>`) and the car moved to the area's plain list. The area now asks `acd_check
+--only <car>` first and reports `SKIPPED | content changed: <car>, refresh cardata/` instead of
+DIFFERENT when the install no longer matches the copy.
+
+### Part 1: `csp_oracle --track <folder>`
+
+`csp_oracle ... --track <AC>/content/tracks/spa --drive oracle/game/track_spa_lap.ryin` builds the
+track with car_oracle's builder (`tools/car_oracle/src/track.rs`: the game's own `Track`,
+`SurfacesManager` and `Track::addSurface` for all 455 physics meshes, ghost as the tape, the three
+timing lines) and drives from the tape's spawn with car_oracle's session start setup (tyre compound,
+setup screen defaults). Visuals are not loaded. What CSP needed around it:
+
+| Need | Where | Stand-in |
+|---|---|---|
+| the `Track` inside its `TrackAvatar` at +0xf8, the avatar in the Sim global `+0x2820268` | CSP reaches the track through the avatar | `BuildPlan::in_avatar` |
+| the Sim global `+0x2820e60` set before the track is built | AI-line detour `+0x5f1d60` (spline reversal check) reads Sim+0x128 | track built after the stand-ins; zeroed Sim: no reversal |
+| track info global `+0x2821430` (+0x68 track name, +0x88 layout) | AI grid cache name in `+0x5f2920` | 0x200 zero block with the two strings |
+| `Car::forcePosition` | CSP's hook `+0x58d7d0` teleports at once only off CSP's main thread (`+0x26bada8`, the loading thread); on it the call is queued (`+0x2814d78`) for its `PhysicsAvatar::stepCommandQueue` hook `+0x676470` | the oracle steps on its own physics thread, set up as CSP's `+0x67d6a0` does (FTZ+DAZ, `+0x2814e50`, `+0x67d8a0`), and runs that queue before each step |
+| CSP's job pool (workers `+0x572660`, jobs queued or running at pool+696) builds AI grids and AI payloads after loading; when they land the car's tyres change | | the drive starts when every pool is idle (about 250 ms), as the game's loading screen would wait |
+| `SurfaceDef` bytes no code sets (wav name after its NUL, padding) differ run to run | copied into the physics state | `BuildPlan::clean_surfaces` zeroes them |
+| one physics state buffer per car | CSP's `getPhysicsState` hook `+0x590220` smooths wheel speeds against the buffer's old contents | |
+
+Results (F2004, Spa, 60 s, 20001 steps): two CSP runs at workers 0 give the same `steps.txt` (car
+and physics state, steps hash `53ce0e8f5ddf5716`). With `--vanilla` the chassis body matches
+car_oracle's own game recording of `spa_lap` in 20001 of 20001 steps. Before the pool wait two CSP
+runs split at a random step (35-51 with Embree, 7113 with ODE's ray): the jobs' timing.
+
+**Ray path:** the installed `general.ini` has `ODE_BATCH_RAYCAST=0`, so `BYTE3(+0x28031fc)` = 1 (the
+forcing flag is 0). Every tyre ray of the F2004 and of the extended `rss_formula_rss_3_v6_2026`
+(4 per step, `Tyre::step` → `+0x92b970` → `+0x932900`) goes through Embree; ODE's ray `+0x926270`
+runs once at set-up. With `ODE_BATCH_RAYCAST=1` in the run's `general.ini` the switch is 0 and the
+rays take ODE.
+
+### Part 2: the origin contacts
+
+They were the cars' own collision meshes: under CSP `Car::forcePosition` was queued on the main
+thread and never ran, so all three cars sat at the world origin inside each other (C5a's runs
+too). With the physics thread the cars start at x = 0 / 20 / 40, no contact batch or `+0x587cc0`
+call is left, and car 0 of three equals one car in car words and physics state for 2000 of 2000
+steps (`car_random.ryin`, workers 0), CSP and Vanilla alike.
