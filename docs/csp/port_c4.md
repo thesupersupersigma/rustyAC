@@ -204,3 +204,8 @@ from the type count and rustyAC's own ODE port (`rustyac-ode`, 9,400 lines, floa
 | Embree tyre rays (open-source Embree at CSP's version: BVH build and ray-triangle as built, `INTEL_EMBREE_ROBUST=0`) over a real track's mesh | 2-3 |
 | `csp_oracle` on a real track (CSP's track config stand-in) and the whole-car rows | 1-2 |
 | **Total** | **9-13** |
+
+**Revised in C5a ([core.md](core.md)): 14-23 sessions** (14-20 without Embree). The survey found a
+newer ODE than 0.13.1 (threaded quickstep, libccd) and CSP's own collision layer, and that the tyre
+rays use Embree only when `ODE_BATCH_RAYCAST` is 1, not 0 as written above; open questions 2 and 3
+are answered there.
