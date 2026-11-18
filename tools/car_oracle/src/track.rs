@@ -248,6 +248,10 @@ pub struct BuildPlan {
     /// code that reaches the track through the avatar (csp_oracle); car_oracle's own runs keep the
     /// two apart. Not a build of its own: [`BuildPlan::active`] ignores it.
     pub in_avatar: bool,
+    /// Zero the bytes of each `SurfaceDef` no code sets: the wav name after its NUL and the padding
+    /// after the two bools and the last float. getSurfaceDescFromMeshName copies them from the
+    /// loader's stack, and Car::getPhysicsState copies them into the state (csp_oracle hashes it).
+    pub clean_surfaces: bool,
 }
 
 impl BuildPlan {
@@ -350,6 +354,12 @@ impl GameTrack {
                 // the callee frees its buffer)
                 surface.write_bytes(0, SURFACE_SIZE);
                 get_surface(avatar, surface, wstring(acs, &ours.name));
+                if plan.clean_surfaces {
+                    let end = (0..64).position(|k| rd::<u16>(surface, 2 * k) == 0).map_or(0x80, |k| 2 * k);
+                    for (from, to) in [(end, 0x80), (0xa1, 0xa4), (0xb1, 0xb4), (0xc4, SURFACE_SIZE)] {
+                        surface.add(from).write_bytes(0, to - from);
+                    }
+                }
                 let theirs = read_surface_def(surface);
                 if !same_bits(&theirs, &ours.surface_def) {
                     surface_mismatches.push(format!("{}: game {theirs:?}, port {:?}", ours.name, ours.surface_def));

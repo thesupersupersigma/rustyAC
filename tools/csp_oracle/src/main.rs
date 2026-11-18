@@ -252,6 +252,8 @@ static DLL_SIZE: AtomicUsize = AtomicUsize::new(0);
 static ENTRY_BYTES: OnceLock<[u8; 12]> = OnceLock::new();
 /// Thread ids in the order the host met them: 0 is the main thread, the rest `CreateThread` calls.
 static THREADS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+// CSP's job pools (worker start dwrite+0x572660); +696 counts the jobs queued or running
+static POOLS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static IMPORTS: OnceLock<Vec<(String, &'static AtomicU64)>> = OnceLock::new();
 
 fn host() -> &'static Host {
@@ -268,6 +270,40 @@ fn tag_of(id: u32) -> String {
 /// One line of the run's record, tagged with the thread it happened on.
 fn say(text: &str) {
     println!("{} {text}", tag_of(unsafe { GetCurrentThreadId() }));
+}
+
+/// The game's physics thread, for CSP: CSP tells it from its main thread (the one that loaded it), and
+/// queues calls made on the main thread for it (docs/csp/core.md, C5b). Runs one job at a time while
+/// the caller waits.
+struct PhysicsThread {
+    jobs: std::sync::mpsc::Sender<Job>,
+    done: std::sync::mpsc::Receiver<()>,
+}
+
+struct Job(Box<dyn FnOnce()>);
+// the game's memory is used by one thread at a time: the caller waits for each job
+unsafe impl Send for Job {}
+
+impl PhysicsThread {
+    fn start() -> PhysicsThread {
+        let (jobs, receive) = std::sync::mpsc::channel::<Job>();
+        let (finished, done) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for job in receive {
+                (job.0)();
+                finished.send(()).unwrap();
+            }
+        });
+        PhysicsThread { jobs, done }
+    }
+
+    fn run<'a>(&self, job: impl FnOnce() + 'a) {
+        let job: Box<dyn FnOnce() + 'a> = Box::new(job);
+        // the borrows outlive the job: run waits until it has finished, as a scoped thread does
+        let job: Box<dyn FnOnce()> = unsafe { std::mem::transmute(job) };
+        self.jobs.send(Job(job)).unwrap();
+        self.done.recv().expect("the physics thread finishes its job");
+    }
 }
 
 fn stop(code: u32, why: &str) -> ! {
@@ -521,6 +557,14 @@ unsafe extern "system" fn create_thread(security: *mut c_void, stack: usize, sta
             threads.len() - 1
         };
         say(&format!("CreateThread: T{index} starts at {}", place(start)));
+        if place(start).ends_with("dwrite.dll+0x572660") {
+            // a worker of CSP's job pool: its parameter starts with the pool
+            let pool = *(parameter as *const usize);
+            let mut pools = POOLS.lock().unwrap();
+            if !pools.contains(&pool) {
+                pools.push(pool);
+            }
+        }
         if flags & 4 == 0 {
             ResumeThread(thread);
         }
@@ -887,7 +931,7 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 // ---- the breakpoint log: CSP_ORACLE_BREAK=rva,rva,... (CSP DLL offsets, hex) -----------------
 // each listed instruction gets an int3; a hit logs (step, thread, rva, caller, rcx rdx r8 r9; an rva
 // ending in "d" also the 12 doubles at rdx; ending in "g" the ODE geoms at rcx and rdx: 8 qwords from +0
-// and the 3 doubles at the position pointer +0x28), puts the byte back,
+// and the 3 doubles at the position pointer +0x28, the body's 6 qwords), puts the byte back,
 // single-steps it and re-arms. shortcut: another thread passing during that one instruction is not
 // logged, upgrade if a count looks short
 
@@ -955,6 +999,11 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
                 let pos = read::<usize>(geom + 0x28);
                 if pos != 0 {
                     (0..3).for_each(|i| line.push_str(&format!(" {}", read::<f64>(pos + i * 8))));
+                }
+                let body = read::<usize>(geom + 0x18);
+                if body != 0 {
+                    line.push_str(" body");
+                    (0..6).for_each(|i| line.push_str(&format!(" {:x}", read::<usize>(body + i * 8))));
                 }
             }
         }
@@ -1239,7 +1288,7 @@ unsafe fn flat_track(acs: &Acs, engine: *mut u8) -> *mut u8 {
 /// shortcut: the TrackAvatar's other members are zero (no AI, no timing, no track objects), upgrade if a
 /// physics seam reads them
 unsafe fn real_track(acs: &Acs, engine: *mut u8, folder: &std::path::Path) -> *mut u8 {
-    let plan = track::BuildPlan { in_avatar: true, ..Default::default() };
+    let plan = track::BuildPlan { in_avatar: true, clean_surfaces: true, ..Default::default() };
     let built = track::GameTrack::build_with(acs, engine, folder, "", true, &plan).unwrap_or_else(|e| stop(2, &format!("the track: {e}")));
     if !built.surface_mismatches.is_empty() {
         stop(2, &format!("the game's surfaces differ from the port's: {:?}", built.surface_mismatches));
@@ -1571,7 +1620,9 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
 
     let step: extern "C" fn(*mut u8, f32, f64, f64) = std::mem::transmute(acs.va(0x1_4026_4760));
     let get_physics_state: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(0x1_4027_0d70));
-    let state = acs.alloc(0x2000);
+    // one state per car, as each CarAvatar has: CSP's getPhysicsState hook (0x590220) smooths the wheels'
+    // angular speed against what the buffer held before
+    let states: Vec<*mut u8> = cars.iter().map(|_| acs.alloc(0x2000)).collect();
     let mut pages = HashMap::new();
     let mut lines = String::new();
     let mut body0 = String::new();
@@ -1589,6 +1640,19 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             air.before(i);
         }
         BREAK_STEP.store(i, Ordering::Relaxed);
+        if i == 0 && !BREAKS.lock().unwrap().is_empty() {
+            // names the bodies in the log's geom dumps
+            for (k, &car) in cars.iter().enumerate() {
+                BREAK_LOG.lock().unwrap().push_str(&format!("car {k} at {car:?}, +0x118 {:x}\n", read::<usize>(car as usize + 0x118)));
+            }
+        }
+        if let Some(dll) = csp {
+            // CSP queues calls made on its main thread, Car::forcePosition among them (hook 0x58d7d0),
+            // and runs them in its hook of the game's PhysicsAvatar::stepCommandQueue (0x676470), which the
+            // physics thread calls each step; this oracle has no PhysicsAvatar, so it runs that queue itself
+            let run_queue: extern "C" fn(usize) = std::mem::transmute(dll + 0x15d_1ee0);
+            run_queue(read::<usize>(read::<usize>(dll + 0x281_4d78)));
+        }
         let time = 60_000.0 + (i + 1) as f64 * 3.0;
         step(engine, 0.003, time, time);
         if let Some(dll) = csp {
@@ -1607,8 +1671,13 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             air.after(i);
         }
         lines.push_str(&i.to_string());
-        for &car in cars {
+        for (k, &car) in cars.iter().enumerate() {
+            let state = states[k];
             get_physics_state(car, state);
+            if i == 0 || i + 1 == steps {
+                let at = |n: usize| read::<f32>(state as usize + 0x34 + 4 * n); // worldMatrix's translation
+                println!("step {i}: car {k} at {} {} {}", at(0), at(1), at(2));
+            }
             let (car_words, _) = words_of(car, CAR_SIZE, &mut pages);
             let (state_words, _) = words_of(state, 0xb70, &mut pages);
             lines.push_str(&format!(" {:016x} {:016x}", fnv(&car_words), fnv(&state_words)));
@@ -2187,19 +2256,38 @@ fn main() {
             checkpoint("crash guard", &before, &functions);
             let dll = dll as usize;
             // what CSP's PhysicsDriveThread::run (RVA 0x67d840) does on the game's physics thread before
-            // its loop, done on this one: its one-time set-up (RVA 0x67d6a0) stores the physics thread's
-            // id (dword RVA 0x2814e50) and its first job (RVA 0x67d8a0) clears three state bytes
-            // shortcut: the set-up's thread name, start time and its +122 one-time call on the thread
-            // object are left out, upgrade if a physics seam reads them
-            *((dll + 0x281_4e50) as *mut u32) = GetCurrentThreadId();
-            let first_job: extern "C" fn() = std::mem::transmute(dll + 0x67_d8a0);
-            first_job();
+            // its loop: its one-time set-up (RVA 0x67d6a0) names the thread through RVA 0x15d8e20, which
+            // sets FTZ and DAZ (RVA 0x15d9c70), and stores the thread's id (dword RVA 0x2814e50); its first
+            // job (RVA 0x67d8a0) clears three state bytes
+            // shortcut: the set-up's thread name, priority, start time and its +122 one-time call on the
+            // thread object are left out, upgrade if a physics seam reads them
+            let physics = PhysicsThread::start();
+            physics.run(|| {
+                THREADS.lock().unwrap().push(GetCurrentThreadId());
+                let csr = mxcsr() | 0x8040;
+                std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
+                *((dll + 0x281_4e50) as *mut u32) = GetCurrentThreadId();
+                let first_job: extern "C" fn() = std::mem::transmute(dll + 0x67_d8a0);
+                first_job();
+                say(&format!("physics thread set up, MXCSR {:#06x}", mxcsr()));
+            });
             println!("CSP worker count {} set to {workers}", read::<u32>(dll + 0x267_b338));
             *((dll + 0x267_b338) as *mut u32) = workers as u32;
             let (engine, cars) = load_car(&acs, car, &car_root, Some(dll), cars, track_folder.as_deref());
             checkpoint("car", &before, &functions);
             if let Some(tape) = &drive_tape {
-                drive(&acs, engine, &cars, tape, steps, still, Some(dll as usize), air_spec.as_deref(), drive_track);
+                // CSP's loading jobs (AI grids, AI payloads) run on its job pool and change the car's
+                // physics when they land; the game loads for seconds before a session, so wait for
+                // them as the game would have, not for a clock (worker decrement: dwrite+0x572d50)
+                let since = std::time::Instant::now();
+                while POOLS.lock().unwrap().iter().any(|&pool| read::<i32>(pool + 696) != 0) {
+                    if since.elapsed().as_secs() > 120 {
+                        stop(2, "CSP's job pool is still busy after 120 s");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                say(&format!("CSP's job pools idle after {} ms", since.elapsed().as_millis()));
+                physics.run(|| drive(&acs, engine, &cars, tape, steps, still, Some(dll), air_spec.as_deref(), drive_track));
                 checkpoint("drive", &before, &functions);
             }
             stop(0, "end of the run");
