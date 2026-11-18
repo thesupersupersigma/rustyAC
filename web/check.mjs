@@ -36,7 +36,7 @@
 // physics steps per second and the page's notes as JSON. A self test with `&keys=...` in the
 // address reports its key presses in `selftest.presses`.
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +140,20 @@ let nextId = 1;
 const waiting = new Map();
 const messages = [];
 let fileChooser = null;
+let paused = null;
+
+// Where a hung page's main thread is: its JS stack, paused (null: it does not even pause, so it
+// waits in the browser, not in script).
+async function stackOfHungPage() {
+  paused = null;
+  await Promise.race([send('Debugger.enable'), sleep(5000)]).catch(() => {});
+  await Promise.race([send('Debugger.pause'), sleep(5000)]).catch(() => {});
+  for (let i = 0; i < 50 && !paused; i++) await sleep(100);
+  const stack = paused;
+  await Promise.race([send('Debugger.resume'), sleep(2000)]).catch(() => {});
+  await Promise.race([send('Debugger.disable'), sleep(2000)]).catch(() => {});
+  return stack;
+}
 
 function send(method, params = {}) {
   return new Promise((done, failed) => {
@@ -149,8 +163,15 @@ function send(method, params = {}) {
   });
 }
 
+// A page that answers nothing for this long is hung (a flow step's `timeout` sets its own).
+let answerMs = 120000;
+function answered(promise) {
+  let timer;
+  const hung = new Promise((_, failed) => (timer = setTimeout(() => failed(new Error(`hung: the page did not answer within ${answerMs / 1000} s`)), answerMs)));
+  return Promise.race([promise, hung]).finally(() => clearTimeout(timer));
+}
 async function evaluate(expression) {
-  const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  const result = await answered(send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }));
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
   return result.result.value;
 }
@@ -193,6 +214,12 @@ try {
       else done(message.result);
     } else if (message.method === 'Runtime.consoleAPICalled') {
       messages.push(`${message.params.type}: ${message.params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`);
+    } else if (message.method === 'Page.javascriptDialogOpening') {
+      // (a reload during a drive asks first: the flow's reload means it)
+      messages.push(`dialog: ${message.params.type}`);
+      send('Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
+    } else if (message.method === 'Debugger.paused') {
+      paused = message.params.callFrames.map((f) => `${f.functionName || '(anonymous)'} ${f.url.split('/').pop()}:${f.location.lineNumber + 1}`);
     } else if (message.method === 'Page.fileChooserOpened') {
       fileChooser = message.params;
     } else if (message.method === 'Runtime.exceptionThrown') {
@@ -215,17 +242,38 @@ try {
     let failed = false;
     for (const step of flow) {
       const at = (Date.now() - started) / 1000;
+      // (where a long flow is, as it goes)
+      process.stderr.write(`${at.toFixed(0)} s: ${JSON.stringify(step).slice(0, 100)}\n`);
       try {
+        // (a step's `timeout`: seconds it may take, else the whole run's)
+        answerMs = step.timeout ? step.timeout * 1000 : 120000;
         if (step.until) {
           let now = null;
+          const since = Date.now();
+          const limit = step.timeout ? step.timeout * 1000 : timeout;
           for (;;) {
             await sleep(250);
-            now = await evaluate('window.rustyac ? window.rustyac.state + "|" + (window.rustyac.error || "") : ""').catch(() => '');
+            now = await evaluate('window.rustyac ? window.rustyac.state + "|" + (window.rustyac.error || "") : ""').catch((error) => (String(error.message).startsWith('hung') ? 'hung|' : ''));
             if (now.split('|')[0] === step.until) break;
             if (now.startsWith('error|')) throw new Error(`the page failed: ${now.slice(6)}`);
-            if (Date.now() - started > timeout) throw new Error(`no state ${step.until} within ${timeout / 1000} s (state: ${now})`);
+            if (now.startsWith('hung|') || Date.now() - since > limit) throw new Error(`hung: no state ${step.until} within ${limit / 1000} s (state: ${now})`);
           }
-          report.flow.push({ at, until: step.until });
+          report.flow.push({ at, until: step.until, seconds: (Date.now() - since) / 1000 });
+        } else if (step.reload) {
+          // { reload: true }: the browser's reload button (a drive's "leave the page?" is answered yes)
+          await answered(send('Page.reload', {}));
+          report.flow.push({ at, reload: true });
+        } else if (step.processes) {
+          // { processes: true }: this browser's processes (by its profile folder) and their private
+          // memory in MB, per kind (gpu-process, renderer, ...); Windows only
+          if (process.platform !== 'win32') throw new Error('processes: Windows only');
+          const ps = `Get-CimInstance Win32_Process -Filter "Name like '%chrome%' or Name like '%msedge%'" | Where-Object { $_.CommandLine -like '*${profile.replace(/'/g, "''")}*' } | ForEach-Object { $t = if ($_.CommandLine -match '--type=([a-z-]+)') { $matches[1] } else { 'browser' }; $m = (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).PrivateMemorySize64; "$t $m" }`;
+          const kinds = {};
+          for (const line of execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).trim().split('\n')) {
+            const [kind, bytes] = line.trim().split(' ');
+            if (kind) kinds[kind] = (kinds[kind] || 0) + Math.round(Number(bytes) / 2 ** 20);
+          }
+          report.flow.push({ at, processes: kinds });
         } else if (step.js) {
           report.flow.push({ at, js: step.js.slice(0, 80), value: await evaluate(step.js) });
         } else if (step.pick) {
@@ -239,22 +287,23 @@ try {
           report.flow.push({ at, pick: step.pick });
         } else if (step.cdp) {
           // { cdp: "Input.dispatchKeyEvent", params: {...} }: real (trusted) input, as a keyboard or mouse gives it
-          report.flow.push({ at, cdp: step.cdp, value: await send(step.cdp, step.params || {}) });
+          report.flow.push({ at, cdp: step.cdp, value: await answered(send(step.cdp, step.params || {})) });
         } else if (step.wait) {
           await sleep(step.wait * 1000);
         } else if (step.shot) {
-          const { data } = await send('Page.captureScreenshot', { format: step.shot.toLowerCase().endsWith('.png') ? 'png' : 'jpeg', quality: 80 });
+          const { data } = await answered(send('Page.captureScreenshot', { format: step.shot.toLowerCase().endsWith('.png') ? 'png' : 'jpeg', quality: 80 }));
           mkdirSync(dirname(resolve(step.shot)), { recursive: true });
           writeFileSync(step.shot, Buffer.from(data, 'base64'));
           report.flow.push({ at, shot: step.shot });
         }
       } catch (error) {
-        report.flow.push({ at, failed: String(error.message || error) });
+        const why = String(error.message || error);
+        report.flow.push({ at, failed: why, stack: why.startsWith('hung') ? await stackOfHungPage() : undefined });
         failed = true;
         break;
       }
     }
-    report.console = messages.filter((m) => !m.startsWith('log:')).slice(0, 30);
+    report.console = messages.filter((m) => !m.startsWith('log:')).slice(-40);
     console.log(JSON.stringify(report, null, 2));
     await close(failed ? 1 : 0);
   }
