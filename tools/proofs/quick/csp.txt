@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --quick: every case of the csp area (about 6 min; see csp.sh for the keys)
+.*

@@ -58,7 +58,7 @@ here. Today's keys stay, so `fresh` records nothing again after a move.
 Every program more than one area runs (the four oracles, rustyac.exe, replay_hash, track_survey,
 rustyac-launcher) is built once before any area starts, with 8 jobs, so no area relinks an exe
 another lane is running. Then four lanes run side by side, the areas of a lane one after the other:
-`render gui python yebis_sweep` (the render oracle), `fresh sound replays launcher` (the car oracle and the
+`render gui python yebis_sweep` (the render oracle), `fresh csp sound replays launcher` (the car oracle and the
 other game-side tools), `physics dumps shaders` and `net browser ai_page` (never load the game's
 code); each lane builds with 2 jobs. Each area writes `times.tsv` (seconds per case). A case that
 cannot run is never dropped: the area counts it as skipped with its reason, and the run prints
@@ -79,6 +79,7 @@ are fine: Task P1's full runs).
 |---|---|---|---|
 | physics | `physics.sh` | the saved one-car recordings (`chassis_compare run --dir oracle/car*`) and several-car recordings (`car_oracle multi-check` at 0, 1, 8 threads) | `oracle/` |
 | fresh | `fresh.sh` | the game's recordings (kept, or made when their key is new) against the port: the F2004's scenarios, conditions, 4WD, KERS/ERS, suspensions, contacts, the road under the wheels on every track, the referee's micro drives, race.ini, the several-car runs of `multi_fresh.txt` | AC, `re/gold/fresh/` |
+| csp | `csp.sh` | Custom Shaders Patch mode (Task C3): the game's car with CSP 0.3.2 live and without (`tools/csp_oracle`), word by word, for the 14 cars CSP makes loadable and 3 plain cars; the same cars' Car::Car against the port; which installed cars are refused with and without `--csp`; the six `*_fa_2026` layouts and their `WAV_PITCH=extended-N` | AC, `re/csp/fakeac`, `cardata/` |
 | sound | `sound.sh` | the audio oracle's 18 tapes (game's FMOD calls against the port's), the DSP check, three drives end to end | `oracle/audio*`, `oracle/game` |
 | render | `render.sh` | the 107 frames and sequences of `render_list.txt` (Tasks 20 to 23), call log and pixels | `oracle/audio`, `oracle/render_tapes` |
 | gui | `gui.sh` | the 122 GUI sequences of `gui_list.txt` (Tasks 29 to 34) | `cardata/`, `oracle/t32` |

@@ -18,11 +18,11 @@
 # area builds for itself with 2 jobs a lane (CARGO_BUILD_JOBS), 8 in all.
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-all="physics fresh sound render gui python replays net browser ai_page shaders launcher dumps yebis_sweep"
+all="physics fresh csp sound render gui python replays net browser ai_page shaders launcher dumps yebis_sweep"
 # the lanes, each one area after another, all lanes at once: two lanes load the game's code (the
 # render oracle's and the car oracle's), never two areas of one lane; the others never load it
 # (a render or GUI compare keeps about 1.5 of the 16 threads busy, Task P1)
-lanes="render gui python yebis_sweep|fresh sound replays launcher|physics dumps shaders|net browser ai_page"
+lanes="render gui python yebis_sweep|fresh csp sound replays launcher|physics dumps shaders|net browser ai_page"
 mode=full; tag=; want=; dry=
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -79,7 +79,7 @@ cd "$repo" || exit 2
 built=
 for t in car_oracle chassis_compare render_oracle audio_oracle; do
     case $t in
-        car_oracle) uses="physics fresh replays" ;; chassis_compare) uses="physics fresh" ;;
+        car_oracle) uses="physics fresh csp replays" ;; chassis_compare) uses="physics fresh csp" ;;
         render_oracle) uses="render gui python fresh yebis_sweep" ;; audio_oracle) uses="sound" ;;
     esac
     for u in $uses; do
@@ -94,7 +94,7 @@ case " $areas " in *" fresh "*|*" sound "*|*" replays "*|*" browser "*|*" ai_pag
     echo "building rustyac, replay_hash"
     cargo build --release --locked --quiet -p rustyac-game --bin rustyac --bin replay_hash && built="$built rustyac replay_hash" ;;
 esac
-case " $areas " in *" fresh "*)
+case " $areas " in *" fresh "*|*" csp "*)
     echo "building track_survey"
     cargo build --release --locked --quiet -p rustyac-physics --bin track_survey && built="$built track_survey" ;;
 esac

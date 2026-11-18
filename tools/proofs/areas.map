@@ -45,13 +45,14 @@ tools/proofs/python.sh        python
 tools/proofs/areas*           none
 tools/proofs/lock_crates.py   none
 tools/proofs/same_rec.py      fresh
+tools/proofs/csp*             csp
 re/gold/fresh/*               fresh
 re/gold/net/*                 net
 re/gold/launcher/*            launcher
 
 # the port
-crates/rustyac-physics/*      physics fresh sound replays net browser ai_page dumps
-crates/rustyac-ode/*          physics fresh sound replays net browser ai_page dumps
+crates/rustyac-physics/*      physics fresh csp sound replays net browser ai_page dumps
+crates/rustyac-ode/*          physics fresh csp sound replays net browser ai_page dumps
 crates/rustyac-render/*       render gui shaders python
 crates/rustyac-dxbc/*         render gui shaders python
 crates/rustyac-gui/*          gui python
@@ -66,14 +67,15 @@ server/*                      net
 # rustyac-game: the areas that build rustyac.exe, replay_hash, rustyac-web or rustyac-launcher
 # (render_oracle, net_golden and the shader tools don't build it); chassis_compare also builds
 # dump.rs and input_file.rs as its own (#[path]), so those two ask for physics as well
-crates/rustyac-game/src/dump.rs        physics fresh sound replays browser ai_page launcher dumps
-crates/rustyac-game/src/input_file.rs  physics fresh sound replays browser ai_page launcher dumps
-crates/rustyac-game/*         fresh sound replays browser ai_page launcher dumps
+crates/rustyac-game/src/dump.rs        physics fresh csp sound replays browser ai_page launcher dumps
+crates/rustyac-game/src/input_file.rs  physics fresh csp sound replays browser ai_page launcher dumps
+crates/rustyac-game/*         fresh csp sound replays browser ai_page launcher dumps
 
 # the oracles and checkers
-tools/car_oracle/*            physics fresh sound replays
-tools/chassis_compare/*       physics fresh
+tools/car_oracle/*            physics fresh csp sound replays
+tools/chassis_compare/*       physics fresh csp
 tools/ode_oracle/*            physics
+tools/csp_oracle/*            csp
 tools/tyre_oracle/*           physics
 tools/render_oracle/*         render gui python fresh
 tools/audio_oracle/*          sound
