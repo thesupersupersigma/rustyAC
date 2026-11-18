@@ -37,6 +37,28 @@
 //!     Small worlds with contacts, stepped on both sides (default 1,500 steps). Writes
 //!     `oracle/collide/worlds_results.md`.
 
+// Lints that newer clippy / rustc versions added after this oracle was written; allowed, not
+// fixed, since rewriting an oracle's arithmetic or extern declarations can move its bits (F2).
+#![allow(
+    dead_code,
+    clashing_extern_declarations,
+    clippy::assign_op_pattern,
+    clippy::excessive_precision,
+    clippy::if_same_then_else,
+    clippy::manual_clamp,
+    clippy::manual_is_multiple_of,
+    clippy::missing_transmute_annotations,
+    clippy::needless_late_init,
+    clippy::needless_range_loop,
+    clippy::ptr_eq,
+    clippy::redundant_closure,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::unnecessary_cast,
+    clippy::unnecessary_sort_by,
+    clippy::wrong_self_convention,
+)]
+
 mod acs;
 mod check;
 mod collide;

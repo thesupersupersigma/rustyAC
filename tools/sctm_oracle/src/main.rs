@@ -8,6 +8,13 @@
 //!             [--combined-factor <x>] [--dy-curve <lut>] [--dx-curve <lut>]
 //!             [--dcamber-lut <lut>] [--dcamber-smooth] [--tag <name>]
 
+// Lints that newer clippy / rustc versions added after this oracle was written; allowed, not
+// fixed, since rewriting an oracle's arithmetic or extern declarations can move its bits (F2).
+#![allow(
+    clippy::needless_lifetimes,
+    clippy::redundant_guards,
+)]
+
 mod acs;
 mod ini;
 mod sctm;

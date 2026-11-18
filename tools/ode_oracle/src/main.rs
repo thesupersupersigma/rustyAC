@@ -31,6 +31,15 @@
 //!
 //! Common: [--acs <path to acs.exe>]
 
+// Lints that newer clippy / rustc versions added after this oracle was written; allowed, not
+// fixed, since rewriting an oracle's arithmetic or extern declarations can move its bits (F2).
+#![allow(
+    clippy::manual_is_multiple_of,
+    clippy::needless_range_loop,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::wrong_self_convention,
+)]
+
 #[path = "../../car_oracle/src/acs.rs"]
 #[allow(dead_code)]
 mod acs;
