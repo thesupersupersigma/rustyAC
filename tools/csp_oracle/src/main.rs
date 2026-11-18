@@ -41,6 +41,14 @@ mod game {
     }
 }
 
+/// The repository (acs.rs reads the function table from it).
+pub fn repo_root() -> std::path::PathBuf {
+    // RUSTYAC_REPO: a copy of the repository the exe was not built in (the proof farm, docs/proof_farm.md)
+    std::env::var_os("RUSTYAC_REPO").map(std::path::PathBuf::from).unwrap_or_else(|| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(std::path::Path::parent).expect("the repository folder").to_path_buf()
+    })
+}
+
 use acs::Acs;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
