@@ -7,14 +7,16 @@
 //! that cannot load the DLL (the browser) still gets AC's exact bits.
 //!
 //! **Which path.** `sinf`, `cosf`, `tanf`, `expf`, `logf`, `powf` and `sin` start with
-//! `cmp [__use_fma3_lib], 0`: the runtime sets that flag when the CPU has FMA3 and the OS saves
-//! the AVX state, and `acs.exe` never calls `_set_FMA3_enable`. So on every CPU since about
+//! `cmp [__use_fma3_lib], 0`: the runtime sets that flag at load time from the CPU's FMA bit
+//! (`__fma3_lib_init`: CPUID leaf 1, ECX bit 12), and `acs.exe` never calls `_set_FMA3_enable`. So on every CPU since about
 //! 2013 (Haswell / Piledriver) the game runs the FMA3 versions, and those are what is ported
 //! here. The four inverse functions are compiled C with a single path.
 //!
 //! **Fused multiply-add.** Where the DLL executes `vfmadd…sd` (`…ss`) this file calls
-//! [`f64::mul_add`] ([`f32::mul_add`]), which is one correctly rounded operation on every
-//! target (an instruction where there is one, exact software arithmetic in wasm). Nothing else here may be fused or
+//! [`fma`] ([`fma32`]), one correctly rounded operation on every target: the `libm` crate's,
+//! which runs the instruction where the CPU has one and exact software arithmetic elsewhere.
+//! (Not [`f64::mul_add`]: on a CPU without FMA3 that calls the UCRT's `fma`, which is not
+//! correctly rounded there; docs/proof_farm.md.) Nothing else here may be fused or
 //! reordered: every `a * b + c` written with separate operators is separate in the DLL too.
 //!
 //! **Proof.** `tools/math_proof` runs every one of the 2^32 inputs of each one-argument
@@ -31,8 +33,8 @@ const INF32: u32 = 0x7f80_0000;
 
 /// `vfmadd`: `a * b + c` with one rounding.
 #[inline(always)]
-fn fma(a: f64, b: f64, c: f64) -> f64 {
-    a.mul_add(b, c)
+pub fn fma(a: f64, b: f64, c: f64) -> f64 {
+    libm::fma(a, b, c)
 }
 
 #[inline(always)]
@@ -419,8 +421,8 @@ pub fn expf(x: f32) -> f32 {
 
 /// `vfmadd…ss`: `a * b + c` with one rounding, in single precision.
 #[inline(always)]
-fn fma32(a: f32, b: f32, c: f32) -> f32 {
-    a.mul_add(b, c)
+pub fn fma32(a: f32, b: f32, c: f32) -> f32 {
+    libm::fmaf(a, b, c)
 }
 
 #[inline(always)]

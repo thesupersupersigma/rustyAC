@@ -59,7 +59,7 @@ fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         command: it.next().ok_or_else(usage)?,
         cars: Vec::new(),
-        acs: PathBuf::from(DEFAULT_ACS),
+        acs: std::env::var_os("AC_ROOT").map_or_else(|| PathBuf::from(DEFAULT_ACS), |root| PathBuf::from(root).join("acs.exe")),
         verbose: false,
         n: 2000,
         seed: 1,

@@ -57,7 +57,8 @@ use rustyac_physics::car::{CarControls, ChassisEnvironment, EngineFeed, ForceSou
 use rustyac_physics::vecmath::Vec3f;
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf()
+    // RUSTYAC_REPO: a copy of the repository the exe was not built in (the proof farm, docs/proof_farm.md)
+    std::env::var_os("RUSTYAC_REPO").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf())
 }
 
 /// Systems whose force calls the chassis makes itself.

@@ -58,7 +58,7 @@ pub fn prepare_root(args: &crate::Args, name: &str) -> Result<(), String> {
         return Ok(());
     }
     let ac = args.acs.parent().ok_or("--acs has no folder")?;
-    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("py_apps");
+    let fixtures = crate::repo_root().join("tools/render_oracle/py_apps");
     for (cwd, documents) in [(args.root.clone(), args.root.join("documents/Assetto Corsa")), (port_root(&args.root), port_root(&args.root).join("documents/Assetto Corsa"))] {
         let apps = cwd.join("apps/python");
         let _ = std::fs::remove_dir_all(&apps);

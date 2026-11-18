@@ -67,7 +67,7 @@ fn main() {
     rustyac_physics::csp::set_enabled(args.iter().any(|a| a == "--csp"));
     let steps: usize = value("--steps").and_then(|s| s.parse().ok()).unwrap_or(300);
     let only = value("--only");
-    let cardata = value("--cardata").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata"));
+    let cardata = value("--cardata").map(PathBuf::from).unwrap_or_else(|| std::env::var_os("RUSTYAC_REPO").map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."), PathBuf::from).join("cardata"));
     let Some(root) = rustyac_content::install::ac_root() else {
         eprintln!("NOT TESTED: {}", rustyac_content::install::not_found_hint());
         std::process::exit(2);

@@ -76,7 +76,8 @@ const USAGE: &str = "usage:
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
 
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("the repository root")
+    // RUSTYAC_REPO: a copy of the repository the exe was not built in (the proof farm, docs/proof_farm.md)
+    std::env::var_os("RUSTYAC_REPO").map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."), PathBuf::from).canonicalize().expect("the repository root")
 }
 
 pub struct Args {

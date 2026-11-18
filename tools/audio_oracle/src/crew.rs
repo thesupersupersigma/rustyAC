@@ -216,8 +216,8 @@ impl rustyac_audio::golden::SessionHooks for PortCrew<'_> {
             for i in 0..16 {
                 tyre_matrix[k].m[i / 4][i % 4] = f(0x144 + 0x40 * k + 4 * i);
             }
-            for i in 0..3 {
-                tyre_contact_point[k][i] = f(0x67c + 12 * k + 4 * i);
+            for (i, v) in tyre_contact_point[k].iter_mut().enumerate() {
+                *v = f(0x67c + 12 * k + 4 * i);
             }
         }
         let t = self.spec.seconds;

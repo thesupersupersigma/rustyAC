@@ -59,7 +59,7 @@ fn parse_args() -> Result<Args, String> {
         axle: "front".into(),
         sweep: "all".into(),
         out: PathBuf::from(DEFAULT_OUT),
-        acs: PathBuf::from(DEFAULT_ACS),
+        acs: std::env::var_os("AC_ROOT").map_or_else(|| PathBuf::from(DEFAULT_ACS), |root| PathBuf::from(root).join("acs.exe")),
         speed: 20.0, // TyreTester's default velocity
         u: 1.0,
         pressure_ratio: 0.0,

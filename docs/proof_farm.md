@@ -1,4 +1,4 @@
-# Proof farm (Task F1 spike)
+# Proof farm (Task F1 spike, Task F2)
 
 Can a Windows 10 virtual machine on the home server run the proof areas bit-exact, and how
 fast? The VM has 12 virtual CPUs, 32 GB of memory and no GPU. Its host processor is an Intel
@@ -9,7 +9,14 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 
 - Done: step 1 (part 1), step 2 (part 2: the physics area on the VM, bit-exact; the maths
   checks).
-- Done: step 3 (part 2b, on paper) and step 4 (part 2c: GO with conditions). F1 is finished; F2 next.
+- Done: step 3 (part 2b, on paper) and step 4 (part 2c: GO with conditions). F1 is finished.
+- **F2** (part F2 below): part 1 committed (paths from the environment, the maths path in the
+  cache key, a correctly rounded fma in `pure.rs`), but its quick run is **incomplete**: Claude Code
+  stopped it for low memory after 8 areas (all IDENTICAL); fresh, ai_page, csp, sound, replays and
+  launcher are still to run (`run_all.sh --quick fresh ai_page csp sound replays launcher`, with
+  more memory free). The VM has a share `rustyac-farm` (that folder only) for robocopy; the PC
+  needs the farm account's credential stored once (Super). Resume there, then F2 part 2 step 1
+  (prebuilt programs).
 
 ## Part 1: what the processor changes (from the code)
 
@@ -17,7 +24,8 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 
 `MSVCR120.dll` (12.0.21005.1) holds two bodies for `sinf`, `cosf`, `tanf`, `expf`, `logf`,
 `powf` and `sin` (double). Each one starts with `cmp [__use_fma3_lib], 0`. The runtime sets
-that flag once, at load time, when the processor has FMA3 and the OS saves the AVX state.
+that flag once, at load time, from the processor's FMA bit alone (`__fma3_lib_init`, 0x180081b3c:
+CPUID leaf 1, ECX bit 12; no OSXSAVE or XGETBV check in this build; F2 read it).
 `acs.exe` never calls `_set_FMA3_enable`, so the flag follows the processor.
 
 - **The PC** (i9-9980HK): flag = 1, so the FMA3 bodies run.
@@ -332,3 +340,87 @@ copy/rsync script; (3) the full physics area and session-0 trials of render, gui
 the PC/server split in run_all.sh and the results coming back; (5) one full run on both, fixes.
 
 `C:\rustyac-farm` stays on the VM: 4.3 GB (AC parts 826 MB, the repo copy 275 MB, 12 lane copies 3.3 GB; delete `lanes\` first when space is needed).
+
+## F2 part 1: paths, the maths path in the cache key, the fma
+
+### Paths from the environment
+
+Every oracle reads the repository from `RUSTYAC_REPO` and the game from `AC_ROOT` when they are
+set, and falls back to what it did before (the folder it was built in, Steam's usual place):
+`repo_root()` of `car_oracle`, `chassis_compare`, `audio_oracle`, `ode_oracle`, `render_oracle`
+(canonicalized either way, as before); the default `--acs` of `car_oracle`, `audio_oracle`,
+`ode_oracle`, `tyre_oracle`, `sctm_oracle` (`<AC_ROOT>/acs.exe`); `car_oracle`'s crash-report
+function table; `render_oracle`'s Python test apps and the two track files of `gui_seq_apps`
+(`rustyac_content::install::ac_root()`, which reads `AC_ROOT`); `acd_check`'s default cardata.
+`render_oracle` and `csp_oracle` already took the game from `AC_ROOT` / the working folder, and
+`rustyac.exe` already finds `cardata/` beside the exe and in the working folder first.
+
+lib.sh does **not** set `RUSTYAC_REPO` (on the PC nothing changes); the farm sets it, in the
+Windows form with backslashes that the built-in path had (`C:\rustyac-farm\...`), for each lane's
+copy. The panic messages still carry the build's paths; they are text, not read.
+
+### The maths path in the cache key
+
+`install_key` (and so `salt_of`, every kept result's key, and `dumps.sh`'s key) now ends with
+`maths SSE2` when MSVCR120.dll takes its SSE2 bodies, and with nothing when it takes the FMA3 ones,
+so the PC's keys are the same bytes as before. lib.sh asks the DLL itself, once when an area
+starts: `_set_FMA3_enable(1)` returns 1 only when `__fma3_is_available` is set, which is what
+`__fma3_lib_init` reads from CPUID (python ctypes; an area stops when it cannot tell). The PC says
+FMA3, the VM SSE2.
+
+### `pure.rs`'s fma
+
+`pure::fma` / `pure::fma32` are now the `libm` crate's `fma` / `fmaf` (0.2.16, already in the lock
+files; MIT). On x86-64 it runs `vfmadd` when the CPU has FMA (or FMA4) and musl's exact software
+algorithm otherwise; both are correctly rounded, so they give the same bits. `f64::mul_add` called
+the UCRT's `fma` on a CPU without FMA3, which is wrong on the Westmere (F1).
+
+`math_proof fma 64|32 <in> <out>` runs `pure::fma` / `fma32` on a file of triples;
+`tools/math_proof/fma_check.py` checks them against the exact a*b+c (fractions, rounded to the
+width with ties to even, subnormals and overflow included): F1's 300,000 triples (random, and c
+near -a*b), the same shapes for floats, and the 5,832 triples of 18 special values (signed zeros,
+the smallest subnormal, the largest subnormal, the smallest normal, one, one plus an ulp, the
+largest finite, infinity, NaN). Results in `re/scratch/taskF2/`:
+
+| | maths path | fma64 wrong | fma32 wrong | `math_proof digest` (pure) |
+|---|---|---|---|---|
+| PC | FMA3 (libm: the instruction) | 0 of 305,832 | 0 of 305,832 | same as F1's PC digest |
+| VM | SSE2 (libm: software) | 0 of 305,832 | 0 of 305,832 | **same as the PC, all 11 functions** |
+
+(F1's VM digest differed for `logf` and `sin`.) The checker itself flags 2,099 of 3,000 unfused
+`a*b+c` results, and agrees with the PC's hardware on every special triple. So `RUSTYAC_MATH=pure`
+now gives the PC's bits on the VM, and condition 6 of part 2c is met.
+
+### Checks
+
+**The PC's keys.** The old and the new `install_key`, run side by side on the PC: both
+`a20661e04fa6997a`; the new one with `maths_path=SSE2`: `b46551863648edea`. So the PC's kept results
+keep their keys, and the VM's can never stand in for them. (`fresh`'s recordings are new anyway
+after this part: `salt_of car_oracle` hashes the oracle's own source, which part 1 had to change, as
+every change to `car_oracle` does. The quick run recorded 21 of them again.)
+
+**The quick run** (`run_all.sh --quick`, 10 GB free, so two lanes joined), stopped by Claude Code
+for low memory (`ai_page`'s headless Chrome GPU process held about 8 GB) after these rows:
+
+| area | cases | identical | time |
+|---|---|---|---|
+| physics | 4 | 4 | 4m30s |
+| dumps | 6 | 6 | 4m47s |
+| render | 18 | 18 | 12m08s |
+| shaders | 4 | 4 | 3m22s |
+| net | 16 | 16 | 5m28s |
+| gui | 29 | 29 | 17m05s |
+| python | 1 | 1 | 0m15s |
+| browser | 15 | 15 | 16m08s |
+| fresh | stopped after 50 | 50 | |
+| ai_page | stopped after 2 | 2 | |
+
+csp, sound, replays and launcher did not start. Every verdict so far is IDENTICAL.
+
+Clippy `-D warnings --all-targets`: the workspace (native, wasm32-unknown-unknown, wasm32-wasip1),
+`math_proof`, `audio_oracle` (one old `needless_range_loop` fixed), `chassis_compare`,
+`tyre_oracle`, `render_oracle`: clean. `car_oracle` (66), `ode_oracle` and `sctm_oracle` fail on
+errors that were there before (newer clippy lints such as `manual_is_multiple_of` and
+`redundant_guards`, none on a line F2 changed); left as they are, since rewriting an oracle's
+arithmetic for a lint can move its bits.
+

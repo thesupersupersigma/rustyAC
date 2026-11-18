@@ -77,7 +77,8 @@ fn usage() -> String {
 
 fn repo_root() -> PathBuf {
     // tools/car_oracle -> the repository (no canonicalize: it would turn the path into a \\?\ one)
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf()
+    // RUSTYAC_REPO: a copy of the repository the exe was not built in (the proof farm, docs/proof_farm.md)
+    std::env::var_os("RUSTYAC_REPO").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf())
 }
 
 struct Args {
@@ -180,7 +181,7 @@ fn parse_args() -> Result<Args, String> {
         to: usize::MAX,
         every: 1,
         csv_out: None,
-        acs: PathBuf::from(DEFAULT_ACS),
+        acs: std::env::var_os("AC_ROOT").map_or_else(|| PathBuf::from(DEFAULT_ACS), |root| PathBuf::from(root).join("acs.exe")),
         root: repo.join("re/scratch/car_oracle/root"),
         car: game::DEFAULT_CAR.to_string(),
         verbose: false,

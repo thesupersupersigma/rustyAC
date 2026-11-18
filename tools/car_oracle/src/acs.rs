@@ -85,7 +85,7 @@ static IMAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
 fn function_name(ghidra: usize) -> String {
     static TABLE: std::sync::OnceLock<Vec<(usize, usize, String)>> = std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../re/index/functions.tsv");
+        let path = crate::repo_root().join("re/index/functions.tsv");
         let mut rows = Vec::new();
         if let Ok(text) = std::fs::read_to_string(path) {
             for line in text.lines().skip(1) {

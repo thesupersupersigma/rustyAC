@@ -43,7 +43,8 @@ use rustyac_audio::track::Scene;
 const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\acs.exe";
 
 pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf()
+    // RUSTYAC_REPO: a copy of the repository the exe was not built in (the proof farm, docs/proof_farm.md)
+    std::env::var_os("RUSTYAC_REPO").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf())
 }
 
 pub struct Args {
@@ -99,7 +100,7 @@ fn parse() -> Result<Args, String> {
         out: repo.join("oracle/audio"),
         frames: None,
         no_track: false,
-        acs: PathBuf::from(DEFAULT_ACS),
+        acs: std::env::var_os("AC_ROOT").map_or_else(|| PathBuf::from(DEFAULT_ACS), |root| PathBuf::from(root).join("acs.exe")),
         root: repo.join("re/scratch/audio_oracle/root"),
         count: 200,
         seed: 1,

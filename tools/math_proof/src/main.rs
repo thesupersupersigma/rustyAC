@@ -30,6 +30,12 @@
 //!                                                             N runs with --stride N and
 //!                                                             --offset 0 .. N-1 cover every
 //!                                                             float)
+//! math_proof fma 64|32 <in> <out>                             `pure::fma` (`fma32`) on the
+//!                                                             triples of <in> (three
+//!                                                             little-endian doubles / floats
+//!                                                             each), results into <out>; the
+//!                                                             exact check is
+//!                                                             tools/math_proof/fma_check.py
 //! ```
 //!
 //! One-argument functions get every one of the 2^32 bit patterns. `atan2f` and `powf` get
@@ -1075,6 +1081,36 @@ fn compare(_: &[String], _: &[String], _: bool) {
     println!("NOT TESTED: the comparison needs msvcr120.dll (Windows)");
 }
 
+/// `math_proof fma 64|32 <in> <out>`: `pure::fma` / `fma32` over a file of triples.
+fn fma_file(args: &[String]) {
+    let [width, input, output] = args else {
+        eprintln!("fma: give 64 or 32, the triples file and the results file");
+        std::process::exit(2);
+    };
+    let data = std::fs::read(input).expect("reading the triples");
+    let out: Vec<u8> = match width.as_str() {
+        "64" => data
+            .chunks_exact(24)
+            .flat_map(|t| {
+                let v = |i: usize| f64::from_le_bytes(t[i * 8..i * 8 + 8].try_into().unwrap());
+                rustyac_math::pure::fma(v(0), v(1), v(2)).to_le_bytes()
+            })
+            .collect(),
+        "32" => data
+            .chunks_exact(12)
+            .flat_map(|t| {
+                let v = |i: usize| f32::from_le_bytes(t[i * 4..i * 4 + 4].try_into().unwrap());
+                rustyac_math::pure::fma32(v(0), v(1), v(2)).to_le_bytes()
+            })
+            .collect(),
+        _ => {
+            eprintln!("fma: the width is 64 or 32");
+            std::process::exit(2);
+        }
+    };
+    std::fs::write(output, out).expect("writing the results");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -1106,6 +1142,7 @@ fn main() {
         }
         Some("parse") => parse(&args[1..]),
         Some("rcpps") => rcpps(option(&args, "--threads").unwrap_or_else(threads_default)),
+        Some("fma") => fma_file(&args[1..]),
         Some("digest") => digest(
             option(&args, "--stride").unwrap_or(4099).max(1),
             option(&args, "--offset").unwrap_or(0),

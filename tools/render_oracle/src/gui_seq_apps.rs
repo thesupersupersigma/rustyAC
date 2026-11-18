@@ -1426,7 +1426,7 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 }
                 "ailine" => {
                     race(&mut o, 6);
-                    let line = std::path::Path::new(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\content\tracks\magione\ai\fast_lane.ai");
+                    let line = rustyac_content::install::ac_root().unwrap_or_default().join(r"content\tracks\magione\ai\fast_lane.ai");
                     o.extend([hud("app.aiLine", 0.0, leak(line.to_string_lossy().into_owned())), hud("app.track", 0.0, "t32_ai_line")]);
                 }
                 _ => race(&mut o, 6),
@@ -1447,7 +1447,7 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
         "app_small" => {
             // Help, Hide all, Running time, Time of the day, Track description on the race
             race(&mut o, 6);
-            let sections = std::path::Path::new(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\content\tracks\magione\data\sections.ini");
+            let sections = rustyac_content::install::ac_root().unwrap_or_default().join(r"content\tracks\magione\data\sections.ini");
             o.extend([hud("app.sections", 0.0, leak(sections.to_string_lossy().into_owned())), hud("app.sun", -40.0, ""), hud("app.gameStart", 1000.0, "")]);
             for app in ["hideall", "help", "timeflow", "trackdescription", "runningtime"] {
                 o.push(hud("app.new", 0.0, app));

@@ -93,12 +93,19 @@ salt_of() {
     { git ls-tree -r HEAD -- "tools/$1" | grep -v 'Cargo\.lock$'
       git diff HEAD -- "tools/$1" ":!tools/$1/Cargo.lock"; install_key; } 2>/dev/null | sha1sum | cut -c1-16
 }
+# maths_path: FMA3 or SSE2, the bodies MSVCR120.dll runs here. Its __fma3_lib_init sets
+# __use_fma3_lib from CPUID leaf 1 ECX bit 12 alone, and _set_FMA3_enable(1) returns that flag
+# (docs/proof_farm.md, F2). A result made on one path never stands in for the other.
+maths_path=$(python -c "import ctypes; print('FMA3' if ctypes.CDLL('msvcr120')._set_FMA3_enable(1) else 'SSE2')")
+[ -n "$maths_path" ] || { echo "MSVCR120.dll's maths path is unknown (python, ctypes, msvcr120.dll)" >&2; exit 2; }
 # install_key: the game's files every case may read: acs.exe's bytes and the names, sizes and
-# times of system/, content/cars and content/tracks (once a run: run_all.sh exports it)
+# times of system/, content/cars and content/tracks, and the maths path when it is not FMA3 (so
+# the PC's keys stay what they were); once a run: run_all.sh exports it
 install_key() {
     if [ -z "$PROOF_INSTALL_KEY" ]; then
         PROOF_INSTALL_KEY=$({ sha1sum "$ac/acs.exe" | cut -c1-40
-            (cd "$ac" && find system content/cars content/tracks -type f -printf '%p %s %T@\n' | sort); } | sha1sum | cut -c1-16)
+            (cd "$ac" && find system content/cars content/tracks -type f -printf '%p %s %T@\n' | sort)
+            [ "$maths_path" = FMA3 ] || echo "maths $maths_path"; } | sha1sum | cut -c1-16)
         export PROOF_INSTALL_KEY
     fi
     echo "$PROOF_INSTALL_KEY"

@@ -8,3 +8,5 @@ publish.workspace = true
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+# a correctly rounded fma on every CPU (pure.rs)
+libm = "0.2.16"
