@@ -68,6 +68,116 @@ of its own.
 Problem 1's fix: the page no longer hangs, so there is no hung state to reload from. Reloads
 from the launcher and from a drive came back 10 of 10 each (above).
 
+## Problem 3: Low laggier than High
+
+### Measured
+
+New in the page's per-second stats (`window.rustyac.perf`, `Game::take_stats` in
+crates/rustyac-web/src/web.rs) and in `check.mjs`'s report: the frame's wasm milliseconds split
+into physics (`Session::advance` and the drawn frame), the picture's draw calls (`full::draw`
+or the debug view's draw), sound, encode and submit (`present_full`); and the time from submit
+to the GPU's "done" (`onSubmittedWorkDone`: the browser has no timestamp queries).
+
+60 s of autodrive each, Ferrari F2004 at Spa from the test pack, sound on, 1280 x 720, the
+page's presets (`?graphics=`; the page has Low, Medium and High: "max" is High with every
+setting at its top, `re/scratch/taskW1/speed.sh`):
+
+| picture | frames/s | wasm ms/frame | physics | draw | sound | submit | submit to GPU done |
+|---|---|---|---|---|---|---|---|
+| Full, Low | 33.6 | 28.1 | 1.9 | 21.4 | 4.5 | 0.2 | 70 ms |
+| Full, Medium | 31.5 | 30.4 | 2.0 | 14.3 | 4.6 | 9.5 | 78 ms |
+| Full, High | 32.2 | 29.2 | 1.8 | 23.0 | 4.1 | 0.3 | 76 ms |
+| Full, max | 17.3 | 54.5 | 3.6 | 46.0 | 4.7 | 0.3 | 297 ms |
+| Debug | 59.9 | 5.3 | 0.9 | 0.8 | 3.6 | 0.0 | 2 ms |
+
+Frame pacing (every interval between two animation frames over 60 s, after 5 s of driving):
+
+| size | preset | frames | p50 ms | p90 | p99 | max | over 50 ms |
+|---|---|---|---|---|---|---|---|
+| 1280 x 720 | Low | 1790 | 33.4 | 49.8 | 50.2 | 367 | 101 |
+| 1280 x 720 | High | 1381 | 33.4 | 50.1 | 66.8 | 834 | 309 |
+| 1920 x 1080 | Low | 2379 | 16.8 | 33.4 | 50.0 | 267 | 17 |
+| 1920 x 1080 | High | 1807 | 33.4 | 33.5 | 50.2 | 484 | 104 |
+
+At 1920 x 1080: Low 22.2 wasm ms a frame (draw 16.1) and 46 ms to the GPU's done, High 31.6
+(draw 23.9) and 68 ms.
+
+### Result: not reproduced
+
+On this PC Low costs less than High in every number: wasm time, GPU time, pacing. What Low
+does that High does not (render scale 75 % with AC's GUI drawn at the canvas's size, no
+post-processing, no MSAA, no reflections, world detail 1, 512 px shadows) was read in the code
+for a path that is slower: the scaled GUI keeps its full-size target between frames
+(`Kgl::begin_gui_screen`), and nothing else is built per frame on Low only. No fix without a
+cause: nothing was changed for problem 3. What would tell it on Super's machine:
+`window.rustyac.perf` in the browser's console now gives the split and the GPU time; the same
+two drives on Low and High there would show which part grows.
+
+## Problem 4: the frame's cost
+
+### The top costs
+
+A 15 s CPU profile of the page's main thread while driving (DevTools' sampling profiler,
+`Profiler.start`/`stop` in a `--flow`), self time by function; the function names from an
+unoptimised build of the same code (`web/build.py --no-opt`, re/scratch/taskW1/site_named):
+
+| | Full, High | share |
+|---|---|---|
+| 1 | bind groups made for every draw of every frame: `createBindGroup` + its wasm-bindgen wrapper + collecting them (`Kgl::end_pass`, crates/rustyac-render/src/kgl_wgpu.rs) | 27 % |
+| 2 | `Kgl::vertex_buffer_map`: almost all of it the call log's FNV hash of every vertex upload, made when no log is kept (`format_args!` makes its arguments first) | 5.8 % |
+| 3 | crossings from wasm into the browser's WebGPU (`wasm-to-js`) | 4.6 % |
+| 4 | `Kgl::record` (a draw's state copied for the pass) | 3.5 % |
+| 5 | `Scene::render` | 2.2 % |
+
+Next were `kgl_log::name` (1.5 %, the same call-log waste as 2) and the sound bridge's calls.
+
+| | Debug | share |
+|---|---|---|
+| | idle (the frame is done early: 60 frames/s) | 54 % |
+| 1 | the sound bridge's `batch` (web/sound.js) | 3.7 % |
+| 2 | wasm-to-js crossings | 2.7 % |
+| 3 | FMOD's embind property sets (`__emval_set_property`) | 1.4 % |
+| 4 | `event_get_3d_attributes` (web/sound.js) | 1.3 % |
+| 5 | the bridge's text decoding (`decode`) | 1.2 % |
+
+### The cheap wins (no pixel, no physics bit)
+
+- **Bind groups kept.** `Kgl::end_pass` made three bind groups for every draw: the constant
+  buffers', the textures' and the samplers'. The textures' and samplers' (and an empty constant
+  buffers' one) are now kept by their layout and what they bind (`GroupKey`); the constant
+  buffers point into each pass's new upload buffer and are still made per draw.
+  shortcut: the cache is emptied whole at 4096 groups.
+- **The call log's arguments.** `kgl_log::hash` and `kgl_log::name` return at once when no
+  capture runs (they are only ever a log line's text; with a capture the log is as before).
+  This also helps the desktop's Direct3D 11 path.
+
+Proof of no change: the page's fixed Full frame (`?fullproof=3`, F2004 at Spa) on the old site
+and the new one, Low and High: the screenshots byte for byte the same, and the kgl call logs
+(17026 and 18074 lines) the same SHA-256 (re/scratch/taskW1/same.sh).
+
+Before and after (60 s, F2004 at Spa, 1280 x 720, sound on):
+
+| | frames/s | wasm ms/frame | draw | submit to GPU done |
+|---|---|---|---|---|
+| Full, Low, before | 33.6 | 28.1 | 21.4 | 70 ms |
+| Full, Low, after | 47.8 | 20.9 | 14.9 | 49 ms |
+| Full, High, before | 32.2 | 29.2 | 23.0 | 76 ms |
+| Full, High, after | 45.9 | 20.7 | 15.3 | 53 ms |
+| Debug, before | 59.9 | 5.3 | 0.8 | 2 ms |
+| Debug, after | 59.7 | 7.4 | 1.1 | 2 ms |
+
+(Debug does not use kgl: its numbers move by the run-to-run noise; it stays at the screen's 60.)
+After: bind groups are 17 % of Full's main thread (from 27 %).
+
+### The expensive ones, left
+
+| cost | what it would take | size |
+|---|---|---|
+| the constant buffers' bind group per draw (17 % left) | dynamic offsets: one group per layout per pass, the offsets given at `set_bind_group`; the pipeline layouts change (`has_dynamic_offset`) and the upload's offsets must keep the 256-byte alignment | half a session, with the wgpu render proofs (`render_wgpu.sh`) |
+| wasm-to-JS crossings for every WebGPU call | fewer calls: state set only when it changes between draws (`set_pipeline`, `set_vertex_buffer`, `set_viewport`), or render bundles for the static scene | a session |
+| the sound bridge (3.6 to 4.9 ms a frame) | the batch is text parsed in JavaScript and FMOD's embind objects per call; a binary batch, and FMOD's mixer on the worklet's thread (a cross-origin-isolated page: COOP/COEP headers, which the site's nginx must send) | a session, plus the site's headers |
+| `Kgl::record` and `Scene::render` | the scene walk itself (AC's own order is kept for the call log) | not cheap: the same code as the desktop |
+
 ## Problem 1: back to the launcher hangs
 
 ### Reproduced
