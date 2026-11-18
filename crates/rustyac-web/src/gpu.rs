@@ -484,6 +484,12 @@ impl Gpu {
         Ok(())
     }
 
+    /// `done` runs when the work submitted so far is done (the page's GPU time per frame: the
+    /// browser gives no timestamp queries).
+    pub fn after_submitted(&self, done: impl FnOnce() + Send + 'static) {
+        self.queue.on_submitted_work_done(done);
+    }
+
     fn pipeline(&mut self, key: PipelineKey) {
         if self.pipelines.contains_key(&key) {
             return;

@@ -408,6 +408,9 @@ try {
       frames_per_second: mean('fps'),
       physics_steps_per_second: mean('steps_per_second'),
       work_ms_per_frame: mean('work_ms_per_frame'),
+      // physics, the picture's draw calls, sound, encode and submit; then submit to the GPU's done
+      split_ms_per_frame: steady.length && steady[0].split_ms_per_frame ? [0, 1, 2, 3].map((i) => steady.reduce((sum, s) => sum + s.split_ms_per_frame[i], 0) / steady.length) : null,
+      gpu_wait_ms: mean('gpu_wait_ms'),
       meshes_drawn: now.perf?.meshes,
       triangles_drawn: now.perf?.triangles,
       backend: now.perf?.backend,

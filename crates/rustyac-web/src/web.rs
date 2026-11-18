@@ -397,6 +397,10 @@ pub struct Game {
     frames: u32,
     steps: u32,
     work_ms: f64,
+    /// The same milliseconds split: physics, the picture's draw calls, sound, encode and submit.
+    split_ms: [f64; 4],
+    /// Submit to the GPU's "done" in milliseconds, summed, and how many frames.
+    gpu_wait: Arc<Mutex<(f64, u32)>>,
     dropped_seconds: f64,
     drawn: crate::gpu::DrawStats,
     /// Full mode: AC's own renderer draws the picture (the debug view's models are not loaded).
@@ -588,7 +592,7 @@ impl Game {
         if full.is_some() {
             let view = session.view();
             let sound = start_sound(&mut session, &mut notes);
-            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui, render_scale: 1.0, sound };
+            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, split_ms: [0.0; 4], gpu_wait: Default::default(), dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui, render_scale: 1.0, sound };
         }
         let setup = &session.sim.setup;
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);
@@ -649,7 +653,7 @@ impl Game {
         }
         let view = session.view();
         let sound = start_sound(&mut session, &mut notes);
-        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui, render_scale: 1.0, sound }
+        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, split_ms: [0.0; 4], gpu_wait: Default::default(), dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui, render_scale: 1.0, sound }
     }
 
     /// Full mode did not start for want of these files, one per line: fetch them and make the
@@ -676,6 +680,7 @@ impl Game {
         if !self.gui.paused {
             self.session.drawn_frame(seconds);
         }
+        let physics_done = now_ms();
         self.view = self.session.view();
         let camera = self.session.camera_frame(&self.view, seconds);
         let remote = self.session.remote_views();
@@ -727,12 +732,23 @@ impl Game {
             }
             None => self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?,
         }
+        let draw_done = now_ms();
         // Game::renderAudio: after the cameras and the picture, before it is shown
         if let Some(sound) = &mut self.sound {
             sound.frame(&self.session.camera, &camera.matrix, seconds, self.gui.paused);
         }
+        let sound_done = now_ms();
         if let Some(full) = &mut self.full {
             self.gpu.present_full(|target, format| full.present_to(target, format))?;
+        }
+        let submitted = now_ms();
+        let wait = Arc::clone(&self.gpu_wait);
+        self.gpu.after_submitted(move || {
+            let mut w = wait.lock().unwrap();
+            *w = (w.0 + now_ms() - submitted, w.1 + 1);
+        });
+        for (sum, ms) in self.split_ms.iter_mut().zip([physics_done - started, draw_done - physics_done, sound_done - draw_done, submitted - sound_done]) {
+            *sum += ms;
         }
         self.frames += 1;
         self.steps += stats.steps;
@@ -1265,11 +1281,19 @@ impl Game {
     /// frame's physics and drawing took, the seconds slow frames dropped, what the last frame
     /// drew.
     pub fn take_stats(&mut self) -> String {
+        let frames = self.frames.max(1) as f64;
+        let gpu_wait = std::mem::take(&mut *self.gpu_wait.lock().unwrap());
+        let gpu_wait = if gpu_wait.1 > 0 { gpu_wait.0 / gpu_wait.1 as f64 } else { 0.0 };
         let out = format!(
-            "{{\"frames\": {}, \"steps\": {}, \"work_ms_per_frame\": {:.3}, \"meshes\": {}, \"triangles\": {}, \"total_steps\": {}, \"dropped_seconds\": {:.3}, \"file_megabytes\": {:.1}, \"backend\": {}, \"other_cars_drawn\": {}, \"other_cars_as_boxes\": {}}}",
+            "{{\"frames\": {}, \"steps\": {}, \"work_ms_per_frame\": {:.3}, \"split_ms_per_frame\": [{:.3}, {:.3}, {:.3}, {:.3}], \"gpu_wait_ms\": {:.3}, \"meshes\": {}, \"triangles\": {}, \"total_steps\": {}, \"dropped_seconds\": {:.3}, \"file_megabytes\": {:.1}, \"backend\": {}, \"other_cars_drawn\": {}, \"other_cars_as_boxes\": {}}}",
             self.frames,
             self.steps,
             if self.frames > 0 { self.work_ms / self.frames as f64 } else { 0.0 },
+            self.split_ms[0] / frames,
+            self.split_ms[1] / frames,
+            self.split_ms[2] / frames,
+            self.split_ms[3] / frames,
+            gpu_wait,
             self.drawn.meshes,
             self.drawn.triangles,
             self.session.total_steps,
@@ -1282,6 +1306,7 @@ impl Game {
         self.frames = 0;
         self.steps = 0;
         self.work_ms = 0.0;
+        self.split_ms = [0.0; 4];
         self.dropped_seconds = 0.0;
         out
     }
