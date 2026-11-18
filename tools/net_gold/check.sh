@@ -23,6 +23,10 @@ CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo/target/wasm-sysroot" \
     cargo build --release --locked -p rustyac-net --example net_golden --target wasm32-wasip1
 exe=$repo/target/release/examples/net_golden.exe
 wasm=$repo/target/wasm32-wasip1/release/examples/net_golden.wasm
+# a checkout made by tools/worktree/make_web.ps1 has re/ and cardata/ as junctions, which wasmtime
+# does not follow out of /repo ("Operation not permitted"): their own folders are given as well
+links=
+for d in re cardata; do [ -L "$d" ] && links="$links --dir $(cd "$d" && pwd -W)::/repo/$d"; done
 
 names=$*
 [ -n "$names" ] || names=$(cd "$gold" && ls *.netgold | sed 's/\.netgold$//')
@@ -35,7 +39,7 @@ for name in $names; do
             desktop) "$exe" "$gold/$name.netgold" --root "$ac" > "$out/$name.$way" 2>&1 || true ;;
             browser|gateway) "$exe" "$gold/$name.netgold" --root "$ac" --$way > "$out/$name.$way" 2>&1 || true ;;
             # the browser's client built for wasm; the repo and the AC folder are the only folders it sees
-            wasm) MSYS_NO_PATHCONV=1 "$wasmtime" run --dir "$repo::/repo" --dir "$ac::/ac" "$wasm" \
+            wasm) MSYS_NO_PATHCONV=1 "$wasmtime" run --dir "$repo::/repo" $links --dir "$ac::/ac" "$wasm" \
                 "/repo/re/gold/net/$name.netgold" --cardata /repo/cardata --root /ac --browser > "$out/$name.$way" 2>&1 || true ;;
         esac
         numbers=$(grep '^steps ' "$out/$name.$way" || echo "no numbers")

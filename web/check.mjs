@@ -163,8 +163,9 @@ function send(method, params = {}) {
   });
 }
 
-// A page that answers nothing for this long is hung (a flow step's `timeout` sets its own).
-let answerMs = 120000;
+// A page that answers nothing for this long is hung: the run's --timeout (a --script can take
+// minutes), and in a flow 120 s or the step's own `timeout`.
+let answerMs = timeout;
 function answered(promise) {
   let timer;
   const hung = new Promise((_, failed) => (timer = setTimeout(() => failed(new Error(`hung: the page did not answer within ${answerMs / 1000} s`)), answerMs)));
