@@ -56,8 +56,7 @@ for car in $extended $plain; do
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
     if oracle "${car}_van" --car "$car" --car-data "$out/plain/$car" --vanilla && oracle "${car}_csp" --car "$car"; then
-        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '
-' | grep -m1 '^PRESSURES ')
+        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '' | grep -m1 '^PRESSURES ')
         line=$(python tools/proofs/csp_words.py "$out/runs/${car}_van/car_root/car_words.txt" "$out/runs/${car}_csp/car_root/car_words.txt" "$port")
         verdict "words $car" "${line%% |*}" "${line#* | }"
     else
@@ -150,12 +149,12 @@ for c in spa:spa:14:20:3 ks_black_cat_county:ks_black_cat_county:26:38:0 ks_zand
     [ -f "$tape" ] || { skip "air $name" "no $tape (car_oracle run --scenario random)"; continue; }
     flag=; [ $name = still ] && flag=--still
     if oracle "air_$name" --car ks_ferrari_f2004 --drive "$(cygpath -w "$tape")" $flag --air "$spec"; then
-        log=$out/runs/air_$name.txt
-        line=$(tr -d '\r' < "$log" | grep -m1 '^air: [0-9]* steps')
-        if grep -q '^air: altitude table: .* all as CSP' "$log" && [ "$(grep -c '^air: grid: .* 0 differ' "$log")" = 2 ]             && echo "$line" | grep -q '^air: 20001 steps, differ: plane 0, height 0, temperature 0, density 0'; then
+        run=$out/runs/air_$name.txt
+        line=$(tr -d '\r' < "$run" | grep -m1 '^air: [0-9]* steps')
+        if grep -q '^air: altitude table: .* all as CSP' "$run" && [ "$(grep -c '^air: grid: .* 0 differ' "$run")" = 2 ]             && echo "$line" | grep -q '^air: 20001 steps, differ: plane 0, height 0, temperature 0, density 0'; then
             verdict "air $name" IDENTICAL "${line#air: }"
         else
-            verdict "air $name" DIFFERENT "$(why "$log" '^air|error|panic|fault')"
+            verdict "air $name" DIFFERENT "$(why "$run" '^air|error|panic|fault')"
         fi
     else
         verdict "air $name" DIFFERENT "csp_oracle failed: $(why "$out/runs/air_$name.txt" 'error|panic|fault|exit')"

@@ -15,7 +15,7 @@ CSP mode is defined in [port_c3.md](port_c3.md): physics worker count 0 and
 | A. `csp_oracle --drive`: the game's car stepped with CSP live, repeatable, threads check | done, f61c273d; redone in C (the world did not step under CSP, see below) |
 | B. the CSP-2 items: addresses, what changes, defaults, plain-session effect | done (table below) |
 | C. CSP air density ported under `--csp`, proven bit-exact against CSP's own functions | done (part C below) |
-| Finish: quick run, clippy, README features row (no release: decision below) | next |
+| Finish: quick run, clippy, README features row (no release: decision below) | done: `run_all.sh --quick` 14 areas all identical (0h57m), csp alone 49/49 after the proof-script fix; clippy rule 24 clean in all seven builds |
 
 Decision (lead, during C4a): no whole-car comparison and no release in C4a. `--csp` physics is CSP's
 air density on Vanilla's ODE until CSP's own ODE core (`cphys::ode64_core`, double precision, Embree
