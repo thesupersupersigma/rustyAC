@@ -198,6 +198,7 @@ const INIREADER_CTOR: usize = 0x1_4023_40a0;
 const INIREADER_HAS_SECTION: usize = 0x1_4023_70b0;
 const INIREADER_SIZE: usize = 0x68;
 const INIREADER_GET_INT: usize = 0x1_4023_5c70;
+const INIREADER_GET_FLOAT: usize = 0x1_4023_58c0;
 
 // the car load of car_oracle (tools/car_oracle/src/game.rs, new_engine and World::build's flat track)
 const CRASH_GUARD_CTOR: usize = 0x1_4021_8800; // CrashGuard::CrashGuard(const wstring&), wWinMain's first object
@@ -1166,6 +1167,36 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
     (engine, car)
 }
 
+/// `SurfacesManager::loadSurfaceDefinitions`' `WAV_PITCH` reads of a track's surfaces.ini, through
+/// the game's `INIReader::getFloat` (CSP's detour at RVA 0x5e4180 reads `extended-N` as N; Vanilla's
+/// `std::stof` throws, which ends this process). The path is the game's own form
+/// (`content/tracks/<track>/<layout>/data/surfaces.ini`): the detour looks at its end.
+unsafe fn wav_pitch(acs: &Acs, track_root: &str, csp: Option<usize>) {
+    std::env::set_current_dir(track_root).expect("the track root can be entered");
+    if let Some(dll) = csp {
+        // the detour's gate: CSP's state object (RVA 0x2821078), its +0x3b8 and that one's +0x60
+        // shortcut: +0x3b8 is taken to be the TrackAvatar being built (+0x60 = trackObjects, empty while
+        // its SurfacesManager loads) and is a zeroed stand-in; upgrade when the writer of +0x3b8 is read
+        let state = read::<usize>(dll + 0x282_1078);
+        assert!(state != 0, "CSP's state object is not made");
+        if read::<usize>(state + 0x3b8) == 0 {
+            put(state as *mut u8, 0x3b8, acs.alloc(0x308));
+        }
+        println!("CSP state +0x3b8 set: {}", read::<usize>(read::<usize>(state + 0x3b8) + 0x60) == 0);
+    }
+    let reader = ini_reader(acs, "content/tracks/t/l/data/surfaces.ini");
+    let get_float: extern "system" fn(*mut u8, *const u8, *const u8) -> f32 = std::mem::transmute(acs.va(INIREADER_GET_FLOAT));
+    println!("reading WAV_PITCH with INIReader::getFloat: {}", through(acs.va(INIREADER_GET_FLOAT)));
+    for n in 0.. {
+        let section = format!("SURFACE_{n}");
+        if !has_section(acs, reader, &section) {
+            break;
+        }
+        let value = get_float(reader, wstring(acs, &section), wstring(acs, "WAV_PITCH"));
+        println!("{section} WAV_PITCH {:08x}", value.to_bits());
+    }
+}
+
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -1192,8 +1223,13 @@ fn main() {
         arguments.remove(i);
         arguments.remove(i)
     });
+    // --surfaces <file>: read that track surfaces.ini's WAV_PITCH values (in place of a car)
+    let surfaces = arguments.iter().position(|a| a == "--surfaces").map(|i| {
+        arguments.remove(i);
+        arguments.remove(i)
+    });
     if arguments.len() != 3 && arguments.len() != 4 {
-        eprintln!("usage: csp_oracle <ac root> <run folder> [cfg folder] [--car <name> [--vanilla]]");
+        eprintln!("usage: csp_oracle <ac root> <run folder> [cfg folder] [--car <name> | --surfaces <file>] [--vanilla]");
         std::process::exit(2);
     }
     let root = full_path(&arguments[1]);
@@ -1251,6 +1287,11 @@ fn main() {
         )
         .unwrap();
     }
+    let track_root = format!("{run}\\track_root");
+    if let Some(file) = &surfaces {
+        std::fs::create_dir_all(format!("{track_root}\\content\\tracks\\t\\l\\data")).unwrap();
+        std::fs::copy(file, format!("{track_root}\\content\\tracks\\t\\l\\data\\surfaces.ini")).expect("the surfaces file can be copied");
+    }
     let command_line = format!("\"{exe}\"");
     let _ = HOST.set(Host { command_line_wide: wide(&command_line), command_line_ansi: (command_line + "\0").into_bytes(), root: root.clone(), run: run.clone(), exe: exe.clone() });
     THREADS.lock().unwrap().push(unsafe { GetCurrentThreadId() });
@@ -1286,6 +1327,10 @@ fn main() {
         let before = snapshot(base);
         if let (Some(car), true) = (&car_name, vanilla) {
             load_car(&acs, car, &car_root, None);
+            stop(0, "end of the run");
+        }
+        if let (Some(_), true) = (&surfaces, vanilla) {
+            wav_pitch(&acs, &track_root, None);
             stop(0, "end of the run");
         }
 
@@ -1329,6 +1374,13 @@ fn main() {
             checkpoint("crash guard", &before, &functions);
             load_car(&acs, car, &car_root, Some(dll as usize));
             checkpoint("car", &before, &functions);
+            stop(0, "end of the run");
+        }
+        if surfaces.is_some() {
+            let guard = acs.alloc(CRASH_GUARD_SIZE);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(CRASH_GUARD_CTOR));
+            ctor(guard, wstring(&acs, ""));
+            wav_pitch(&acs, &track_root, Some(dll as usize));
             stop(0, "end of the run");
         }
 
