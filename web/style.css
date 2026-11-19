@@ -85,6 +85,11 @@ html, body {
 /* a drive's way to the rustyAC tab (O does the same) */
 #gear { position: fixed; right: 8px; bottom: 8px; z-index: 29; display: flex; align-items: center; padding: 4px 6px; opacity: 0.7; }
 #gear[hidden] { display: none; }
+/* Full mode asked, the debug view draws: why (see showFallback) */
+#fallback { position: fixed; left: 50%; top: 8px; transform: translateX(-50%); z-index: 40; max-width: min(720px, calc(100vw - 32px)); display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px 8px 14px; background: rgba(13, 16, 20, 0.92); color: #e8edf2; border-left: 3px solid var(--accent); border-radius: 4px; font-size: 13px; line-height: 1.4; }
+#fallback[hidden] { display: none; }
+#fallback span { overflow-wrap: anywhere; }
+#fallback button { flex: none; font-size: 14px; line-height: 1; padding: 2px 7px; }
 /* the start page (no pack, no folder) and the loading of a drive: only the Content section */
 body.launcher-page #menu > section.old { display: none; }
 body.launcher-page.has-source #menu .folder-only { display: none; }

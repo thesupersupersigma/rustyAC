@@ -52,7 +52,7 @@ fi
 # listed server's car and track and its own gateway address, an unlisted ?join joins nothing
 need "$gold/web/pack/manifest.json" "the test pack"
 python web/build.py > "$out/build.txt" 2>&1 || { verdict "page build" DIFFERENT "$(tail -n 1 "$out/build.txt")"; summary; exit; }
-python web/serve.py --port 8139 --pack "$gold/web/pack" > "$out/serve.txt" 2>&1 &
+python web/serve.py --port 8139 --pack "$gold/web/pack" --ac "$ac" > "$out/serve.txt" 2>&1 &
 sp=$!
 node tools/proofs/ondemand_site.mjs 8140 8139 tools/proofs/ondemand_servers.json > "$out/site.txt" 2>&1 &
 fp=$!
@@ -66,6 +66,12 @@ r=$(page "join=x-proof-laguna&name=proof39" --menu)
 echo "$r" | grep -qF '"server":"x-proof-laguna"' && echo "$r" | grep -qF 'no connection to ws://127.0.0.1:8140/net/x/proof-laguna' && verdict "?join of a listed on-demand server" IDENTICAL "$r" || verdict "?join of a listed on-demand server" DIFFERENT "$r"
 r=$(page "join=x-not-running&name=proof39" --menu)
 echo "$r" | grep -qF 'x-not-running is not running now' && ! echo "$r" | grep -qF 'connecting' && verdict "?join of an unlisted server" IDENTICAL "$r" || verdict "?join of an unlisted server" DIFFERENT "$r"
+# Full mode on a track it cannot draw (Task W2): montreal's CSP layout names stPerPixelNM_UVflow,
+# which the install's system/shaders/win lacks; the debug view draws and the page's banner says why
+r=$(node web/check.mjs --url "http://127.0.0.1:8139/?testfolder=/ac-test/&go=1&car=ks_ferrari_f2004&track=montreal&spawn=pit&autodrive=1&backend=full" --seconds 5     --script tools/proofs/fallback_page.js --profile "$out/chrome_profile_fallback" --port 9340 --timeout 900 --flags "--enable-features=Vulkan" 2> "$out/fallback.err" |
+    node -e 'let t="";process.stdin.on("data",(d)=>(t+=d)).on("end",()=>{const r=JSON.parse(t||"{}");console.log(JSON.stringify(r.script??r.error??null))})')
+echo "$r" | grep -qF '"shown":true' && echo "$r" | grep -qF 'Full mode could not start' && echo "$r" | grep -qF 'stPerPixelNM_UVflow' && echo "$r" | grep -qF '"same":true' &&
+    verdict "Full mode's fallback banner (montreal)" IDENTICAL "$r" || verdict "Full mode's fallback banner (montreal)" DIFFERENT "$r"
 # the way back to AC's launcher (Task W1): 3 drives with sound left by AC's Exit (FMOD's late mix
 # once hung the page there), then 3 reloads from the launcher and 3 from a drive
 python tools/proofs/roundtrip_flow.py "$out/roundtrip_flow.json" 3 3 ks_ferrari_f2004@spa

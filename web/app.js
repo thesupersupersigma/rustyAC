@@ -237,8 +237,8 @@ async function openPack(base) {
     // (the launcher reads a file it did not read before at once, over HTTP)
     urlOf: (path) => base + path.split('/').map(encodeURIComponent).join('/'),
     sizes: new Map(manifest.files.map((f) => [f.path, f.bytes])),
-    cars: manifest.cars.map((c) => ({ id: c.id, name: c.name, refused: null, bytes: c.bytes, pinned: !!c.pinned })),
-    tracks: manifest.tracks.map((t) => ({ track: t.id, layout: t.layout, name: t.name, refused: null, bytes: t.bytes, pinned: !!t.pinned })),
+    cars: manifest.cars.map((c) => ({ id: c.id, name: c.name, refused: null, bytes: c.bytes, pinned: !!c.pinned, noFull: c.missing_shaders || null })),
+    tracks: manifest.tracks.map((t) => ({ track: t.id, layout: t.layout, name: t.name, refused: null, bytes: t.bytes, pinned: !!t.pinned, noFull: t.missing_shaders || null })),
     // from: resume at this byte (HTTP Range); fresh: not from the browser's storage
     async open(path, { from = 0, fresh = false } = {}) {
       const entry = entries.get(path.toLowerCase());
@@ -576,8 +576,10 @@ function folderFromFiles(list) {
 
 // ---------------------------------------------------------------- the lists
 
-const carLabel = (c) => (c.name === c.id ? c.id : `${c.name} (${c.id})`);
-const trackLabel = (t) => (t.layout ? `${t.name} (${t.track} / ${t.layout})` : `${t.name} (${t.track})`);
+// (a pack's car or track whose materials name shaders the install lacks: Full mode cannot draw it)
+const noFull = (item) => (item.noFull ? ' [debug view only]' : '');
+const carLabel = (c) => (c.name === c.id ? c.id : `${c.name} (${c.id})`) + noFull(c);
+const trackLabel = (t) => (t.layout ? `${t.name} (${t.track} / ${t.layout})` : `${t.name} (${t.track})`) + noFull(t);
 const trackValue = (t) => `${t.track}|${t.layout}`;
 // a list this long gets a search box
 const SEARCH_FROM = 13;
@@ -1100,6 +1102,17 @@ for (const id of ['sound-volume', 'sound-mute']) {
 }
 applySound(null);
 
+// Full mode asked and the debug view draws (no WebGPU, a shader or file missing, an error): why,
+// on the page until closed; '' hides it. (window.rustyac.notes keeps the same line.)
+function showFallback(text) {
+  window.rustyac.fallback = text;
+  $('fallback-text').textContent = text;
+  $('fallback').hidden = !text;
+}
+$('fallback-close').addEventListener('click', () => {
+  $('fallback').hidden = true;
+});
+
 // `launch`: a drive AC's launcher asked for ({ car, track, layout, race, assists }), else the
 // menu's choice
 async function drive(launch) {
@@ -1113,6 +1126,7 @@ async function drive(launch) {
   $('drive').disabled = true;
   $('refusal').hidden = true;
   $('notes').hidden = true;
+  showFallback('');
   window.rustyac.state = 'loading';
   try {
     // the files: the wasm side says which it still needs; more can be named once the first
@@ -1122,6 +1136,11 @@ async function drive(launch) {
     // (and the files of race.ini's other cars, which AI drivers drive)
     const models = [...new Set([car, ...(launch && launch.race ? raceModels(launch.race) : [])])];
     const picture = await pictureBackend();
+    if (picture.backend === 'full') {
+      const lower = (text) => (text || '').toLowerCase();
+      const marked = (state.source.cars || []).find((c) => lower(c.id) === lower(car) && c.noFull) || (state.source.tracks || []).find((t) => lower(t.track) === lower(track) && lower(t.layout) === lower(layout) && t.noFull);
+      if (marked) showFallback(`Full mode can't draw this ${marked.track ? 'track' : 'car'} (it needs Custom Shaders Patch: ${marked.noFull.join(', ')}): the debug view will draw it.`);
+    }
     const filesWanted = picture.backend === 'full' ? rac.files_wanted_full : rac.files_wanted;
     if (picture.backend === 'full') await listPictureFiles(models);
     const wantedNow = () => [...new Set(models.flatMap((model) => filesWanted(model, track, layout).split('\n').filter(Boolean)))];
@@ -1200,6 +1219,7 @@ async function drive(launch) {
     window.rustyac.notes = notes;
     $('notes').textContent = notes;
     $('notes').hidden = false;
+    showFallback(notes.split('\n').find((line) => line.startsWith('Full mode ')) || '');
     window.rustyac.bindings = game.bindings();
     if (params.has('selftest')) {
       const steps = Number(params.get('selftest'));
@@ -1572,6 +1592,7 @@ async function joinServer() {
     window.rustyac.notes = notes;
     $('notes').textContent = notes;
     $('notes').hidden = false;
+    showFallback(notes.split('\n').find((line) => line.startsWith('Full mode ')) || '');
     window.rustyac.bindings = game.bindings();
     state.loading = false;
     startDriving();
@@ -2757,6 +2778,8 @@ async function returnToLauncher() {
   leaveServer(false);
   freshCanvas();
   for (const id of ['hud', 'keys', 'chat', 'gear']) $(id).hidden = true;
+  const why = window.rustyac.fallback;
+  showFallback('');
   state.launch = null;
   const api = state.theme;
   if (json) api.launcher.write_doc('out\\race_out.json', json);
@@ -2766,6 +2789,8 @@ async function returnToLauncher() {
   window.rustyac.state = 'launcher';
   api.pause(false);
   api.trigger('ACStoppedEvent');
+  // (the reason the debug view drew, in the theme's own notice)
+  if (why) api.notice(why);
 }
 
 async function main() {
