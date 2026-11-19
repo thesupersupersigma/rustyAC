@@ -2,43 +2,43 @@
 
 //! Mass parameters: `ode/src/mass.cpp`.
 
-use crate::common::{Matrix3, Vector3};
+use crate::common::{Matrix3, Real, Vector3};
 
 /// `dMass`: total mass, centre of gravity in the body frame, and inertia tensor about the
 /// body origin (3x4, row-major).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Mass {
-    pub mass: f32,
-    pub c: Vector3,
-    pub i: Matrix3,
+pub struct Mass<R = f32> {
+    pub mass: R,
+    pub c: Vector3<R>,
+    pub i: Matrix3<R>,
 }
 
-impl Default for Mass {
+impl<R: Real> Default for Mass<R> {
     fn default() -> Self {
         Mass::zero()
     }
 }
 
-impl Mass {
-    /// `dMassSetZero` @ 0x140346d30.
-    pub fn zero() -> Mass {
-        Mass { mass: 0.0, c: [0.0; 4], i: [0.0; 12] }
+impl<R: Real> Mass<R> {
+    /// `dMassSetZero` @ 0x140346d30 (CSP +0x168d4f0).
+    pub fn zero() -> Self {
+        Mass { mass: R::ZERO, c: [R::ZERO; 4], i: [R::ZERO; 12] }
     }
 
     /// `dMassSetParameters` @ 0x140346c60. (`dMassCheck`, which it calls, only prints.)
     #[allow(clippy::too_many_arguments)]
     pub fn parameters(
-        mass: f32,
-        cgx: f32,
-        cgy: f32,
-        cgz: f32,
-        i11: f32,
-        i22: f32,
-        i33: f32,
-        i12: f32,
-        i13: f32,
-        i23: f32,
-    ) -> Mass {
+        mass: R,
+        cgx: R,
+        cgy: R,
+        cgz: R,
+        i11: R,
+        i22: R,
+        i33: R,
+        i12: R,
+        i13: R,
+        i23: R,
+    ) -> Self {
         let mut m = Mass::zero();
         m.mass = mass;
         m.c[0] = cgx;
@@ -56,15 +56,15 @@ impl Mass {
         m
     }
 
-    /// `dMassSetBoxTotal` @ 0x140346bc0: a solid box of the given total mass and side lengths.
+    /// `dMassSetBoxTotal` @ 0x140346bc0 (CSP +0x168d670): a solid box of the given total mass
+    /// and side lengths.
     ///
     /// The source says `total_mass / 12 * (ly*ly + lz*lz)`; the compiled code multiplies by
-    /// the constant `0x3daaaaab` (the f32 nearest to 1/12) instead of dividing.
-    pub fn box_total(total_mass: f32, lx: f32, ly: f32, lz: f32) -> Mass {
-        const ONE_TWELFTH: f32 = f32::from_bits(0x3daa_aaab);
+    /// the constant nearest to 1/12 (`0x3daaaaab`, CSP `0x3fb5555555555555`) instead of dividing.
+    pub fn box_total(total_mass: R, lx: R, ly: R, lz: R) -> Self {
         let mut m = Mass::zero();
         m.mass = total_mass;
-        let k = total_mass * ONE_TWELFTH;
+        let k = total_mass * R::ONE_TWELFTH;
         m.i[0] = (lz * lz + ly * ly) * k;
         m.i[5] = (lx * lx + lz * lz) * k;
         m.i[10] = (lx * lx + ly * ly) * k;

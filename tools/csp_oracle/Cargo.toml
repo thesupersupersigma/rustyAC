@@ -10,6 +10,8 @@ description = "Spike oracle for Custom Shaders Patch: loads CSP's dwrite.dll nex
 # Task C4a: the air density port and the maths it calls, held against CSP's own in the process
 rustyac-math = { path = "../../crates/rustyac-math" }
 rustyac-physics = { path = "../../crates/rustyac-physics" }
+# Task C5c: the f64 ODE functions held against CSP's
+rustyac-ode = { path = "../../crates/rustyac-ode" }
 
 [profile.release]
 opt-level = 3

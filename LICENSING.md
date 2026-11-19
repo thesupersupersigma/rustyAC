@@ -35,7 +35,9 @@ everything that links the car physics is GPL.
 
 - **ODE 0.13.1** (Open Dynamics Engine), copyright (c) 2001-2007 Russell L. Smith, under its
   BSD-style license. `crates/rustyac-ode` is a Rust translation of the part of ODE that the game
-  uses. The license text is in `crates/rustyac-ode/LICENSE-ODE`.
+  uses. The license text is in `crates/rustyac-ode/LICENSE-ODE`. Its double-precision functions
+  (Custom Shaders Patch mode) follow ODE master commit 66615b8a (2025-01-05), whose
+  `LICENSE-BSD.TXT` is the same text.
 - **MSVCR120.dll**, Microsoft's Visual C++ 2013 runtime. rustyAC loads it at run time from the
   user's system, when it is installed, to get the same maths results as the game. It is never
   shipped with rustyAC. Where a DLL cannot be loaded (the browser preview),

@@ -26,6 +26,8 @@ mod acs;
 #[path = "../../car_oracle/src/track.rs"]
 #[allow(dead_code)]
 mod track;
+// Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
+mod ode;
 #[path = "../../car_oracle/src/setup_screen.rs"]
 mod setup_screen;
 /// What track.rs takes from car_oracle's game.rs.
@@ -2057,6 +2059,11 @@ fn main() {
     let mut arguments: Vec<String> = std::env::args().collect();
     // --maths: CSP's C runtime functions of the air density against rustyac_math (Task C4a)
     let maths_check = arguments.iter().position(|a| a == "--maths").map(|i| arguments.remove(i)).is_some();
+    // --ode <breaks.txt>: CSP's ODE functions against rustyac-ode's f64 ones on that drive's inputs (Task C5c)
+    let ode_check = arguments.iter().position(|a| a == "--ode").map(|i| {
+        arguments.remove(i);
+        arguments.remove(i)
+    });
     // --car <name>: load that car after CSP's start-up; --vanilla: the same without CSP
     let car_name = arguments.iter().position(|a| a == "--car").map(|i| {
         arguments.remove(i);
@@ -2243,6 +2250,10 @@ fn main() {
         checkpoint("called", &before, &functions);
         if maths_check {
             maths(dll as usize);
+            stop(0, "end of the run");
+        }
+        if let Some(breaks) = &ode_check {
+            ode::run(dll as usize, breaks);
             stop(0, "end of the run");
         }
 

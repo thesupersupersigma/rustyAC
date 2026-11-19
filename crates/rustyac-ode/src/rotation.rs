@@ -2,16 +2,16 @@
 
 //! Quaternion and rotation-matrix helpers: `ode/src/rotation.cpp`.
 
-use crate::common::{Matrix3, Quaternion};
-use rustyac_math::sqrtf;
+use crate::common::{Matrix3, Quaternion, Real};
 
 /// `dRSetIdentity` @ 0x1403465f0.
-pub fn r_set_identity(r: &mut Matrix3) {
-    *r = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+pub fn r_set_identity<R: Real>(r: &mut Matrix3<R>) {
+    let (o, l) = (R::ZERO, R::ONE);
+    *r = [l, o, o, o, o, l, o, o, o, o, l, o];
 }
 
-/// `dQMultiply0` @ 0x140346040: `qa = qb * qc`.
-pub fn q_multiply0(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
+/// `dQMultiply0` @ 0x140346040 (CSP +0x168b680, same order): `qa = qb * qc`.
+pub fn q_multiply0<R: Real>(qb: &Quaternion<R>, qc: &Quaternion<R>) -> Quaternion<R> {
     [
         qb[0] * qc[0] - qb[1] * qc[1] - qb[2] * qc[2] - qb[3] * qc[3],
         qb[0] * qc[1] + qb[1] * qc[0] + qb[2] * qc[3] - qb[3] * qc[2],
@@ -20,10 +20,14 @@ pub fn q_multiply0(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
     ]
 }
 
-/// `dQMultiply1` @ 0x140346130: `qa = inverse(qb) * qc`.
-pub fn q_multiply1(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
+/// `dQMultiply1` @ 0x140346130 (CSP +0x168b7b0): `qa = inverse(qb) * qc`.
+pub fn q_multiply1<R: Real>(qb: &Quaternion<R>, qc: &Quaternion<R>) -> Quaternion<R> {
     [
-        qb[0] * qc[0] + qb[1] * qc[1] + qb[2] * qc[2] + qb[3] * qc[3],
+        if R::FAST {
+            (qb[2] * qc[2] + qb[3] * qc[3]) + (qb[0] * qc[0] + qb[1] * qc[1])
+        } else {
+            qb[0] * qc[0] + qb[1] * qc[1] + qb[2] * qc[2] + qb[3] * qc[3]
+        },
         qb[0] * qc[1] - qb[1] * qc[0] - qb[2] * qc[3] + qb[3] * qc[2],
         qb[0] * qc[2] - qb[2] * qc[0] - qb[3] * qc[1] + qb[1] * qc[3],
         qb[0] * qc[3] - qb[3] * qc[0] - qb[1] * qc[2] + qb[2] * qc[1],
@@ -31,7 +35,7 @@ pub fn q_multiply1(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
 }
 
 /// `dQMultiply2` @ 0x140346220: `qa = qb * inverse(qc)`.
-pub fn q_multiply2(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
+pub fn q_multiply2<R: Real>(qb: &Quaternion<R>, qc: &Quaternion<R>) -> Quaternion<R> {
     [
         qb[0] * qc[0] + qb[1] * qc[1] + qb[2] * qc[2] + qb[3] * qc[3],
         -qb[0] * qc[1] + qb[1] * qc[0] - qb[2] * qc[3] + qb[3] * qc[2],
@@ -40,12 +44,12 @@ pub fn q_multiply2(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
     ]
 }
 
-/// `dQMultiply3` @ 0x140346310: `qa = inverse(qb) * inverse(qc)`.
+/// `dQMultiply3` @ 0x140346310 (CSP +0x168b8a0, same order): `qa = inverse(qb) * inverse(qc)`.
 ///
 /// The source says `-qb0*qc1 - qb1*qc0 + qb2*qc3 - qb3*qc2`; the compiled code groups the
 /// two negative products first (`addss` @ 0x140346364) and subtracts their sum, which gives
 /// the other sign on an exact zero.
-pub fn q_multiply3(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
+pub fn q_multiply3<R: Real>(qb: &Quaternion<R>, qc: &Quaternion<R>) -> Quaternion<R> {
     [
         qb[0] * qc[0] - qb[1] * qc[1] - qb[2] * qc[2] - qb[3] * qc[3],
         (qb[2] * qc[3] - (qb[1] * qc[0] + qb[0] * qc[1])) - qb[3] * qc[2],
@@ -54,34 +58,38 @@ pub fn q_multiply3(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
     ]
 }
 
-/// `dRfromQ` @ 0x140346620 (`dQtoR` in the stepper): rotation matrix of a unit quaternion.
-pub fn r_from_q(r: &mut Matrix3, q: &Quaternion) {
-    let qq1 = 2.0 * q[1] * q[1];
-    let qq2 = 2.0 * q[2] * q[2];
-    let qq3 = 2.0 * q[3] * q[3];
-    r[0] = 1.0 - qq2 - qq3;
-    r[1] = 2.0 * (q[1] * q[2] - q[0] * q[3]);
-    r[2] = 2.0 * (q[1] * q[3] + q[0] * q[2]);
-    r[3] = 0.0;
-    r[4] = 2.0 * (q[1] * q[2] + q[0] * q[3]);
-    r[5] = 1.0 - qq1 - qq3;
-    r[6] = 2.0 * (q[2] * q[3] - q[0] * q[1]);
-    r[7] = 0.0;
-    r[8] = 2.0 * (q[1] * q[3] - q[0] * q[2]);
-    r[9] = 2.0 * (q[2] * q[3] + q[0] * q[1]);
-    r[10] = 1.0 - qq1 - qq2;
-    r[11] = 0.0;
+/// `dRfromQ` @ 0x140346620 (`dQtoR` in the stepper; CSP +0x168b990): rotation matrix of a
+/// unit quaternion. CSP doubles each factor of three sums (`(q0+q0)*q2 + (q1+q1)*q3`).
+pub fn r_from_q<R: Real>(r: &mut Matrix3<R>, q: &Quaternion<R>) {
+    let two = R::TWO;
+    let qq1 = two * q[1] * q[1];
+    let qq2 = two * q[2] * q[2];
+    let qq3 = two * q[3] * q[3];
+    let d = |a: R| a + a;
+    r[0] = R::ONE - qq2 - qq3;
+    r[1] = two * (q[1] * q[2] - q[0] * q[3]);
+    r[2] = if R::FAST { d(q[0]) * q[2] + d(q[1]) * q[3] } else { two * (q[1] * q[3] + q[0] * q[2]) };
+    r[3] = R::ZERO;
+    r[4] = if R::FAST { d(q[1]) * q[2] + d(q[0]) * q[3] } else { two * (q[1] * q[2] + q[0] * q[3]) };
+    r[5] = R::ONE - qq1 - qq3;
+    r[6] = two * (q[2] * q[3] - q[0] * q[1]);
+    r[7] = R::ZERO;
+    r[8] = two * (q[1] * q[3] - q[0] * q[2]);
+    r[9] = if R::FAST { d(q[0]) * q[1] + d(q[2]) * q[3] } else { two * (q[2] * q[3] + q[0] * q[1]) };
+    r[10] = R::ONE - qq1 - qq2;
+    r[11] = R::ZERO;
 }
 
-/// `dQfromR` @ 0x140346400: quaternion of a rotation matrix.
-pub fn q_from_r(r: &Matrix3) -> Quaternion {
+/// `dQfromR` @ 0x140346400 (CSP +0x168bae0): quaternion of a rotation matrix. CSP's `0.5 / s`
+/// has the same bits as `0.5 * (1 / s)` here: halving is exact and `s >= 2^-538`.
+pub fn q_from_r<R: Real>(r: &Matrix3<R>) -> Quaternion<R> {
     let m = |i: usize, j: usize| r[i * 4 + j];
-    let mut q = [0f32; 4];
+    let mut q = [R::ZERO; 4];
     let tr = m(0, 0) + m(1, 1) + m(2, 2);
-    if tr >= 0.0 {
-        let s = sqrtf(tr + 1.0);
-        q[0] = 0.5 * s;
-        let s = 0.5 * (1.0f32 / s);
+    if tr >= R::ZERO {
+        let s = R::sqrt(tr + R::ONE);
+        q[0] = R::HALF * s;
+        let s = R::HALF * (R::ONE / s);
         q[1] = (m(2, 1) - m(1, 2)) * s;
         q[2] = (m(0, 2) - m(2, 0)) * s;
         q[3] = (m(1, 0) - m(0, 1)) * s;
@@ -101,25 +109,25 @@ pub fn q_from_r(r: &Matrix3) -> Quaternion {
     };
     match case {
         0 => {
-            let s = sqrtf((m(0, 0) - (m(1, 1) + m(2, 2))) + 1.0);
-            q[1] = 0.5 * s;
-            let s = 0.5 * (1.0f32 / s);
+            let s = R::sqrt((m(0, 0) - (m(1, 1) + m(2, 2))) + R::ONE);
+            q[1] = R::HALF * s;
+            let s = R::HALF * (R::ONE / s);
             q[2] = (m(0, 1) + m(1, 0)) * s;
             q[3] = (m(2, 0) + m(0, 2)) * s;
             q[0] = (m(2, 1) - m(1, 2)) * s;
         }
         1 => {
-            let s = sqrtf((m(1, 1) - (m(2, 2) + m(0, 0))) + 1.0);
-            q[2] = 0.5 * s;
-            let s = 0.5 * (1.0f32 / s);
+            let s = R::sqrt((m(1, 1) - (m(2, 2) + m(0, 0))) + R::ONE);
+            q[2] = R::HALF * s;
+            let s = R::HALF * (R::ONE / s);
             q[3] = (m(1, 2) + m(2, 1)) * s;
             q[1] = (m(0, 1) + m(1, 0)) * s;
             q[0] = (m(0, 2) - m(2, 0)) * s;
         }
         _ => {
-            let s = sqrtf((m(2, 2) - (m(0, 0) + m(1, 1))) + 1.0);
-            q[3] = 0.5 * s;
-            let s = 0.5 * (1.0f32 / s);
+            let s = R::sqrt((m(2, 2) - (m(0, 0) + m(1, 1))) + R::ONE);
+            q[3] = R::HALF * s;
+            let s = R::HALF * (R::ONE / s);
             q[1] = (m(2, 0) + m(0, 2)) * s;
             q[2] = (m(1, 2) + m(2, 1)) * s;
             q[0] = (m(1, 0) - m(0, 1)) * s;
@@ -128,12 +136,14 @@ pub fn q_from_r(r: &Matrix3) -> Quaternion {
     q
 }
 
-/// `dDQfromW` @ 0x140345f70 (`dWtoDQ`): time derivative of `q` for angular velocity `w`.
-pub fn dq_from_w(w: &[f32], q: &Quaternion) -> [f32; 4] {
+/// `dDQfromW` @ 0x140345f70 (`dWtoDQ`; CSP +0x168bca0): time derivative of `q` for angular
+/// velocity `w`. CSP multiplies each product of the third row by one half before summing.
+pub fn dq_from_w<R: Real>(w: &[R], q: &Quaternion<R>) -> [R; 4] {
+    let h = R::HALF;
     [
-        0.5 * (-w[0] * q[1] - w[1] * q[2] - w[2] * q[3]),
-        0.5 * (w[0] * q[0] + w[1] * q[3] - w[2] * q[2]),
-        0.5 * (-w[0] * q[3] + w[1] * q[0] + w[2] * q[1]),
-        0.5 * (w[0] * q[2] - w[1] * q[1] + w[2] * q[0]),
+        h * (-w[0] * q[1] - w[1] * q[2] - w[2] * q[3]),
+        h * (w[0] * q[0] + w[1] * q[3] - w[2] * q[2]),
+        if R::FAST { (h * (w[1] * q[0]) - h * (w[0] * q[3])) + h * (w[2] * q[1]) } else { h * (-w[0] * q[3] + w[1] * q[0] + w[2] * q[1]) },
+        h * (w[0] * q[2] - w[1] * q[1] + w[2] * q[0]),
     ]
 }
