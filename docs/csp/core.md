@@ -20,9 +20,10 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5c A. CSP's ODE release | done: ODE master `66615b8a` (2025-01-05), [below](#task-c5c-csps-ode-release) |
 | C5c B. `rustyac-ode` generic, f64 proofs | split into parts 3 (C5c) and 4 (C5d) (rule 32) |
 | C5c B0. does CSP call `dWorldStep`? | done: yes, every step; QuickStep never runs for cars ([answer](#does-csp-call-dworldstep-yes-every-physics-step)) |
-| C5c B1. `rustyac-ode` generic over the number type | not started |
+| C5c B1. `rustyac-ode` generic over the number type | done for rotation and mass: 7 f64 functions bit-identical to CSP's ([below](#part-3-step-1-rotation-and-mass-in-double)); Vanilla unchanged |
+| C5c B2. odemath / matrix helpers, body integration, ray-vs-trimesh, joint rows in f64 | not started (part 3 resized to 4-6 sessions, rule 32) |
 
-Next: plan part 3, step 1 (`rustyac-ode` generic over the number type, Vanilla bit-identical).
+Next: plan part 3, step 2: the next shared functions in f64 (odemath helpers first, then body integration), each one transcribed in CSP's machine order and proven with `csp_oracle --ode`.
 
 ## The core in one paragraph
 
@@ -180,14 +181,14 @@ density: same inputs through CSP's function and the port, every output compared 
 |---|---|---|---|
 | 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | **done in C5b** |
 | 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
-| 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ray-vs-trimesh, hinge / ball / fixed rows (C5c) | 2-3 | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
+| 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ray-vs-trimesh, hinge / ball / fixed rows (C5c, step 1 done: rotation and mass) | 4-6 (was 2-3: CSP's ODE is built with reassociation, each function needs its machine order) | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
 | 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)) 1-2; contact `getInfo2` and the box / trimesh colliders that changed 1-2; `odemath` / `matrix` changes 0.5; libccd pairs 1. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 3.5-5.5 | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback | 2-3 | contact lists identical per step |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5c** | **15.5-23.5** (C5b: 15-22; C5c found ODE from 2025, cars on `dWorldStep`, no QuickStep) | |
+| | **Total left after C5c** | **16.5-25.5** (C5b: 15-22; C5c found ODE from 2025, cars on `dWorldStep`, no QuickStep, part 3 bigger) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -328,3 +329,27 @@ its world set-up, but does not step the cars with it:
   `+0x16c1f80` 0 in all three.
 
 So part 4's LDLT / LCP item is needed and QuickStep is not, for stock and extended cars.
+
+### Part 3, step 1: rotation and mass in double
+
+- `crates/rustyac-ode/src/common.rs` has `trait Real` (f32 and f64): constants, `sqrt` (f32: the
+  runtime's `sqrtf` as before, f64: `f64::sqrt`) and `FAST`. `Vector3`, `Quaternion`, `Matrix3` and
+  `Mass` take the number type with f32 as default, so every Vanilla caller is unchanged.
+- CSP's ODE is compiled with reassociation (SSE2, no FMA): some sums come out in another order
+  than ODE's source and than the decompiler's pseudo-C. Where the order differs the code has
+  `if R::FAST { CSP's order } else { ODE's order }`, the f64 branch read from the machine code:
+  `dQMultiply1` +0x168b7b0 (`r[0]`), `dRfromQ` +0x168b990 (`r[2]`, `r[4]`, `r[9]` as
+  `(q0+q0)*q2 + (q1+q1)*q3` and so on), `dDQfromW` +0x168bca0 (row 2). `dQMultiply0` +0x168b680,
+  `dQMultiply3` +0x168b8a0, `dQfromR` +0x168bae0 (`0.5/s`, the same bits as `0.5*(1/s)`),
+  `dMassSetZero` +0x168d4f0 and `dMassSetBoxTotal` +0x168d670 keep ODE's order.
+- Called during a 600-step Spa drive (both cars, 0 workers): `dQMultiply1` 600, `dRfromQ` 3600,
+  `dDQfromW` 3600, mass functions 2 each; `dQfromR`, `dQMultiply0/3` not called.
+- Proof: `csp_oracle --ode <breaks.txt>` (`tools/csp_oracle/src/ode.rs`) calls CSP's 7 functions
+  in process and rustyac-ode's f64 ones on the drive's own inputs (4200 quaternions, 3600 angular
+  velocities from breakpoint dumps), every pair of 25 edge values, random bit patterns and unit
+  quaternions, at MXCSR 0x1f80 and 0x9fc0 (flush-to-zero): 1,204,200 inputs each, 0 differ, for
+  both cars. With the f64 path planted to ODE's order it finds 119,662 / 59,074 / 1,486
+  differences in `dQMultiply1` / `dRfromQ` / `dDQfromW`. Proof area `csp`, cases `ode <car>`
+  (quick set, 2m40s).
+- Size: 7 functions took a session because each needs its order read from the machine code; the
+  matrix and LDLT loops may be vectorised as well. Part 3 is now 4-6 sessions, one done.
