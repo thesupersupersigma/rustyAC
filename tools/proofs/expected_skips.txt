@@ -20,3 +20,5 @@ replays replay-file AC_311026-163403_O_ks_corvette_c7r_ks_nordschleife_touristen
 # The drive names its setup under re\scratch\task15, deleted since (docs/port/proofs.md): the old
 # exe cannot read it and dumps nothing (browser.sh plays it with the kept copy)
 dumps oracle/game/conditions_spa_setup_launch.ryin | the old exe dumps nothing: its setup file (re\scratch\task15\god_tc4.ini) is gone
+# Task W3: the browser area's fallback banner case drives the montreal mod; an install without it skips the case
+browser Full mode's fallback banner (montreal) | the montreal mod is not installed: no other track names a shader the install lacks

@@ -68,10 +68,22 @@ r=$(page "join=x-not-running&name=proof39" --menu)
 echo "$r" | grep -qF 'x-not-running is not running now' && ! echo "$r" | grep -qF 'connecting' && verdict "?join of an unlisted server" IDENTICAL "$r" || verdict "?join of an unlisted server" DIFFERENT "$r"
 # Full mode on a track it cannot draw (Task W2): montreal's CSP layout names stPerPixelNM_UVflow,
 # which the install's system/shaders/win lacks; the debug view draws and the page's banner says why
-r=$(node web/check.mjs --url "http://127.0.0.1:8139/?testfolder=/ac-test/&go=1&car=ks_ferrari_f2004&track=montreal&spawn=pit&autodrive=1&backend=full" --seconds 5     --script tools/proofs/fallback_page.js --profile "$out/chrome_profile_fallback" --port 9340 --timeout 900 --flags "--enable-features=Vulkan" 2> "$out/fallback.err" |
-    node -e 'let t="";process.stdin.on("data",(d)=>(t+=d)).on("end",()=>{const r=JSON.parse(t||"{}");console.log(JSON.stringify(r.script??r.error??null))})')
-echo "$r" | grep -qF '"shown":true' && echo "$r" | grep -qF 'Full mode could not start' && echo "$r" | grep -qF 'stPerPixelNM_UVflow' && echo "$r" | grep -qF '"same":true' &&
-    verdict "Full mode's fallback banner (montreal)" IDENTICAL "$r" || verdict "Full mode's fallback banner (montreal)" DIFFERENT "$r"
+if [ -d "$ac/content/tracks/montreal" ]; then
+    r=$(node web/check.mjs --url "http://127.0.0.1:8139/?testfolder=/ac-test/&go=1&car=ks_ferrari_f2004&track=montreal&spawn=pit&autodrive=1&backend=full" --seconds 5     --script tools/proofs/fallback_page.js --profile "$out/chrome_profile_fallback" --port 9340 --timeout 900 --flags "--enable-features=Vulkan" 2> "$out/fallback.err" |
+        node -e 'let t="";process.stdin.on("data",(d)=>(t+=d)).on("end",()=>{const r=JSON.parse(t||"{}");console.log(JSON.stringify(r.script??r.error??null))})')
+    echo "$r" | grep -qF '"shown":true' && echo "$r" | grep -qF 'Full mode could not start' && echo "$r" | grep -qF 'stPerPixelNM_UVflow' && echo "$r" | grep -qF '"same":true' &&
+        verdict "Full mode's fallback banner (montreal)" IDENTICAL "$r" || verdict "Full mode's fallback banner (montreal)" DIFFERENT "$r"
+else skip "Full mode's fallback banner (montreal)" "the montreal mod is not installed"; fi
+# the render scale (Task W3): Full mode at 50 % from the start, and 100 % turned to 50 % mid-drive;
+# each screenshot one whole picture (scale_check.py: no black quarter, no app bar off the edge)
+scale_case() {
+    node web/check.mjs --url "http://127.0.0.1:8139/?testfolder=/ac-test/&go=1&car=ks_ferrari_f2004&track=ks_red_bull_ring&spawn=pit&autodrive=1&backend=full&graphics=high,SCALE=$2" \
+        --seconds 8 $3 --screenshot "$out/scale_$2.png" --profile "$out/chrome_profile_scale" --port 9342 --timeout 900 --flags "--enable-features=Vulkan" > "$out/scale_$2.json" 2>&1
+    r=$(python tools/proofs/scale_check.py "$out/scale_$2.png" 2>&1 | tr -d '\r')
+    case $r in ok*) verdict "$1" IDENTICAL "$r" ;; *) verdict "$1" DIFFERENT "$r" ;; esac
+}
+scale_case "Full mode at render scale 50 %" 50
+scale_case "Full mode's render scale 100 % to 50 % mid-drive" 100 "--script tools/proofs/scale_page.js"
 # the way back to AC's launcher (Task W1): 3 drives with sound left by AC's Exit (FMOD's late mix
 # once hung the page there), then 3 reloads from the launcher and 3 from a drive
 python tools/proofs/roundtrip_flow.py "$out/roundtrip_flow.json" 3 3 ks_ferrari_f2004@spa
