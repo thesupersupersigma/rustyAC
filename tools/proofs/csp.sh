@@ -61,8 +61,7 @@ for car in $extended $plain; do
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
     if oracle "${car}_van" --car "$car" --car-data "$out/plain/$car" --vanilla && oracle "${car}_csp" --car "$car"; then
-        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '
-' | grep -m1 '^PRESSURES ')
+        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '' | grep -m1 '^PRESSURES ')
         line=$(python tools/proofs/csp_words.py "$out/runs/${car}_van/car_root/car_words.txt" "$out/runs/${car}_csp/car_root/car_words.txt" "$port")
         verdict "words $car" "${line%% |*}" "${line#* | }"
     else
