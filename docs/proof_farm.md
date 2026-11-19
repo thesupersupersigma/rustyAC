@@ -16,10 +16,12 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
   physics part of the copy is on the VM, the rest of the one-time copy (~85 GB) waits: SMB gave
   5.3 MB/s over Wi-Fi. Part 3 step 1 done: the full physics area is 121/121 IDENTICAL on the VM
   with `RUSTYAC_MATH=pure` (94/121 on the DLL path).
-- **Resume here: part 3 step 2** (session 0: copy one render case's, one gui case's and the
-  launcher's data, run them over ssh; then a scheduled task in the logged-in session if needed),
-  then step 3 (the other areas, cheapest first: each needs its data copied; ask Super about
-  ethernet before the big copy), part 4 (`run_all.sh --farm`, areas.map "farm", lanes: physics
+- Part 3 step 2 done: session 0 fails render, gui and the launcher (no desktop: no swap chain,
+  no screen modes); a scheduled task with `/IT` in the logged-in session runs all three
+  IDENTICAL. `farm_sync.sh` has the `ac` and `repo` parts for the rest of the copy (Super runs it).
+- **Resume here: part 3 step 3**, once Super's copy of the `ac` and `repo` parts is on the VM
+  (the other areas, cheapest first; render, gui, python, yebis_sweep, shaders and the launcher
+  through the logged-in session's scheduled task), part 4 (`run_all.sh --farm`, areas.map "farm", lanes: physics
   split into lanes), part 5.
 
 ## Part 1: what the processor changes (from the code)
@@ -502,14 +504,30 @@ from git and from `src/car_oracle.txt` are both `c1af0ef52f0411a5`, and fresh's 
 with robocopy (`/MT:8 /J /XO`; a file of the same size and time is skipped), into `<share>\repo` (for
 `RUSTYAC_REPO`) and `<share>\ac` (for `AC_ROOT`). Only `repo\tools\proofs` and `repo\target\prebuilt`
 are mirrored (deletions); everything else only gains files, so results made on the VM stay. Every
-source is named in the script, so nothing under a served folder goes. Parts so far:
+source is named in the script, so nothing under a served folder goes. With no part named it runs
+all four:
 
 - `programs`: the manifest's files folder by folder with the PC's `msvcr120.dll` and
-  `vcruntime140.dll` beside each (F1), `tools/proofs`, `tools/net_gold`, `target/prebuilt`,
-  `cardata/`, AC's `system/` and `acs.exe`: 187 MB the first time, about 1 MB after.
+  `vcruntime140.dll` beside each (F1) and the DirectX June 2010 DLLs `acs.exe` imports
+  (`d3dcompiler_43.dll`, `d3dx11_43.dll`, `xinput1_3.dll`: a plain Windows lacks them, and the game
+  side stops with "d3dcompiler_43.dll not found"), `tools/proofs`, `tools/net_gold`,
+  `target/prebuilt`, `cardata/`, AC's `system/` and `acs.exe`: 187 MB the first time (+33 MB for the
+  DirectX DLLs), about 1 MB after.
 - `physics`: every `oracle/car*/` folder, the top level of every folder holding a `.mcrec`, the
   tracks the recordings name (`track=` in their header: bahrain_international_circuit, imola,
   ks_drag, ks_vallelunga, magione, mugello, spa) and every car's `collider.kn5`: 15.8 GB.
+- `ac`: the rest of the install, all of AC's folder but `sdk/` (Kunos' editors, which nothing
+  reads): 71.8 GB in all (robocopy `/L`), less what `physics` already sent.
+- `repo`: `oracle/` (15.1 GB) and `re/gold` without `web/` (22.5 GB; the browser's kept results stay
+  on the PC with the browser), plus the two repo files areas read besides the programs: python's
+  test apps (`tools/render_oracle/py_apps`) and `tools/csp_oracle/src/main.rs` (csp.sh takes its
+  race.ini from there).
+
+`oracle/`, `re/gold` and AC's folder hold no junctions (checked), so robocopy's following of
+junctions copies nothing twice. The rest of the one-time copy (`ac` and `repo`, about 90 GB not yet
+there) is Super's to start, e.g. overnight, from Git Bash in this worktree:
+`FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh programs ac repo` (about 5 h at
+5 MB/s; it can be stopped and started again, robocopy skips what is there).
 
 The share must be given as `//<vm>/rustyac-farm` (or `\\<vm>\...`); anything else stops the script,
 and so does a share without a `repo` folder. (A lost backslash in the first try made robocopy write
@@ -547,15 +565,52 @@ port then takes the exact Rust copies of those bodies. **Areas where the game ru
 process (csp, render, gui, python, sound, fresh's new recordings) must keep the DLL path** there,
 since the game takes SSE2 too; areas against kept results need the same switch when they move.
 
+**What each machine proves.** On the VM the physics area proves the **pure** maths path (pure.rs,
+the one the browser takes); the PC's runs keep proving the DLL path (MSVCR120.dll's FMA3 bodies, the
+desktop's default). Neither stands in for the other, so a `--farm` full run says so in its summary
+line (part 4).
+
 The two ERRORs were the harness: `t27/v6` and `t27f/v6_line` drive an old AI line kept in
 `re/gold/roots/t27_v6`, and their header's `ai_folder` is the PC's absolute path. A recording
 replayed on another machine now finds that folder in its own repository (the longest tail of the
 path that exists there, `engine/record.rs`, with a unit test), as `track_folder` already did with
 the game's folder; `farm_sync.sh physics` sends `re/gold/roots`.
 
+**A `find` through a junction.** In the browser worktree `oracle/` is a junction, and `find oracle
+-name '*.mcrec'` does not enter it (Git's `find` takes a junction for a link), so physics there
+skipped every recording without a word; `find oracle/` does. The other area scripts were checked
+for the same: only physics had it (fresh's `find oracle/t24b oracle/t28 oracle/t28b` starts below
+the junction and finds the same 62 files as in the main folder; the rest walk `target/` or AC's
+folder, which hold no junctions, nor do `oracle/`, `re/gold` or AC's folder inside).
+
 **Time.** Pure maths is slower on the Westmere (libm's software fma, no FMA instruction): 93 min in
 one lane, where the PC's last full run took 85 min for this area in its four-lane run. The area's
 cases are independent, so part 4's lanes split it (the longest case, `rc_weekend_q`, is 6m44s).
 
-Not done yet in part 3: session 0 (one render, one gui case, the launcher) and the other areas,
-which wait for their data on the VM (the rest of the one-time copy, after ethernet).
+### Session 0 and the logged-in session (step 2)
+
+With only what the cases read copied (`re/scratch/taskF2/sync_trial.sh`: the default car, AC's
+`cfg`, `apps`, `launcher` and `content/{fonts,gui,sfx,weather,texture,driver,objects3D}`, 2.1 GB),
+three runs through `vm_run.sh` (`re/scratch/taskF2/vm_trial.sh`): render (`r20_01`, and quick's
+`overlays ks_drag/drag400`), gui (`base`) and the launcher's twelve lists:
+
+| where it runs | render | gui | launcher |
+|---|---|---|---|
+| ssh (session 0, no desktop) | ERROR 2 of 2: `D3D11CreateDeviceAndSwapChain` 0x887A0022 (DXGI_ERROR_NOT_CURRENTLY_AVAILABLE), then the game's code crashes | ERROR: the same | DIFFERENT 10 of 12: the screen's modes come back empty (`videomodes`), the audio page's answers differ, `probe` crashes the oracle (an access violation in the launcher's code) |
+| a scheduled task in the logged-in user's session | **IDENTICAL 2 of 2**, 26 s | **IDENTICAL**, 23 s | **IDENTICAL 12 of 12**, 2m48s |
+
+So **session 0 cannot run the WARP areas or the launcher; the logged-in session can.** The VM's
+user stays logged in at the console (Super leaves it so), and the runs start as a scheduled task
+with `/IT` (interactive only: it runs in that user's session, on its desktop, and needs no password):
+
+    schtasks /create /tn <name> /tr "C:\rustyac-farm\f2\trial_task.cmd <suffix>" /sc once /st 23:59 /it /ru <user> /f
+    schtasks /run /tn <name>
+
+made over ssh (`/sc once` with a time that never comes: `/run` starts it). `schtasks /change` asks
+for the password even then (it hung the ssh call): make the task again with `/create /f` instead.
+The task's output goes to a log file the ssh side reads. Part 4's farm runner starts render, gui,
+python, yebis_sweep, shaders and the launcher this way; CPU-only areas can stay on plain ssh (the
+physics area ran there).
+
+Not done yet in part 3: the other areas (step 3), which wait for their data on the VM (the `ac`
+and `repo` parts of the copy).
