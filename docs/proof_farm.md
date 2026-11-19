@@ -28,7 +28,7 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
   the `/IT` scheduled task; `prebuild.sh` + `farm_sync.sh programs` (and `physics` / `repo` for new
   recordings) first; 8 lanes, with physics and yebis_sweep split into lanes by case (an area's out
   folder is deleted when it starts: shards need their own); results back over the share; the
-  ssh/share/session fallbacks; the locked-session and no-RDP checks; `proof_tui`. Then part 5.
+  ssh/share/session fallbacks; `proof_tui`. Then part 5. (Locked and no-RDP: proven, step 3.)
   After the rebase onto `master` the prebuilt programs are stale: `prebuild.sh` again (it needs the
   dumps area's old release, v1.1.3, built once: done on the PC).
 
@@ -700,3 +700,9 @@ What the runs found and what was fixed (each a farm-only cause; the PC's runs ar
 
 Checked on the PC after the changes: `run_all.sh --quick sound net dumps`, 4/4, 16/16, 6/6
 IDENTICAL, and dumps again against v1.1.3, 6/6.
+
+**Locked, no remote desktop** (how the VM sits, logged in at the console by Autologon): every run
+above ran in the console session with no remote desktop connected. With the session locked (a `/IT`
+task running `rundll32 user32.dll,LockWorkStation`, `re/scratch/taskF2/lock.cmd`; LogonUI then shows
+in session 1), render's `r20_01` (3 cases) and gui's `base` still ran IDENTICAL through the
+scheduled task: a locked desktop still makes WARP's windows and swap chains. Nothing more is needed.
