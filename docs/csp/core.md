@@ -18,7 +18,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5b plan update | done (Plan) |
 | C5c 0. release notes from `docs/releases/<tag>.md` | done |
 | C5c A. CSP's ODE release | done: ODE master `66615b8a` (2025-01-05), [below](#task-c5c-csps-ode-release) |
-| C5c B. `rustyac-ode` generic, f64 proofs | not started: the release is too far from 0.13.1, split into parts 3 and 4 (rule 32) |
+| C5c B. `rustyac-ode` generic, f64 proofs | split into parts 3 (C5c) and 4 (C5d) (rule 32) |
+| C5c B0. does CSP call `dWorldStep`? | done: yes, every step; QuickStep never runs for cars ([answer](#does-csp-call-dworldstep-yes-every-physics-step)) |
+| C5c B1. `rustyac-ode` generic over the number type | not started |
 
 Next: plan part 3, step 1 (`rustyac-ode` generic over the number type, Vanilla bit-identical).
 
@@ -179,15 +181,15 @@ density: same inputs through CSP's function and the port, every output compared 
 | 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | **done in C5b** |
 | 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
 | 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ray-vs-trimesh, hinge / ball / fixed rows (C5c) | 2-3 | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
-| 4 | the `66615b8a` code 0.13.1 does not have (C5c): QuickStep as rewritten since 2017 (threaded stages, dynamic iteration count, reorder and its `dRandInt` seed; about 3,600 C++ lines, none ported yet) 3-4; contact `getInfo2` and the box / trimesh colliders that changed 1-2; `odemath` / `matrix` changes 0.5; libccd pairs 1; the new LDLT / LCP solvers only if CSP steps a world with `dWorldStep` (open question) +1-2 | 6-9 (+1-2) | per-stage in-process compare |
+| 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)) 1-2; contact `getInfo2` and the box / trimesh colliders that changed 1-2; `odemath` / `matrix` changes 0.5; libccd pairs 1. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 3.5-5.5 | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback | 2-3 | contact lists identical per step |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5c** | **18-27** (C5b: 15-22; C5c found QuickStep from 2025, not 0.13.1's) | |
+| | **Total left after C5c** | **15.5-23.5** (C5b: 15-22; C5c found ODE from 2025, cars on `dWorldStep`, no QuickStep) | |
 
-Later, not counted: COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
+Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
 
 ### Decisions
@@ -306,7 +308,23 @@ differing proof is then either a CSP change or a port bug, and the source of `66
 | `joints/contact.cpp` | 206 / 198 | part 4 |
 | `box.cpp`, `collision_trimesh_box.cpp`, `collision_trimesh_opcode.cpp` | 309 / 26, 169 / 237, 446 / 574 | part 4 |
 | `quickstep.cpp` | 2668 / 786 (3,587 lines; `rustyac-ode` has no QuickStep) | part 4 |
-| `step.cpp`, `lcp.cpp` + new `fast*_impl.h` LDLT solvers (~4,500 lines) | 620 / 408, 452 / 353 | part 4, only if CSP uses `dWorldStep` |
+| `step.cpp`, `lcp.cpp` + new `fast*_impl.h` LDLT solvers (~4,500 lines) | 620 / 408, 452 / 353 | part 4 (CSP steps cars with `dWorldStep`, below) |
 
-Vanilla AC steps with `dWorldStep` (Dantzig LCP); CSP sets QuickStep's iteration count to 48 in
-its world set-up, so the CSP path needs a QuickStep port that `rustyac-ode` never had.
+Vanilla AC steps with `dWorldStep` (Dantzig LCP). CSP sets QuickStep's iteration count to 48 in
+its world set-up, but does not step the cars with it:
+
+### Does CSP call `dWorldStep`? Yes, every physics step
+
+- Workers 0: the world step `+0x92e4a0` calls `+0x16c7650(world, info, dt, +0x16c5850)` then
+  `+0x16c6d00` = `ode.cpp`'s `dWorldStep` body (`66615b8a` line 1879): `+0x16c5850` has the
+  `m * dPAD(m)` A-matrix term of `step.cpp`'s `dxEstimateStepMemoryRequirements`, and
+  `+0x16c6d00`'s call-count estimator `+0x16c5a10` returns `2 * n + 4` = `step.cpp`'s
+  `dxEstimateStepMaxCallCount`.
+- Workers > 0: CSP's island builder `+0x168d1c0` picks the estimator per island in `+0x168d180`:
+  QuickStep's (`+0x16c1f80`, no m×m term) only when every body of the island has flag `0x200`
+  (`+56`), else `step.cpp`'s. `0x200` is CSP's own: ODE's body flags stop at `dxBodyGyroscopic = 256`.
+- Breakpoint counts, Spa, `track_spa_lap.ryin`, 600 steps (`re/scratch/taskC5b/runs/c5c_brk_*`):
+  F2004 and `rss_formula_rss_3_v6_2026` at workers 0, F2004 at workers 4: `+0x16c5850` 600,
+  `+0x16c1f80` 0 in all three.
+
+So part 4's LDLT / LCP item is needed and QuickStep is not, for stock and extended cars.
