@@ -18,6 +18,8 @@ pub trait Real:
     /// `1/12` as the compiled `dMassSetBoxTotal` multiplies by it.
     const ONE_TWELFTH: Self;
     fn sqrt(self) -> Self;
+    fn abs(self) -> Self;
+    fn copysign(self, sign: Self) -> Self;
 }
 
 impl Real for f32 {
@@ -29,6 +31,12 @@ impl Real for f32 {
     const ONE_TWELFTH: f32 = f32::from_bits(0x3daa_aaab);
     fn sqrt(self) -> f32 {
         rustyac_math::sqrtf(self)
+    }
+    fn abs(self) -> f32 {
+        f32::abs(self)
+    }
+    fn copysign(self, sign: f32) -> f32 {
+        f32::copysign(self, sign)
     }
 }
 
@@ -42,6 +50,13 @@ impl Real for f64 {
     fn sqrt(self) -> f64 {
         // sqrtsd/sqrtpd, correctly rounded like CSP's
         f64::sqrt(self)
+    }
+    fn abs(self) -> f64 {
+        f64::abs(self)
+    }
+    // CSP calls the CRT's `_copysign` (dwrite.dll+0x1dc98f0): magnitude of self, sign of `sign`
+    fn copysign(self, sign: f64) -> f64 {
+        f64::copysign(self, sign)
     }
 }
 

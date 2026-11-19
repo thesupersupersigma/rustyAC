@@ -21,9 +21,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5c B. `rustyac-ode` generic, f64 proofs | split into parts 3 (C5c) and 4 (C5d) (rule 32) |
 | C5c B0. does CSP call `dWorldStep`? | done: yes, every step; QuickStep never runs for cars ([answer](#does-csp-call-dworldstep-yes-every-physics-step)) |
 | C5c B1. `rustyac-ode` generic over the number type | done for rotation and mass: 7 f64 functions bit-identical to CSP's ([below](#part-3-step-1-rotation-and-mass-in-double)); Vanilla unchanged |
-| C5c B2. odemath / matrix helpers, body integration, ray-vs-trimesh, joint rows in f64 | not started (part 3 resized to 4-6 sessions, rule 32) |
+| C5c B2a. are CSP's matrix / LDLT loops vectorised? | done: partly, the LDLT / L1 solves are scalar ([answer](#part-3-step-2-vectorised-loops-and-odemath)) |
+| C5c B2b. odemath helpers in f64 | done: `dxSafeNormalize3` bit-identical to CSP's; the other helpers have no out-of-line copy in CSP, proven inside their callers ([below](#part-3-step-2-vectorised-loops-and-odemath)) |
+| C5c B2c. body integration, ray-vs-trimesh, joint rows in f64 | not started |
 
-Next: plan part 3, step 2: the next shared functions in f64 (odemath helpers first, then body integration), each one transcribed in CSP's machine order and proven with `csp_oracle --ode`.
+Next: plan part 3, step 2c: body integration (`step_body`) in f64, then ray-vs-trimesh and the hinge / ball / fixed rows, each one transcribed in CSP's machine order and proven with `csp_oracle --ode`.
 
 ## The core in one paragraph
 
@@ -353,3 +355,42 @@ So part 4's LDLT / LCP item is needed and QuickStep is not, for stock and extend
   (quick set, 2m40s).
 - Size: 7 functions took a session because each needs its order read from the machine code; the
   matrix and LDLT loops may be vectorised as well. Part 3 is now 4-6 sessions, one done.
+
+### Part 3, step 2: vectorised loops and odemath
+
+**Are CSP's matrix / LDLT loops vectorised?** Partly. Counted over every function of CSP's ODE
+(dwrite.dll +0x1680000..+0x1710000, packed-double `addpd/subpd/mulpd/divpd` and horizontal adds
+`unpckhpd/haddpd/movhlps` per function):
+
+- Element-wise loops are packed two doubles at a time and unrolled (`a[i] += s*b[i]` @ +0x16ff6b6:
+  eight per round with `mulpd`/`addpd`, a scalar tail). Each lane does what the scalar code does:
+  same bits, the port can stay scalar.
+- Some sums of products are reduced in pairs: +0x16fe3d0 (a solve kernel with two accumulators)
+  multiplies with `mulpd`, adds the two packed products with `addpd`, then folds the halves with
+  `unpckhpd` + `addsd`, so four products are summed `(p0+p2) + (p1+p3)` before they meet the
+  accumulator. That is reassociated: the f64 port must copy this order. 18 functions have such
+  horizontal adds (the body / joint / collider code at +0x168d930, +0x169e9f0, +0x16ae450,
+  +0x16b77c0, +0x16bd6b0, +0x16bf3b0, +0x16c0100, +0x16c16dc, +0x16c2834, +0x16c5370 and the
+  solver code at +0x16fc470, +0x16fe3d0, +0x16fed7b); each gets its order read when it is ported.
+- The big LDLT factor and L1 solve kernels (+0x17010c9 / +0x1702789, +0x17017b0 / +0x1702e80, two
+  copies each, and +0x1702440) are scalar `mulsd`/`addsd` only, unrolled like ODE's
+  `fastldlt` / `fastlsolve` source: no lane reordering, but the unrolled sums still follow the
+  compiler's order, read from the machine code.
+- Sizing: the vectorised reductions are a few lines each where they occur; they do not change
+  the plan (part 3: 4-6 sessions, part 4: 3.5-5.5).
+
+**odemath.** Of master's `odemath.cpp` only `dxSafeNormalize3` has an out-of-line copy
+(+0x168aed0; `dNormalize3` +0x168b060 calls it, 40 callers in the colliders and joints).
+`dxPlaneSpace`, `dxOrthogonalizeR`, `dxSafeNormalize4` and the header inlines (dot, cross, the
+`dMultiply` family) are inlined into their callers; they are proven with those callers (body
+integration, joints, colliders), not on their own.
+
+- `dxSafeNormalize3` keeps master's source order: the largest component taken as exactly one,
+  `l = 1/sqrt(1 + ti*ti + tj*tj)` (the machine code adds `ti*ti + 1` then `tj*tj`: the same
+  bits), the other two `*l`, the largest one `_copysign(l, a[idx])` (CRT +0x1dc98f0). A zero
+  vector returns false and is left unchanged (0.13.1 wrote (1, 0, 0)).
+- `safe_normalize3` in `crates/rustyac-ode/src/odemath.rs` is generic: `if R::FAST` takes
+  master's code, f32 keeps 0.13.1's. `Real` gained `abs` and `copysign`.
+- Proof: `csp_oracle --ode` checks both halves of each 8-value input (2,408,400 vectors) with
+  the return value: 0 differ at MXCSR 0x1f80 and 0x9fc0. With the f64 path planted to 0.13.1's
+  code it finds 476,219 / 542,137 differences. Proof area `csp`, cases `ode <car>`: 16 lines.

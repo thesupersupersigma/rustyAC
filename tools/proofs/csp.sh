@@ -61,7 +61,8 @@ for car in $extended $plain; do
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
     if oracle "${car}_van" --car "$car" --car-data "$out/plain/$car" --vanilla && oracle "${car}_csp" --car "$car"; then
-        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '' | grep -m1 '^PRESSURES ')
+        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '
+' | grep -m1 '^PRESSURES ')
         line=$(python tools/proofs/csp_words.py "$out/runs/${car}_van/car_root/car_words.txt" "$out/runs/${car}_csp/car_root/car_words.txt" "$port")
         verdict "words $car" "${line%% |*}" "${line#* | }"
     else
@@ -172,7 +173,7 @@ done
 
 # ode <car>: CSP's double ODE (Task C5c, docs/csp/core.md): a 600-step Spa drive logs the inputs of its
 # rotation functions (breakpoint dumps), then rustyac-ode's f64 functions against CSP's own on those,
-# edge values and random bits, at two MXCSR values (14 lines, each "0 differ")
+# edge values and random bits, at two MXCSR values (16 lines, each "0 differ")
 lap=oracle/game/track_spa_lap.ryin
 for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
     keep "ode $car" || continue
@@ -180,8 +181,8 @@ for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
     if CSP_ORACLE_BREAK=168b7b0d,168b990d,168bca0d oracle "ode_drive_$car" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --workers 0 --steps 600 \
         && oracle "ode_$car" --ode "$(cygpath -aw "$out/runs/ode_drive_$car/car_root/breaks.txt")"; then
         run=$out/runs/ode_$car.txt
-        if [ "$(tr -d '\r' < "$run" | grep -c '^ode [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 14 ]; then
-            verdict "ode $car" IDENTICAL "7 functions x 2 MXCSR, $(tr -d '\r' < "$run" | grep -m1 '^ode: ' | cut -d' ' -f2-6) from the drive, 0 differ"
+        if [ "$(tr -d '\r' < "$run" | grep -c '^ode [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 16 ]; then
+            verdict "ode $car" IDENTICAL "8 functions x 2 MXCSR, $(tr -d '\r' < "$run" | grep -m1 '^ode: ' | cut -d' ' -f2-6) from the drive, 0 differ"
         else
             verdict "ode $car" DIFFERENT "$(why "$run" '^ode|error|panic|fault')"
         fi

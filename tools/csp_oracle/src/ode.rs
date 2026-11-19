@@ -7,6 +7,7 @@
 //! (docs/port/ode_stage1.md: a NaN's payload depends on operand order the compiler may swap).
 
 use rustyac_ode::mass::Mass;
+use rustyac_ode::odemath;
 use rustyac_ode::rotation as rot;
 
 type Q = [f64; 4];
@@ -20,6 +21,7 @@ struct Csp {
     q_from_r: extern "C" fn(*mut f64, *const f64),
     dq_from_w: extern "C" fn(*mut f64, *const f64, *const f64),
     box_total: extern "C" fn(*mut f64, f64, f64, f64, f64),
+    safe_normalize3: extern "C" fn(*mut f64) -> bool,
 }
 
 #[derive(Default)]
@@ -80,6 +82,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
         q_from_r: f2(0x168_bae0),
         dq_from_w: f3(0x168_bca0),
         box_total: std::mem::transmute::<usize, extern "C" fn(*mut f64, f64, f64, f64, f64)>(dll + 0x168_d670),
+        safe_normalize3: std::mem::transmute::<usize, extern "C" fn(*mut f64) -> bool>(dll + 0x168_aed0),
     };
     let log = std::fs::read_to_string(breaks).expect("--ode takes the breaks.txt of a drive");
     let q4 = |v: &Vec<f64>| -> Q { [v[0], v[1], v[2], v[3]] };
@@ -113,7 +116,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
 
     for csr in [0x1f80u32, 0x9fc0] {
         std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
-        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total"].map(|n| (n, Count::default())).into();
+        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3"].map(|n| (n, Count::default())).into();
         for (set, inputs) in &sets {
             for (i, x) in inputs.iter().enumerate() {
                 let what = || format!("{set} #{i} {x:?}");
@@ -143,6 +146,13 @@ pub unsafe fn run(dll: usize, breaks: &str) {
                 port[1..5].copy_from_slice(&m.c);
                 port[5..].copy_from_slice(&m.i);
                 counts[6].1.check(&what, &mass, &port);
+                // both halves of the input, the return value as a fourth value
+                for v in [[x[0], x[1], x[2]], [x[4], x[5], x[6]]] {
+                    let (mut c, mut p) = ([v[0], v[1], v[2], 0.0], [v[0], v[1], v[2], 0.0]);
+                    c[3] = (csp.safe_normalize3)(c.as_mut_ptr()) as u8 as f64;
+                    p[3] = odemath::safe_normalize3(&mut p) as u8 as f64;
+                    counts[7].1.check(&what, &c, &p);
+                }
             }
         }
         for (name, c) in &counts {

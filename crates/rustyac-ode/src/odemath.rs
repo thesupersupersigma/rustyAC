@@ -8,7 +8,7 @@
 //! Vectors are `[f32; 4]` (`dVector3`) or longer slices, matrices are 3x4 row-major
 //! `[f32; 12]` (`dMatrix3`); the fourth column is padding that no function here reads.
 
-use crate::common::{Matrix3, Vector3};
+use crate::common::{Matrix3, Real, Vector3};
 use rustyac_math::sqrtf;
 
 /// `dCalcVectorDot3`.
@@ -135,7 +135,11 @@ pub fn invert_matrix3(dst: &mut Matrix3, ma: &Matrix3) -> f32 {
 /// The source divides the three components by the largest one; the compiled code takes one
 /// reciprocal (`divss` @ 0x14034b469) and multiplies three times, which is not the same in
 /// the last bit. A NaN first component ends in the "zero vector" case (`comiss` + `jbe`).
-pub fn safe_normalize3(a: &mut [f32]) -> bool {
+///
+/// f64: CSP's `dxSafeNormalize3` @ dwrite.dll+0x168aed0, ODE master 66615b8a
+/// `ode/src/odemath.cpp`: a zero vector is left unchanged, the largest component is taken
+/// as exactly one (`1 + a0*a0 + a2*a2`) and gets `copysign(l, a[idx])`.
+pub fn safe_normalize3<R: Real>(a: &mut [R]) -> bool {
     let aa = [a[0].abs(), a[1].abs(), a[2].abs()];
     let idx;
     if aa[1] > aa[0] {
@@ -143,19 +147,30 @@ pub fn safe_normalize3(a: &mut [f32]) -> bool {
     } else if aa[2] > aa[0] {
         idx = 2;
     } else {
-        if !(aa[0] > 0.0) {
-            a[0] = 1.0;
-            a[1] = 0.0;
-            a[2] = 0.0;
+        if !(aa[0] > R::ZERO) {
+            if !R::FAST {
+                a[0] = R::ONE;
+                a[1] = R::ZERO;
+                a[2] = R::ZERO;
+            }
             return false;
         }
         idx = 0;
     }
-    let r = 1.0f32 / aa[idx];
+    let r = R::ONE / aa[idx];
+    if R::FAST {
+        let (i, j) = [(1, 2), (0, 2), (0, 1)][idx];
+        let (ti, tj) = (a[i] * r, a[j] * r);
+        let l = R::ONE / (R::ONE + ti * ti + tj * tj).sqrt();
+        a[i] = ti * l;
+        a[j] = tj * l;
+        a[idx] = l.copysign(a[idx]);
+        return true;
+    }
     let t0 = r * a[0];
     let t1 = r * a[1];
     let t2 = r * a[2];
-    let l = 1.0f32 / sqrtf(t0 * t0 + t1 * t1 + t2 * t2);
+    let l = R::ONE / (t0 * t0 + t1 * t1 + t2 * t2).sqrt();
     a[0] = t0 * l;
     a[1] = t1 * l;
     a[2] = t2 * l;
