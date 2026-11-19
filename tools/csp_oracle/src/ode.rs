@@ -6,6 +6,7 @@
 //! "ode <name>: <n> inputs, <d> differ, <nan> NaN against NaN". NaN against NaN counts as equal
 //! (docs/port/ode_stage1.md: a NaN's payload depends on operand order the compiler may swap).
 
+use rustyac_ode::csp_contact::{self as contact, Contact};
 use rustyac_ode::joint::{ball_get_info2, fixed_get_info2, Info2};
 use rustyac_ode::mass::Mass;
 use rustyac_ode::odemath;
@@ -28,6 +29,8 @@ struct Csp {
     step_body: extern "C" fn(*mut u64, f64),
     ball: GetInfo2,
     fixed: GetInfo2,
+    contact1: extern "C" fn(*mut u64, *mut u8),
+    contact2: GetInfo2,
 }
 
 /// `dxJoint::getInfo2(this, worldFPS, worldERP, rowskip, J1, J2, pairskip, pairRhsCfm, pairLoHi, findex)`
@@ -169,6 +172,87 @@ unsafe fn joint_both(f: GetInfo2, fixed: bool, has_b1: bool, v: &[f64], r: [M3; 
     (csp, port)
 }
 
+/// One contact joint's getInfo1 + getInfo2 on CSP's side and the port's. `v` = pos, lvel, avel of
+/// body 0 and body 1, contact pos, normal, depth, fdir1, mu, mu2, rho, rho2, rhoN, bounce,
+/// bounce_vel, soft_erp, soft_cfm, motion1, motion2, motionN, slip1, slip2, then fps, world erp,
+/// max_vel, min_depth: 46 values. Returns m, nub, the five coefficients after getInfo1, then per
+/// row J1, J2 (as `joint_both`), rhs, cfm, lo, hi, findex.
+unsafe fn contact_both(csp: &Csp, mode: u32, reverse: bool, has_b1: bool, v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut bodies = [[0u64; 0x300 / 8]; 2];
+    let put = |m: &mut [u64], offset: usize, x: &[f64]| x.iter().enumerate().for_each(|(i, x)| m[offset / 8 + i] = x.to_bits());
+    for (k, b) in bodies.iter_mut().enumerate() {
+        put(b, 0x138, &v[9 * k..9 * k + 3]);
+        put(b, 0x1d8, &v[9 * k + 3..9 * k + 6]);
+        put(b, 0x1f8, &v[9 * k + 6..9 * k + 9]);
+    }
+    let mut world = [0u64; 0x110 / 8];
+    put(&mut world, 0xf8, &v[44..46]);
+    let mut j = [0u64; 0x1a0 / 8];
+    j[1] = world.as_mut_ptr() as u64;
+    j[0x30 / 8] = if reverse { 2 } else { 0 };
+    j[0x40 / 8] = bodies[0].as_mut_ptr() as u64;
+    j[0x58 / 8] = if has_b1 { bodies[1].as_mut_ptr() as u64 } else { 0 };
+    j[0xa8 / 8] = mode as u64;
+    put(&mut j, 0xb0, &v[28..42]);
+    put(&mut j, 0x120, &v[18..21]);
+    put(&mut j, 0x140, &v[21..24]);
+    put(&mut j, 0x160, &v[24..25]);
+    put(&mut j, 0x180, &v[25..28]);
+    let mut i1 = [0u8; 2];
+    (csp.contact1)(j.as_mut_ptr(), i1.as_mut_ptr());
+    let mut csp_out = vec![i1[0] as f64, i1[1] as f64];
+    csp_out.extend((0..5).map(|k| f64::from_bits(j[0xb0 / 8 + k])));
+    let (mut j1, mut j2, mut rc, mut lohi, mut findex) = ([0f64; 48], [0f64; 48], [1e-5f64; 12], [0f64; 12], [-1i32; 6]);
+    for r in 0..6 {
+        (rc[2 * r], lohi[2 * r], lohi[2 * r + 1]) = (0.0, -1e300, 1e300);
+    }
+    (csp.contact2)(j.as_mut_ptr(), v[42], v[43], 8, j1.as_mut_ptr(), j2.as_mut_ptr(), 2, rc.as_mut_ptr(), lohi.as_mut_ptr(), findex.as_mut_ptr());
+    let rows = (i1[0] as usize).min(6);
+    for row in 0..rows {
+        csp_out.extend_from_slice(&j1[8 * row..8 * row + 8]);
+        csp_out.extend_from_slice(&j2[8 * row..8 * row + 8]);
+        csp_out.extend_from_slice(&[rc[2 * row], rc[2 * row + 1], lohi[2 * row], lohi[2 * row + 1], findex[row] as f64]);
+    }
+
+    let w = |i: usize| [v[i], v[i + 1], v[i + 2], 0.0];
+    let mk = |k: usize| Body::<f64> { lvel: w(9 * k + 3), avel: w(9 * k + 6), ..body(w(9 * k), [1.0, 0.0, 0.0, 0.0], [0.0; 12]) };
+    let (b0, b1) = (mk(0), mk(1));
+    let mut c = Contact {
+        mode,
+        mu: v[28],
+        mu2: v[29],
+        rho: v[30],
+        rho2: v[31],
+        rho_n: v[32],
+        bounce: v[33],
+        bounce_vel: v[34],
+        soft_erp: v[35],
+        soft_cfm: v[36],
+        motion1: v[37],
+        motion2: v[38],
+        motion_n: v[39],
+        slip1: v[40],
+        slip2: v[41],
+        pos: w(18),
+        normal: w(21),
+        depth: v[24],
+        fdir1: w(25),
+    };
+    let (m, nub) = contact::get_info1(&mut c);
+    let mut port = vec![m as f64, nub as f64, c.mu, c.mu2, c.rho, c.rho2, c.rho_n];
+    let (mut p1, mut p2, mut pc, mut pcfm, mut lo, mut hi, mut pf) = ([0f64; 48], [0f64; 48], [0f64; 6], [1e-5f64; 6], [-1e300f64; 6], [1e300f64; 6], [-1i32; 6]);
+    let mut info = Info2 { j1: &mut p1, j2: &mut p2, c: &mut pc, cfm: &mut pcfm, lo: &mut lo, hi: &mut hi, findex: &mut pf };
+    contact::get_info2(&c, m, reverse, &b0, has_b1.then_some(&b1), v[42], v[43], v[44], v[45], &mut info);
+    for row in 0..(m as usize).min(6) {
+        for m in [&p1, &p2] {
+            let x = &m[8 * row..8 * row + 8];
+            port.extend_from_slice(&[x[0], x[1], x[2], x[4], x[5], x[6], x[3], x[7]]);
+        }
+        port.extend_from_slice(&[pc[row], pcfm[row], lo[row], hi[row], pf[row] as f64]);
+    }
+    (csp_out, port)
+}
+
 #[derive(Default)]
 pub(crate) struct Count {
     pub(crate) n: u64,
@@ -231,6 +315,8 @@ pub unsafe fn run(dll: usize, breaks: &str) {
         step_body: std::mem::transmute::<usize, extern "C" fn(*mut u64, f64)>(dll + 0x16c_61b0),
         ball: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_3ba0),
         fixed: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_0fd0),
+        contact1: std::mem::transmute::<usize, extern "C" fn(*mut u64, *mut u8)>(dll + 0x16c_79d0),
+        contact2: std::mem::transmute::<usize, GetInfo2>(dll + 0x16c_7b30),
     };
     let log = std::fs::read_to_string(breaks).expect("--ode takes the breaks.txt of a drive");
     let q4 = |v: &Vec<f64>| -> Q { [v[0], v[1], v[2], v[3]] };
@@ -273,7 +359,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
 
     for csr in [0x1f80u32, 0x9fc0] {
         std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
-        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body", "ball", "fixed"].map(|n| (n, Count::default())).into();
+        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body", "ball", "fixed", "contact"].map(|n| (n, Count::default())).into();
         for (set, inputs) in &sets {
             for (i, x) in inputs.iter().enumerate() {
                 let what = || format!("{set} #{i} {x:?}");
@@ -356,6 +442,30 @@ pub unsafe fn run(dll: usize, breaks: &str) {
         for (_, inputs) in &sets {
             for (i, x) in inputs.windows(4).enumerate() {
                 joints(&mut counts, i, &x.concat()[..28], i % 2 == 1);
+            }
+        }
+        // contact joints: two of the drive's bodies, a third one's position and rotation columns as
+        // contact point, normal and fdir1, set coefficients; then each set's inputs six at a time.
+        // Modes from every surface bit (CSP's car contacts | 0xe2 on every other one), every third
+        // joint reversed, every fourth without a second body.
+        let mode = |i: usize| {
+            let m = ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 40) as u32 & 0x77ff;
+            if i.is_multiple_of(2) { m | 0xe2 } else { m }
+        };
+        for i in 0..bodies.len() {
+            let (a, b, c) = (&bodies[i].1, &bodies[(i * 7 + 1) % bodies.len()].1, &bodies[(i * 13 + 2) % bodies.len()].1);
+            let mut r = [0.0; 12];
+            rot::r_from_q(&mut r, &[c[4], c[5], c[6], c[7]]);
+            let coeffs = [1.2, 0.9, 0.01, 0.02, 0.005, 0.3, 0.1, 0.2, 1e-5, 0.5, -0.5, 0.1, 1e-4, 2e-4, 1.0 / a[0], 0.2, 1e300, 0.0];
+            let v: Vec<f64> = a[1..4].iter().chain(&a[8..14]).chain(&b[1..4]).chain(&b[8..14]).chain(&c[1..4]).chain(&[r[0], r[4], r[8], (c[8] * 0.01).abs(), r[1], r[5], r[9]]).chain(&coeffs).copied().collect();
+            let (cs, p) = contact_both(&csp, mode(i), i % 3 == 2, i % 4 != 3, &v);
+            counts[11].1.check(&|| format!("drive contact #{i} mode {:#x} {v:?}", mode(i)), &cs, &p);
+        }
+        for (set, inputs) in &sets {
+            for (i, x) in inputs.windows(6).enumerate() {
+                let v = &x.concat()[..46];
+                let (cs, p) = contact_both(&csp, mode(i), i % 3 == 2, i % 4 != 3, v);
+                counts[11].1.check(&|| format!("{set} contact #{i} mode {:#x} {v:?}", mode(i)), &cs, &p);
             }
         }
         for (name, c) in &counts {

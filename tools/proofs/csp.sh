@@ -173,7 +173,7 @@ done
 
 # ode <car>: CSP's double ODE (Task C5c, docs/csp/core.md): a 600-step Spa drive logs the inputs of its
 # rotation functions and dxStepBody (breakpoint dumps), then rustyac-ode's f64 functions against CSP's own on those,
-# edge values and random bits, at two MXCSR values (22 lines, each "0 differ"); the ball and fixed joint rows take the drive's bodies;
+# edge values and random bits, at two MXCSR values (24 lines, each "0 differ"); the ball, fixed and contact joint rows take the drive's bodies;
 # then the solver kernels (Task C5d, csp_matrix) on 1..40-row matrices from the drive's values and dSolveLCP (csp_lcp) on step-shaped problems (24 lines, each "0 differ")
 lap=oracle/game/track_spa_lap.ryin
 for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
@@ -183,9 +183,9 @@ for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
         && oracle "ode_$car" --ode "$(cygpath -aw "$out/runs/ode_drive_$car/car_root/breaks.txt")" \
         && oracle "solver_$car" --solver "$(cygpath -aw "$out/runs/ode_drive_$car/car_root/breaks.txt")"; then
         run=$out/runs/ode_$car.txt; srun=$out/runs/solver_$car.txt
-        if [ "$(tr -d '\r' < "$run" | grep -c '^ode [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 22 ] \
+        if [ "$(tr -d '\r' < "$run" | grep -c '^ode [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 24 ] \
             && [ "$(tr -d '\r' < "$srun" | grep -c '^solver [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 24 ]; then
-            verdict "ode $car" IDENTICAL "11 functions + 10 solver kernels + dSolveLCP x 2 MXCSR, $(tr -d '\r' < "$run" | grep -m1 '^ode: ' | cut -d' ' -f2-6) from the drive, 0 differ"
+            verdict "ode $car" IDENTICAL "11 functions + contact rows + 10 solver kernels + dSolveLCP x 2 MXCSR, $(tr -d '\r' < "$run" | grep -m1 '^ode: ' | cut -d' ' -f2-6) from the drive, 0 differ"
         else
             verdict "ode $car" DIFFERENT "$(why "$run" '^ode|error|panic|fault') $(why "$srun" '^solver|error|panic|fault')"
         fi

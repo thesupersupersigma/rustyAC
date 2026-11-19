@@ -28,8 +28,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5d 1.1 solver kernels in f64 | done: master's LDLT factor, L1 / L1T solves, dots, `dxLDLTAddTL`, `dxLDLTRemove` bit-identical to CSP's ([below](#task-c5d-part-1-step-1-solver-kernels-in-double)) |
 | C5d 1.2 `dSolveLCP` in f64 | done: `csp_lcp::solve_lcp` bit-identical to CSP's on 96,000 problems ([below](#task-c5d-part-1-step-2-dsolvelcp-in-double)) |
 
-Next: C5d part 1 step 3, contact joint `getInfo2` rows as CSP's cars create them, and fixed joint's
-other path (+0x16a1287, field +0x110 != -1).
+| C5d 1.3 contact rows, fixed joint's other path | done: `csp_contact::get_info1` / `get_info2` bit-identical to CSP's on 1.2 M contacts; the other fixed path decoded, not ported ([below](#task-c5d-part-1-step-3-contact-rows-and-the-fixed-joints-other-path)) |
+
+Next: C5d part 2, `dxStepIsland` (step.cpp stages +0x16c24b0 .. +0x16c5370) in f64, whole-island proof.
 
 ## The core in one paragraph
 
@@ -529,3 +530,53 @@ per MXCSR (0x1f80 and 0x9fc0): 0 differ. Planted bugs, each caught: N-to-C dot i
 1,569 differ, cmd 5 / 6 bounds swapped 6,371 / 6,547, s <= 0 exit without zeroing x 439 / 470, `==` with
 NaN unequal 13,099 / 13,083, cmd 4 not zeroing w 245 / 246, C-to-N swap without state 1,565 / 1,638,
 `-w / dw` 8,053 / 8,032. Case `ode <car>` now wants 24 solver lines.
+
+## Task C5d, part 1, step 3: contact rows and the fixed joint's other path
+
+**Contact joint** (vtable 0x182383170: getInfo1 +0x16c79d0, getInfo2 +0x16c7b30; layout: the_m +0xa0,
+`dContact` from +0xa8, mode +0xa8, mu +0xb0 .. slip2 +0x118, pos +0x120, normal +0x140, depth +0x160,
+fdir1 +0x180; reverse = flag 2 at +0x30; world contactp max_vel / min_depth at world +0xf8 / +0x100).
+Port: `crates/rustyac-ode/src/csp_contact.rs`. Differences from master's `contact.cpp`:
+
+| where | CSP |
+|---|---|
+| getInfo1 | every coefficient tested `>= 0`, so NaN is zeroed like a negative one; `dInfinity` = 1e300 |
+| depth | `maxsd(depth - min_depth, 0)`: NaN gives 0 |
+| normal rhs | `min(erp * fps * depth, max_vel) + motionN` (minsd: NaN takes max_vel) |
+| bounce, body 1 | `((ja1 av1 + ja0 av0) + ja2 av2) - ((n1 l1 + n0 l0) + n2 l2)` |
+| bounce, body 0 | `motionN - (((n2 l2 + n0 l0) + n1 l1) + ((ja2 av2 + ja0 av0) + ja1 av1) + outgoing1)`; new rhs by maxsd |
+| dPlaneSpace | the `a * k` component is `sqrt(a)`; `|n2| > SQRT1_2` by comisd, so NaN takes the n0/n1 branch |
+
+CSP's cars build their contacts in +0x18091c8e0: one contact becomes two world-attached joints (one per
+body), mode `|= 0xe2` (FDIR1, MOTION1, MOTION2, MOTION_N), soft_cfm / slip1 / slip2 halved when set,
+BOUNCE dropped below 0.02 or when the approach speed is under bounce_vel.
+
+Proof (`csp_oracle --ode`, line `ode contact`): getInfo1 + getInfo2 on CSP's side and the port's,
+compared are m, nub, the five coefficients after getInfo1 and per row J1, J2, rhs, cfm, lo, hi,
+findex. Inputs: 4,180 contacts from the drive's bodies (contact point, normal and fdir1 from a third
+body) with set coefficients, then the edge / bits / unit sets six at a time; modes from all surface
+bits, every other one with CSP's `| 0xe2`, every third reversed, every fourth without body 1. 1,207,780
+contacts per MXCSR (0x1f80, 0x9fc0): 0 differ. Planted bugs: body-0 linear dot in source order 1,641
+differ; `a * k` in dPlaneSpace plus `min` after `+ motionN` 434,280 / 435,880. Case `ode <car>` now
+wants 24 ode lines.
+
+**Fixed joint's other path.** dxJointFixed (vtable 0x182382928, ctor +0x16a04f0 sets +0xe0..+0xf0 and
++0x128..+0x138 to the world ERP, +0xf8 to the world CFM, +0x100..+0x120 to -1). getInfo2 +0x16a0fd0:
++0x110 == -1 → master's path (proven in C5c); else +0x118 == -1 → +0x16a0670; else → +0x16a0a60.
+The fields are set by CSP's `cphys::ode_impl_shifting_joint_base` (RTTI
+`.?AUode_impl_shifting_joint_base@cphys@@`): a box body joined to the car by two fixed joints
+(created in +0x1809272e0, bodies +0x180926e70); its updater +0x180927570 (from +0x180935280 after a
+QueryPerformanceCounter delay, and +0x18093af30) copies 12 values p0..p11: +0xe0..+0xf0 = p6..p8
+(linear ERP per axis), +0x128..+0x138 = p9..p11 (angular ERP per axis); if p0 = p1 = p2 and
+p3 = p4 = p5 it sets +0xf8 = p0 and +0x110 = p3 (or -1 when p3 = p0), the rest -1; otherwise
++0xf8..+0x108 = p0..p2 (linear CFM per axis), +0x110..+0x120 = p3..p5 (angular CFM per axis).
+
+What the two paths compute (both write nothing without body 1): rows 0..2 linear, rows 3..5 angular
+(master has them the other way). Angular rows (+0x169fed0 / +0x16a01a0): J1 = I, J2 = -I,
+q = q0⁻¹ q1 (dQMultiply1), error = qrel⁻¹ q (sign flipped when its w < 0), each component times
+its axis' angular ERP, back to world by R0, times 2·fps; cfm = +0x110 (one value) or +0x110..+0x120.
+Linear rows: +0x16a0670 keeps world axes (J1 = I with the cross of R0·offset, J2 = -I), rhs = R0 ·
+(per-axis ERP · R0ᵀ (p1 - p0 + R0·offset)) · fps, one cfm +0xf8; +0x16a0a60 uses body 0's axes (J1 =
+R0 columns, J2 = -R0 columns, angular part = (R0·offset) × axis), rhs = (R0ᵀ (p1 - p0) + offset) · axis
+ERP · fps, cfm +0xf8 / +0x100 / +0x108. Not ported: no config key found that makes a car create
+this joint, and neither proof car does (part 2's island capture checks the joints it steps).
