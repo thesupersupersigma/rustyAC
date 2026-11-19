@@ -120,7 +120,7 @@ fma; part 2's maths section).
 
 ### What went to the VM
 
-Everything sits in `C:\rustyac-farm\` on the VM. The script is `re/scratch/taskF1/copy.sh`
+Everything sits in `C:\rustyac-farm\` on the VM. The script is `re/scratch/taskF1/copy.sh` (taskF1 is archived on the server: `taskF1.tar`, see docs/disk.md)
 (tar over ssh); 9 min for 1.1 GB and 10,104 files.
 
 | what | size |
@@ -205,7 +205,7 @@ into the first case):
 plan) and ran at 1.4 GHz during the measurement. Its own number moves with heat and the power
 plan, so the ratio is this PC's, today.
 
-Lanes: n copies of the farm repo (`re/scratch/taskF1/stage/vm_lanes.sh`), n quick physics runs
+Lanes: n copies of the farm repo (`re/scratch/taskF1/stage/vm_lanes.sh`, archived), n quick physics runs
 at once (`PROOF_LOCKED=1`), every lane 9 IDENTICAL:
 
 | lanes | wall clock | throughput (× one lane) |
@@ -223,7 +223,7 @@ still gains a little.
 
 ### The maths on the Westmere (`math_proof` on the VM)
 
-`re/scratch/taskF1/stage/vm_math.sh`; results in `re/scratch/taskF1/vm_math.txt`.
+`re/scratch/taskF1/stage/vm_math.sh` (archived); results in `re/scratch/taskF1/vm_math.txt`.
 
 - **`rcpps`**: Westmere's hardware against `rustyac_ode`'s table copy of Intel's, every 32-bit
   pattern: **identical**. The LCP solver gives the same bits on the server as on the PC.

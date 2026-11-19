@@ -49,7 +49,7 @@ and ERROR / skipped / vanished lists that `run_all.sh` prints. `q`, Esc or Ctrl+
   back into a folder, 30 times faster, each area 0.75 to 1.35 times as fast as the kept times, and
   turns one case into DIFFERENT (gui `pit_menu`), one into ERROR (net `laguna_a_net_block wasm`) and
   one into skipped (render `r22_01`). Played the v1.0.0 quick run (47 min, 175 cases, kept in
-  `re/scratch/taskT1/src_run`): the screen showed each of the three, and the end it predicted (elapsed
+  `re/scratch/taskT1/src_run`, now in `taskT1.tar` on the server, see docs/disk.md): the screen showed each of the three, and the end it predicted (elapsed
   + left) was 94, 99, 96, 111, 101, 120, 120, 113, 114, 115, 114 s at 3 to 104 s; the replay ended at
   115 s. Early on it is off by up to 18 %; from 60 % done it is within 6 s.
 - **With and without the screen.** `run_all.sh --quick python shaders launcher` twice, once alone

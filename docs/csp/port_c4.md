@@ -47,7 +47,7 @@ What CSP needs around a stepped car that the car stage did not (each a shortcut 
 | `0x2820268` TrackAvatar | `TimeTransponder::step` detour (`0x69a3a0`): the track's time lines; `0x58cba0`: the physics track's ray cast | a zeroed TrackAvatar (0x308) with the oracle's Track at `+0xf8` (no time lines) |
 
 The input is `oracle/game/car_random.ryin` (ks_ferrari_f2004, 20,001 steps = 60 s, car_oracle's
-smoothly varying random wheel and pedals, flat road). Scripts: `re/scratch/taskC4a/drive.sh <run> <args>`.
+smoothly varying random wheel and pedals, flat road). Scripts: `re/scratch/taskC4a/drive.sh <run> <args>` (folder archived on the server: `taskC4a.tar`, see docs/disk.md).
 
 **Correction (part C).** The first part A runs (commit f61c273d) never stepped the world: with CSP
 the world step is the drive loop's job (`0x2803210` above), so the car's words changed every step

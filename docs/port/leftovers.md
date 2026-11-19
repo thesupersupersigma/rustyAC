@@ -29,7 +29,7 @@
   showed it. The fix is in the proof: `tools/proofs/sound.sh`'s e2e part makes a crashed run
   again (three tries a side), as `audio_oracle compare` already did; the e2e cases run 20 times
   in a row: 60 of 60 IDENTICAL. Scripts:
-  `re/scratch/taskL1/fmod/` (rep.sh port side, game_rep.sh game side, fmoddis.py).
+  `re/scratch/taskL1/fmod/` (rep.sh port side, game_rep.sh game side, fmoddis.py; taskL1 is archived on the server: `taskL1.tar`, see docs/disk.md).
 - Done: the scratch archive: 16 old folders (25,843 files) went to the server with
   `re/scratch/taskL1/archive_scratch.sh` (archive_kept.sh's method), every SHA-256 matched there.
 - Done: render_oracle's clippy errors: `cargo clippy --release --locked --all-targets` on it is

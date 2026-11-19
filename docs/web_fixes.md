@@ -62,7 +62,7 @@ the wasm changed.
 
 ## How it was driven
 
-`web/check.mjs --flow` with flows made by `re/scratch/taskW1/mkflow.py` and run by
+`web/check.mjs --flow` with flows made by `re/scratch/taskW1/mkflow.py` (taskW1 is archived on the server: `taskW1.tar`, see docs/disk.md) and run by
 `re/scratch/taskW1/flow.sh` (scratch, not kept). A round trip is what a player does: AC's
 launcher, its Start (`ac://start`), the drive (it starts in AC's ESC menu), Esc, Esc, a real
 click on the ESC menu's Exit at (355, 322) on a 1280 x 720 page, back to the launcher. The car
@@ -116,7 +116,7 @@ to the GPU's "done" (`onSubmittedWorkDone`: the browser has no timestamp queries
 
 60 s of autodrive each, Ferrari F2004 at Spa from the test pack, sound on, 1280 x 720, the
 page's presets (`?graphics=`; the page has Low, Medium and High: "max" is High with every
-setting at its top, `re/scratch/taskW1/speed.sh`):
+setting at its top, `re/scratch/taskW1/speed.sh`, archived):
 
 | picture | frames/s | wasm ms/frame | physics | draw | sound | submit | submit to GPU done |
 |---|---|---|---|---|---|---|---|

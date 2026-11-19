@@ -378,7 +378,7 @@ functions itself, in order, with CSP's patches in them. That is the unknown in b
 run without CSP (`--vanilla`). Run: `csp_oracle.exe re/csp/fakeac <run folder> <cfg folder>
 --car <name> [--car-data <folder>] [--vanilla]` from the repo root; the car's data is copied
 into `<run>/car_root/content/cars/<car>/data` (default source `cardata/<car>`), which is the
-working directory while the car loads. Scratch: `re/scratch/taskC2/` (`final.sh` = the runs
+working directory while the car loads. Scratch (archived on the server: `taskC2.tar`, see docs/disk.md): `re/scratch/taskC2/` (`final.sh` = the runs
 below, `py/rematch.py` + `py/annotate.py` = Part C).
 
 ### Resume here

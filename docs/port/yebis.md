@@ -8,7 +8,7 @@
 - Next: the custom-filter key tasks after v1.0 (plan at the end of this section).
 - Commits: `d39d09b` (step 1 report), `28a7d92` (airy gate + log line, refusals), `005264e` (README, this
   report), then `chore(release): v0.50.0`.
-- End proofs (re/scratch/taskY7f/end.sh): clippy native, both wasm targets, wgpu, web: clean;
+- End proofs (re/scratch/taskY7f/end.sh, archived: `taskY7f.tar`, see docs/disk.md): clippy native, both wasm targets, wgpu, web: clean;
   render_oracle's clippy: the same 41 old errors as Y7e. Sweep 10/10 IDENTICAL, render post rows 141/141
   IDENTICAL, `run_all.sh --quick` all IDENTICAL but one sound case (FMOD's known crash inside
   fmod64.dll at frame 1408), IDENTICAL when run again alone. Disk: 27 GB free at start, 29 GB at the end.
@@ -107,7 +107,7 @@ the tone-map viewport, and the **airy disc**:
 ## Step 1: the key table
 
 Source: `CameraForwardYebis::readPPSetOptions` 0x140026150 (the desktop reader; the VR path
-`YebisPP::readPPSet` 0x14002cd60 reads the same keys). Scratch: `re/scratch/taskY7b/keys.py` pulls
+`YebisPP::readPPSet` 0x14002cd60 reads the same keys). Scratch (archived: `taskY7b.tar`, see docs/disk.md): `re/scratch/taskY7b/keys.py` pulls
 (section, key, getter, pp field) out of the pseudo-C, `values.py` lists each key's values across the
 10 shipped filters, `table.py` adds the port's status.
 
@@ -605,7 +605,7 @@ Disk: C: 30 GB free at the start, 27 GB at the end. RAM 18 GB free at both.
 
 ## What the game draws at DOF quality 5 (step 1)
 
-- Run `re/scratch/taskY7/q5`: `RENDER_ORACLE_DOF=5,5 F=rustyac_f4 bash re/scratch/taskY7/cmp.sh q5 0 3`
+- Run `re/scratch/taskY7/q5` (taskY7 is archived on the server: `taskY7.tar`, see docs/disk.md): `RENDER_ORACLE_DOF=5,5 F=rustyac_f4 bash re/scratch/taskY7/cmp.sh q5 0 3`
   (1280x720, GLARE 0; the port refuses, the game side runs). `re/scratch/taskY7/tech.py <name part>`
   prints each technique's vs / ps FNV hash from acs.exe's container, to name the gpulog's programs.
 - The game's post draws, in order: depth factor; halving 1280x720 to 640x360; level sources 384x216
@@ -1077,7 +1077,7 @@ All from the game's code (`re/decomp/GPURenderGlare`, `GPUTextureUtil`, `GPUPost
 | `ry5b_05` GLARE=3 QUALITY=3, FXAA | 8 | IDENTICAL | IDENTICAL |
 | planted: the diaphragm's 2 degree turn left out (`plant`) | 3 | DIFFERENT in all 3 from frame 1 | IDENTICAL (under one 8-bit step) |
 
-(`re/scratch/taskY5b/<case>/out.txt` from `re/scratch/taskY5b/cmp.sh`; the rows:
+(taskY5b is archived on the server: `taskY5b.tar`, see docs/disk.md; `re/scratch/taskY5b/<case>/out.txt` from `re/scratch/taskY5b/cmp.sh`; the rows:
 `RENDER_ONLY='ry5b_0[1-5]' PROOF_OUT=re/scratch/taskY5b/proof2 sh tools/proofs/render.sh`,
 `re/scratch/taskY5b/proof2.log`.)
 
@@ -1785,7 +1785,7 @@ is in `clears.py`'s output for `runs/rszfx` and `runs/rtlogtri`.
   Shaders, the B4096 cbuffer and the input layouts are created on first draw, as the game does.
 - **Next: Task Y3d-2** (render-target pool, the 49 clears, the teardown; see "What next needs").
 - Check: run `RENDER_ORACLE_TEXTURE_DATA=1 bash re/scratch/taskY3d1/cmp.sh rszfx rszfx <args>`, with the
-  rszfx/trirsz arguments from `re/scratch/taskY3b/regress.sh`. Then run
+  rszfx/trirsz arguments from `re/scratch/taskY3b/regress.sh` (archived: `taskY3b.tar`, see docs/disk.md). Then run
   `python re/scratch/taskY3d1/startup.py re/scratch/taskY3d1/runs/rszfx`. It compares game and port
   from frame 10's first `CreateRasterizerState`, and counts differing screen-bind lines without
   stopping at them.
@@ -1867,7 +1867,7 @@ Frame 10 calls:
 - **Not released (no code change).** Step 1 is about 60 KB of game code, not the expected ~30 KB, so
   it was stopped before it under rule 7. Steps 2 and 3 depend on it. The whole of it moves to **Task
   Y3d**, split as below. Heat shimmer and VR with YEBIS move with it.
-- Check (unchanged): `bash re/scratch/taskY3b/regress.sh`. Frame-10 logs of the resize run are in
+- Check (unchanged): `bash re/scratch/taskY3b/regress.sh` (archived: `taskY3b.tar`, see docs/disk.md). Frame-10 logs of the resize run are in
   `re/scratch/taskY3/runs/rszfx/*.f10.gpulog`. `re/scratch/taskY3c/init_skim.c` is
   `CPostEffect::Initialize` with prints and declarations removed (scratch only, not committed).
 - Disk: C: had 21 GB free at the start and 21 GB at the end (no build or run was made).
@@ -1992,7 +1992,7 @@ Frame 10 calls:
 - **Released as v0.48.3.** The two Y3 shortcuts are now rules read from game code (step 2). Step 1 (the
   resize frame's call log) and step 3 (heat shimmer) were stopped under rule 7 and moved to **Task Y3c**,
   together with VR with YEBIS.
-- Check: `bash re/scratch/taskY3b/regress.sh` runs rszfx, trirsz, tri and aeoff one after another
+- Check: `bash re/scratch/taskY3b/regress.sh` (archived: `taskY3b.tar`, see docs/disk.md) runs rszfx, trirsz, tri and aeoff one after another
   (through `re/scratch/taskY3/cmp.sh`) and writes `re/scratch/taskY3b/regress.txt`.
 - Disk: C: had 23 GB free at the start and 19 GB before the runs (under the 22 GB mark). Free RAM was
   11.1 GB before the runs; the quick run still used its full lanes (it checks at its own start).
