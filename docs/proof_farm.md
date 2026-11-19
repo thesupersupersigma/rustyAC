@@ -19,10 +19,18 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 - Part 3 step 2 done: session 0 fails render, gui and the launcher (no desktop: no swap chain,
   no screen modes); a scheduled task with `/IT` in the logged-in session runs all three
   IDENTICAL. `farm_sync.sh` has the `ac` and `repo` parts for the rest of the copy (Super runs it).
-- **Resume here: part 3 step 3**, once Super's copy of the `ac` and `repo` parts is on the VM
-  (the other areas, cheapest first; render, gui, python, yebis_sweep, shaders and the launcher
-  through the logged-in session's scheduled task), part 4 (`run_all.sh --farm`, areas.map "farm", lanes: physics
-  split into lanes), part 5.
+- Part 3 step 3 done: the copy finished (~5 MB/s); every area but shaders, browser and ai_page is
+  IDENTICAL on the VM in its quick run (yebis_sweep on a 7-row sample); shaders stays on the PC
+  (WARP's and SwiftShader's pixels change with the processor). WARP areas run 1.5-2.2 × the PC's time.
+- **Resume here: part 4** (`run_all.sh --farm`): mark the farm areas in `areas.map` (areas.sh must
+  skip that line); the farm runner is `re/scratch/taskF2/vm_run.sh` + `task.cmd` made real (home
+  with `AppData\Roaming`, render_oracle's folder on `PATH`, `RUSTYAC_PREBUILT`, the roots), started as
+  the `/IT` scheduled task; `prebuild.sh` + `farm_sync.sh programs` (and `physics` / `repo` for new
+  recordings) first; 8 lanes, with physics and yebis_sweep split into lanes by case (an area's out
+  folder is deleted when it starts: shards need their own); results back over the share; the
+  ssh/share/session fallbacks; the locked-session and no-RDP checks; `proof_tui`. Then part 5.
+  After the rebase onto `master` the prebuilt programs are stale: `prebuild.sh` again (it needs the
+  dumps area's old release, v1.1.3, built once: done on the PC).
 
 ## Part 1: what the processor changes (from the code)
 
@@ -612,5 +620,83 @@ The task's output goes to a log file the ssh side reads. Part 4's farm runner st
 python, yebis_sweep, shaders and the launcher this way; CPU-only areas can stay on plain ssh (the
 physics area ran there).
 
-Not done yet in part 3: the other areas (step 3), which wait for their data on the VM (the `ac`
-and `repo` parts of the copy).
+### The rest of the copy
+
+Super ran `farm_sync.sh programs ac repo` overnight; robocopy's logs (`target/farm_sync/`) show it
+finished with nothing failed: `ac` 65.4 GB copied (71.8 GB with what was there) in 3h37m, `repo`
+2.1 GB of `oracle/` (13.0 GB were there from the physics part) and 22.5 GB of `re/gold` in 1h14m:
+**about 5 MB/s**, the Wi-Fi speed of part 2. The `csp` part (CSP's frozen build, 214 MB) later went
+at 9.3 MB/s. The VM's disk: 137 GB used of 250 GB.
+
+### Every other area on the VM (step 3)
+
+Each area's quick run in the VM's copy (`re/scratch/taskF2/task.sh` through `task.cmd`: the scheduled
+task in the logged-in session for all of them, CPU areas too, so the farm needs one way to start a
+run), against the PC's last quick run (part 1, four lanes on both):
+
+| area | on the VM | VM time | PC time | where it runs now |
+|---|---|---|---|---|
+| physics | 9/9 IDENTICAL (pure maths) | 11m43s | 4m30s (4 cases then) | farm |
+| fresh | 63/63 IDENTICAL | 45m22s | 21m54s | farm |
+| csp | 49/49 IDENTICAL | 14m02s | (did not build in part 1) | farm |
+| sound | 4/4 IDENTICAL | 0m53s | 0m35s | farm |
+| render | 18/18 IDENTICAL | 24m00s | 12m08s | farm |
+| gui | 29/29 IDENTICAL | 25m46s | 17m05s | farm |
+| python | 1/1 IDENTICAL | 0m25s | 0m15s | farm |
+| replays | 6/6 IDENTICAL | 7m36s | 4m44s | farm |
+| net | 16/16 IDENTICAL (native ways on pure maths) | 8m22s | 4m35s | farm |
+| launcher | 1/1 IDENTICAL | 1m28s | 0m46s | farm |
+| dumps | 6/6 IDENTICAL | 5m49s | 5m12s | farm |
+| yebis_sweep | 7/7 IDENTICAL (a 7-row sample, `SWEEP_ONLY`) | 3m06s | 1m23s (the same rows) | farm |
+| shaders | **2/4: `shader_proof warp_flat` and `swift_flat` DIFFERENT** (84 and 73 rows of the tables) | 1m09s | 3m22s | **PC** |
+| browser, ai_page | not tried (Chrome, Node, fixed ports) | | | **PC** |
+
+The first whole quick run took 1h05m on the VM (12 areas, four lanes) against 0h29m on the PC.
+
+- **Fresh** made every recording again with the game on the VM: the kept recordings' keys now
+  hold the maths path (part 1), so none of the PC's stood in, and the VM keeps its own (SSE2) ones in
+  its `re/gold/fresh/rec`; the next run there reuses them. The game and the port both took the DLL's
+  SSE2 bodies, and every case was IDENTICAL.
+- **Shaders stays on the PC.** Its tables must be Task 38b's again, row for row, and WARP's and
+  SwiftShader's own code takes another path on a processor without AVX: the pixels differ, not the
+  port. (Tables made on the VM would prove nothing about Task 38b's.) It is 3 minutes on the PC.
+- **WARP's speed** (F1 left it unmeasured): render 2.0 ×, gui 1.5 ×, the YEBIS sweep 2.2 × the PC's
+  time in the same lanes. The full sweep, 528 rows and 93 min on the PC, would be about 3.4 h in one
+  lane on the VM, so part 4 splits it into lanes too.
+
+What the runs found and what was fixed (each a farm-only cause; the PC's runs are unchanged):
+
+- `lib.sh`'s `install_key` said "once a run: run_all.sh exports it", but nothing exported it, and
+  its callers run in `$(...)` subshells, so every key walked AC's `system/`, `content/cars` and
+  `content/tracks` again: 22 s each on the VM (Git's `find` over 36,585 files), four lanes at once.
+  It now runs once an area, when `lib.sh` is sourced.
+- **Drives name the PC's AC folder**: 162 of the 228 `oracle/game/*.ryin` drives hold the track's
+  absolute folder. `rustyac.exe` (and the dumps area's old release, which no fix can reach) stopped
+  with "the track ... was not found", and dumps kept an empty dump. `lib.sh`'s `drive()`, which
+  already rewrote a drive's Documents path into a copy, now also rewrites the PC's AC folder into
+  `$ac` when `AC_ROOT` is elsewhere (nothing changes on the PC); sound's end-to-end replay goes through
+  it too. The four empty dumps the VM kept were deleted.
+- `audio_oracle --tape` took the tape's absolute track folder as it was; it now falls back to the
+  game's own `content/tracks/<name>` when that folder is missing, as `--tapes` already did.
+- **Net against the PC's goldens** differed on the native ways (desktop, browser, gateway) late in
+  two drives: the physics area's SSE2-against-FMA3 split. `net.sh` sets `RUSTYAC_MATH=pure` off FMA3,
+  as `physics.sh` does; the wasm way already takes pure maths.
+- wasmtime stops with "config file not specified and failed to get the default" when
+  `USERPROFILE` points at a folder without `AppData\Roaming` (the farm's own home): the farm runner
+  makes it.
+- **Python**: AC's `python33.dll` needs `MSVCR100.dll`, which a plain Windows lacks, and
+  `rustyac-python` loads it with `LOAD_WITH_ALTERED_SEARCH_PATH`, so the exe's folder is not searched:
+  `farm_sync.sh` sends `MSVCR100.dll` with the other DLLs and the farm runner puts render_oracle's
+  folder on `PATH`.
+- **csp** reads `re/csp/fakeac` (CSP's frozen build over junctions into AC's folder):
+  `fakeac_csp.ps1` takes `AC_ROOT`, `farm_sync.sh csp` sends the frozen build and the script, and it
+  was made once on the VM (`AC_ROOT=C:\rustyac-farm\ac powershell -File tools\csp\fakeac_csp.ps1` in
+  its repo folder). Remove it there only with `fakeac_csp_rm.ps1`, as on the PC.
+- render's `r20_13` / `r20_21` read `crates/rustyac-render/tests/data/*.pose`: `farm_sync.sh repo`
+  sends that folder.
+- New tags on `master` (v1.1.2, v1.1.3) changed the dumps area's old release under the run:
+  `prebuild.sh` needs that release's exe built once on the PC (a quick dumps run) before it writes
+  the manifest.
+
+Checked on the PC after the changes: `run_all.sh --quick sound net dumps`, 4/4, 16/16, 6/6
+IDENTICAL, and dumps again against v1.1.3, 6/6.
