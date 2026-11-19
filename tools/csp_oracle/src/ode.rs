@@ -7,6 +7,7 @@
 //! (docs/port/ode_stage1.md: a NaN's payload depends on operand order the compiler may swap).
 
 use rustyac_ode::csp_contact::{self as contact, Contact};
+use rustyac_ode::csp_joints::dball_get_info2;
 use rustyac_ode::joint::{ball_get_info2, fixed_get_info2, Info2};
 use rustyac_ode::mass::Mass;
 use rustyac_ode::odemath;
@@ -29,6 +30,7 @@ struct Csp {
     step_body: extern "C" fn(*mut u64, f64),
     ball: GetInfo2,
     fixed: GetInfo2,
+    dball: GetInfo2,
     contact1: extern "C" fn(*mut u64, *mut u8),
     contact2: GetInfo2,
 }
@@ -115,13 +117,21 @@ fn body(pos: [f64; 4], q: Q, r: M3) -> Body<f64> {
 /// erp, the joint's erp and cfm: 28 values; `r` the two rotations. Returns per row the Jacobian
 /// (J1 then J2: linear part, angular part, two padding values; the port's angular part sits in
 /// column 4, CSP's in column 3), rhs and cfm (CSP's, port's).
-unsafe fn joint_both(f: GetInfo2, fixed: bool, has_b1: bool, v: &[f64], r: [M3; 2]) -> (Vec<f64>, Vec<f64>) {
+/// `dball` (fixed false): anchor1, anchor2, erp, cfm as for ball, target distance from qrel[0];
+/// velocities lvel0 = qrel[0..3], avel0 = anchor2, lvel1 = anchor1, avel1 = qrel[1..4] (the
+/// short-q fallback reads them).
+unsafe fn joint_both(f: GetInfo2, fixed: bool, dball: bool, has_b1: bool, v: &[f64], r: [M3; 2]) -> (Vec<f64>, Vec<f64>) {
     let mut bodies = [[0u64; 0x300 / 8]; 2];
     let put = |m: &mut [u64], offset: usize, x: &[f64]| x.iter().enumerate().for_each(|(i, x)| m[offset / 8 + i] = x.to_bits());
     for (k, b) in bodies.iter_mut().enumerate() {
         put(b, 0x138, &v[7 * k..7 * k + 3]);
         put(b, 0x158, &r[k]);
         put(b, 0x1b8, &v[7 * k + 3..7 * k + 7]);
+    }
+    let vel = [(&v[20..23], &v[17..20]), (&v[14..17], &v[21..24])];
+    for (k, b) in bodies.iter_mut().enumerate() {
+        put(b, 0x1d8, vel[k].0);
+        put(b, 0x1f8, vel[k].1);
     }
     let mut j = [0u64; 0x140 / 8];
     j[0x40 / 8] = bodies[0].as_mut_ptr() as u64;
@@ -139,8 +149,11 @@ unsafe fn joint_both(f: GetInfo2, fixed: bool, has_b1: bool, v: &[f64], r: [M3; 
         put(&mut j, 0xa0, a1);
         put(&mut j, 0xc0, a2);
         put(&mut j, 0xe0, &[erp, cfm]);
+        if dball {
+            put(&mut j, 0xf0, &[qrel[0]]);
+        }
     }
-    let rows = if fixed { 6 } else { 3 };
+    let rows = if fixed { 6 } else if dball { 1 } else { 3 };
     let (mut j1, mut j2, mut rc, mut lohi, mut findex) = ([0f64; 48], [0f64; 48], [0f64; 12], [0f64; 12], [-1i32; 6]);
     f(j.as_mut_ptr(), fps, world_erp, 8, j1.as_mut_ptr(), j2.as_mut_ptr(), 2, rc.as_mut_ptr(), lohi.as_mut_ptr(), findex.as_mut_ptr());
     let mut csp = Vec::new();
@@ -152,11 +165,14 @@ unsafe fn joint_both(f: GetInfo2, fixed: bool, has_b1: bool, v: &[f64], r: [M3; 
 
     let w = |i: usize| [v[i], v[i + 1], v[i + 2], 0.0];
     let q = |i: usize| [v[i], v[i + 1], v[i + 2], v[i + 3]];
-    let (b0, b1) = (body(w(0), q(3), r[0]), body(w(7), q(10), r[1]));
+    let (mut b0, mut b1) = (body(w(0), q(3), r[0]), body(w(7), q(10), r[1]));
+    (b0.lvel, b0.avel, b1.lvel, b1.avel) = (w(20), w(17), w(14), w(21));
     let b1 = has_b1.then_some(&b1);
     let (mut p1, mut p2, mut c, mut pc, mut lo, mut hi, mut pf) = ([0f64; 48], [0f64; 48], [0f64; 6], [0f64; 6], [0f64; 6], [0f64; 6], [-1i32; 6]);
     let mut info = Info2 { j1: &mut p1, j2: &mut p2, c: &mut c, cfm: &mut pc, lo: &mut lo, hi: &mut hi, findex: &mut pf };
-    if fixed {
+    if dball {
+        dball_get_info2(&b0, b1, fps, &w(14), &w(17), erp, cfm, v[20], &mut info);
+    } else if fixed {
         fixed_get_info2(&b0, b1, fps, world_erp, &q(20), &w(14), erp, cfm, &mut info);
     } else {
         ball_get_info2(&b0, b1, fps, erp, cfm, &mut info, &w(14), &w(17));
@@ -315,6 +331,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
         step_body: std::mem::transmute::<usize, extern "C" fn(*mut u64, f64)>(dll + 0x16c_61b0),
         ball: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_3ba0),
         fixed: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_0fd0),
+        dball: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_2fd0),
         contact1: std::mem::transmute::<usize, extern "C" fn(*mut u64, *mut u8)>(dll + 0x16c_79d0),
         contact2: std::mem::transmute::<usize, GetInfo2>(dll + 0x16c_7b30),
     };
@@ -359,7 +376,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
 
     for csr in [0x1f80u32, 0x9fc0] {
         std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
-        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body", "ball", "fixed", "contact"].map(|n| (n, Count::default())).into();
+        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body", "ball", "fixed", "contact", "dball"].map(|n| (n, Count::default())).into();
         for (set, inputs) in &sets {
             for (i, x) in inputs.iter().enumerate() {
                 let what = || format!("{set} #{i} {x:?}");
@@ -428,9 +445,9 @@ pub unsafe fn run(dll: usize, breaks: &str) {
                     m
                 }
             };
-            for (n, fixed) in [(9, false), (10, true)] {
-                let (csp_fn, what) = (if fixed { csp.fixed } else { csp.ball }, || format!("joint #{i} raw {raw} {v:?}"));
-                let (c, p) = joint_both(csp_fn, fixed, i % 4 != 3, v, [r(0), r(1)]);
+            for (n, fixed, dball) in [(9, false, false), (10, true, false), (12, false, true)] {
+                let (csp_fn, what) = ([csp.ball, csp.fixed, csp.dball][if dball { 2 } else { fixed as usize }], || format!("joint #{i} raw {raw} {v:?}"));
+                let (c, p) = joint_both(csp_fn, fixed, dball, i % 4 != 3, v, [r(0), r(1)]);
                 counts[n].1.check(&what, &c, &p);
             }
         };

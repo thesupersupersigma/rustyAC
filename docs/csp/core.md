@@ -30,7 +30,10 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5d 1.3 contact rows, fixed joint's other path | done: `csp_contact::get_info1` / `get_info2` bit-identical to CSP's on 1.2 M contacts; the other fixed path decoded, not ported ([below](#task-c5d-part-1-step-3-contact-rows-and-the-fixed-joints-other-path)) |
 
-Next: C5d part 2, `dxStepIsland` (step.cpp stages +0x16c24b0 .. +0x16c5370) in f64, whole-island proof.
+| C5d 2.1 dball rows | done: `csp_joints::dball_get_info2` bit-identical to CSP's on 1.2 M joints ([below](#task-c5d-part-2-the-car-islands-and-dball)) |
+
+Next: C5d part 2, `dxStepIsland` (+0x16c24b0, stages +0x16c26d0 .. +0x16c5370) in f64 on the recorded
+islands (re/scratch/taskC5d/isl.sh), whole-island proof.
 
 ## The core in one paragraph
 
@@ -580,3 +583,32 @@ Linear rows: +0x16a0670 keeps world axes (J1 = I with the cross of R0·offset, J
 R0 columns, J2 = -R0 columns, angular part = (R0·offset) × axis), rhs = (R0ᵀ (p1 - p0) + offset) · axis
 ERP · fps, cfm +0xf8 / +0x100 / +0x108. Not ported: no config key found that makes a car create
 this joint, and neither proof car does (part 2's island capture checks the joints it steps).
+
+## Task C5d, part 2: the car islands and dball
+
+**What CSP's cars step.** `dxStepIsland` is +0x16c24b0 (context: world +0, h +8, memarena +0x10,
+bodies +0x20, joints +0x28, nb +0x30, nj +0x34, allowed threads +0x38; one thread → Stage0 bodies
++0x16c26d0, Stage0 joints +0x16c35d0, then a tail jump to Stage1 +0x16c38f0). `dWorldStep` +0x16c6d00
+hands it to the island processor. csp_oracle's island recorder (`CSP_ORACLE_BREAK=16c24b0i,16c6d00w`,
+`CSP_ORACLE_ISLANDS=<file>`, tools/csp_oracle/src/island.rs) copies every island raw at entry and
+again when the world step returns. On the 600-step Spa drive (h = 0.003 as f32→f64):
+
+| car | island | joints |
+|---|---|---|
+| ks_ferrari_f2004 | 6 bodies | 1 fixed (6 rows), 20 dball (1 row each), 0..4 contacts on 8 steps |
+| rss_formula_rss_3_v6_2026 | 6 bodies | 1 fixed, 20 dball, no contacts |
+
+Every body has flag 0x100 (gyroscopic, so Stage0's implicit gyroscopic torque runs), world gravity
+(0, -9.806, 0) at world +0x40, ERP 0.3 at +0x60, CFM 0 at +0x68, contactp max_vel 3 / min_depth 0.001 at
++0xf8 / +0x100. No joint has a feedback struct (+0x68 is null), so the island proof compares bodies.
+The fixed joints keep +0x110 = -1 (master's path).
+
+**dball** (vtable 0x1823829e8: getInfo1 +0x16a2fc0 m = nub = 1, getInfo2 +0x16a2fd0; anchor1 +0xa0,
+anchor2 +0xc0, erp +0xe0, cfm +0xe8, target distance +0xf0, CSP stores target - |q| at +0xf8). Port:
+`csp_joints::dball_get_info2`. Differences from master's `dball.cpp`: body 1's anchor sums as
+`(a2 R_k2 + a0 R_k0) + (a1 R_k1 + pos_k)`; the short-q test is `!(|q| >= 1e-12)` (NaN takes it); body
+0's point velocity takes `R a1` where the source has `globalA1 - pos`; the rhs reuses `|q|` from before
+the velocity fallback; J1's angular part is `r × q` and J2's `q × r` as plain products (no `0 * q0`
+term). Proof (`ode dball`, same inputs as the ball / fixed rows, velocities from spare slots): 1,207,788
+joints per MXCSR, 0 differ. Planted bug (body-1 anchor in source order plus `len < 1e-12`): 273,898 /
+271,603 differ. Case `ode <car>` now wants 26 ode lines.

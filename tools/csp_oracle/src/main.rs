@@ -27,6 +27,7 @@ mod acs;
 #[allow(dead_code)]
 mod track;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
+mod island;
 mod ode;
 mod solver;
 #[path = "../../car_oracle/src/setup_screen.rs"]
@@ -943,7 +944,8 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 // each listed instruction gets an int3; a hit logs (step, thread, rva, caller, rcx rdx r8 r9; an rva
 // ending in "d" also the 12 doubles at rdx; ending in "g" the ODE geoms at rcx and rdx: 8 qwords from +0
 // and the 3 doubles at the position pointer +0x28, the body's 6 qwords; ending in "b" the dxBody at
-// rcx as `dxStepBody` reads it: h from xmm1, the flags, then ode::BODY_FIELDS), puts the byte back,
+// rcx as `dxStepBody` reads it: h from xmm1, the flags, then ode::BODY_FIELDS; "i" / "w" the island
+// recorder, island.rs), puts the byte back,
 // single-steps it and re-arms. shortcut: another thread passing during that one instruction is not
 // logged, upgrade if a count looks short
 
@@ -958,7 +960,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('d' | 'g' | 'b')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('d' | 'g' | 'b' | 'i' | 'w')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1007,6 +1009,23 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         if dump == 'b' {
             line.push_str(&format!(" {} {}", read::<f64>(context + 0x1b0), read::<u32>(rcx + 0x38)));
             crate::ode::BODY_FIELDS.iter().for_each(|&(offset, n)| (0..n).for_each(|i| line.push_str(&format!(" {}", read::<f64>(rcx + offset + i * 8)))));
+        }
+        if dump == 'i' {
+            crate::island::enter(rcx, step);
+        }
+        if dump == 'w' {
+            // the world step's return site: a break of its own, kind 'x'
+            let ret = read::<usize>(read::<usize>(context + 0x98));
+            let mut breaks = BREAKS.lock().unwrap();
+            if !breaks.iter().any(|(address, ..)| *address == ret) {
+                let mut old = 0;
+                VirtualProtect(ret as *mut c_void, 1, 0x40, &mut old);
+                breaks.push((ret, read::<u8>(ret), 'x'));
+                set_byte(ret, 0xcc);
+            }
+        }
+        if dump == 'x' {
+            crate::island::leave(step);
         }
         if dump == 'g' {
             for geom in [rcx, rdx] {
@@ -1721,6 +1740,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         std::fs::write("body0.txt", &body0).expect("body0.txt can be written");
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
+    island::save();
     if !BREAKS.lock().unwrap().is_empty() {
         std::fs::write("breaks.txt", &*BREAK_LOG.lock().unwrap()).expect("breaks.txt can be written");
     }

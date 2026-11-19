@@ -40,6 +40,7 @@ pub mod collision;
 pub mod common;
 pub mod contact;
 pub mod csp_contact;
+pub mod csp_joints;
 pub mod csp_lcp;
 pub mod csp_matrix;
 pub mod geom;
