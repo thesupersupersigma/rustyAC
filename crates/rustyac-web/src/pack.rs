@@ -40,6 +40,9 @@ pub struct PackItem {
     /// Named in the pack's config itself, in a list that also has a `"*"`: the page lists it
     /// before what the star added.
     pub pinned: bool,
+    /// Shaders its KN5 materials name that the install's `system/shaders/win` lacks (a CSP
+    /// track's, say): Full mode cannot draw it, the page says so. Empty for most.
+    pub missing_shaders: Vec<String>,
     /// Indices into [`Manifest::files`].
     pub files: Vec<usize>,
 }
@@ -107,6 +110,16 @@ impl Manifest {
                 json_text(&mut out, &item.name);
                 if item.pinned {
                     out.push_str(", \"pinned\": true");
+                }
+                if !item.missing_shaders.is_empty() {
+                    out.push_str(", \"missing_shaders\": [");
+                    for (n, shader) in item.missing_shaders.iter().enumerate() {
+                        if n > 0 {
+                            out.push_str(", ");
+                        }
+                        json_text(&mut out, shader);
+                    }
+                    out.push(']');
                 }
                 let _ = write!(out, ", \"bytes\": {}, \"files\": [{}]}}", self.bytes_of(&item.files), list(&item.files));
             }
@@ -248,11 +261,11 @@ mod tests {
         let a = m.file(PackFile { path: "content/cars/a/data.acd".into(), bytes: 10, sha256: "00".into() });
         let b = m.file(PackFile { path: "system/data/surfaces.ini".into(), bytes: 5, sha256: "11".into() });
         assert_eq!(m.file(PackFile { path: "content/cars/A/data.acd".into(), bytes: 10, sha256: "00".into() }), a);
-        m.cars.push(PackItem { id: "a".into(), layout: String::new(), name: "The \"A\"".into(), pinned: false, files: vec![a] });
-        m.tracks.push(PackItem { id: "t".into(), layout: "gp".into(), name: "T".into(), pinned: true, files: vec![] });
+        m.cars.push(PackItem { id: "a".into(), layout: String::new(), name: "The \"A\"".into(), pinned: false, missing_shaders: vec![], files: vec![a] });
+        m.tracks.push(PackItem { id: "t".into(), layout: "gp".into(), name: "T".into(), pinned: true, missing_shaders: vec!["ksX".into(), "stY".into()], files: vec![] });
         m.shared.push(b);
         let json = m.to_json();
-        assert!(json.contains("{\"id\": \"t\", \"layout\": \"gp\", \"name\": \"T\", \"pinned\": true, \"bytes\": 0, \"files\": []}"), "{json}");
+        assert!(json.contains("{\"id\": \"t\", \"layout\": \"gp\", \"name\": \"T\", \"pinned\": true, \"missing_shaders\": [\"ksX\", \"stY\"], \"bytes\": 0, \"files\": []}"), "{json}");
         assert!(json.contains("\"format\": \"rustyac-preview-pack-1\""), "{json}");
         assert!(json.contains("{\"id\": \"a\", \"layout\": \"\", \"name\": \"The \\\"A\\\"\", \"bytes\": 10, \"files\": [0]}"), "{json}");
         assert!(json.contains("\"shared\": [1],\n  \"bytes\": 15"), "{json}");

@@ -240,6 +240,8 @@ struct Item {
     pinned: bool,
     /// Its own files, relative to the game's folder, with their sizes.
     files: Vec<(String, u64)>,
+    /// What [`missing_shaders`] found in its models.
+    missing_shaders: Vec<String>,
 }
 
 impl Item {
@@ -254,6 +256,24 @@ impl Item {
     fn bytes(&self) -> u64 {
         self.files.iter().map(|(_, bytes)| bytes).sum()
     }
+}
+
+/// The shaders the models among `files` name that the install's `system/shaders/win` lacks
+/// (both `_ps.fxo` and `_vs.fxo`, as Shader::get_shader wants): AC's renderer, and so the page's
+/// Full mode, cannot draw them; a track made for Custom Shaders Patch, say. Sorted, once each.
+fn missing_shaders(root: &Path, files: &[(String, u64)]) -> Vec<String> {
+    let folder = root.join("system").join("shaders").join("win");
+    let mut missing: Vec<String> = files
+        .iter()
+        .filter(|(file, _)| file.to_ascii_lowercase().ends_with(".kn5"))
+        // (a model that does not open is the drive's check's to refuse, not this one's)
+        .filter_map(|(file, _)| rustyac_content::Kn5::open(&root.join(file)).ok())
+        .flat_map(|kn5| kn5.materials.into_iter().map(|material| material.shader.display().into_owned()))
+        .filter(|name| !name.is_empty() && !["ps", "vs"].iter().all(|kind| folder.join(format!("{name}_{kind}.fxo")).is_file()))
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
 }
 
 /// Every file under `folder` (relative to `root`, `/` between names), the ones `keep` takes.
@@ -431,7 +451,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 Some(stock) => !stock.contains(&car.to_ascii_lowercase()),
                 None => content::car_is_mod(&root, car),
             };
-            Ok(Item { id: car.clone(), layout: String::new(), name: content::car_name(&root, car), is_mod, pinned: named_cars.contains(&car.to_ascii_lowercase()), files })
+            let missing_shaders = missing_shaders(&root, &files);
+            Ok(Item { id: car.clone(), layout: String::new(), name: content::car_name(&root, car), is_mod, pinned: named_cars.contains(&car.to_ascii_lowercase()), files, missing_shaders })
         });
         match probe {
             Ok(item) => car_items.push(item),
@@ -484,7 +505,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             }
             let name = if entry.ui_name.is_empty() { track.clone() } else { entry.ui_name.clone() };
-            Ok(Item { id: track.clone(), layout: layout.clone(), name, is_mod: entry.maker == Maker::Mod, pinned: named_tracks.contains(&label.to_ascii_lowercase()), files })
+            let missing_shaders = missing_shaders(&root, &files);
+            Ok(Item { id: track.clone(), layout: layout.clone(), name, is_mod: entry.maker == Maker::Mod, pinned: named_tracks.contains(&label.to_ascii_lowercase()), files, missing_shaders })
         });
         match probe {
             Ok(item) => track_items.push(item),
@@ -509,6 +531,9 @@ fn run(args: &[String]) -> Result<(), String> {
                     largest.map(|(file, bytes)| format!("; the largest: {} ({})", file.rsplit('/').next().unwrap_or(""), megabytes(*bytes))).unwrap_or_default(),
                     if item.is_mod { "   [mod]" } else { "" }
                 );
+                if !item.missing_shaders.is_empty() {
+                    println!("      Full mode can't draw it (debug view only), shaders not in system/shaders/win: {}", item.missing_shaders.join(", "));
+                }
                 every.extend(item.files.iter().map(|(file, bytes)| (file.to_ascii_lowercase(), *bytes)));
             }
         }
@@ -593,7 +618,7 @@ fn run(args: &[String]) -> Result<(), String> {
         eprint!("\rcopying {} of {total}: {:50}", n + 1, item.label());
         match add(&mut manifest, &item.files) {
             Ok(files) => {
-                let entry = PackItem { id: item.id.clone(), layout: item.layout.clone(), name: item.name.clone(), pinned: item.pinned, files };
+                let entry = PackItem { id: item.id.clone(), layout: item.layout.clone(), name: item.name.clone(), pinned: item.pinned, missing_shaders: item.missing_shaders.clone(), files };
                 if kind == "car" {
                     manifest.cars.push(entry);
                 } else {
@@ -758,5 +783,44 @@ mod tests {
         assert_eq!(usage.difference(&accepted).collect::<Vec<_>>(), none, "in USAGE, not accepted by the parser");
         assert_eq!(accepted.difference(&documented).collect::<Vec<_>>(), none, "accepted by the parser, not in docs/flags.md");
         assert_eq!(documented.difference(&accepted).collect::<Vec<_>>(), none, "in docs/flags.md, not accepted by the parser");
+    }
+
+    #[test]
+    fn a_model_whose_shader_the_install_lacks_is_marked() {
+        let root = std::env::temp_dir().join(format!("web_pack_shaders_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("system/shaders/win")).unwrap();
+        std::fs::create_dir_all(root.join("content/tracks/t")).unwrap();
+        for file in ["ksPerPixel_ps.fxo", "ksPerPixel_vs.fxo", "stHalf_ps.fxo"] {
+            std::fs::write(root.join("system/shaders/win").join(file), b"x").unwrap();
+        }
+        // a version 5 kn5: no textures, four materials, one empty root node
+        let mut kn5 = b"sc6969".to_vec();
+        let int = |kn5: &mut Vec<u8>, n: i32| kn5.extend(n.to_le_bytes());
+        let text = |kn5: &mut Vec<u8>, t: &str| {
+            kn5.extend((t.len() as i32).to_le_bytes());
+            kn5.extend(t.as_bytes());
+        };
+        int(&mut kn5, 5);
+        int(&mut kn5, 0);
+        int(&mut kn5, 4);
+        for shader in ["ksPerPixel", "stPerPixelNM_UVflow", "stHalf", "stPerPixelNM_UVflow"] {
+            text(&mut kn5, "m");
+            text(&mut kn5, shader);
+            kn5.extend([0, 0]);
+            int(&mut kn5, 0);
+            int(&mut kn5, 0);
+            int(&mut kn5, 0);
+        }
+        int(&mut kn5, 0);
+        text(&mut kn5, "root");
+        int(&mut kn5, 0);
+        kn5.push(1);
+        std::fs::write(root.join("content/tracks/t/t.kn5"), &kn5).unwrap();
+        let files = [("content/tracks/t/t.kn5".to_string(), 1), ("content/tracks/t/missing.kn5".to_string(), 1)];
+        // (stHalf has no _vs.fxo: AC's renderer refuses it too)
+        assert_eq!(missing_shaders(&root, &files), ["stHalf", "stPerPixelNM_UVflow"]);
+        assert!(missing_shaders(&root, &files[..0]).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
