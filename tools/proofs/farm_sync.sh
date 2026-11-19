@@ -8,8 +8,9 @@
 # and repo\target\prebuilt, and every source is named below, so nothing under a served folder
 # (web/, target/web*) goes.
 #   FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [part ...]
-# parts (default: programs physics): programs (target/prebuilt's manifest, the proof scripts,
-# cardata/), physics. Each part prints "sync <part>: <bytes> in <s> s (<MB/s>)"; robocopy's logs are in
+# parts (default: programs physics ac repo): programs (target/prebuilt's manifest, the proof scripts,
+# cardata/), physics (what the physics area reads), ac (the rest of the install, ~64 GB), repo (oracle/,
+# re/gold). Each part prints "sync <part>: <bytes> in <s> s (<MB/s>)"; robocopy's logs are in
 # target/farm_sync/.
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd); cd "$repo" || exit 2
@@ -36,18 +37,20 @@ rc() {
     echo "  $src: ${b:-0} bytes in $(( $(date +%s) - t0 )) s"
 }
 
+dlls="msvcr120.dll vcruntime140.dll d3dcompiler_43.dll d3dx11_43.dll xinput1_3.dll"
 part_programs() {
     [ -f target/prebuilt/manifest.txt ] || { echo "no target/prebuilt/manifest.txt (bash tools/proofs/prebuild.sh)" >&2; exit 2; }
     rc tools/proofs repo/tools/proofs /MIR
     rc tools/net_gold repo/tools/net_gold /E
-    rc target/prebuilt repo/target/prebuilt /MIR /XF msvcr120.dll vcruntime140.dll  # the DLLs below stay
+    rc target/prebuilt repo/target/prebuilt /MIR /XF $dlls  # the DLLs below stay
     # every file of the manifest, folder by folder; the PC's MSVCR120.dll and VCRUNTIME140.dll beside
     # each one (the exe's folder comes first in the DLL search: the processor stays the only
-    # difference from the PC, F1)
+    # difference from the PC, F1), and the DirectX June 2010 DLLs acs.exe imports, which a plain
+    # Windows lacks (F2 part 3)
     while read -r d f; do
         # shellcheck disable=SC2086
         rc "$d" "repo/$d" $f
-        rc /c/Windows/System32 "repo/$d" msvcr120.dll vcruntime140.dll
+        rc /c/Windows/System32 "repo/$d" $dlls
     done < <(awk '{ p = $2; sub(/^[*]/, "", p); n = split(p, s, "/"); d = substr(p, 1, length(p) - length(s[n]) - 1)
         fs[d] = fs[d] " " s[n] } END { for (d in fs) print d fs[d] }' target/prebuilt/manifest.txt)
     rc cardata repo/cardata /E
@@ -65,8 +68,20 @@ part_physics() {
     # the old AI lines some recordings drove (their header's ai_folder)
     rc re/gold/roots repo/re/gold/roots /E
 }
+# the rest, for the other areas (F2 part 3): the whole install but sdk/ (Kunos' editors, never read),
+# then every kept result and recording but re/gold/web (the browser's, which stays on the PC), and the
+# two repo files areas read besides the programs (python's test apps, csp's race.ini)
+part_ac() {
+    rc "$ac" ac /E /XD "$(cygpath -w "$ac/sdk")"
+}
+part_repo() {
+    rc oracle repo/oracle /E
+    rc re/gold repo/re/gold /E /XD "$(cygpath -w re/gold/web)"
+    rc tools/render_oracle/py_apps repo/tools/render_oracle/py_apps /E
+    rc tools/csp_oracle/src repo/tools/csp_oracle/src main.rs
+}
 
-for part in ${*:-programs physics}; do
+for part in ${*:-programs physics ac repo}; do
     [ "$(type -t "part_$part")" = function ] || { echo "no part $part" >&2; exit 2; }
     : > "$logs/$part.txt"; bytes=0; s=$(date +%s)
     "part_$part"
