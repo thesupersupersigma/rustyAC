@@ -3,6 +3,9 @@
 # a glob (`*` matches across folders too) and the areas, or `none`. The first rule that matches
 # a file wins; a file no rule matches runs every area.
 
+# run_all.sh --farm: the areas that run on the proof farm (docs/proof_farm.md); the rest stay on the PC
+@farm physics fresh csp sound render gui python replays net launcher dumps yebis_sweep
+
 # what changes nothing the proofs look at
 docs/flags.md                 browser
 docs/*                        none
@@ -41,6 +44,9 @@ tools/proofs/launcher*        launcher
 tools/proofs/log2req.py       launcher
 tools/proofs/tdiff.py         launcher
 tools/proofs/dumps.sh         dumps
+tools/proofs/old_exe.sh       dumps
+tools/proofs/farm*            none
+tools/proofs/prebuil*         none
 tools/proofs/python.sh        python
 tools/proofs/areas*           none
 tools/proofs/lock_crates.py   none

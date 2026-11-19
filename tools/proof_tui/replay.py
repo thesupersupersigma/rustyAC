@@ -20,7 +20,7 @@ speed = float(args[args.index("--speed") + 1]) if "--speed" in args else 30.0
 rng = random.Random(int(args[args.index("--seed") + 1]) if "--seed" in args else 1)
 src, out = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or not args[i - 1].startswith("--"))][:2]
 repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-lanes_line = re.search(r'^lanes="([^"]*)"', open(os.path.join(repo, "tools/proofs/run_all.sh")).read(), re.M).group(1)
+lanes_line = re.search(r'^lanes=\$\{PROOF_LANES:-"([^"]*)"\}', open(os.path.join(repo, "tools/proofs/run_all.sh")).read(), re.M).group(1)
 mode = "quick" if os.path.isdir(os.path.join(src, "cases/quick")) else "full"
 areas = [a for a in re.split(r"[ |]", lanes_line) if os.path.isfile(os.path.join(src, a, "cases.log"))]
 lanes = [[a for a in l.split() if a in areas] for l in lanes_line.split("|")]

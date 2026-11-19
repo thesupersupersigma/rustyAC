@@ -3,6 +3,8 @@
 //! A progress screen for `tools/proofs/run_all.sh`. It only reads what a run writes under
 //! `target/proofs` (`run.status`, `rows/`, `<area>/cases.log`, `times.tsv`, `now`, `last_case`, and
 //! the last run of the mode in `cases/<mode>/`) and writes nothing: a run is the same with it or without.
+//! A `--farm` run's VM lanes (the VM's status files, mirrored into `farm/` by tools/proofs/farm.sh)
+//! show below the PC's when the screen has room, beside them when not.
 //!
 //!     proof_tui [<proofs dir, default $PROOF_OUT or target/proofs>] [--plain]
 //!
@@ -78,6 +80,8 @@ struct Run {
     elapsed: f64,
     end: bool,
     lanes: Vec<Vec<Area>>,
+    /// the first pc_lanes lanes are the PC's, the rest the farm VM's
+    pc_lanes: usize,
     /// every DIFFERENT / ERROR line so far, with the area's log
     bad: Vec<String>,
 }
@@ -96,9 +100,11 @@ impl Run {
     }
 }
 
-fn load_area(dir: &Path, mode: &str, start: f64, t: f64, name: String, bad: &mut Vec<String>) -> Area {
+/// `dir`: the area's run folder (the farm's mirror for a VM lane); `kept`: the PC's, whose last run
+/// of the mode gives the time guesses
+fn load_area(dir: &Path, kept: &Path, mode: &str, start: f64, t: f64, name: String, bad: &mut Vec<String>) -> Area {
     let d = dir.join(&name);
-    let kept = dir.join("cases").join(mode);
+    let kept = kept.join("cases").join(mode);
     let last = times(&kept.join(format!("{name}.times")));
     let mut a = Area { total: Some(read(&kept.join(format!("{name}.txt"))).lines().count()).filter(|&n| n > 0), ..Default::default() };
     // lib.sh writes quick.re when the area starts (after deleting the area's folder)
@@ -147,8 +153,9 @@ fn load_area(dir: &Path, mode: &str, start: f64, t: f64, name: String, bad: &mut
     a
 }
 
-/// None while there is no run.status (none yet, or run_all.sh is still building)
-fn load(dir: &Path) -> Option<Run> {
+/// run.status: the mode, the start, the end and each lane's areas
+type Status = (String, Option<f64>, Option<f64>, Vec<Vec<String>>);
+fn status(dir: &Path) -> Status {
     let (mut mode, mut start, mut end, mut lanes) = (String::new(), None, None, vec![]);
     for l in read(&dir.join("run.status")).lines() {
         match l.split_once(' ') {
@@ -159,11 +166,26 @@ fn load(dir: &Path) -> Option<Run> {
             _ => {}
         }
     }
+    (mode, start, end, lanes)
+}
+
+/// None while there is no run.status (none yet, or run_all.sh is still building)
+fn load(dir: &Path) -> Option<Run> {
+    let (mode, start, end, lanes) = status(dir);
     let start = start?;
     let t = end.unwrap_or_else(now);
     let mut bad = vec![];
-    let lanes = lanes.into_iter().map(|l| l.into_iter().map(|n| load_area(dir, &mode, start, t, n, &mut bad)).collect()).collect();
-    Some(Run { mode, elapsed: t - start, end: end.is_some(), lanes, bad })
+    let mut lanes: Vec<Vec<Area>> = lanes.into_iter().map(|l| l.into_iter().map(|n| load_area(dir, dir, &mode, start, t, n, &mut bad)).collect()).collect();
+    let pc_lanes = lanes.len();
+    // the VM's lanes of a --farm run, timed by the VM's own start (a farm left from an older run is not shown)
+    let fdir = dir.join("farm");
+    if let (_, Some(fstart), fend, flanes) = status(&fdir) {
+        if fstart >= start - 600.0 {
+            let ft = if end.is_some() { fend.unwrap_or(t) } else { fend.unwrap_or_else(now) };
+            lanes.extend(flanes.into_iter().map(|l| l.into_iter().map(|n| load_area(&fdir, dir, &mode, fstart, ft, n, &mut bad)).collect()));
+        }
+    }
+    Some(Run { mode, elapsed: t - start, end: end.is_some(), lanes, pc_lanes, bad })
 }
 
 /// what run_all.sh prints at the end: table.md, then the ERROR, skipped and vanished cases
@@ -295,10 +317,19 @@ fn draw(f: &mut ratatui::Frame, dir: &Path, run: &Option<Run>) {
         let lines: Vec<Line> = summary(dir, &r.mode).into_iter().map(|(l, red)| if red { Line::styled(l, Style::new().fg(Color::Red)) } else { Line::raw(l) }).collect();
         f.render_widget(Paragraph::new(lines).block(Block::bordered().title(" the run's table (table.md) ")), body);
     } else {
-        let cols = Layout::horizontal(vec![Constraint::Ratio(1, r.lanes.len().max(1) as u32); r.lanes.len()]).split(body);
-        for (i, (lane, c)) in r.lanes.iter().zip(cols.iter()).enumerate() {
-            let w = c.width.saturating_sub(2) as usize;
-            f.render_widget(Paragraph::new(lane_lines(lane, w)).block(Block::bordered().title(format!(" lane {} ", i + 1))), *c);
+        // the VM's lanes in a row of their own below the PC's when there is room for two rows
+        let (pc, vm) = r.lanes.split_at(r.pc_lanes.min(r.lanes.len()));
+        let rows: Vec<&[Vec<Area>]> = if !vm.is_empty() && !pc.is_empty() && body.height >= 28 { vec![pc, vm] } else { vec![&r.lanes[..]] };
+        let heights = Layout::vertical(vec![Constraint::Ratio(1, rows.len() as u32); rows.len()]).split(body);
+        let mut i = 0;
+        for (row, h) in rows.iter().zip(heights.iter()) {
+            let cols = Layout::horizontal(vec![Constraint::Ratio(1, row.len().max(1) as u32); row.len()]).split(*h);
+            for (lane, c) in row.iter().zip(cols.iter()) {
+                let w = c.width.saturating_sub(2) as usize;
+                let title = if i < r.pc_lanes { format!(" lane {} ", i + 1) } else { format!(" VM lane {} ", i + 1 - r.pc_lanes) };
+                f.render_widget(Paragraph::new(lane_lines(lane, w)).block(Block::bordered().title(title)), *c);
+                i += 1;
+            }
         }
     }
     if red {

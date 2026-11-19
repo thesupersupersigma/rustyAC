@@ -7,6 +7,7 @@ Every proof the reports claim reruns from here, one area at a time or all at onc
     bash tools/proofs/run_all.sh [--full]           # every area, every case, against the game's kept results (milestones), ≈ 4.5 h
     bash tools/proofs/run_all.sh --rerecord         # the same, and the game's results made again and held against the kept ones
     bash tools/proofs/run_all.sh gui net            # only these areas (with any of the above)
+    bash tools/proofs/run_all.sh --quick --farm     # the @farm areas of areas.map on the proof farm's VM, the rest here
     bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different= errors= skipped= expected=)
 
 Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
@@ -113,6 +114,9 @@ lines `salt_of` reads, the test programs, the dumps area's release tag). A run w
 `prebuilt/` first on PATH (`cargo build` does nothing, `cargo run --bin|--example` and `cargo test
 --test` run the built programs, anything else stops with "not prebuilt") and stops the run when a
 file is not the manifest's. Not prebuilt: browser (`web_pack`'s unit test, the wasm builds) and
-ai_page (they stay on the PC); the dumps area's old release must have been built once on the PC.
+ai_page (they stay on the PC); the dumps area's old release is built once per tag (`old_exe.sh`).
 `FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [part ...]` sends a part's files to
-the farm with robocopy, only what changed. docs/proof_farm.md has the rest.
+the farm with robocopy, only what changed. `run_all.sh --farm` (with `--quick` or `--full`) does
+both itself, then runs the farm's areas there (`farm.sh`, `farm_run.sh`) while the others run here;
+it needs `target/farm.env` (`FARM_HOST`, `FARM_SHARE`). `PROOF_LANES` sets other lanes; a lane word
+`<area>.<i>` runs shard i of the area's cases (`PROOF_SHARD`). docs/proof_farm.md has the rest.

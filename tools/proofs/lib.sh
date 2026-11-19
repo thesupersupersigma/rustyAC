@@ -16,8 +16,9 @@ ac=${AC_ROOT:-"C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"}
 # RUSTYAC_PREBUILT=1: the programs of tools/proofs/prebuild.sh, no cargo, dotnet or git
 . "$repo/tools/proofs/prebuilt/env.sh"
 gold=$repo/re/gold
-# what a run writes: build output, deleted and remade by every run of the area
-out=${PROOF_OUT:-$repo/target/proofs}/$area
+# what a run writes: build output, deleted and remade by every run of the area; PROOF_SHARD=<i>/<n>
+# (run_all.sh's lane word "<area>.<i>"): only the cases whose key hashes to i of n, into <area>.<i>
+out=${PROOF_OUT:-$repo/target/proofs}/$area${PROOF_SHARD:+.${PROOF_SHARD%/*}}
 rm -rf "$out"
 mkdir -p "$out"
 log=$out/cases.log
@@ -82,7 +83,9 @@ grep -vE '^\s*(#|$)' "${PROOF_QUICK_RE:-$repo/tools/proofs/quick/$area.txt}" > "
 # keep <key>: whether a case runs (always, unless this is a quick run and the key is not listed)
 keep() {
     { [ -z "$PROOF_QUICK" ] || printf '%s
-' "$1" | grep -qxE -f "$quick_re"; } && { echo "$1" 2> /dev/null > "$out/now"; true; }  # now: for proof_tui
+' "$1" | grep -qxE -f "$quick_re"; } &&
+        { [ -z "$PROOF_SHARD" ] || [ $(( $(printf %s "$1" | cksum | cut -d' ' -f1) % ${PROOF_SHARD#*/} + 1 )) = "${PROOF_SHARD%/*}" ]; } &&
+        { echo "$1" 2> /dev/null > "$out/now"; true; }  # now: for proof_tui
 }
 
 # The game's recordings, kept (xz) in re/gold/fresh/rec/<name>/<key>/ (made once, byte for byte

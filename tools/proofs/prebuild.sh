@@ -47,9 +47,9 @@ NUGET_PACKAGES="$(cygpath -w "$nu/packages")" DOTNET_CLI_HOME="$(cygpath -w "$nu
     sh -c 'dotnet restore --locked-mode --source https://api.nuget.org/v3/index.json tools/launcher_oracle/launcher_oracle.csproj &&
         dotnet build -c Release --no-restore tools/launcher_oracle/launcher_oracle.csproj' > $p/dotnet.txt 2>&1 || { echo "dotnet build failed ($p/dotnet.txt)" >&2; exit 2; }
 files="$files $(find tools/launcher_oracle/bin/Release -type f | tr '\n' ' ')"
-# the dumps area's old release (dumps.sh builds and keeps it once per tag)
+# the dumps area's old release (old_exe.sh builds and keeps it once per tag)
 tag=$(git tag --list 'v*' --sort=-v:refname --no-contains HEAD | head -n 1)
-[ -f "target/proofs/old_exe/$tag/rustyac.exe" ] || { echo "no target/proofs/old_exe/$tag: run the dumps area once here first" >&2; exit 2; }
+sh tools/proofs/old_exe.sh "$tag" > /dev/null  # built once per tag: a new tag on master needs nothing by hand
 echo "$tag" > $p/dumps_tag
 files="$files $(find "target/proofs/old_exe/$tag" -type f | tr '\n' ' ')"
 

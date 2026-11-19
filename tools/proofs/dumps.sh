@@ -5,7 +5,7 @@
 # --dump-states by the previous version's rustyac.exe and by this one, byte for byte (sha256).
 #   DUMPS_TAG=<tag> (default: the newest v* tag that is not HEAD) or DUMPS_OLD=<folder of the old rustyac.exe>
 #   DUMPS_EVERY=<n>: every n-th drive (default 1: all of them)
-# The old version is built from a git worktree into target/proofs/dumps_old, deleted at the end.
+# The old version is built once per tag by old_exe.sh.
 area=dumps
 . "$(dirname "$0")/lib.sh"
 build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
@@ -13,16 +13,7 @@ old=$DUMPS_OLD
 if [ -z "$old" ]; then
     tag=${DUMPS_TAG:-$(git tag --list 'v*' --sort=-v:refname --no-contains HEAD | head -n 1)}
     # the old exe is built once per tag and kept (only the exe and its DLLs) in target/proofs/old_exe/<tag>
-    old=$repo/target/proofs/old_exe/$tag
-    if [ ! -f "$old/rustyac.exe" ]; then
-        src=$repo/target/proofs/dumps_old/src
-        rm -rf "$repo/target/proofs/dumps_old"; git worktree prune
-        git worktree add --detach "$src" "$tag" > "$out/worktree.txt" 2>&1 || { echo "no worktree of $tag" >&2; exit 2; }
-        (cd "$src" && CARGO_TARGET_DIR=$repo/target/proofs/dumps_old/tgt cargo build --release --locked --quiet -p rustyac-game --bin rustyac) || exit 2
-        mkdir -p "$old.part" && cp "$repo"/target/proofs/dumps_old/tgt/release/*.exe "$repo"/target/proofs/dumps_old/tgt/release/*.dll "$old.part"/ 2>/dev/null
-        mv "$old.part" "$old"
-        git worktree remove --force "$src"; rm -rf "$repo/target/proofs/dumps_old"
-    fi
+    old=$(sh "$repo/tools/proofs/old_exe.sh" "$tag") || exit 2
     echo "old: $tag" >> "$log.info"
 fi
 # the old exe's dump of a drive is kept in re/gold/dumps/<key> (key: the old exe's bytes, the drive,

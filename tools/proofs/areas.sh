@@ -11,7 +11,7 @@
 all="physics fresh csp sound render gui python replays net browser ai_page shaders launcher dumps"
 cd "$(dirname "$0")/../.." || exit 2
 map=tools/proofs/areas.map
-rules=$(grep -vE '^\s*(#|$)' "$map")
+rules=$(grep -vE '^\s*(#|$|@)' "$map")  # @farm: run_all.sh --farm's line
 picked=" "
 ws_version() {  # ws_version <file content on stdin>: [workspace.package] version
     sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p'
