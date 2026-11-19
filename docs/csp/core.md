@@ -294,6 +294,8 @@ own job pool (C5a).
 - Contact reduction after `dCollide` (`+0x169fd90`, `+0x169f060`, C5a): CSP's own, not ODE.
 - Build: `ODE_EXT_no_debug`, double, OPCODE 16-bit indices, no GIMPACT, no built-in threads.
 
+Licence: `66615b8a`'s `LICENSE-BSD.TXT` and `LICENSE.TXT` are unchanged since 0.13.1 and the BSD text is the one in `crates/rustyac-ode/LICENSE-ODE`, so [LICENSING.md](../../LICENSING.md)'s ODE row (BSD-3-Clause) covers the f64 side as it is.
+
 Not done: a function-by-function compare of every ODE function in `dwrite.dll` against
 `66615b8a`. Parts 3 and 4 do it function by function as the in-process proofs reach each one; a
 differing proof is then either a CSP change or a port bug, and the source of `66615b8a` tells which.
