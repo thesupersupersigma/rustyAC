@@ -167,6 +167,12 @@ impl CameraForwardYebis {
         self.height = graphics.video.height;
         if graphics.video.pp_hdr_enabled && !self.stereo() {
             self.init_render_targets(graphics)?;
+            // NOT Assetto Corsa: wgpu has no YEBIS to scale the scene into the first size, and the
+            // stand-in copies at the camera's size (the page's render scale showed a corner, W3)
+            #[cfg(feature = "backend-wgpu")]
+            if self.fxaa_temp_rt.is_some() {
+                self.fxaa_temp_rt = Some(color_target(graphics, DXGI_FORMAT_R8G8B8A8_UNORM, self.width, self.height));
+            }
             // initPostProcessing 0x140024ca0: a new particle manager
             #[cfg(all(windows, not(feature = "backend-wgpu")))]
             if let Some(heat) = &mut self.heat {

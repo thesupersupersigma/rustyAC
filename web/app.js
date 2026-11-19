@@ -1175,7 +1175,7 @@ async function drive(launch) {
     $('loading-progress').hidden = true;
     setStatus(`loading the car and the track${picture.backend === 'full' ? ', preparing the shaders' : ''} (a large track takes some seconds; the page stands still meanwhile) ...`);
     await nextPaint();
-    resizeCanvas();
+    resizeCanvas(picture.backend === 'full');
     const built = performance.now();
     const backend = picture.backend;
     // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart);
@@ -1568,9 +1568,9 @@ async function joinServer() {
     $('loading-progress').hidden = true;
     setStatus('loading the cars and the track, preparing the shaders (a large track takes some seconds; the page stands still meanwhile) ...');
     await nextPaint();
-    resizeCanvas();
-    const built = performance.now();
     const { backend } = await pictureBackend();
+    resizeCanvas(backend === 'full');
+    const built = performance.now();
     const autodrive = params.get('autodrive') === '1';
     const spawn = params.get('spawn') || 'pit';
     // (create_online takes the join: from here on the game owns the session)
@@ -2038,11 +2038,12 @@ window.rustyac.graphics = async (values) => {
 
 // ---------------------------------------------------------------- driving
 
-function resizeCanvas() {
+// `gui`: a game with AC's GUI, or one about to be made in Full mode (its GUI is laid out at the
+// canvas's size it starts with, and stays so)
+function resizeCanvas(gui = hasGui()) {
   // (the graphics page's render scale draws fewer pixels, which the browser stretches; with
   // AC's GUI the game draws the 3D picture smaller itself and its GUI at the canvas's size)
-  const gui = hasGui();
-  if (gui) state.game.set_render_scale(renderScale());
+  if (gui && state.game) state.game.set_render_scale(renderScale());
   const scale = Math.min(window.devicePixelRatio || 1, 1.5) * (gui ? 1 : renderScale());
   const width = Math.max(16, Math.round(canvas.clientWidth * scale));
   const height = Math.max(16, Math.round(canvas.clientHeight * scale));
