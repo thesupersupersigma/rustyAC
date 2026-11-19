@@ -25,8 +25,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5c B2b. odemath helpers in f64 | done: `dxSafeNormalize3` bit-identical to CSP's; the other helpers have no out-of-line copy in CSP, proven inside their callers ([below](#part-3-step-2-vectorised-loops-and-odemath)) |
 | C5c B2c. body integration in f64 | done: `dxStepBody` bit-identical to CSP's ([below](#part-3-step-2c-body-integration-in-double)) |
 | C5c B2d. joint rows in f64 | done: ball and fixed `getInfo2` bit-identical to CSP's; CSP has no hinge; ray-vs-trimesh moved to part 8 ([below](#part-3-step-2d-joint-rows-in-double)). Part 3 done |
+| C5d 1.1 solver kernels in f64 | done: master's LDLT factor, L1 / L1T solves, dots, `dxLDLTAddTL`, `dxLDLTRemove` bit-identical to CSP's ([below](#task-c5d-part-1-step-1-solver-kernels-in-double)) |
+| C5d 1.2 `dSolveLCP` in f64 | done: `csp_lcp::solve_lcp` bit-identical to CSP's on 96,000 problems ([below](#task-c5d-part-1-step-2-dsolvelcp-in-double)) |
 
-Next: plan part 4 (C5d): `step.cpp` changes and the new LDLT / LCP solvers first.
+Next: C5d part 1 step 3, contact joint `getInfo2` rows as CSP's cars create them, and fixed joint's
+other path (+0x16a1287, field +0x110 != -1).
 
 ## The core in one paragraph
 
@@ -454,3 +457,75 @@ contact (4), universal (5), fixed (7, +0x16a0fd0), AMotor (9), LMotor (10), PU (
   0x1f80 and 0x9fc0. Plants: ODE's `dQMultiply2` order 18 / 8 differ (edge values only, row 0
   feeds only the sign test), `fps * erp * 2` 1,607 / 881, a regrouped ball rhs 133,845 / 133,758.
   Proof area `csp`, cases `ode <car>`: 22 lines.
+
+## Task C5d, part 1, step 1: solver kernels in double
+
+CSP builds ODE master `66615b8a`'s dense kernels (not 0.13.1's), so `rustyac-ode` gets them as a new
+f64-only module, `crates/rustyac-ode/src/csp_matrix.rs`; the f32 path keeps 0.13.1's `matrix.rs`.
+dSolveLCP (`+0x16ffe10`) calls them on the pairs layout (`b` and `d` interleaved, stride 2) with
+`nskip = n <= 1 ? n : (n + 3) & ~3`. Copies in CSP:
+
+| Kernel | stride 1 | stride 2 |
+|---|---|---|
+| `factorMatrixAsLDLT` | `+0x1700e90` | `+0x1701f60` |
+| `solveL1Straight` | `+0x1701090` | `+0x1702750` |
+| `solveL1Transposed` | `+0x17017b0` | `+0x1702e80` |
+| `calculateLargeVectorDot` (`dxDot` = stride 1) | `+0x16cb540` | `+0x1703b80` |
+| `scaleAndFactorizeL1Stripe_2` | `+0x1702440` | `+0x1703870` |
+| `solveL1Stripe_2` / `solveStripeL1_1` | `+0x16fe080` / `+0x16fe3d0` | (shared) |
+| `dxLDLTAddTL` / `dxLDLTRemove` | `+0x168ded0` / `+0x168e5d0` | |
+
+Moves-only helpers (bit-trivial): `+0x16fe530` (swap problem), `+0x1703630` and `+0x1702160` (row
+swaps). All kernels are scalar SSE2 except `solveStripeL1_1`'s packed block. The sums, as the
+machine code adds them (`a0..` the products in source order):
+
+- every unrolled loop adds its first columns one by one, as the source does;
+- the big block is reassociated: 4 columns `((z + a0) + a1) + (a2 + a3)` (factor stripes),
+  8 columns `(((z + a0) + a1) + (a2 + a3)) + ((a4 + a5) + (a6 + a7))` (L1 and L1T solves);
+- `solveStripeL1_1`'s 4-column block is packed: `z + ((a0 + a2) + (a1 + a3))`;
+- dot products: blocks of four add `(m3 + m2) + (m1 + m0)`, the rest one by one;
+- `solveL1Transposed`'s odd first row starts `z = a`, not `0 + a` (matters for -0.0);
+- `dxLDLTAddTL`'s first step: `alpha1 = alpha2 = 1` folded away, `W21 * W21` computed as
+  `(a0/2 - 1)^2 * 0x3fe0000000000001` (the rounded square of `1/sqrt 2`), `k2 = (gamma1 * W21) * W11 - W21`;
+- `dxLDLTRemove` divides (`L / d`), it has no reciprocal approximation.
+
+Proof: `csp_oracle --solver <breaks.txt>` (`tools/csp_oracle/src/solver.rs`) calls the ten kernels
+in the DLL and the port on matrices of 1 to 40 rows (row skip as dSolveLCP's, every third one 4
+wider), 1,500 per size and set: values from the Spa drive's `dxStepBody` calls (`B*B^T + nI`,
+positive definite, the solves and the rank-2 update run on CSP's factors), the same from random
+values in [-1, 1], edge values and random bits; `ldlt_remove` with A behind shuffled row pointers.
+240,000 inputs per kernel, at MXCSR `0x1f80` and `0x9fc0`: **0 differ** for all ten. Planted bugs
+(each the source order instead of CSP's) show: factor stripe-2 block one by one 3,379 differ per
+stride, stripe-1 block as `sum4` 14,479, L1 8-block one by one 10,737 / 10,937, L1T 10,984 / 11,116,
+dot in source order 16,260 / 16,096, `dxLDLTAddTL` with `W21 * W21` 35,987, `dxLDLTRemove` with
+`L * (1/d)` 602. Proof area `csp`, case `ode <car>`, now runs `--solver` after `--ode` (20 more
+lines, 30 s).
+
+## Task C5d, part 1, step 2: `dSolveLCP` in double
+
+`crates/rustyac-ode/src/csp_lcp.rs` is master's `lcp.cpp` (Dantzig solver, `dLCP` with row pointers,
+the NUB and findex moves) in f64 on `csp_matrix`'s kernels. `dxSolveLCP` is +0x16ffe10 (the all
+unbounded path inline: factor<2>, L1<2>, scale, L1T<2>); the rest is outlined at +0x16fffa0 with the
+`dLCP` constructor +0x16fe5f0, `transfer_i_to_C` +0x16febb0, `transfer_i_from_N_to_C` +0x16fed30,
+`transfer_i_from_C_to_N` +0x16ff260, `pN_plusequals_ANi` +0x16ff3c0, `pC_plusequals_s` +0x16ff690,
+`solve1` +0x16ff830, `swapProblem` +0x16fe530, `swapRowsAndCols` +0x1702160 (row data) and
++0x1703630 (row pointers). CSP's differences from the source:
+
+| what | CSP |
+|------|-----|
+| `dInfinity` | 1e300, not infinity (+0x170013c / +0x170014e): bounds of 1e300 count as unbounded, true infinities do not |
+| `s = -w(i) / delta_w(i)` and the cmd 4 step | `(-1 / dw) * w` |
+| the "zero denominator" nudge | `nextafter(A(i,i), 1e300)` (+0x1da8110) |
+| `==` / `!=` tests | `ucomisd` + `jne`: NaN counts as equal; `<` / `<=` tests that branch on `jae` / `ja` are `!(a >= b)` / `!(a > b)`, so NaN takes the "less" side |
+| `transfer_i_from_N_to_C` dot | vectorised (+0x16fefd0): columns 4k, 4k+1 into lanes a, 4k+2, 4k+3 into lanes b, `(a0 + b0) + (a1 + b1)`, then the last `nC % 4` in order |
+| everything else | source order (the other `ell . Dell` dot is `dxDot`) |
+
+Proof (`csp_oracle --solver`, two more lines per MXCSR): problems shaped like a step's,
+`A = B B^T + diag(1e-5 |v|)` with B 1 to 2n columns (often rank deficient), n 1..40, rows mixed
+unbounded (1e300, one in eight true infinity) / contact normal / friction on an earlier normal's x
+(findex) / bounded, with and without findex, values from the Spa drive, unit randoms and edge values;
+compared are x, lo / hi, A after the call and findex. 36,000 general + 12,000 all unbounded problems
+per MXCSR (0x1f80 and 0x9fc0): 0 differ. Planted bugs, each caught: N-to-C dot in lane order 1,469 /
+1,569 differ, cmd 5 / 6 bounds swapped 6,371 / 6,547, s <= 0 exit without zeroing x 439 / 470, `==` with
+NaN unequal 13,099 / 13,083, cmd 4 not zeroing w 245 / 246, C-to-N swap without state 1,565 / 1,638,
+`-w / dw` 8,053 / 8,032. Case `ode <car>` now wants 24 solver lines.

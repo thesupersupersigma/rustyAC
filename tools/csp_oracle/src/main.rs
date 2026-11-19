@@ -28,6 +28,7 @@ mod acs;
 mod track;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
 mod ode;
+mod solver;
 #[path = "../../car_oracle/src/setup_screen.rs"]
 mod setup_screen;
 /// What track.rs takes from car_oracle's game.rs.
@@ -2069,6 +2070,11 @@ fn main() {
         arguments.remove(i);
         arguments.remove(i)
     });
+    // --solver <breaks.txt>: CSP's solver kernels against rustyac-ode's csp_matrix (Task C5d)
+    let solver_check = arguments.iter().position(|a| a == "--solver").map(|i| {
+        arguments.remove(i);
+        arguments.remove(i)
+    });
     // --car <name>: load that car after CSP's start-up; --vanilla: the same without CSP
     let car_name = arguments.iter().position(|a| a == "--car").map(|i| {
         arguments.remove(i);
@@ -2259,6 +2265,10 @@ fn main() {
         }
         if let Some(breaks) = &ode_check {
             ode::run(dll as usize, breaks);
+            stop(0, "end of the run");
+        }
+        if let Some(breaks) = &solver_check {
+            solver::run(dll as usize, breaks);
             stop(0, "end of the run");
         }
 

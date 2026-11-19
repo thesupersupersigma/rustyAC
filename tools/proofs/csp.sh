@@ -13,7 +13,8 @@
 #   air <track>|still  CSP's air density (Task C4a, docs/csp/port_c4.md): the game's car driven 60 s with
 #                  CSP live, CSP's own density law, near-ground temperature, ground plane and altitude
 #                  table called at every step against crates/rustyac-physics/src/csp/air.rs, bit for bit
-#   ode <car>      CSP's double ODE functions against rustyac-ode's f64 ones (Task C5c), inputs from a Spa drive
+#   ode <car>      CSP's double ODE functions and solver kernels against rustyac-ode's f64 ones (Tasks C5c, C5d),
+#                  inputs from a Spa drive
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -172,18 +173,21 @@ done
 
 # ode <car>: CSP's double ODE (Task C5c, docs/csp/core.md): a 600-step Spa drive logs the inputs of its
 # rotation functions and dxStepBody (breakpoint dumps), then rustyac-ode's f64 functions against CSP's own on those,
-# edge values and random bits, at two MXCSR values (22 lines, each "0 differ"); the ball and fixed joint rows take the drive's bodies
+# edge values and random bits, at two MXCSR values (22 lines, each "0 differ"); the ball and fixed joint rows take the drive's bodies;
+# then the solver kernels (Task C5d, csp_matrix) on 1..40-row matrices from the drive's values and dSolveLCP (csp_lcp) on step-shaped problems (24 lines, each "0 differ")
 lap=oracle/game/track_spa_lap.ryin
 for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
     keep "ode $car" || continue
     [ -f "$lap" ] || { skip "ode $car" "no $lap"; continue; }
     if CSP_ORACLE_BREAK=168b7b0d,168b990d,168bca0d,16c61b0b oracle "ode_drive_$car" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --workers 0 --steps 600 \
-        && oracle "ode_$car" --ode "$(cygpath -aw "$out/runs/ode_drive_$car/car_root/breaks.txt")"; then
-        run=$out/runs/ode_$car.txt
-        if [ "$(tr -d '\r' < "$run" | grep -c '^ode [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 22 ]; then
-            verdict "ode $car" IDENTICAL "11 functions x 2 MXCSR, $(tr -d '\r' < "$run" | grep -m1 '^ode: ' | cut -d' ' -f2-6) from the drive, 0 differ"
+        && oracle "ode_$car" --ode "$(cygpath -aw "$out/runs/ode_drive_$car/car_root/breaks.txt")" \
+        && oracle "solver_$car" --solver "$(cygpath -aw "$out/runs/ode_drive_$car/car_root/breaks.txt")"; then
+        run=$out/runs/ode_$car.txt; srun=$out/runs/solver_$car.txt
+        if [ "$(tr -d '\r' < "$run" | grep -c '^ode [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 22 ] \
+            && [ "$(tr -d '\r' < "$srun" | grep -c '^solver [a-z_0-9]* mxcsr 0x[0-9a-f]*: [0-9]* inputs, 0 differ')" = 24 ]; then
+            verdict "ode $car" IDENTICAL "11 functions + 10 solver kernels + dSolveLCP x 2 MXCSR, $(tr -d '\r' < "$run" | grep -m1 '^ode: ' | cut -d' ' -f2-6) from the drive, 0 differ"
         else
-            verdict "ode $car" DIFFERENT "$(why "$run" '^ode|error|panic|fault')"
+            verdict "ode $car" DIFFERENT "$(why "$run" '^ode|error|panic|fault') $(why "$srun" '^solver|error|panic|fault')"
         fi
     else
         verdict "ode $car" DIFFERENT "csp_oracle failed: $(why "$r.txt" 'error|panic|fault|exit')"

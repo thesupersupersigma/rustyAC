@@ -170,15 +170,15 @@ unsafe fn joint_both(f: GetInfo2, fixed: bool, has_b1: bool, v: &[f64], r: [M3; 
 }
 
 #[derive(Default)]
-struct Count {
-    n: u64,
-    differ: u64,
-    nan: u64,
-    first: Vec<String>,
+pub(crate) struct Count {
+    pub(crate) n: u64,
+    pub(crate) differ: u64,
+    pub(crate) nan: u64,
+    pub(crate) first: Vec<String>,
 }
 
 impl Count {
-    fn check(&mut self, what: &dyn Fn() -> String, csp: &[f64], port: &[f64]) {
+    pub(crate) fn check(&mut self, what: &dyn Fn() -> String, csp: &[f64], port: &[f64]) {
         self.n += 1;
         let mut nan = false;
         for (a, b) in csp.iter().zip(port) {
@@ -196,7 +196,7 @@ impl Count {
     }
 }
 
-fn edge() -> Vec<f64> {
+pub(crate) fn edge() -> Vec<f64> {
     vec![
         0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, 3.0, 1e-300, -1e-300, 1e300, -1e300, 1e-160, 1e160,
         f64::from_bits(1), -f64::from_bits(1), f64::MIN_POSITIVE, f64::MAX, f64::MIN, f64::INFINITY,

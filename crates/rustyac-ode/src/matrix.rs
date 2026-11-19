@@ -510,7 +510,7 @@ pub fn ldlt_add_tl(l: &mut [f32], l_off: usize, d: &mut [f32], a: &[f32], n: usi
 
 /// `_dRemoveRowCol` @ 0x14034c910: removes row and column `r` of the `n` x `n` matrix `a`
 /// (row skip `nskip`) by moving the rest up and left.
-pub fn remove_row_col(a: &mut [f32], n: usize, nskip: usize, r: usize) {
+pub fn remove_row_col<T: Copy>(a: &mut [T], n: usize, nskip: usize, r: usize) {
     if r >= n - 1 {
         return;
     }
