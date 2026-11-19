@@ -8,7 +8,8 @@
 # DLLs of the AC folder that acs.exe imports (CSP looks functions up in them too).
 # Makes re/csp/fakeac/. Remove only with fakeac_csp_rm.ps1 (a recursive delete follows junctions).
 $ErrorActionPreference = 'Stop'
-$ac = 'C:\Program Files (x86)\Steam\steamapps\common\assettocorsa'
+# AC_ROOT: another copy of the install (the proof farm's, docs/proof_farm.md)
+$ac = if ($env:AC_ROOT) { $env:AC_ROOT } else { 'C:\Program Files (x86)\Steam\steamapps\common\assettocorsa' }
 $csp = Join-Path $PSScriptRoot '..\..\ignored\CSP\lights-patch-v0.3.2-preview2'
 $f = Join-Path $PSScriptRoot '..\..\re\csp\fakeac'
 if (Test-Path $f) { Write-Error "$f exists: remove it with fakeac_csp_rm.ps1 first" }
