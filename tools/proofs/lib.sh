@@ -48,12 +48,16 @@ rustyac() {
     _o=$(own) && _x=$1 && shift && "$_x" --cfg-dir "$_o/cfg" --documents "$_o/docs" "$@"
 }
 # drive <file.ryin>: the drive as the proofs replay it (a path from the repo): one naming a file under
-# the player's Documents (conditions_spa_setup: its setup) as a copy naming the kept one instead
+# the player's Documents (conditions_spa_setup: its setup) as a copy naming the kept one instead, and
+# with AC_ROOT elsewhere (the proof farm) one naming the PC's AC folder (its track) as a copy naming $ac
 drive() {
-    grep -aqF '\Documents\Assetto Corsa\' "$1" || { echo "$1"; return; }
+    pc_ac='C:\Program Files (x86)\Steam\steamapps\common\assettocorsa'
+    [ "$(cygpath -w "$ac")" = "$pc_ac" ] && pc_ac=
+    grep -aqF '\Documents\Assetto Corsa\' "$1" || { [ -n "$pc_ac" ] && grep -aqiF "$pc_ac" "$1"; } || { echo "$1"; return; }
     mkdir -p "$out/drives"
     c=$out/drives/$(basename "$1")
-    [ -f "$c" ] || DOCS=$(cygpath -w "$docs_gold") perl -0777 -pe 's/[A-Za-z]:\\Users\\[^\\\n]+\\Documents\\Assetto Corsa/$ENV{DOCS}/g' "$1" > "$c"
+    [ -f "$c" ] || DOCS=$(cygpath -w "$docs_gold") FROM=$pc_ac AC=$(cygpath -w "$ac") perl -0777 -pe \
+        's/[A-Za-z]:\\Users\\[^\\\n]+\\Documents\\Assetto Corsa/$ENV{DOCS}/g; $ENV{FROM} ne "" and s/\Q$ENV{FROM}\E/$ENV{AC}/gi' "$1" > "$c"
     echo "${c#"$repo"/}"
 }
 # own_print: what a run without --cfg-dir would read and write: the default own folder beside
@@ -103,7 +107,8 @@ maths_path=$(python -c "import ctypes; print('FMA3' if ctypes.CDLL('msvcr120')._
 [ -n "$maths_path" ] || { echo "MSVCR120.dll's maths path is unknown (python, ctypes, msvcr120.dll)" >&2; exit 2; }
 # install_key: the game's files every case may read: acs.exe's bytes and the names, sizes and
 # times of system/, content/cars and content/tracks, and the maths path when it is not FMA3 (so
-# the PC's keys stay what they were); once a run: run_all.sh exports it
+# the PC's keys stay what they were); once an area, here (its callers run in $(...) subshells,
+# which would each walk the install again: 22 s on the farm VM)
 install_key() {
     if [ -z "$PROOF_INSTALL_KEY" ]; then
         PROOF_INSTALL_KEY=$({ sha1sum "$ac/acs.exe" | cut -c1-40
@@ -113,6 +118,7 @@ install_key() {
     fi
     echo "$PROOF_INSTALL_KEY"
 }
+install_key > /dev/null
 cache_salt=$(salt_of car_oracle)
 # cache_key <words...>: the key of one recording (its arguments, the content of any file named in them)
 cache_key() {

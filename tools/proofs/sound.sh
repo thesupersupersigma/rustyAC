@@ -59,7 +59,7 @@ while read -r scenario camera; do
     done
     game_log=$(ls "$out"/e2e/*_"${scenario}_${camera}"_ac.log 2>/dev/null | head -n 1)
     for try in 1 2 3; do
-        rustyac target/release/rustyac.exe --replay "oracle/game/audio_e2e_$scenario.ryin" --headless --no-shm \
+        rustyac target/release/rustyac.exe --replay "$(drive "oracle/game/audio_e2e_$scenario.ryin")" --headless --no-shm \
             --audio-wav "$out/e2e/port.wav" --audio-log "$out/e2e/port.log" --audio-oracle-camera "$camera" \
             --audio-ini "$root/cfg/audio.ini" --audio-script "$game_log" >> "$out/e2e.txt" 2>&1 && break
     done
