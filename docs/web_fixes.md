@@ -383,3 +383,112 @@ skipped): **one item is marked, track `montreal`** (mod, 316.7 MB), missing
 - the browser area (`tools/proofs/browser.sh`): 238 IDENTICAL, 0 not (237 of W1 plus the banner).
 - clippy `-D warnings --all-targets --locked`: rustyac-web for wasm32-unknown-unknown and native,
   rustyac-game native and `replay_hash` for wasm32-wasip1, `tools/web_pack`: clean.
+
+# W3: Full mode at a render scale below 100 %, the audio crackling, the montreal skip
+
+Super, on rustyac.com (v1.1.2), Full mode, Red Bull Ring, Render scale 50 %: the 3D picture
+filled the top part of the canvas and slices of it repeated below. He also heard the sound
+crackle, with the PC under heavy load.
+
+## Resume here (W3)
+
+- Done: bug 1 reproduced, its two causes found and fixed, the browser area's two new rows and
+  the montreal skip; bug 2 measured (load, nothing changed); clippy; released as v1.1.3.
+- Open: see "Not done" at the end of this section.
+
+## Bug 1: the picture in a corner
+
+Reproduced in headless Chrome (`web/check.mjs`, 1280x720, ks_ferrari_f2004 on ks_red_bull_ring,
+`backend=full&graphics=high,SCALE=<n>`; scripts and shots in `re/scratch/taskW3/`): at 100 % one
+whole picture; at 75 % and 50 % AC's app bar stood in the middle of the screen (x = 970 at 75 %,
+650 at 50 %), and at 50 % the right part was darker. With FXAA off, and with post-processing off,
+the same. Changed during a drive from 100 % to 50 %: the new picture in the top-left quarter and
+pieces of the last full-size frame around it, Super's picture.
+
+It was in v1.1.0: that tag's web build, made in a scratch worktree of its own (removed again),
+shows the same app bar at 75 % and the same quarter-over-old-frames when the scale changes
+during a drive. W1's bind-group cache (`f1df015`) is not part of it, and neither is the
+render-scale blit (`kgl_wgpu.rs` `begin_gui_screen` / `present_to`: whole texture, whole
+target). Two causes:
+
+1. **The GUI laid out at the small size.** The page shrinks the canvas itself for the render
+   scale when the game has no AC GUI (`web/app.js` `resizeCanvas`), and it calls that before the
+   game is made, when there is no game and so no GUI yet (`web/app.js:1178`, and `:1571` for
+   online). Full mode's renderer and AC's GUI were therefore made at 640x360; the next frame
+   saw the GUI and put the canvas back at 1280x720, but the GUI keeps the sizes it was made with,
+   as the game does: the app bar's hidden place is the screen's width + 10
+   (`crates/rustyac-gui/src/taskbar.rs:92`), 650, now inside the window, and the bar jumps
+   between there and off the screen every frame. Fix: those two calls count a Full-mode game
+   as one with the GUI (`resizeCanvas(gui = hasGui())`), so the game is made at the canvas's
+   full size and the 3D picture is made smaller by `set_render_scale`, as for a game that
+   exists.
+2. **The FXAA target keeps its first size.** `CameraForwardYebis::onResize` keeps the FXAA target
+   at the size it was made with and YEBIS scales the resized scene into it
+   (`crates/rustyac-render/src/post.rs:162`, as the game). The browser has no YEBIS: its
+   stand-in copies the scene at the camera's new size (the render oracle's game side does too,
+   `tools/render_oracle/src/ac.rs:182`) into the corner of the old, larger target, and the FXAA
+   pass then draws all of that target onto the screen: the picture in a quarter, the old frame
+   around it. With fix 1 every Full drive goes through this resize at its start, so it showed
+   at once (top-left quarter, the rest black). Fix: on the wgpu backend only (`#[cfg(feature =
+   "backend-wgpu")]`), the FXAA target is made again at the new size on a resize. The desktop
+   keeps the game's rule.
+
+At 100 % nothing is resized, and nothing changed. After the fix: 50 %, 75 %, 100 % and 100 %
+→ 50 % mid-drive are one whole picture each.
+
+New in the browser area (`tools/proofs/browser.sh`), each a drive's screenshot judged by
+`tools/proofs/scale_check.py`: "Full mode at render scale 50 %" and "Full mode's render scale
+100 % to 50 % mid-drive" (`tools/proofs/scale_page.js` sets it through
+`window.rustyac.graphics`). Bad is a quarter of the window mostly black, a hard edge along the
+middle row or column (more than 3 times the typical change between nearby rows, + 2), or the app
+bar's red arrow at the top away from the right edge. A drive's frames are not repeatable, so the
+screenshot's SHA-256 is in the line as a record, not compared. On the shots of this task the
+check says bad for every shot of v1.1.0 / v1.1.2 that shows a fault (the app bar, the quarter
+on black, the quarter on old frames: edges of 63-102 against 6-11) and ok for every whole
+picture (edges at most 1.05 times typical). The app bar flickers frame by frame, so one shot can
+miss it (v1.1.0's 50 % shot did).
+
+## Bug 2: the crackling is the load
+
+FMOD 2.03 HTML5's AudioWorklet asks the page's main thread for each mix, so a main thread busy
+for longer than the worklet's buffer gives a gap in the sound. Measured in the page
+(`re/scratch/taskW3/audio.js`: the worklet port's requests wrapped and timed, long tasks
+observed, 20 s of a Full High drive with sound on Spa from the test pack, the PC otherwise idle):
+
+| build | requests | gap median | p99 | largest | > 80 ms | long tasks | fps |
+|---|---|---|---|---|---|---|---|
+| v1.1.2 + W3 | 937 | 20.1 ms | 38.2 ms | 43.9 ms | 0 | 0 | 54 |
+| v1.1.0 | 938 | 20.2 ms | 37.4 ms | 42.2 ms | 0 | 0 | 39 |
+| v1.1.2 + W3, 16 busy shell loops | 939 | 19.2 ms | 37.3 ms | 42.6 ms | 0 | 0 | 60 |
+
+A request every ~21 ms matches one 1024-sample block at 48 kHz (21.3 ms); the largest gap stayed near two
+blocks, with no task on the main thread over 50 ms. Nothing here underruns, on either build, so
+the crackling Super heard comes from his PC's load at the time (a build and a network copy), and
+nothing was changed. (16 busy shell loops did not slow the page here: Windows gives Chrome its
+share. A load that does, his, would show as gaps far over 80 ms.)
+
+## Small: the montreal case
+
+`tools/proofs/browser.sh` runs "Full mode's fallback banner (montreal)" only when
+`content/tracks/montreal` is in the install; otherwise `skip` with "the montreal mod is not
+installed", which `tools/proofs/expected_skips.txt` now lists, so it counts as expected.
+
+## Checks (W3)
+
+- clippy `-D warnings --all-targets --locked` (`re/scratch/taskW3/clippy.sh`, W2's recipe):
+  rustyac-web for wasm32-unknown-unknown and native, rustyac-game native and `replay_hash` for
+  wasm32-wasip1, `tools/web_pack`: clean.
+- the browser area (`tools/proofs/run_all.sh browser`, 55 min): 240 IDENTICAL, 0 not (W2's 238
+  plus the two render-scale rows; montreal is installed here, so its case ran). The rows' lines:
+  `ok 9a5b0d74088e303b` (50 %), `ok b4f7e05ff931b7f2` (100 % to 50 %).
+- No new file in the web zip (only `web/app.js` changed there).
+
+## Not done (W3)
+
+- Super's cockpit camera was not driven: the faults are in the 2D pass and the post-processing
+  targets, the same for every camera.
+- The new rows judge a screenshot, not a fixed frame: `?fullproof` draws one frame when the
+  renderer is made and does not take the render scale.
+- The wgpu render proof (`tools/proofs/render_wgpu.sh`, not a run_all area) will log the FXAA
+  target made again on its RESIZE rows with FXAA on; its call-log diff against Direct3D 11 there
+  is this change.
