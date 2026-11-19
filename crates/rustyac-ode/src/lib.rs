@@ -43,6 +43,7 @@ pub mod csp_contact;
 pub mod csp_joints;
 pub mod csp_lcp;
 pub mod csp_matrix;
+pub mod csp_step;
 pub mod geom;
 pub mod joint;
 pub mod lcp;

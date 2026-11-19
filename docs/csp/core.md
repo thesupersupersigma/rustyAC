@@ -32,8 +32,10 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5d 2.1 dball rows | done: `csp_joints::dball_get_info2` bit-identical to CSP's on 1.2 M joints ([below](#task-c5d-part-2-the-car-islands-and-dball)) |
 
-Next: C5d part 2, `dxStepIsland` (+0x16c24b0, stages +0x16c26d0 .. +0x16c5370) in f64 on the recorded
-islands (re/scratch/taskC5d/isl.sh), whole-island proof.
+| C5d 2.2 `dxStepIsland` in f64 | done: `csp_step::step_island` bit-identical to CSP's on 1,200 recorded car islands (bodies, joint feedback, solver inputs) ([below](#task-c5d-part-2-dxstepisland-in-double)). C5d done |
+
+Next: plan part 5 (C5e): `csp_step` inside `World` (islands from the body / joint lists, auto-disable),
+then the car's f64 world in rustyAC's CSP mode.
 
 ## The core in one paragraph
 
@@ -192,13 +194,13 @@ density: same inputs through CSP's function and the port, every output compared 
 | 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | **done in C5b** |
 | 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
 | 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ball / fixed rows (**done in C5c**; ray-vs-trimesh went to part 8, the LDLT / solve kernels to part 4: master rewrote them; CSP has no hinge) | 2 used (planned 4-6) | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
-| 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)) 1-2; contact `getInfo2` and the box / trimesh colliders that changed 1-2; `odemath` / `matrix` changes 0.5; libccd pairs 1. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 3.5-5.5 | per-stage in-process compare |
+| 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)), contact and dball `getInfo2`, `matrix` changes (**done in C5d**, 1 session); the box / trimesh colliders that changed (1) and libccd pairs (1) moved to part 6. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 1 used (planned 3.5-5.5) | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
-| 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback | 2-3 | contact lists identical per step |
+| 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback; the box / trimesh colliders that changed and libccd pairs (from part 4) | 4-5 | contact lists identical per step |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5c** | **13-20.5** (parts 4-9; C5b: 15-22; C5c found ODE from 2025, cars on `dWorldStep`, no QuickStep) | |
+| | **Total left after C5d** | **11.5-17** (parts 5-9; after C5c: 13-20.5) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -612,3 +614,45 @@ the velocity fallback; J1's angular part is `r × q` and J2's `q × r` as plain 
 term). Proof (`ode dball`, same inputs as the ball / fixed rows, velocities from spare slots): 1,207,788
 joints per MXCSR, 0 differ. Planted bug (body-1 anchor in source order plus `len < 1e-12`): 273,898 /
 271,603 differ. Case `ode <car>` now wants 26 ode lines.
+
+## Task C5d, part 2: `dxStepIsland` in double
+
+**Port.** `crates/rustyac-ode/src/csp_step.rs`: `step_island(world, bodies, joints, h)` is master's
+`dxStepIsland` for one thread (Stage0 bodies and joints, 2a rows, 2b `J invM` and `rhs_tmp`, 2c A and
+rhs, 3 `csp_lcp::solve_lcp`, 4 constraint forces, joint feedback, velocities, `dxStepBody`) over a slice
+of `Body<f64>` and `Joint { kind, b0, b1, feedback }` (ball, fixed on master's path, dball, contact).
+Master's ordering of the joints (unbounded, mixed, LCP) is kept as written; the "nub" master hands the
+solver is the count of unbounded joints, not rows (CSP's too). Every stage was read in the machine code
+(two-lane SSA trace of the SSE code, re/scratch/taskC5d/ssa.py); the CSP orders that differ from the
+source:
+
+| stage | CSP's order | master |
+|---|---|---|
+| Stage0 gyroscopic torque (+0x16c2c5e..+0x16c3529) | `tacc_x = (T02 L2 + T01 L1) + (T00 L0 + tacc_x)`, y: `(T12 L2 + T10 L0) + (T11 L1 + tacc_y)`, z: `(T22 L2 + T20 L0) + (T21 L1 + tacc_z)` | `tacc += T L` |
+| Stage2c `MultiplyAddJinvMxJToA` (+0x16c47c0) | `A = ((AY + AX) + (AZ + A)) + ((LZ + LX) + LY)` | `A += ((((LX + LY) + LZ) + AX) + AY) + AZ` |
+| Stage2c `MultiplySubJxRhsTmpFromRHS` | `rhs -= ((AZ + AY) + AX) + ((LX + LZ) + LY)` | sequential sum |
+| Stage4 `avel += invI acc` (+0x16c5757) | z row: `(acc_y I21 + avel_z) + (acc_x I20 + acc_z I22)`; x, y as source | `dMultiplyAdd0_331` |
+
+Everything else (world inverse inertia, the closed-form 3×3 inverse, `J invM`, `rhs_tmp`, the
+constraint-force sums, the linear velocity) is source order up to commutative swaps.
+
+**Proof.** csp_oracle's recorder now also breaks at `dxSolveLCP`'s entry (`16ffe10l`: m, nub, A's lower
+triangle, rhs / cfm pairs, lo / hi pairs, findex and the bodies' force accumulators) and, with
+`CSP_ORACLE_FEEDBACK=1`, gives every joint a zeroed `dJointFeedback` (CSP's cars set none; the step
+only writes it). `csp_oracle --islands <file>` steps every recorded island with `csp_step` from its
+entry state and compares bit for bit: every body's pos, q, R, lvel, avel, facc, tacc after the step,
+every joint's feedback, and the solver's inputs. On the 600-step Spa drive:
+
+| car | islands | with contacts | joint feedbacks | differ | solver inputs differ |
+|---|---|---|---|---|---|
+| ks_ferrari_f2004 | 600 | 8 (24 / 25 joints) | 12,626 | 0 | 0 |
+| rss_formula_rss_3_v6_2026 | 600 | 0 | 12,600 | 0 | 0 |
+
+Each step starts from CSP's recorded state (not a chained 600-step run of the port). Planted bugs:
+master's A sum plus the source-order z row: 167,048 / 162,873 differ (solver inputs 73,679 / 75,614);
+the gyroscopic y row in source order plus a feedback nudge: 30,900 / 31,783 (solver inputs 1,274 /
+1,349). Proof area `csp`, case `island <car>` (record about 12 s, check under 1 s).
+
+Not done in part 2: the other fixed path (CSP's shifting joint, decoded in step 3, no car of the proof
+uses it) and hinge (CSP has none) are not in `JointKind`; ray-vs-trimesh stays part 8. Wiring
+`csp_step` into `World` (body / joint lists, islands, auto-disable) is the next part's (5).

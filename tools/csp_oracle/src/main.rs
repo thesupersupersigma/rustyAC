@@ -960,7 +960,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('d' | 'g' | 'b' | 'i' | 'w')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('d' | 'g' | 'b' | 'i' | 'w' | 'l')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1026,6 +1026,9 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         }
         if dump == 'x' {
             crate::island::leave(step);
+        }
+        if dump == 'l' {
+            crate::island::lcp(rdx, r8, r9, read::<usize>(context + 0x98));
         }
         if dump == 'g' {
             for geom in [rcx, rdx] {
@@ -2091,6 +2094,10 @@ unsafe fn maths(dll: usize) {
 
 fn main() {
     let mut arguments: Vec<String> = std::env::args().collect();
+    // --islands <file>: recorded CSP islands stepped by rustyac-ode's csp_step (Task C5d), no AC
+    if let Some(i) = arguments.iter().position(|a| a == "--islands") {
+        return island::check(&arguments[i + 1]);
+    }
     // --maths: CSP's C runtime functions of the air density against rustyac_math (Task C4a)
     let maths_check = arguments.iter().position(|a| a == "--maths").map(|i| arguments.remove(i)).is_some();
     // --ode <breaks.txt>: CSP's ODE functions against rustyac-ode's f64 ones on that drive's inputs (Task C5c)

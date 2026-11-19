@@ -15,6 +15,7 @@
 #                  table called at every step against crates/rustyac-physics/src/csp/air.rs, bit for bit
 #   ode <car>      CSP's double ODE functions and solver kernels against rustyac-ode's f64 ones (Tasks C5c, C5d),
 #                  inputs from a Spa drive
+#   island <car>   CSP's dxStepIsland against rustyac-ode's csp_step on that car's recorded Spa islands (Task C5d)
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -191,6 +192,29 @@ for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
         fi
     else
         verdict "ode $car" DIFFERENT "csp_oracle failed: $(why "$r.txt" 'error|panic|fault|exit')"
+    fi
+done
+
+# island <car>: CSP's dxStepIsland (Task C5d, csp_step): a 600-step Spa drive records every island at
+# dxStepIsland's entry, at dxSolveLCP's entry and after the world step (CSP_ORACLE_ISLANDS, every joint given a
+# feedback block), then rustyac-ode steps each recorded island from the same state: bodies, joint feedback
+# and the solver's inputs bit for bit (one line, "0 differ, solver inputs 0 differ")
+for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
+    keep "island $car" || continue
+    [ -f "$lap" ] || { skip "island $car" "no $lap"; continue; }
+    bin=$out/runs/island_$car.bin; rm -f "$bin"
+    if CSP_ORACLE_BREAK=16c24b0i,16c6d00w,16ffe10l CSP_ORACLE_ISLANDS="$(cygpath -aw "$bin")" CSP_ORACLE_FEEDBACK=1         oracle "island_drive_$car" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --workers 0 --steps 600         && [ -s "$bin" ]; then
+        run=$out/runs/island_$car.txt
+        "$CSP" --islands "$(cygpath -aw "$bin")" > "$run" 2>&1
+        line=$(tr -d '\r' < "$run" | grep -m1 '^island ')
+        if echo "$line" | grep -q '^island 600 steps, 600 islands (.*): 0 differ, solver inputs 0 differ'; then
+            verdict "island $car" IDENTICAL "${line#island }"
+        else
+            verdict "island $car" DIFFERENT "$(why "$run" '^island|^step|error|panic')"
+        fi
+        rm -f "$bin"
+    else
+        verdict "island $car" DIFFERENT "csp_oracle failed: $(why "$out/runs/island_drive_$car.txt" 'error|panic|fault|exit')"
     fi
 done
 
