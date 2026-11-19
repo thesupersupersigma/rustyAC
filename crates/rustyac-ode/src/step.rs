@@ -17,7 +17,7 @@
 //! The game runs ODE's threading interface in its single-threaded form, so the stages below
 //! run one after the other in the order of the source's `allowedThreads == 1` path.
 
-use crate::common::pad;
+use crate::common::{pad, Real};
 use crate::joint::{ContactParameters, Info1, Info2, JointFeedback};
 use crate::lcp::{solve_lcp, LcpMemory, LcpStats};
 use crate::matrix::{factor_ldlt, solve_ldlt};
@@ -30,7 +30,6 @@ use crate::world::{
     Body, BodyId, JointId, World, BODY_ANGULAR_DAMPING, BODY_AUTO_DISABLE, BODY_DISABLED, BODY_FINITE_ROTATION,
     BODY_FINITE_ROTATION_AXIS, BODY_GYROSCOPIC, BODY_LINEAR_DAMPING, BODY_MAX_ANGULAR_SPEED, BODY_NO_GRAVITY,
 };
-use rustyac_math::{cosf, sinf, sqrtf};
 
 /// Scratch arrays of the stepper (ODE's `dxWorldProcessMemArena`), kept between steps so
 /// that a step does not allocate.
@@ -839,29 +838,32 @@ fn multiply_add2_p8r(a: &mut [f32], a_off: usize, b: &[f32], c: &[f32], p: usize
 /// `sinc` (static in `util.cpp`): sin(x)/x, with a two-term Taylor series near zero. The
 /// threshold is the **double** constant 1.0e-4.
 #[inline(always)]
-fn sinc(x: f32) -> f32 {
+fn sinc<R: Real>(x: R) -> R {
     // if |x| < 1e-4 then use a taylor series expansion. this two term expansion
     // is actually accurate to one LS bit within this range if double precision
     // is being used - so don't worry!
-    if (x.abs() as f64) < 1.0e-4 {
-        1.0f32 - x * x * 0.166_666_67f32
+    if x.abs().to_f64() < 1.0e-4 {
+        R::ONE - x * x * R::ONE_SIXTH
     } else {
-        sinf(x) / x
+        x.sin() / x
     }
 }
 
 /// `dxStepBody` @ 0x140353860: given a body b, apply its linear and angular rotation over
 /// the time interval h, thereby adjusting its position and orientation.
-pub(crate) fn step_body(b: &mut Body, mut h: f32) {
+///
+/// In f64 this is CSP's `dxStepBody` (dwrite.dll+0x16c61b0, ODE master 66615b8a `step.cpp`):
+/// the same order except the quaternion length in [`safe_normalize4`].
+pub fn step_body<R: Real>(b: &mut Body<R>, mut h: R) {
     // cap the angular velocity
     if b.flags & BODY_MAX_ANGULAR_SPEED != 0 {
         let max_ang_speed = b.max_angular_speed;
         let aspeed = dot3(&b.avel, &b.avel);
         if aspeed > max_ang_speed * max_ang_speed {
-            let coef = max_ang_speed / sqrtf(aspeed);
-            b.avel[0] *= coef;
-            b.avel[1] *= coef;
-            b.avel[2] *= coef;
+            let coef = max_ang_speed / aspeed.sqrt();
+            b.avel[0] = b.avel[0] * coef;
+            b.avel[1] = b.avel[1] * coef;
+            b.avel[2] = b.avel[2] * coef;
         }
     }
     // end of angular velocity cap
@@ -872,7 +874,7 @@ pub(crate) fn step_body(b: &mut Body, mut h: f32) {
     }
 
     if b.flags & BODY_FINITE_ROTATION != 0 {
-        let mut irv = [0.0f32; 3]; // infitesimal rotation vector
+        let mut irv = [R::ZERO; 3]; // infitesimal rotation vector
         let q; // quaternion for finite rotation
 
         if b.flags & BODY_FINITE_ROTATION_AXIS != 0 {
@@ -886,17 +888,17 @@ pub(crate) fn step_body(b: &mut Body, mut h: f32) {
 
             // make a rotation quaternion q that corresponds to frv * h.
             // compare this with the full-finite-rotation case below.
-            h *= 0.5;
+            h = h * R::HALF;
             let theta = k * h;
             let s = sinc(theta) * h;
-            q = [cosf(theta), frv[0] * s, frv[1] * s, frv[2] * s];
+            q = [theta.cos(), frv[0] * s, frv[1] * s, frv[2] * s];
         } else {
             // make a rotation quaternion q that corresponds to w * h
-            let wlen = sqrtf(b.avel[0] * b.avel[0] + b.avel[1] * b.avel[1] + b.avel[2] * b.avel[2]);
-            h *= 0.5;
+            let wlen = (b.avel[0] * b.avel[0] + b.avel[1] * b.avel[1] + b.avel[2] * b.avel[2]).sqrt();
+            h = h * R::HALF;
             let theta = wlen * h;
             let s = sinc(theta) * h;
-            q = [cosf(theta), b.avel[0] * s, b.avel[1] * s, b.avel[2] * s];
+            q = [theta.cos(), b.avel[0] * s, b.avel[1] * s, b.avel[2] * s];
         }
 
         // do the finite rotation
@@ -905,15 +907,20 @@ pub(crate) fn step_body(b: &mut Body, mut h: f32) {
         // do the infitesimal rotation if required
         if b.flags & BODY_FINITE_ROTATION_AXIS != 0 {
             let dq = dq_from_w(&irv, &b.q);
+            // CSP's inlined row 0 (+0x16c664c) subtracts the positive sum: zero signs differ
+            let q0 = b.q[0] - h * (R::HALF * (irv[0] * b.q[1] + irv[1] * b.q[2] + irv[2] * b.q[3]));
             for j in 0..4 {
-                b.q[j] += h * dq[j];
+                b.q[j] = b.q[j] + h * dq[j];
+            }
+            if R::FAST {
+                b.q[0] = q0;
             }
         }
     } else {
         // the normal way - do an infitesimal rotation
         let dq = dq_from_w(&b.avel, &b.q);
         for j in 0..4 {
-            b.q[j] += h * dq[j];
+            b.q[j] = b.q[j] + h * dq[j];
         }
     }
 
@@ -928,20 +935,20 @@ pub(crate) fn step_body(b: &mut Body, mut h: f32) {
         let lin_threshold = b.dampingp.linear_threshold;
         let lin_speed = dot3(&b.lvel, &b.lvel);
         if lin_speed > lin_threshold {
-            let k = 1.0f32 - b.dampingp.linear_scale;
-            b.lvel[0] *= k;
-            b.lvel[1] *= k;
-            b.lvel[2] *= k;
+            let k = R::ONE - b.dampingp.linear_scale;
+            b.lvel[0] = b.lvel[0] * k;
+            b.lvel[1] = b.lvel[1] * k;
+            b.lvel[2] = b.lvel[2] * k;
         }
     }
     if b.flags & BODY_ANGULAR_DAMPING != 0 {
         let ang_threshold = b.dampingp.angular_threshold;
         let ang_speed = dot3(&b.avel, &b.avel);
         if ang_speed > ang_threshold {
-            let k = 1.0f32 - b.dampingp.angular_scale;
-            b.avel[0] *= k;
-            b.avel[1] *= k;
-            b.avel[2] *= k;
+            let k = R::ONE - b.dampingp.angular_scale;
+            b.avel[0] = b.avel[0] * k;
+            b.avel[1] = b.avel[1] * k;
+            b.avel[2] = b.avel[2] * k;
         }
     }
 }

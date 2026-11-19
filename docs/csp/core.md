@@ -23,9 +23,10 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5c B1. `rustyac-ode` generic over the number type | done for rotation and mass: 7 f64 functions bit-identical to CSP's ([below](#part-3-step-1-rotation-and-mass-in-double)); Vanilla unchanged |
 | C5c B2a. are CSP's matrix / LDLT loops vectorised? | done: partly, the LDLT / L1 solves are scalar ([answer](#part-3-step-2-vectorised-loops-and-odemath)) |
 | C5c B2b. odemath helpers in f64 | done: `dxSafeNormalize3` bit-identical to CSP's; the other helpers have no out-of-line copy in CSP, proven inside their callers ([below](#part-3-step-2-vectorised-loops-and-odemath)) |
-| C5c B2c. body integration, ray-vs-trimesh, joint rows in f64 | not started |
+| C5c B2c. body integration in f64 | done: `dxStepBody` bit-identical to CSP's ([below](#part-3-step-2c-body-integration-in-double)) |
+| C5c B2d. ray-vs-trimesh, joint rows in f64 | not started |
 
-Next: plan part 3, step 2c: body integration (`step_body`) in f64, then ray-vs-trimesh and the hinge / ball / fixed rows, each one transcribed in CSP's machine order and proven with `csp_oracle --ode`.
+Next: plan part 3, step 2d: ray-vs-trimesh and the hinge / ball / fixed rows, each one transcribed in CSP's machine order and proven with `csp_oracle --ode`.
 
 ## The core in one paragraph
 
@@ -394,3 +395,33 @@ integration, joints, colliders), not on their own.
 - Proof: `csp_oracle --ode` checks both halves of each 8-value input (2,408,400 vectors) with
   the return value: 0 differ at MXCSR 0x1f80 and 0x9fc0. With the f64 path planted to 0.13.1's
   code it finds 476,219 / 542,137 differences. Proof area `csp`, cases `ode <car>`: 16 lines.
+
+### Part 3, step 2c: body integration in double
+
+CSP's `dxStepBody` is +0x16c61b0 (called from the island steppers +0x16c5370 and +0x16c1e80).
+It keeps master's `step.cpp` order except in three places, which the f64 path copies:
+
+- The quaternion normalise (master's `dxSafeNormalize4`, inlined at +0x16c67df) is
+  reassociated: `l = (q0*q0 + q1*q1) + (q2*q2 + q3*q3)`; `l > 0` gives `q *= 1/sqrt(l)`,
+  anything else (zero, NaN) `(1, 0, 0, 0)`. `safe_normalize4` and `dot3` in
+  `crates/rustyac-ode/src/odemath.rs` are now generic, `if R::FAST` takes that order.
+- In the finite-rotation-axis case the infinitesimal update is inlined (+0x16c664c): row 0
+  is `q0 - h*(0.5*(w0*q1 + w1*q2 + w2*q3))`, a subtraction of the positive sum where the
+  source adds the negated one. Same value, but an exact-zero sum gives the other zero sign.
+  Rows 1-3 match the out-of-line `dDQfromW` (+0x168bca0, row 2 reordered as in step 1).
+- `sin` / `cos` are CSP's statically linked CRT (+0x1dbef50 / +0x1dbfb40); Rust's `f64::sin`
+  / `cos` give the same bits on every input below.
+
+The geoms loop and the moved callback are skipped when byte `[[[[body+8]+0xa0]+8]+0x28]` is
+set; the oracle gives CSP a fake world chain with that byte set, so only the integration is
+compared. `Body`, `Damping` and `AutoDisable` in `crates/rustyac-ode/src/world.rs` take
+`R = f32`; `step_body` and `sinc` in `crates/rustyac-ode/src/step.rs` are generic; `Real`
+gained `ONE_SIXTH`, `sin`, `cos`, `to_f64`. The f32 path is unchanged.
+
+Proof: the Spa drive logs each `dxStepBody` call (breakpoint kind `b`: h, flags and the body
+fields); `csp_oracle --ode` runs CSP's function and `step_body::<f64>` on a fake body with
+those values under all 32 combinations of the finite-rotation, axis, linear / angular damping
+and max-angular-speed flags, plus edge values and random bits: 1,319,392 bodies, position,
+quaternion, R, lvel and avel compared, 0 differ at MXCSR 0x1f80 and 0x9fc0. Planted with the
+source-order normalise it finds 53,036 / 53,031 differences; before the row-0 fix it found 16 /
+38 (zero signs, edge set only). Proof area `csp`, cases `ode <car>`: 18 lines.

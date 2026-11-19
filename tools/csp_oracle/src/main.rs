@@ -933,7 +933,8 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 // ---- the breakpoint log: CSP_ORACLE_BREAK=rva,rva,... (CSP DLL offsets, hex) -----------------
 // each listed instruction gets an int3; a hit logs (step, thread, rva, caller, rcx rdx r8 r9; an rva
 // ending in "d" also the 12 doubles at rdx; ending in "g" the ODE geoms at rcx and rdx: 8 qwords from +0
-// and the 3 doubles at the position pointer +0x28, the body's 6 qwords), puts the byte back,
+// and the 3 doubles at the position pointer +0x28, the body's 6 qwords; ending in "b" the dxBody at
+// rcx as `dxStepBody` reads it: h from xmm1, the flags, then ode::BODY_FIELDS), puts the byte back,
 // single-steps it and re-arms. shortcut: another thread passing during that one instruction is not
 // logged, upgrade if a count looks short
 
@@ -948,7 +949,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('d' | 'g')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('d' | 'g' | 'b')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -993,6 +994,10 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         let mut line = format!("{step} {} {:#x} {} {rcx:#x} {rdx:#x} {r8:#x} {r9:#x}", tag_of(GetCurrentThreadId()), at - DLL_BASE.load(Ordering::Relaxed), place(caller));
         if dump == 'd' {
             (0..12).for_each(|i| line.push_str(&format!(" {}", read::<f64>(rdx + i * 8))));
+        }
+        if dump == 'b' {
+            line.push_str(&format!(" {} {}", read::<f64>(context + 0x1b0), read::<u32>(rcx + 0x38)));
+            crate::ode::BODY_FIELDS.iter().for_each(|&(offset, n)| (0..n).for_each(|i| line.push_str(&format!(" {}", read::<f64>(rcx + offset + i * 8)))));
         }
         if dump == 'g' {
             for geom in [rcx, rdx] {

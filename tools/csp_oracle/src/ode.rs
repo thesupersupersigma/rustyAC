@@ -9,6 +9,8 @@
 use rustyac_ode::mass::Mass;
 use rustyac_ode::odemath;
 use rustyac_ode::rotation as rot;
+use rustyac_ode::step::step_body;
+use rustyac_ode::world::{AutoDisable, Body, Damping};
 
 type Q = [f64; 4];
 type M3 = [f64; 12];
@@ -22,6 +24,69 @@ struct Csp {
     dq_from_w: extern "C" fn(*mut f64, *const f64, *const f64),
     box_total: extern "C" fn(*mut f64, f64, f64, f64, f64),
     safe_normalize3: extern "C" fn(*mut f64) -> bool,
+    step_body: extern "C" fn(*mut u64, f64),
+}
+
+/// The dxBody doubles `dxStepBody` reads (offset, count): pos, q, lvel, avel, finite_rot_axis,
+/// damping (linear/angular scale, linear/angular threshold), max_angular_speed. 21 values.
+pub const BODY_FIELDS: [(usize, usize); 7] = [(0x138, 3), (0x1b8, 4), (0x1d8, 3), (0x1f8, 3), (0x258, 3), (0x2c8, 4), (0x2e8, 1)];
+
+/// The flags `dxStepBody` tests: finite rotation, its axis, linear / angular damping, max speed.
+const STEP_FLAGS: [u32; 5] = [1, 2, 0x20, 0x40, 0x80];
+
+/// One `dxStepBody` call on CSP's side and the port's: `v` = h then the 21 BODY_FIELDS values.
+/// Returns pos, q, R, lvel, avel after the step (CSP's, port's).
+unsafe fn step_both(f: extern "C" fn(*mut u64, f64), flags: u32, v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    // the body's world chain ends at a byte that says "no geom moved callbacks" (+0x28 != 0)
+    let mut chain = [0u64; 32];
+    let p = chain.as_mut_ptr();
+    let at = p as u64;
+    (*p.add(20), *p.add(1), *p.add(5)) = (at, at, 1);
+    let mut b = [0u64; 0x300 / 8];
+    b[1] = at;
+    b[0x38 / 8] = flags as u64;
+    let mut k = 1;
+    for &(offset, n) in &BODY_FIELDS {
+        for i in 0..n {
+            b[offset / 8 + i] = v[k].to_bits();
+            k += 1;
+        }
+    }
+    f(b.as_mut_ptr(), v[0]);
+    let get = |offset: usize, n: usize| (0..n).map(move |i| f64::from_bits(b[offset / 8 + i]));
+    let csp = get(0x138, 3).chain(get(0x1b8, 4)).chain(get(0x158, 12)).chain(get(0x1d8, 3)).chain(get(0x1f8, 3)).collect();
+    let w = |i: usize| [v[i], v[i + 1], v[i + 2], 0.0];
+    let mut p = Body::<f64> {
+        alive: true,
+        next: None,
+        tag: 0,
+        first_joint: None,
+        first_geom: None,
+        flags,
+        mass: Mass::zero(),
+        inv_i: [0.0; 12],
+        inv_mass: 0.0,
+        pos: w(1),
+        r: [0.0; 12],
+        q: [v[4], v[5], v[6], v[7]],
+        lvel: w(8),
+        avel: w(11),
+        facc: [0.0; 4],
+        tacc: [0.0; 4],
+        finite_rot_axis: w(14),
+        adis: AutoDisable { idle_time: 0.0, idle_steps: 0, linear_average_threshold: 0.0, angular_average_threshold: 0.0, average_samples: 0 },
+        adis_timeleft: 0.0,
+        adis_stepsleft: 0,
+        average_lvel_buffer: Vec::new(),
+        average_avel_buffer: Vec::new(),
+        average_counter: 0,
+        average_ready: false,
+        dampingp: Damping { linear_scale: v[17], angular_scale: v[18], linear_threshold: v[19], angular_threshold: v[20] },
+        max_angular_speed: v[21],
+    };
+    step_body(&mut p, v[0]);
+    let port = p.pos[..3].iter().chain(&p.q).chain(&p.r).chain(&p.lvel[..3]).chain(&p.avel[..3]).copied().collect();
+    (csp, port)
 }
 
 #[derive(Default)]
@@ -83,13 +148,23 @@ pub unsafe fn run(dll: usize, breaks: &str) {
         dq_from_w: f3(0x168_bca0),
         box_total: std::mem::transmute::<usize, extern "C" fn(*mut f64, f64, f64, f64, f64)>(dll + 0x168_d670),
         safe_normalize3: std::mem::transmute::<usize, extern "C" fn(*mut f64) -> bool>(dll + 0x168_aed0),
+        step_body: std::mem::transmute::<usize, extern "C" fn(*mut u64, f64)>(dll + 0x16c_61b0),
     };
     let log = std::fs::read_to_string(breaks).expect("--ode takes the breaks.txt of a drive");
     let q4 = |v: &Vec<f64>| -> Q { [v[0], v[1], v[2], v[3]] };
     let quats: Vec<Q> = dumps(&log, "0x168b990").iter().chain(&dumps(&log, "0x168b7b0")).map(q4).collect();
     let omegas: Vec<Q> = dumps(&log, "0x168bca0").iter().map(q4).collect();
     assert!(quats.len() >= 600 && omegas.len() >= 600, "breaks.txt has {} quaternions, {} angular velocities", quats.len(), omegas.len());
-    println!("ode: {} quaternions, {} angular velocities from {breaks}", quats.len(), omegas.len());
+    // the drive's bodies (`CSP_ORACLE_BREAK=16c61b0b`): flags, then h and the 21 BODY_FIELDS
+    let bodies: Vec<(u32, Vec<f64>)> = log
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            (f.len() == 31 && f[2] == "0x16c61b0").then(|| (f[9].parse().expect("flags"), std::iter::once(f[8]).chain(f[10..].iter().copied()).map(|v| v.parse::<f64>().expect("a dumped double")).collect()))
+        })
+        .collect();
+    assert!(bodies.len() >= 600, "breaks.txt has {} dxStepBody calls", bodies.len());
+    println!("ode: {} quaternions, {} angular velocities, {} bodies from {breaks}", quats.len(), omegas.len(), bodies.len());
 
     // the inputs: the drive's, every combination slot by slot from the edge values, random bits,
     // random values in [-1, 1]
@@ -116,7 +191,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
 
     for csr in [0x1f80u32, 0x9fc0] {
         std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
-        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3"].map(|n| (n, Count::default())).into();
+        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body"].map(|n| (n, Count::default())).into();
         for (set, inputs) in &sets {
             for (i, x) in inputs.iter().enumerate() {
                 let what = || format!("{set} #{i} {x:?}");
@@ -153,6 +228,22 @@ pub unsafe fn run(dll: usize, breaks: &str) {
                     p[3] = odemath::safe_normalize3(&mut p) as u8 as f64;
                     counts[7].1.check(&what, &c, &p);
                 }
+            }
+        }
+        // step_body: the drive's bodies with every flag combination, then each set's inputs
+        // three at a time (22 values) with flag combination i % 32
+        let combo = |i: usize| STEP_FLAGS.iter().enumerate().filter(|(bit, _)| i >> bit & 1 != 0).fold(0, |a, (_, f)| a | f);
+        for (i, (flags, v)) in bodies.iter().enumerate() {
+            for c in 0..32 {
+                let (csp, port) = step_both(csp.step_body, if c == 0 { *flags } else { combo(c) }, v);
+                counts[8].1.check(&|| format!("drive body #{i} flags {c} {v:?}"), &csp, &port);
+            }
+        }
+        for (set, inputs) in &sets {
+            for (i, x) in inputs.windows(3).enumerate() {
+                let v: Vec<f64> = x.concat()[..22].to_vec();
+                let (csp, port) = step_both(csp.step_body, combo(i), &v);
+                counts[8].1.check(&|| format!("{set} body #{i} {v:?}"), &csp, &port);
             }
         }
         for (name, c) in &counts {

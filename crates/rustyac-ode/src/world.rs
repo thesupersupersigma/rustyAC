@@ -56,26 +56,27 @@ pub const BODY_GYROSCOPIC: u32 = 256;
 
 /// `dxAutoDisable`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AutoDisable {
-    pub idle_time: f32,
+pub struct AutoDisable<R = f32> {
+    pub idle_time: R,
     pub idle_steps: i32,
-    pub linear_average_threshold: f32,
-    pub angular_average_threshold: f32,
+    pub linear_average_threshold: R,
+    pub angular_average_threshold: R,
     pub average_samples: u32,
 }
 
 /// `dxDampingParameters`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Damping {
-    pub linear_scale: f32,
-    pub angular_scale: f32,
-    pub linear_threshold: f32,
-    pub angular_threshold: f32,
+pub struct Damping<R = f32> {
+    pub linear_scale: R,
+    pub angular_scale: R,
+    pub linear_threshold: R,
+    pub angular_threshold: R,
 }
 
 /// `dxBody` (0x1b8 bytes in `acs.exe`).
 #[derive(Clone, Debug)]
-pub struct Body {
+/// Generic over the float type: f32 is `acs.exe`'s ODE, f64 CSP's.
+pub struct Body<R = f32> {
     /// False once the body was destroyed ([`World::body_destroy`]); its slot stays, unused.
     pub alive: bool,
     /// Next body in the world's list (`dObject::next`).
@@ -87,30 +88,30 @@ pub struct Body {
     /// First of the geoms attached to this body (`geom`): the newest.
     pub first_geom: Option<crate::geom::GeomId>,
     pub flags: u32,
-    pub mass: Mass,
+    pub mass: Mass<R>,
     /// Inverse of `mass.i` in the body frame.
-    pub inv_i: Matrix3,
-    pub inv_mass: f32,
-    pub pos: Vector3,
-    pub r: Matrix3,
+    pub inv_i: Matrix3<R>,
+    pub inv_mass: R,
+    pub pos: Vector3<R>,
+    pub r: Matrix3<R>,
     /// (w, x, y, z)
-    pub q: Quaternion,
-    pub lvel: Vector3,
-    pub avel: Vector3,
+    pub q: Quaternion<R>,
+    pub lvel: Vector3<R>,
+    pub avel: Vector3<R>,
     /// Force accumulator.
-    pub facc: Vector3,
+    pub facc: Vector3<R>,
     /// Torque accumulator.
-    pub tacc: Vector3,
-    pub finite_rot_axis: Vector3,
-    pub adis: AutoDisable,
-    pub adis_timeleft: f32,
+    pub tacc: Vector3<R>,
+    pub finite_rot_axis: Vector3<R>,
+    pub adis: AutoDisable<R>,
+    pub adis_timeleft: R,
     pub adis_stepsleft: i32,
-    pub average_lvel_buffer: Vec<[f32; 3]>,
-    pub average_avel_buffer: Vec<[f32; 3]>,
+    pub average_lvel_buffer: Vec<[R; 3]>,
+    pub average_avel_buffer: Vec<[R; 3]>,
     pub average_counter: u32,
     pub average_ready: bool,
-    pub dampingp: Damping,
-    pub max_angular_speed: f32,
+    pub dampingp: Damping<R>,
+    pub max_angular_speed: R,
 }
 
 impl Body {

@@ -13,7 +13,7 @@ use rustyac_math::sqrtf;
 
 /// `dCalcVectorDot3`.
 #[inline(always)]
-pub fn dot3(a: &[f32], b: &[f32]) -> f32 {
+pub fn dot3<R: Real>(a: &[R], b: &[R]) -> R {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
@@ -183,18 +183,20 @@ pub fn is_nonzero(x: f32) -> bool {
     x < 0.0 || x > 0.0
 }
 
-/// `_dSafeNormalize4` @ 0x14034b500 (`dNormalize4` @ 0x14034b570 is a jump to it).
-pub fn safe_normalize4(a: &mut [f32; 4]) -> bool {
-    let l = dot3(a, a) + a[3] * a[3];
-    if l > 0.0 {
-        let l = 1.0f32 / sqrtf(l);
-        a[0] *= l;
-        a[1] *= l;
-        a[2] *= l;
-        a[3] *= l;
+/// `_dSafeNormalize4` @ 0x14034b500 (`dNormalize4` @ 0x14034b570 is a jump to it). In f64 the
+/// length is CSP's reassociated `(q0² + q1²) + (q2² + q3²)` (inlined in `dxStepBody`,
+/// dwrite.dll+0x16c67df); ODE master 66615b8a `dxSafeNormalize4` is otherwise the same.
+pub fn safe_normalize4<R: Real>(a: &mut [R; 4]) -> bool {
+    let l = if R::FAST { (a[0] * a[0] + a[1] * a[1]) + (a[2] * a[2] + a[3] * a[3]) } else { dot3(a, a) + a[3] * a[3] };
+    if l > R::ZERO {
+        let l = R::ONE / l.sqrt();
+        a[0] = a[0] * l;
+        a[1] = a[1] * l;
+        a[2] = a[2] * l;
+        a[3] = a[3] * l;
         true
     } else {
-        *a = [1.0, 0.0, 0.0, 0.0];
+        *a = [R::ONE, R::ZERO, R::ZERO, R::ZERO];
         false
     }
 }
