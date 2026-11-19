@@ -314,3 +314,72 @@ The same 10 trips with the three fixes:
 Sound started on all 10 drives. The JS heap's 451 and 510 are the collector's timing (the next
 trip is back at 140). The GPU process still creeps (545 to 924 MB over 10 trips, against 2120
 to 4062 before): open, to be measured over more trips.
+
+# W2: why Full mode falls back, which pack items it cannot draw, three small fixes
+
+Full mode on montreal (a mod track whose CSP layout names the shader `stPerPixelNM_UVflow`)
+drew the debug view on WebGPU, and the reason was only in `window.rustyac.notes`. The pack
+cannot fix that: `tools/web_pack` already copies every shader of the install, and this one is
+Custom Shaders Patch's, not the install's.
+
+## Resume here (W2)
+
+- Done: steps 1 to 3, the page check, the browser area, clippy; released as v1.1.2.
+- Open: the `[debug view only]` labels and the warning before a drive of a marked pack item have
+  no page check (the test pack has no marked item; montreal is 317 MB).
+
+## Step 1: the reason on the page
+
+When Full mode was asked for and the debug view draws, whatever the reason (no WebGPU, a shader
+or file missing, an error), a banner at the top of the page says why, until it is closed
+(`#fallback` in `web/index.html`, `showFallback` in `web/app.js`, the page's own style in
+`web/style.css`). Its text is the notes' line that starts with "Full mode " (both reasons do),
+so `window.rustyac.notes` is unchanged and says the same; `window.rustyac.fallback` holds it
+too. Back in AC's launcher (Escape, Exit), the same line is the theme's own notice
+(`api.notice`, recorded in `window.rustyac.launcher.notice`).
+
+## Step 2: the pack marks what Full mode cannot draw
+
+`web_pack` opens every KN5 of each packed car and track (and layout) with `rustyac_content::Kn5`
+and lists the shaders its materials name that `system/shaders/win` lacks (both `_ps.fxo` and
+`_vs.fxo`, as `Shader::get_shader` wants). The manifest's item gets
+`"missing_shaders": ["stPerPixelNM_UVflow"]` (left out when empty, so a manifest without it is
+the same as before); `--dry-run` prints them. The page labels a marked car or track
+`[debug view only]` in its own lists, and a drive of one with Full asked shows the banner at
+once: "Full mode can't draw this track (it needs Custom Shaders Patch: stPerPixelNM_UVflow): the
+debug view will draw it." Nothing is refused, and Full mode is still tried (a mark can be older
+than the install; the renderer's own error is the truth, and its line replaces the banner's).
+
+Super's install, read-only (`web/my_pack.toml`: 189 cars, 56 tracks and layouts, nothing
+skipped): **one item is marked, track `montreal`** (mod, 316.7 MB), missing
+`stPerPixelNM_UVflow`. No car is marked.
+
+## Step 3: three small fixes
+
+- `web/sound.js:323` `InvalidStateError: Cannot resume a closed AudioContext` after leaving a
+  drive: the click/key/visibility handler resumes only a context that is not `closed` (leaving
+  a drive closes it).
+- The browser's notes said "post-processing on: ... with YEBIS's filter ... from your acs.exe on
+  Direct3D". The page has neither. `crates/rustyac-game/src/render/ac.rs` keeps that line only
+  where YEBIS really starts (Windows, not `wgpu`); elsewhere it says "post-processing on: the
+  game's post-processing frame (...), without YEBIS (its filter, tone mapping, ... run only in
+  acs.exe on Direct3D 11); the light levels are those of post-processing off".
+- `/favicon.ico` 404: the page links `favicon.svg`, the server panel's own icon
+  (`server/panel/public/favicon.svg`, ours, MIT OR Apache-2.0), copied to `web/favicon.svg` and
+  added to `web/build.py`'s site files. **New file in the web zip: `favicon.svg`**: add it to
+  rustyACSite's `scripts/fetch-web-preview.mjs` allowlist. (A browser that asks
+  `/favicon.ico` before reading the page still gets a 404; the page's own requests do not.)
+
+## Checks (W2)
+
+- `tools/proofs/browser.sh` has a new case, "Full mode's fallback banner (montreal)": the
+  install served read-only (`serve.py --ac`), a drive of ks_ferrari_f2004 on montreal with
+  `backend=full`; the banner is shown, says "Full mode could not start ... stPerPixelNM_UVflow",
+  and its line is in the notes (`tools/proofs/fallback_page.js`). Alone it gave
+  `{"shown":true,"text":"Full mode could not start, the debug view draws instead: the shader
+  stPerPixelNM_UVflow is not in ac/system/shaders/win","same":true}`.
+- `web_pack`'s tests (one new: a KN5 built in a temp folder, a shader with only `_ps.fxo`
+  counts as missing) and `rustyac-web`'s `pack::` tests pass.
+- the browser area (`tools/proofs/browser.sh`): 238 IDENTICAL, 0 not (237 of W1 plus the banner).
+- clippy `-D warnings --all-targets --locked`: rustyac-web for wasm32-unknown-unknown and native,
+  rustyac-game native and `replay_hash` for wasm32-wasip1, `tools/web_pack`: clean.
