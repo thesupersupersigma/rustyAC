@@ -22,15 +22,12 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 - Part 3 step 3 done: the copy finished (~5 MB/s); every area but shaders, browser and ai_page is
   IDENTICAL on the VM in its quick run (yebis_sweep on a 7-row sample); shaders stays on the PC
   (WARP's and SwiftShader's pixels change with the processor). WARP areas run 1.5-2.2 × the PC's time.
-- **Resume here: part 4** (`run_all.sh --farm`): mark the farm areas in `areas.map` (areas.sh must
-  skip that line); the farm runner is `re/scratch/taskF2/vm_run.sh` + `task.cmd` made real (home
-  with `AppData\Roaming`, render_oracle's folder on `PATH`, `RUSTYAC_PREBUILT`, the roots), started as
-  the `/IT` scheduled task; `prebuild.sh` + `farm_sync.sh programs` (and `physics` / `repo` for new
-  recordings) first; 8 lanes, with physics and yebis_sweep split into lanes by case (an area's out
-  folder is deleted when it starts: shards need their own); results back over the share; the
-  ssh/share/session fallbacks; `proof_tui`. Then part 5. (Locked and no-RDP: proven, step 3.)
-  After the rebase onto `master` the prebuilt programs are stale: `prebuild.sh` again (it needs the
-  dumps area's old release, v1.1.3, built once: done on the PC).
+- Part 4 done: `run_all.sh --farm` (`farm.sh`, `farm_run.sh`, `farm_task.cmd`, lane shards, the
+  fallback to the PC, `proof_tui`'s VM lanes, `old_exe.sh` for new tags). Part 5: `--quick --farm`
+  286/286 IDENTICAL in 0h45m (PC alone 0h59m).
+- **Resume here: part 5's `--full --farm`**, only with Super's go (about 3.5-4 h the first time);
+  compare its verdicts and time with the PC's last full run, fix what it finds, retune `FARM_LANES`
+  from its area times. Optional: browser and ai_page in two PC lanes (see part 5).
 
 ## Part 1: what the processor changes (from the code)
 
@@ -706,3 +703,106 @@ above ran in the console session with no remote desktop connected. With the sess
 task running `rundll32 user32.dll,LockWorkStation`, `re/scratch/taskF2/lock.cmd`; LogonUI then shows
 in session 1), render's `r20_01` (3 cases) and gui's `base` still ran IDENTICAL through the
 scheduled task: a locked desktop still makes WARP's windows and swap chains. Nothing more is needed.
+
+## F2 part 4: `run_all.sh --farm`
+
+    bash tools/proofs/run_all.sh --quick --farm     (or --full --farm, or with area names)
+
+needs `target/farm.env` (never committed: it names the VM), with `FARM_HOST` (ssh's user@host, key
+login; the user is also the scheduled task's) and `FARM_SHARE` (`//<vm>/rustyac-farm`); the
+environment wins over the file. The pieces (`tools/proofs/`):
+
+- **Which areas go.** `areas.map`'s `@farm` line: physics, fresh, csp, sound, render, gui, python,
+  replays, net, launcher, dumps, yebis_sweep (part 3: every area but shaders, browser and ai_page,
+  which run on the PC at the same time, in its usual lanes). `areas.sh` skips that line.
+- **Before any lane starts** (`farm.sh`'s `farm_up`, inside the PC's proof lock, which so covers the
+  whole farm run): ssh answers, the share answers, no earlier farm run is still running there, and
+  `prebuild.sh` builds every program the VM runs. The dumps area's old release now comes from
+  `old_exe.sh` (built once per tag, also by `dumps.sh`), so **a new release tag on master needs
+  nothing by hand**: prebuild builds that release's exe and the copy sends it.
+- **Beside the PC's lanes** (`farm_go`, in the background): `farm_sync.sh programs repo csp ac`
+  (only what changed: about 30 s to 2 min when little did, `ac` alone 15 s), then the run's
+  arguments and lanes into the share's `run\`, then over ssh
+  `schtasks /create ... /it /ru <user> /f` and `/run` of `farm_task.cmd`, which runs `farm_run.sh`
+  in the logged-in session (part 3: session 0 cannot run WARP or the launcher). `farm_run.sh` is
+  `vm_run.sh` made real: the roots from its own place (`<farm>\repo`, `<farm>\ac`, `<farm>\home` with
+  `AppData\Roaming`), `RUSTYAC_PREBUILT=1`, render_oracle's folder on `PATH`, then the VM's own
+  `run_all.sh` with `PROOF_LANES`; last it lists the kept files the run made (`new_kept.txt`) and
+  writes `exit`.
+- **Lanes and shards.** `run_all.sh` takes other lanes from `PROOF_LANES`; a lane word `<area>.<i>`
+  runs shard i of n of the area's cases (`lib.sh`'s `PROOF_SHARD=i/n`: a case runs when its quick key
+  hashes, `cksum` mod n, to i), into its own `target/proofs/<area>.<i>` (an area deletes its out
+  folder when it starts). Once every lane is done the shards are merged into the area's folder, log
+  and row (the time: the longest shard's); a case found in two shards (a verdict outside `keep()`)
+  becomes an ERROR, so nothing is counted twice unseen. The VM's default lanes (`farm.sh`, eight;
+  `FARM_LANES` sets others): quick `fresh.1|fresh.2|gui.1 sound|gui.2 python launcher|render.1
+  replays|render.2 dumps|csp|physics net`, full `fresh.1 sound python|fresh.2 launcher csp|fresh.3
+  dumps|gui.1 physics.1|gui.2 physics.2|render.1 yebis_sweep.1|render.2 yebis_sweep.2|net replays
+  yebis_sweep.3`. Checked on the PC: quick physics as three shards, 4 + 4 + 1 cases, merged 9/9
+  IDENTICAL, nothing vanished.
+- **Waiting, bounded.** Every 30 s the PC mirrors the VM's status files (`run.status`, each area's
+  `cases.log`, `times.tsv`, `now`, rows) into `target/proofs/farm/`, which `proof_tui` reads: the
+  VM's lanes show in a row below the PC's ("VM lane n") when the screen has room, beside them when
+  not. The farm counts as failed when the task has not started the run in 5 min (no logged-in
+  user), the share stops answering for 10 min, or no new verdict comes for `FARM_STALL` minutes
+  (60); the task is then ended.
+- **Results back.** For every area the VM finished, its folder (without `own`, `root`, `rec`,
+  `frames`, `drives`), log and row come into the PC's `target/proofs/` as if it had run here, its
+  "where" is VM, and the ERROR-again-alone pass is the VM's own. The kept files the VM made in this
+  run (`re/gold/fresh/rec`, `re/gold/dumps`: its SSE2 keys) come back too, each folder's `done` last.
+  Only those: a whole-tree copy of the VM's kept results (tried first) would bring back what
+  `archive_kept.sh` moved off the PC (2 GB of old keys there), at Wi-Fi speed.
+- **Fallback.** An area the farm could not run for a farm reason (VM off or no answer, the copy,
+  ssh, the task not starting, a stall, "did not run" there, its results not coming back) runs on
+  the PC after the PC's own lanes, and the table says so: `PC (VM: <reason>)`. A DIFFERENT or ERROR
+  case on the VM is a result and stays one. Checked: with ssh refused, sound ran on the PC from the
+  start ("the VM does not answer ssh ..."); with a wrong farm folder the task never started, and
+  after the 5 min sound ran on the PC ("the VM's scheduled task did not start the run in 5 min").
+- **The table** of a `--farm` run has a "where" column, and its last line says
+  `physics on the VM proves pure.rs's maths, not MSVCR120.dll's` when physics ran there (part 3).
+
+First end-to-end run (`--quick --farm sound python launcher`): 4/4, 1/1, 1/1 IDENTICAL on the VM,
+its run 2 min.
+
+## F2 part 5: the real runs
+
+### `run_all.sh --quick --farm`
+
+All 14 areas, 286 cases, against the PC's own quick run of the same day (main folder, 0h59m):
+
+| area | where | cases | on the farm run | farm run time | PC-only run time |
+|---|---|---|---|---|---|
+| physics | VM (pure maths) | 9 | 9 IDENTICAL | 3m14s | 1m15s |
+| fresh | VM, 2 shards | 63 | 63 IDENTICAL | 28m12s (24 + 39 cases) | 19m14s |
+| csp | VM | 51 | 51 IDENTICAL | 23m31s | 9m40s |
+| sound | VM | 4 | 4 IDENTICAL | 0m56s | 0m27s |
+| render | VM, 2 shards | 18 | 18 IDENTICAL | 17m40s | 8m39s |
+| gui | VM, 2 shards | 29 | 29 IDENTICAL | 29m32s (17 + 12) | 18m59s |
+| python | VM | 1 | 1 IDENTICAL | 0m48s | 0m18s |
+| replays | VM | 6 | 6 IDENTICAL | 10m05s | 5m53s |
+| net | VM | 16 | 16 IDENTICAL | 13m24s | 9m00s |
+| launcher | VM | 1 | 1 IDENTICAL | 2m57s | 1m15s |
+| dumps | VM | 6 | 6 IDENTICAL | 4m00s | 3m04s |
+| browser | PC | 18 | 18 IDENTICAL | 17m33s | 19m58s |
+| ai_page | PC | 9 | 9 IDENTICAL | 28m01s | 27m13s |
+| shaders | PC | 4 | 4 IDENTICAL | 1m07s | 3m40s |
+| **wall clock** | | **286** | **0 different, 0 ERROR, 0 vanished** | **0h45m** | **0h59m** |
+
+The farm half: the copy 29 s (little had changed), the VM's run 31m17s (eight lanes; its longest,
+`gui.1`, 29m32s; part 3's quick on the VM took 1h05m in four lanes), the results back 4 min, nearly
+all of it the 99 kept files the VM made for cases added on master since part 3 (913 MB of SSE2
+recordings at Wi-Fi speed, once). **The long pole is now the PC's browser + ai_page lane** (45m34s),
+not the VM: with nothing new to bring back, a quick farm run is about that lane. Running browser and
+ai_page in two lanes (their ports already differ) would bring it to about the VM's 31 min, but two
+headless Chromes at once (ai_page's GPU process reaches about 8 GB) need their own proof first; to
+try it: `PROOF_LANES="browser|ai_page shaders" run_all.sh --quick --farm` (the PC's lanes only; the
+VM's come from `FARM_LANES`).
+
+### `run_all.sh --full --farm`
+
+Not run yet: it waits for Super's go. Expected: the PC half (browser, ai_page, shaders) about
+2 h; the VM half about 2.5-3 h from the per-area full times (P1) times part 3's VM ratios, split over
+the eight full lanes. The first one is longer: the VM has no full-run kept recordings of its own yet
+(fresh records every case again with the game, SSE2 keys), and they come back to the PC once, about
+15 GB at Wi-Fi speed (~50 min, ~15 GB of the PC's disk). So about **3.5-4 h the first time, then
+about 3 h**, against about 6.5 h on the PC alone.

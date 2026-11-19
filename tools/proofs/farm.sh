@@ -64,7 +64,7 @@ farm_go() {
         { farm_off "the copy to the VM failed ($(tail -n 1 "$fo/sync.txt"))"; return; }
     t1=$(date +%s); echo "copy: $((t1 - t0)) s; $(grep '^sync ' "$fo/sync.txt" | paste -sd ';' -)" >> "$fo/farm.txt"
     # nothing of an earlier VM run may count for this one
-    mkdir -p "$fs/run" "$fp/rows" && rm -f "$fs/run/exit" "$fs/run/started" "$fp"/rows/* ||
+    mkdir -p "$fs/run" "$fp/rows" && rm -f "$fs/run/exit" "$fs/run/started" "$fs/run/new_kept.txt" "$fp"/rows/* ||
         { farm_off "the VM's run folder is not writable"; return; }
     { if [ "$mode" = quick ]; then echo --quick; else echo --full; fi
       [ -z "$PROOF_RERECORD" ] || echo --rerecord
