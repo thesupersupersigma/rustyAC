@@ -36,6 +36,16 @@ pub fn q_multiply1<R: Real>(qb: &Quaternion<R>, qc: &Quaternion<R>) -> Quaternio
 
 /// `dQMultiply2` @ 0x140346220: `qa = qb * inverse(qc)`.
 pub fn q_multiply2<R: Real>(qb: &Quaternion<R>, qc: &Quaternion<R>) -> Quaternion<R> {
+    if R::FAST {
+        // CSP's only copy, inlined in setFixedOrientation (+0x16c8b0f): row 0 regrouped, 1-3 ODE's
+        let (b, c) = (qb, qc);
+        return [
+            (c[3] * b[3] + c[2] * b[2]) + (c[0] * b[0] + c[1] * b[1]),
+            ((c[0] * b[1] - c[1] * b[0]) - c[3] * b[2]) + c[2] * b[3],
+            ((c[0] * b[2] - c[2] * b[0]) - c[1] * b[3]) + c[3] * b[1],
+            ((c[0] * b[3] - c[3] * b[0]) - c[2] * b[1]) + c[1] * b[2],
+        ];
+    }
     [
         qb[0] * qc[0] + qb[1] * qc[1] + qb[2] * qc[2] + qb[3] * qc[3],
         -qb[0] * qc[1] + qb[1] * qc[0] - qb[2] * qc[3] + qb[3] * qc[2],

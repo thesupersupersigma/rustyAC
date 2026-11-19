@@ -37,7 +37,7 @@ pub fn length3(a: &[f32]) -> f32 {
 
 /// `dMultiply0_331`: `A * b` for a 3x3 `A` (stored 3x4) and a 3-vector.
 #[inline(always)]
-pub fn multiply0_331(a: &[f32], b: &[f32]) -> [f32; 3] {
+pub fn multiply0_331<R: Real>(a: &[R], b: &[R]) -> [R; 3] {
     [dot3(&a[0..], b), dot3(&a[4..], b), dot3(&a[8..], b)]
 }
 
@@ -79,7 +79,7 @@ pub fn multiply2_333(res: &mut [f32], a: &[f32], b: &[f32]) {
 /// `dSetCrossMatrixPlus(res, a, skip)`: writes the six off-diagonal entries of the matrix
 /// `[a]x` (so that `res * b = a x b`) into a row-major block with `skip` values per row.
 #[inline(always)]
-pub fn set_cross_matrix_plus(res: &mut [f32], a: &[f32], skip: usize) {
+pub fn set_cross_matrix_plus<R: Real>(res: &mut [R], a: &[R], skip: usize) {
     let (a0, a1, a2) = (a[0], a[1], a[2]);
     res[1] = -a2;
     res[2] = a1;
@@ -91,7 +91,7 @@ pub fn set_cross_matrix_plus(res: &mut [f32], a: &[f32], skip: usize) {
 
 /// `dSetCrossMatrixMinus(res, a, skip)`: the negated version.
 #[inline(always)]
-pub fn set_cross_matrix_minus(res: &mut [f32], a: &[f32], skip: usize) {
+pub fn set_cross_matrix_minus<R: Real>(res: &mut [R], a: &[R], skip: usize) {
     let (a0, a1, a2) = (a[0], a[1], a[2]);
     res[1] = a2;
     res[2] = -a1;

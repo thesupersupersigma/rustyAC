@@ -15,7 +15,7 @@
 //! A Jacobian block is `rows` rows of 8 values: linear part in columns 0..3, angular part in
 //! columns 4..7 (the fourth of each is padding), one block per attached body.
 
-use crate::common::{Quaternion, Vector3};
+use crate::common::{Quaternion, Real, Vector3};
 use crate::contact::Contact;
 use crate::odemath::{
     cross3, length3, multiply0_331, multiply1_331, plane_space, safe_normalize3, set_cross_matrix_minus,
@@ -178,14 +178,14 @@ pub struct Info1 {
 
 /// `dxJoint::Info2Descr` with slices in place of pointers. `j1` and `j2` are the Jacobian
 /// blocks of body 1 and body 2 (`rows * 8` values each, zeroed by the caller).
-pub struct Info2<'a> {
-    pub j1: &'a mut [f32],
-    pub j2: &'a mut [f32],
-    pub c: &'a mut [f32],
-    pub cfm: &'a mut [f32],
+pub struct Info2<'a, R = f32> {
+    pub j1: &'a mut [R],
+    pub j2: &'a mut [R],
+    pub c: &'a mut [R],
+    pub cfm: &'a mut [R],
     /// Limits of each row's force (preset to -inf and +inf).
-    pub lo: &'a mut [f32],
-    pub hi: &'a mut [f32],
+    pub lo: &'a mut [R],
+    pub hi: &'a mut [R],
     /// For a friction row the joint's row whose force scales its limits (preset to -1).
     pub findex: &'a mut [i32],
 }
@@ -286,44 +286,13 @@ impl Joint {
         let b1 = self.node[1].body.map(|b| &bodies[b.0 as usize]);
         match &self.kind {
             JointKind::Ball { anchor1, anchor2, erp, cfm } => {
-                // dxJointBall::getInfo2 @ 0x140340d00
-                info.cfm[0] = *cfm;
-                info.cfm[1] = *cfm;
-                info.cfm[2] = *cfm;
-                set_ball(b0, b1, world_fps, *erp, info, anchor1, anchor2);
+                ball_get_info2(b0, b1, world_fps, *erp, *cfm, info, anchor1, anchor2);
             }
             JointKind::DBall { anchor1, anchor2, erp, cfm, target_distance } => {
                 dball_get_info2(b0, b1, world_fps, *erp, *cfm, *target_distance, anchor1, anchor2, info);
             }
             JointKind::Fixed { qrel, offset, erp, cfm } => {
-                // dxJointFixed::getInfo2 @ 0x140341ba0
-                // Three rows for orientation
-                set_fixed_orientation(b0, b1, world_fps, world_erp, info, qrel, 3);
-                // Three rows for position. set jacobian
-                info.j1[0] = 1.0;
-                info.j1[S + 1] = 1.0;
-                info.j1[2 * S + 2] = 1.0;
-                info.cfm[0] = *cfm;
-                info.cfm[1] = *cfm;
-                info.cfm[2] = *cfm;
-                let ofs = multiply0_331(&b0.r, offset);
-                if b1.is_some() {
-                    set_cross_matrix_plus(&mut info.j1[A..], &ofs, S);
-                    info.j2[0] = -1.0;
-                    info.j2[S + 1] = -1.0;
-                    info.j2[2 * S + 2] = -1.0;
-                }
-                // set right hand side for the first three rows (linear)
-                let k = world_fps * *erp;
-                if let Some(b1) = b1 {
-                    for j in 0..3 {
-                        info.c[j] = k * (b1.pos[j] - b0.pos[j] + ofs[j]);
-                    }
-                } else {
-                    for j in 0..3 {
-                        info.c[j] = k * (offset[j] - b0.pos[j]);
-                    }
-                }
+                fixed_get_info2(b0, b1, world_fps, world_erp, qrel, offset, *erp, *cfm, info);
             }
             JointKind::Slider { axis1, qrel, offset, limot } => {
                 slider_get_info2(self.flags, b0, b1, world_fps, world_erp, axis1, qrel, offset, limot, info);
@@ -366,27 +335,88 @@ fn slider_position(flags: u32, b0: &Body, b1: Option<&Body>, axis1: &Vector3, of
     crate::odemath::dot3(&ax1, &q)
 }
 
+/// `dxJointBall::getInfo2` @ 0x140340d00 (CSP +0x16a3ba0, master 66615b8a `ball.cpp`, same order).
+#[allow(clippy::too_many_arguments)]
+pub fn ball_get_info2<R: Real>(
+    b0: &Body<R>,
+    b1: Option<&Body<R>>,
+    world_fps: R,
+    erp: R,
+    cfm: R,
+    info: &mut Info2<R>,
+    anchor1: &Vector3<R>,
+    anchor2: &Vector3<R>,
+) {
+    info.cfm[0] = cfm;
+    info.cfm[1] = cfm;
+    info.cfm[2] = cfm;
+    set_ball(b0, b1, world_fps, erp, info, anchor1, anchor2);
+}
+
+/// `dxJointFixed::getInfo2` @ 0x140341ba0 (CSP +0x16a0fd0 when its field +0x110 is -1, the
+/// path that is master 66615b8a's `fixed.cpp`; the other path is CSP's own).
+#[allow(clippy::too_many_arguments)]
+pub fn fixed_get_info2<R: Real>(
+    b0: &Body<R>,
+    b1: Option<&Body<R>>,
+    world_fps: R,
+    world_erp: R,
+    qrel: &Quaternion<R>,
+    offset: &Vector3<R>,
+    erp: R,
+    cfm: R,
+    info: &mut Info2<R>,
+) {
+    // Three rows for orientation
+    set_fixed_orientation(b0, b1, world_fps, world_erp, info, qrel, 3);
+    // Three rows for position. set jacobian
+    info.j1[0] = R::ONE;
+    info.j1[S + 1] = R::ONE;
+    info.j1[2 * S + 2] = R::ONE;
+    info.cfm[0] = cfm;
+    info.cfm[1] = cfm;
+    info.cfm[2] = cfm;
+    let ofs = multiply0_331(&b0.r, offset);
+    if b1.is_some() {
+        set_cross_matrix_plus(&mut info.j1[A..], &ofs, S);
+        info.j2[0] = -R::ONE;
+        info.j2[S + 1] = -R::ONE;
+        info.j2[2 * S + 2] = -R::ONE;
+    }
+    // set right hand side for the first three rows (linear)
+    let k = world_fps * erp;
+    if let Some(b1) = b1 {
+        for j in 0..3 {
+            info.c[j] = k * (b1.pos[j] - b0.pos[j] + ofs[j]);
+        }
+    } else {
+        for j in 0..3 {
+            info.c[j] = k * (offset[j] - b0.pos[j]);
+        }
+    }
+}
+
 /// `setBall` @ 0x14034e230: the three position rows of a ball joint.
-fn set_ball(
-    b0: &Body,
-    b1: Option<&Body>,
-    fps: f32,
-    erp: f32,
-    info: &mut Info2,
-    anchor1: &Vector3,
-    anchor2: &Vector3,
+fn set_ball<R: Real>(
+    b0: &Body<R>,
+    b1: Option<&Body<R>>,
+    fps: R,
+    erp: R,
+    info: &mut Info2<R>,
+    anchor1: &Vector3<R>,
+    anchor2: &Vector3<R>,
 ) {
     // set jacobian
-    info.j1[0] = 1.0;
-    info.j1[S + 1] = 1.0;
-    info.j1[2 * S + 2] = 1.0;
+    info.j1[0] = R::ONE;
+    info.j1[S + 1] = R::ONE;
+    info.j1[2 * S + 2] = R::ONE;
     let a1 = multiply0_331(&b0.r, anchor1);
     set_cross_matrix_minus(&mut info.j1[A..], &a1, S);
-    let mut a2 = [0.0f32; 3];
+    let mut a2 = [R::ZERO; 3];
     if let Some(b1) = b1 {
-        info.j2[0] = -1.0;
-        info.j2[S + 1] = -1.0;
-        info.j2[2 * S + 2] = -1.0;
+        info.j2[0] = -R::ONE;
+        info.j2[S + 1] = -R::ONE;
+        info.j2[2 * S + 2] = -R::ONE;
         a2 = multiply0_331(&b1.r, anchor2);
         set_cross_matrix_plus(&mut info.j2[A..], &a2, S);
     }
@@ -405,24 +435,24 @@ fn set_ball(
 
 /// `setFixedOrientation` @ 0x14034e5a0: three rows that keep the relative orientation of the
 /// two bodies at `qrel`, starting at row `start_row`.
-fn set_fixed_orientation(
-    b0: &Body,
-    b1: Option<&Body>,
-    fps: f32,
-    erp: f32,
-    info: &mut Info2,
-    qrel: &Quaternion,
+fn set_fixed_orientation<R: Real>(
+    b0: &Body<R>,
+    b1: Option<&Body<R>>,
+    fps: R,
+    erp: R,
+    info: &mut Info2<R>,
+    qrel: &Quaternion<R>,
     start_row: usize,
 ) {
     let start_index = start_row * S;
     // 3 rows to make body rotations equal
-    info.j1[A + start_index] = 1.0;
-    info.j1[A + start_index + S + 1] = 1.0;
-    info.j1[A + start_index + S * 2 + 2] = 1.0;
+    info.j1[A + start_index] = R::ONE;
+    info.j1[A + start_index + S + 1] = R::ONE;
+    info.j1[A + start_index + S * 2 + 2] = R::ONE;
     if b1.is_some() {
-        info.j2[A + start_index] = -1.0;
-        info.j2[A + start_index + S + 1] = -1.0;
-        info.j2[A + start_index + S * 2 + 2] = -1.0;
+        info.j2[A + start_index] = -R::ONE;
+        info.j2[A + start_index + S + 1] = -R::ONE;
+        info.j2[A + start_index + S * 2 + 2] = -R::ONE;
     }
     // compute the right hand side. the first three elements will result in
     // relative angular velocity of the two bodies - this is set to bring them
@@ -446,16 +476,17 @@ fn set_fixed_orientation(
         q_multiply3(&b0.q, qrel)
     };
     // `comiss qerr0, 0` + `jae`: negative or NaN (a -0.0 is left alone)
-    if !(qerr[0] >= 0.0) {
+    if !(qerr[0] >= R::ZERO) {
         qerr[1] = -qerr[1]; // adjust sign of qerr to make theta small
         qerr[2] = -qerr[2];
         qerr[3] = -qerr[3];
     }
     let e = multiply0_331(&b0.r, &qerr[1..]);
-    let k = fps * erp;
-    info.c[start_row] = 2.0 * k * e[0];
-    info.c[start_row + 1] = 2.0 * k * e[1];
-    info.c[start_row + 2] = 2.0 * k * e[2];
+    // CSP (+0x16c8c23) doubles erp before the multiply: another result on overflow
+    let k2 = if R::FAST { (erp + erp) * fps } else { R::TWO * (fps * erp) };
+    info.c[start_row] = k2 * e[0];
+    info.c[start_row + 1] = k2 * e[1];
+    info.c[start_row + 2] = k2 * e[2];
 }
 
 /// `dxJointDBall::getInfo2` @ 0x140342080.

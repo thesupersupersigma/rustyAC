@@ -24,9 +24,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5c B2a. are CSP's matrix / LDLT loops vectorised? | done: partly, the LDLT / L1 solves are scalar ([answer](#part-3-step-2-vectorised-loops-and-odemath)) |
 | C5c B2b. odemath helpers in f64 | done: `dxSafeNormalize3` bit-identical to CSP's; the other helpers have no out-of-line copy in CSP, proven inside their callers ([below](#part-3-step-2-vectorised-loops-and-odemath)) |
 | C5c B2c. body integration in f64 | done: `dxStepBody` bit-identical to CSP's ([below](#part-3-step-2c-body-integration-in-double)) |
-| C5c B2d. ray-vs-trimesh, joint rows in f64 | not started |
+| C5c B2d. joint rows in f64 | done: ball and fixed `getInfo2` bit-identical to CSP's; CSP has no hinge; ray-vs-trimesh moved to part 8 ([below](#part-3-step-2d-joint-rows-in-double)). Part 3 done |
 
-Next: plan part 3, step 2d: ray-vs-trimesh and the hinge / ball / fixed rows, each one transcribed in CSP's machine order and proven with `csp_oracle --ode`.
+Next: plan part 4 (C5d): `step.cpp` changes and the new LDLT / LCP solvers first.
 
 ## The core in one paragraph
 
@@ -184,14 +184,14 @@ density: same inputs through CSP's function and the port, every output compared 
 |---|---|---|---|
 | 1 | `csp_oracle` on a real track (Spa, CSP track config stand-in) with breakpoints on the raycaster: which ray path the cars take, whether `ODE_BATCH_RAYCAST` is forced | 1-2 | **done in C5b** |
 | 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
-| 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ray-vs-trimesh, hinge / ball / fixed rows (C5c, step 1 done: rotation and mass) | 4-6 (was 2-3: CSP's ODE is built with reassociation, each function needs its machine order) | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
+| 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ball / fixed rows (**done in C5c**; ray-vs-trimesh went to part 8, the LDLT / solve kernels to part 4: master rewrote them; CSP has no hinge) | 2 used (planned 4-6) | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
 | 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)) 1-2; contact `getInfo2` and the box / trimesh colliders that changed 1-2; `odemath` / `matrix` changes 0.5; libccd pairs 1. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 3.5-5.5 | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback | 2-3 | contact lists identical per step |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5c** | **16.5-25.5** (C5b: 15-22; C5c found ODE from 2025, cars on `dWorldStep`, no QuickStep, part 3 bigger) | |
+| | **Total left after C5c** | **13-20.5** (parts 4-9; C5b: 15-22; C5c found ODE from 2025, cars on `dWorldStep`, no QuickStep) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -306,9 +306,9 @@ differing proof is then either a CSP change or a port bug, and the source of `66
 |---|---|---|
 | `rotation.cpp` | 0 | part 3 |
 | `mass.cpp` | 3 / 3 | part 3 |
-| `collision_kernel.cpp`, `collision_trimesh_ray.cpp`, `util.cpp` (islands) | 21-63 each | part 3 |
-| joints `ball` / `fixed` / `hinge` | 9-33 each | part 3 |
-| `odemath.cpp` / `matrix.cpp` | 174 / 71, 211 / 125 | part 3 (unchanged functions), part 4 (changed) |
+| `collision_kernel.cpp`, `collision_trimesh_ray.cpp`, `util.cpp` (islands) | 21-63 each | parts 6, 8, 5 |
+| joints `ball` / `fixed` / `hinge` | 9-33 each | part 3 (no hinge in CSP) |
+| `odemath.cpp` / `matrix.cpp` | 174 / 71, 211 / 125 | part 3 (`dxSafeNormalize3`), part 4 (the rest, with the solvers) |
 | `joints/contact.cpp` | 206 / 198 | part 4 |
 | `box.cpp`, `collision_trimesh_box.cpp`, `collision_trimesh_opcode.cpp` | 309 / 26, 169 / 237, 446 / 574 | part 4 |
 | `quickstep.cpp` | 2668 / 786 (3,587 lines; `rustyac-ode` has no QuickStep) | part 4 |
@@ -425,3 +425,30 @@ and max-angular-speed flags, plus edge values and random bits: 1,319,392 bodies,
 quaternion, R, lvel and avel compared, 0 differ at MXCSR 0x1f80 and 0x9fc0. Planted with the
 source-order normalise it finds 53,036 / 53,031 differences; before the row-0 fix it found 16 /
 38 (zero signs, edge set only). Proof area `csp`, cases `ode <car>`: 18 lines.
+
+### Part 3, step 2d: joint rows in double
+
+**Which joints.** CSP's ODE has the vtables of ball (type 1, `getInfo2` +0x16a3ba0), slider (3),
+contact (4), universal (5), fixed (7, +0x16a0fd0), AMotor (9), LMotor (10), PU (13) and DBall
+(15); no hinge (type 2) is linked, so there is nothing to prove for it.
+
+- Ball: `getInfo2` writes the joint's cfm (+0xe8) to the three rows and tail-calls `setBall`
+  (+0x16c8670) with erp +0xe0, anchor1 +0xa0, anchor2 +0xc0. `setBall` keeps master's source
+  order (`k * (a2 + b1.pos - a1 - b0.pos)`, `k = fps * erp`).
+- Fixed: `getInfo2` first tests the field +0x110 against -1; -1 runs master's code (qrel +0xa0,
+  offset +0xc0, erp +0xe0, cfm +0xf8), any other value CSP's own path (+0x16a1287): part 4.
+  `setFixedOrientation` (+0x16c8a10) differs from the source twice: the inlined `dQMultiply2`
+  regroups row 0 to `(c3*b3 + c2*b2) + (c0*b0 + c1*b1)` (rows 1-3 keep ODE's order; row 0 only
+  feeds the sign test), and the rhs factor is `(erp + erp) * fps`, not `fps * erp * 2`
+  (another result on overflow).
+- Port: `Info2` is generic; `ball_get_info2` and `fixed_get_info2` in
+  `crates/rustyac-ode/src/joint.rs` are public and generic, `q_multiply2` and the rhs factor take
+  CSP's order `if R::FAST`. `multiply0_331` and `set_cross_matrix_plus/minus` are generic.
+- Proof: `csp_oracle --ode` calls CSP's two `getInfo2` on a joint stand-in with two dxBody
+  stand-ins: the drive's 3,600 bodies (rotation from their quaternion, 333 Hz), then each input
+  set four values at a time, rotations from the quaternions and raw in turn, every fourth joint
+  without a second body. It compares the Jacobian rows (angular part moved from CSP's column 3
+  to the port's 4, padding included), rhs and cfm: 1,207,788 joints each, 0 differ at MXCSR
+  0x1f80 and 0x9fc0. Plants: ODE's `dQMultiply2` order 18 / 8 differ (edge values only, row 0
+  feeds only the sign test), `fps * erp * 2` 1,607 / 881, a regrouped ball rhs 133,845 / 133,758.
+  Proof area `csp`, cases `ode <car>`: 22 lines.

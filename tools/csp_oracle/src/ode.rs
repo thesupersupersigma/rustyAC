@@ -6,6 +6,7 @@
 //! "ode <name>: <n> inputs, <d> differ, <nan> NaN against NaN". NaN against NaN counts as equal
 //! (docs/port/ode_stage1.md: a NaN's payload depends on operand order the compiler may swap).
 
+use rustyac_ode::joint::{ball_get_info2, fixed_get_info2, Info2};
 use rustyac_ode::mass::Mass;
 use rustyac_ode::odemath;
 use rustyac_ode::rotation as rot;
@@ -25,7 +26,12 @@ struct Csp {
     box_total: extern "C" fn(*mut f64, f64, f64, f64, f64),
     safe_normalize3: extern "C" fn(*mut f64) -> bool,
     step_body: extern "C" fn(*mut u64, f64),
+    ball: GetInfo2,
+    fixed: GetInfo2,
 }
+
+/// `dxJoint::getInfo2(this, worldFPS, worldERP, rowskip, J1, J2, pairskip, pairRhsCfm, pairLoHi, findex)`
+type GetInfo2 = extern "C" fn(*mut u64, f64, f64, i32, *mut f64, *mut f64, i32, *mut f64, *mut f64, *mut i32);
 
 /// The dxBody doubles `dxStepBody` reads (offset, count): pos, q, lvel, avel, finite_rot_axis,
 /// damping (linear/angular scale, linear/angular threshold), max_angular_speed. 21 values.
@@ -57,23 +63,38 @@ unsafe fn step_both(f: extern "C" fn(*mut u64, f64), flags: u32, v: &[f64]) -> (
     let csp = get(0x138, 3).chain(get(0x1b8, 4)).chain(get(0x158, 12)).chain(get(0x1d8, 3)).chain(get(0x1f8, 3)).collect();
     let w = |i: usize| [v[i], v[i + 1], v[i + 2], 0.0];
     let mut p = Body::<f64> {
+        flags,
+        lvel: w(8),
+        avel: w(11),
+        finite_rot_axis: w(14),
+        dampingp: Damping { linear_scale: v[17], angular_scale: v[18], linear_threshold: v[19], angular_threshold: v[20] },
+        max_angular_speed: v[21],
+        ..body(w(1), [v[4], v[5], v[6], v[7]], [0.0; 12])
+    };
+    step_body(&mut p, v[0]);
+    let port = p.pos[..3].iter().chain(&p.q).chain(&p.r).chain(&p.lvel[..3]).chain(&p.avel[..3]).copied().collect();
+    (csp, port)
+}
+
+fn body(pos: [f64; 4], q: Q, r: M3) -> Body<f64> {
+    Body::<f64> {
         alive: true,
         next: None,
         tag: 0,
         first_joint: None,
         first_geom: None,
-        flags,
+        flags: 0,
         mass: Mass::zero(),
         inv_i: [0.0; 12],
         inv_mass: 0.0,
-        pos: w(1),
-        r: [0.0; 12],
-        q: [v[4], v[5], v[6], v[7]],
-        lvel: w(8),
-        avel: w(11),
+        pos,
+        r,
+        q,
+        lvel: [0.0; 4],
+        avel: [0.0; 4],
         facc: [0.0; 4],
         tacc: [0.0; 4],
-        finite_rot_axis: w(14),
+        finite_rot_axis: [0.0; 4],
         adis: AutoDisable { idle_time: 0.0, idle_steps: 0, linear_average_threshold: 0.0, angular_average_threshold: 0.0, average_samples: 0 },
         adis_timeleft: 0.0,
         adis_stepsleft: 0,
@@ -81,11 +102,70 @@ unsafe fn step_both(f: extern "C" fn(*mut u64, f64), flags: u32, v: &[f64]) -> (
         average_avel_buffer: Vec::new(),
         average_counter: 0,
         average_ready: false,
-        dampingp: Damping { linear_scale: v[17], angular_scale: v[18], linear_threshold: v[19], angular_threshold: v[20] },
-        max_angular_speed: v[21],
-    };
-    step_body(&mut p, v[0]);
-    let port = p.pos[..3].iter().chain(&p.q).chain(&p.r).chain(&p.lvel[..3]).chain(&p.avel[..3]).copied().collect();
+        dampingp: Damping { linear_scale: 0.0, angular_scale: 0.0, linear_threshold: 0.0, angular_threshold: 0.0 },
+        max_angular_speed: 0.0,
+    }
+}
+
+/// One ball (`fixed` false) or fixed joint's getInfo2 on CSP's side and the port's. `v` = pos0,
+/// q0, pos1, q1 (7 each), anchor1 (the fixed joint's offset), anchor2, qrel, then fps, world
+/// erp, the joint's erp and cfm: 28 values; `r` the two rotations. Returns per row the Jacobian
+/// (J1 then J2: linear part, angular part, two padding values; the port's angular part sits in
+/// column 4, CSP's in column 3), rhs and cfm (CSP's, port's).
+unsafe fn joint_both(f: GetInfo2, fixed: bool, has_b1: bool, v: &[f64], r: [M3; 2]) -> (Vec<f64>, Vec<f64>) {
+    let mut bodies = [[0u64; 0x300 / 8]; 2];
+    let put = |m: &mut [u64], offset: usize, x: &[f64]| x.iter().enumerate().for_each(|(i, x)| m[offset / 8 + i] = x.to_bits());
+    for (k, b) in bodies.iter_mut().enumerate() {
+        put(b, 0x138, &v[7 * k..7 * k + 3]);
+        put(b, 0x158, &r[k]);
+        put(b, 0x1b8, &v[7 * k + 3..7 * k + 7]);
+    }
+    let mut j = [0u64; 0x140 / 8];
+    j[0x40 / 8] = bodies[0].as_mut_ptr() as u64;
+    j[0x58 / 8] = if has_b1 { bodies[1].as_mut_ptr() as u64 } else { 0 };
+    let (a1, a2, qrel) = (&v[14..17], &v[17..20], &v[20..24]);
+    let (fps, world_erp, erp, cfm) = (v[24], v[25], v[26], v[27]);
+    if fixed {
+        put(&mut j, 0xa0, qrel);
+        put(&mut j, 0xc0, a1);
+        put(&mut j, 0xe0, &[erp]);
+        put(&mut j, 0xf8, &[cfm]);
+        // -1: the joint as ODE's (CSP's own other path is part 4)
+        put(&mut j, 0x110, &[-1.0]);
+    } else {
+        put(&mut j, 0xa0, a1);
+        put(&mut j, 0xc0, a2);
+        put(&mut j, 0xe0, &[erp, cfm]);
+    }
+    let rows = if fixed { 6 } else { 3 };
+    let (mut j1, mut j2, mut rc, mut lohi, mut findex) = ([0f64; 48], [0f64; 48], [0f64; 12], [0f64; 12], [-1i32; 6]);
+    f(j.as_mut_ptr(), fps, world_erp, 8, j1.as_mut_ptr(), j2.as_mut_ptr(), 2, rc.as_mut_ptr(), lohi.as_mut_ptr(), findex.as_mut_ptr());
+    let mut csp = Vec::new();
+    for row in 0..rows {
+        csp.extend_from_slice(&j1[8 * row..8 * row + 8]);
+        csp.extend_from_slice(&j2[8 * row..8 * row + 8]);
+        csp.extend_from_slice(&rc[2 * row..2 * row + 2]);
+    }
+
+    let w = |i: usize| [v[i], v[i + 1], v[i + 2], 0.0];
+    let q = |i: usize| [v[i], v[i + 1], v[i + 2], v[i + 3]];
+    let (b0, b1) = (body(w(0), q(3), r[0]), body(w(7), q(10), r[1]));
+    let b1 = has_b1.then_some(&b1);
+    let (mut p1, mut p2, mut c, mut pc, mut lo, mut hi, mut pf) = ([0f64; 48], [0f64; 48], [0f64; 6], [0f64; 6], [0f64; 6], [0f64; 6], [-1i32; 6]);
+    let mut info = Info2 { j1: &mut p1, j2: &mut p2, c: &mut c, cfm: &mut pc, lo: &mut lo, hi: &mut hi, findex: &mut pf };
+    if fixed {
+        fixed_get_info2(&b0, b1, fps, world_erp, &q(20), &w(14), erp, cfm, &mut info);
+    } else {
+        ball_get_info2(&b0, b1, fps, erp, cfm, &mut info, &w(14), &w(17));
+    }
+    let mut port = Vec::new();
+    for row in 0..rows {
+        for m in [&p1, &p2] {
+            let x = &m[8 * row..8 * row + 8];
+            port.extend_from_slice(&[x[0], x[1], x[2], x[4], x[5], x[6], x[3], x[7]]);
+        }
+        port.extend_from_slice(&[c[row], pc[row]]);
+    }
     (csp, port)
 }
 
@@ -149,6 +229,8 @@ pub unsafe fn run(dll: usize, breaks: &str) {
         box_total: std::mem::transmute::<usize, extern "C" fn(*mut f64, f64, f64, f64, f64)>(dll + 0x168_d670),
         safe_normalize3: std::mem::transmute::<usize, extern "C" fn(*mut f64) -> bool>(dll + 0x168_aed0),
         step_body: std::mem::transmute::<usize, extern "C" fn(*mut u64, f64)>(dll + 0x16c_61b0),
+        ball: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_3ba0),
+        fixed: std::mem::transmute::<usize, GetInfo2>(dll + 0x16a_0fd0),
     };
     let log = std::fs::read_to_string(breaks).expect("--ode takes the breaks.txt of a drive");
     let q4 = |v: &Vec<f64>| -> Q { [v[0], v[1], v[2], v[3]] };
@@ -191,7 +273,7 @@ pub unsafe fn run(dll: usize, breaks: &str) {
 
     for csr in [0x1f80u32, 0x9fc0] {
         std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
-        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body"].map(|n| (n, Count::default())).into();
+        let mut counts: Vec<(&str, Count)> = ["q_multiply0", "q_multiply1", "q_multiply3", "r_from_q", "q_from_r", "dq_from_w", "box_total", "safe_normalize3", "step_body", "ball", "fixed"].map(|n| (n, Count::default())).into();
         for (set, inputs) in &sets {
             for (i, x) in inputs.iter().enumerate() {
                 let what = || format!("{set} #{i} {x:?}");
@@ -244,6 +326,36 @@ pub unsafe fn run(dll: usize, breaks: &str) {
                 let v: Vec<f64> = x.concat()[..22].to_vec();
                 let (csp, port) = step_both(csp.step_body, combo(i), &v);
                 counts[8].1.check(&|| format!("{set} body #{i} {v:?}"), &csp, &port);
+            }
+        }
+        // ball and fixed joints: two of the drive's bodies (rotation from their quaternion), a
+        // third one's angular velocity and quaternion as anchors and qrel, at 333 Hz; then each
+        // set's inputs four at a time, rotations from the quaternions and as raw values in turn.
+        // Every fourth joint has no second body.
+        let joints = |counts: &mut Vec<(&str, Count)>, i: usize, v: &[f64], raw: bool| {
+            let r = |k: usize| -> M3 {
+                if raw {
+                    std::array::from_fn(|n| v[(12 * k + n) % 28])
+                } else {
+                    let mut m = [0.0; 12];
+                    rot::r_from_q(&mut m, &[v[7 * k + 3], v[7 * k + 4], v[7 * k + 5], v[7 * k + 6]]);
+                    m
+                }
+            };
+            for (n, fixed) in [(9, false), (10, true)] {
+                let (csp_fn, what) = (if fixed { csp.fixed } else { csp.ball }, || format!("joint #{i} raw {raw} {v:?}"));
+                let (c, p) = joint_both(csp_fn, fixed, i % 4 != 3, v, [r(0), r(1)]);
+                counts[n].1.check(&what, &c, &p);
+            }
+        };
+        for i in 0..bodies.len() {
+            let (a, b, c) = (&bodies[i].1, &bodies[(i * 7 + 1) % bodies.len()].1, &bodies[(i * 13 + 2) % bodies.len()].1);
+            let v: Vec<f64> = a[1..8].iter().chain(&b[1..8]).chain(&c[11..14]).chain(&b[8..11]).chain(&c[4..8]).chain(&[1.0 / a[0], 0.2, 0.3, 1e-6]).copied().collect();
+            joints(&mut counts, i, &v, false);
+        }
+        for (_, inputs) in &sets {
+            for (i, x) in inputs.windows(4).enumerate() {
+                joints(&mut counts, i, &x.concat()[..28], i % 2 == 1);
             }
         }
         for (name, c) in &counts {
