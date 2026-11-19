@@ -193,18 +193,17 @@ fn load_drive(args: &Args) -> Result<Drive, String> {
 }
 
 fn load_drive_of(args: &Args) -> Result<Drive, String> {
-    match (&args.tapes, &args.tape) {
-        (Some(prefix), _) => {
-            let mut drive = Drive::load_field(prefix, args.camera, args.frames, args.max_cars, &args.focus, args.in_pit)?;
-            // (a track given by its name: its folder in the game)
-            if let Some(track) = drive.track_folder.clone().filter(|t| !t.is_dir()) {
-                drive.track_folder = Some(ac_folder(args).join("content/tracks").join(track));
-            }
-            Ok(drive)
-        }
-        (None, Some(tape)) => Drive::load(&std::path::absolute(tape).map_err(|e| e.to_string())?, args.camera, args.frames),
-        (None, None) => Err("a drive is --tape <file.audiotape> or --tapes <prefix>".to_string()),
+    let mut drive = match (&args.tapes, &args.tape) {
+        (Some(prefix), _) => Drive::load_field(prefix, args.camera, args.frames, args.max_cars, &args.focus, args.in_pit)?,
+        (None, Some(tape)) => Drive::load(&std::path::absolute(tape).map_err(|e| e.to_string())?, args.camera, args.frames)?,
+        (None, None) => return Err("a drive is --tape <file.audiotape> or --tapes <prefix>".to_string()),
+    };
+    // a track given by its name, or a folder of another machine's install (the proof farm): its
+    // folder in this game
+    if let Some(name) = drive.track_folder.clone().filter(|t| !t.is_dir()).and_then(|t| t.file_name().map(PathBuf::from)) {
+        drive.track_folder = Some(ac_folder(args).join("content/tracks").join(name));
     }
+    Ok(drive)
 }
 
 /// One side of a drive.
