@@ -320,8 +320,8 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
     const resume = () => {
       FMOD.OutputAudioWorklet_resumeAudio?.();
       FMOD.OutputWebAudio_resumeAudio?.();
-      FMOD.mContext?.resume?.();
-      FMOD.context?.resume?.();
+      // (a drive left closes the context: resuming a closed one throws InvalidStateError)
+      for (const context of [FMOD.mContext, FMOD.context]) if (context && context.state !== 'closed') context.resume?.();
     };
     for (const kind of ['click', 'keydown', 'touchend', 'pointerdown']) win.addEventListener(kind, resume, { capture: true });
     // a hidden tab is silent and its mixer stops
