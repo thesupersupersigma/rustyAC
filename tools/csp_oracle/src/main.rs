@@ -29,6 +29,7 @@ mod track;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
 mod btl;
 mod island;
+mod joints;
 mod ode;
 mod reduce;
 mod solver;
@@ -963,7 +964,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('c' | 'r' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('c' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1026,6 +1027,22 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
                 breaks.push((ret, read::<u8>(ret), 'x'));
                 set_byte(ret, 0xcc);
             }
+        }
+        if dump == 'j' {
+            // the joint maker's return site (a tail call's caller's): a break of its own, kind 'k'
+            let rsp = read::<usize>(context + 0x98);
+            crate::joints::enter(rcx, rdx, r8 as i32, r9, rsp, DLL_BASE.load(Ordering::Relaxed), GetCurrentThreadId());
+            let ret = read::<usize>(rsp);
+            let mut breaks = BREAKS.lock().unwrap();
+            if !breaks.iter().any(|(address, ..)| *address == ret) {
+                let mut old = 0;
+                VirtualProtect(ret as *mut c_void, 1, 0x40, &mut old);
+                breaks.push((ret, read::<u8>(ret), 'k'));
+                set_byte(ret, 0xcc);
+            }
+        }
+        if dump == 'k' {
+            crate::joints::leave(GetCurrentThreadId());
         }
         if dump == 'x' {
             crate::island::leave(step);
@@ -1767,7 +1784,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     island::save();
-    let btl = btl::finish() + &space::finish() + &reduce::finish();
+    let btl = btl::finish() + &space::finish() + &reduce::finish() + &joints::finish();
     print!("{btl}");
     BREAK_LOG.lock().unwrap().push_str(&btl);
     if !BREAKS.lock().unwrap().is_empty() {

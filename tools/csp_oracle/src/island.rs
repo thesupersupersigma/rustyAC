@@ -127,7 +127,7 @@ fn u32_at(w: &[u64], o: usize) -> u32 {
     (w[o / 8] >> (8 * (o % 8))) as u32
 }
 
-fn body(b: &[u64]) -> Body<f64> {
+pub(crate) fn body(b: &[u64]) -> Body<f64> {
     Body::<f64> {
         alive: true,
         next: None,
