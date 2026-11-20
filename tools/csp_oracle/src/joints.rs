@@ -10,7 +10,7 @@
 
 use crate::read;
 use rustyac_ode::csp_btl::ContactGeom;
-use rustyac_ode::csp_collide::{contact_joints, soften, Side, Switches};
+use rustyac_ode::csp_collide::{contact_joints, soften, NewJoint, Side, Switches};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -48,7 +48,7 @@ unsafe fn words(at: usize, n: usize) -> Vec<u64> {
     (0..n).map(|i| read::<u64>(at + 8 * i)).collect()
 }
 
-unsafe fn side(geom: usize) -> (Side, usize) {
+pub(crate) unsafe fn side(geom: usize) -> (Side, usize) {
     let data = read::<usize>(geom + 0x10);
     let body = read::<usize>(geom + 0x18);
     let user = if body != 0 { read::<usize>(body + 0x28) } else { 0 };
@@ -78,13 +78,7 @@ pub(crate) unsafe fn enter(world: usize, buf: usize, n: i32, g1: usize, rsp: usi
             bodies.push(p);
         }
     }
-    let flag200 = bodies.iter().any(|&b| read::<u32>(b + 0x38) & 0x200 != 0);
-    let switches = Switches {
-        depth_from_speed: read::<u8>(dll + 0x27f_9197) != 0,
-        surface_mix: read::<u32>(dll + 0x26b_9e88) != 0,
-        soft_deep: read::<u8>(dll + 0x280_3208 + 6) != 0,
-        car_pairs: read::<u8>(dll + 0x280_3220 + 1) != 0 || flag200,
-    };
+    let switches = switches(dll, &bodies);
     let path = format!("classes {} {} bodies {} {} data {} {} sw {:?}", s1.class, s2.class, p1 != 0, p2 != 0, !s1.no_data, !s2.no_data, switches);
     *st.paths.entry(path).or_default() += 1;
     let call = Call {
@@ -192,31 +186,8 @@ pub(crate) unsafe fn leave(thread: u32) {
         bad.push(format!("{} joints, port {}", added.len(), port.len()));
     }
     for (k, (&j, p)) in added.iter().zip(&port).enumerate() {
-        if read::<u64>(j) & 0xffff != 0x3170 {
-            bad.push(format!("#{k} not a contact joint"));
-            continue;
-        }
-        let c = &p.contact;
-        let g = &p.geom;
-        let mut want: Vec<u64> = vec![c.mode as u64];
-        want.extend([c.mu, c.mu2, c.rho, c.rho2, c.rho_n, c.bounce, c.bounce_vel, c.soft_erp, c.soft_cfm, c.motion1, c.motion2, c.motion_n, c.slip1, c.slip2].map(f64::to_bits));
-        want.extend(c.pos.map(f64::to_bits));
-        want.extend(c.normal.map(f64::to_bits));
-        want.extend([c.depth.to_bits(), g.g1 as u64, g.g2 as u64, (g.side1 as u32 as u64) | ((g.side2 as u32 as u64) << 32)]);
-        want.extend(c.fdir1.map(f64::to_bits));
-        let got = words(j + 0xa8, want.len());
-        // the mode word's high half and the vector pads are what CSP left there
-        let mask = |i: usize| if i == 0 { 0xffff_ffff } else if i == 18 || i == 22 || i == 30 { 0 } else { u64::MAX };
-        if let Some(i) = (0..want.len()).find(|&i| (got[i] ^ want[i]) & mask(i) != 0) {
-            bad.push(format!("#{k} word {i} csp {:#x} port {:#x}", got[i], want[i]));
-        }
-        let b0 = read::<usize>(j + 0x40);
-        let b1 = read::<usize>(j + 0x58);
-        let pb0 = call.bodies[p.b0];
-        let pb1 = p.b1.map_or(0, |b| call.bodies[b]);
-        let reverse = read::<u32>(j + 0x30) & 2 != 0;
-        if (b0, b1, reverse) != (pb0, pb1, p.reverse) {
-            bad.push(format!("#{k} bodies {b0:#x} {b1:#x} rev {reverse}, port {pb0:#x} {pb1:#x} rev {}", p.reverse));
+        if let Some(d) = differs(k, j, p, &call.bodies) {
+            bad.push(d);
         }
     }
     if !bad.is_empty() {
@@ -224,6 +195,54 @@ pub(crate) unsafe fn leave(thread: u32) {
         if st.notes.len() < 20 {
             st.notes.push(format!("hit {}: {} contacts: {}", call.hit, call.contacts.len(), bad.join("; ")));
         }
+    }
+}
+
+/// A port joint's words from +0xa8 as CSP lays a contact joint out (mode .. fdir1).
+pub(crate) fn contact_words(p: &NewJoint) -> Vec<u64> {
+    let c = &p.contact;
+    let g = &p.geom;
+    let mut want: Vec<u64> = vec![c.mode as u64];
+    want.extend([c.mu, c.mu2, c.rho, c.rho2, c.rho_n, c.bounce, c.bounce_vel, c.soft_erp, c.soft_cfm, c.motion1, c.motion2, c.motion_n, c.slip1, c.slip2].map(f64::to_bits));
+    want.extend(c.pos.map(f64::to_bits));
+    want.extend(c.normal.map(f64::to_bits));
+    want.extend([c.depth.to_bits(), g.g1 as u64, g.g2 as u64, (g.side1 as u32 as u64) | ((g.side2 as u32 as u64) << 32)]);
+    want.extend(c.fdir1.map(f64::to_bits));
+    want
+}
+
+/// CSP's contact joint `j` against the port's `p` (`bodies` maps the port's body indices to
+/// pointers): the first difference.
+pub(crate) unsafe fn differs(k: usize, j: usize, p: &NewJoint, bodies: &[usize]) -> Option<String> {
+    if read::<u64>(j) & 0xffff != 0x3170 {
+        return Some(format!("#{k} not a contact joint"));
+    }
+    let want = contact_words(p);
+    let got = words(j + 0xa8, want.len());
+    // the mode word's high half and the vector pads are what CSP left there
+    let mask = |i: usize| if i == 0 { 0xffff_ffff } else if i == 18 || i == 22 || i == 30 { 0 } else { u64::MAX };
+    if let Some(i) = (0..want.len()).find(|&i| (got[i] ^ want[i]) & mask(i) != 0) {
+        return Some(format!("#{k} word {i} csp {:#x} port {:#x}", got[i], want[i]));
+    }
+    let b0 = read::<usize>(j + 0x40);
+    let b1 = read::<usize>(j + 0x58);
+    let pb0 = bodies[p.b0];
+    let pb1 = p.b1.map_or(0, |b| bodies[b]);
+    let reverse = read::<u32>(j + 0x30) & 2 != 0;
+    if (b0, b1, reverse) != (pb0, pb1, p.reverse) {
+        return Some(format!("#{k} bodies {b0:#x} {b1:#x} rev {reverse}, port {pb0:#x} {pb1:#x} rev {}", p.reverse));
+    }
+    None
+}
+
+/// The joint maker's switches as CSP has them now; `bodies` the pair's body pointers.
+pub(crate) unsafe fn switches(dll: usize, bodies: &[usize]) -> Switches {
+    let flag200 = bodies.iter().any(|&b| read::<u32>(b + 0x38) & 0x200 != 0);
+    Switches {
+        depth_from_speed: read::<u8>(dll + 0x27f_9197) != 0,
+        surface_mix: read::<u32>(dll + 0x26b_9e88) != 0,
+        soft_deep: read::<u8>(dll + 0x280_3208 + 6) != 0,
+        car_pairs: read::<u8>(dll + 0x280_3220 + 1) != 0 || flag200,
     }
 }
 

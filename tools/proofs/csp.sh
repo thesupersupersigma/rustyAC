@@ -18,6 +18,8 @@
 #   island <car>   CSP's dxStepIsland against rustyac-ode's csp_step on that car's recorded Spa islands (Task C5d)
 #   world <car> <n>  CSP's world step (auto-disable, islands, island steps) against rustyac-ode's csp_world on
 #                  n cars' recorded Spa worlds, CSP workers 0 and 7 (Task C5e)
+#   collision <car> <n>  CSP's collision step against rustyac-ode's csp_collision on n cars' Spa drive, then
+#                  the world stepped on the port's own contacts (Task C5f)
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -247,6 +249,37 @@ for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
             verdict "world $car $n" IDENTICAL "${w0#world } (workers 7 the same)"
         else
             verdict "world $car $n" DIFFERENT "workers 0: $w0 / workers 7: $w7 $(why "$out/runs/world_${car}_${n}_0.txt" '^step|panic')"
+        fi
+    done
+done
+
+# collision <car> <n>: CSP's collision step (Task C5f, csp_collision): a 600-step Spa drive with n cars (CSP
+# workers 0) where, at every step, the oracle copies CSP's geoms, spaces, bodies and kept pairs into the port's
+# Collision and runs CspWorld::collide, then compares the contact joints CSP made (order and every word), the
+# kept pairs, every box's OPCODE cache and every geom's flags, box and pose; 8 made-up poses a step through CSP's
+# space computeAABB against the port's refresh (both MXCSR settings, NaN against NaN counted apart). The world
+# is recorded with the port's joints (record 6) and CspWorld steps every recorded world on them instead of
+# CSP's: every body and joint feedback bit for bit
+for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
+    for n in 1 3; do
+        keep "collision $car $n" || continue
+        [ -f "$lap" ] || { skip "collision $car $n" "no $lap"; continue; }
+        bin=$out/runs/collision_${car}_${n}.bin; rm -f "$bin"
+        run=$out/runs/collision_${car}_${n}.txt
+        drive=$out/runs/collision_drive_${car}_${n}.txt
+        if CSP_ORACLE_BREAK=92c2b0q,16c7650a,92ea7dz CSP_ORACLE_ISLANDS="$(cygpath -aw "$bin")" CSP_ORACLE_FEEDBACK=1 oracle "collision_drive_${car}_${n}" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --cars $n --workers 0 --steps 600 && [ -s "$bin" ]; then
+            "$CSP" --world "$(cygpath -aw "$bin")" > "$run" 2>&1
+        else
+            echo "csp_oracle failed: $(why "$drive" 'error|panic|fault|exit')" > "$run"
+        fi
+        rm -f "$bin"
+        col=$(tr -d '\r' < "$drive" | grep -m1 '^collision: ')
+        wld=$(tr -d '\r' < "$run" | grep -m1 '^world \|^csp_oracle failed')
+        if echo "$col" | grep -q "^collision: 300 static + 300 dynamic steps, 600 compared (.*), 0 differ, not ported {};.* 0x1f80 [0-9]* cases 0 differ .* 0x9fc0 [0-9]* cases 0 differ" &&
+            echo "$wld" | grep -q "^world 600 steps (600 on the port's contacts), $((600 * n)) islands, .*: 0 differ, after "; then
+            verdict "collision $car $n" IDENTICAL "$(echo "$col" | sed 's/^collision: //; s/; (class.*made-up/; made-up/') / ${wld#world }"
+        else
+            verdict "collision $car $n" DIFFERENT "$col / $wld $(why "$drive" '^  step|^  pose|panic')"
         fi
     done
 done

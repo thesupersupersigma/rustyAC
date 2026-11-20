@@ -73,8 +73,9 @@ pub(crate) unsafe fn load_mesh(data: usize, log: &mut String) -> (MeshInterface,
 }
 
 /// The box's TC block (+0x16a8110's list at box+0x98, kind 0 at +0x10) as rustyac-ode's [`BoxTc`];
-/// `model` is the current model pointer (a slot's +0x18 equal to it is a valid cache).
-unsafe fn read_tc(box_: usize, model: usize) -> BoxTc {
+/// `model` is the current model pointer (a slot's +0x18 equal to it is a valid cache), 0 for each
+/// slot's own trimesh's model.
+pub(crate) unsafe fn read_tc(box_: usize, model: usize) -> BoxTc {
     let mut e = read::<usize>(box_ + 0x98);
     while e != 0 && read::<u32>(e + 0x10) != 0 {
         e = read::<usize>(e + 8);
@@ -90,7 +91,7 @@ unsafe fn read_tc(box_: usize, model: usize) -> BoxTc {
         *s = TcSlot {
             cache: ObbCache {
                 touched: (0..cur).map(|k| read::<u32>(entries + k * 4)).collect(),
-                valid: read::<usize>(a + 0x18) == model,
+                valid: read::<usize>(a + 0x18) == if model != 0 { model } else { own_model(read(a + 0x60)) },
                 fat_center: read(a + 0x20),
                 fat_extents: read(a + 0x2c),
                 fat_rot: [[rot[0], rot[1], rot[2]], [rot[3], rot[4], rot[5]], [rot[6], rot[7], rot[8]]],
@@ -104,8 +105,15 @@ unsafe fn read_tc(box_: usize, model: usize) -> BoxTc {
     tc
 }
 
+unsafe fn own_model(trimesh: usize) -> usize {
+    if trimesh == 0 {
+        return usize::MAX;
+    }
+    read::<usize>(trimesh + 0xc0) + 0x40
+}
+
 /// The cache as bits (NaN payloads included), for comparing.
-fn tc_bits(tc: &BoxTc) -> Vec<u64> {
+pub(crate) fn tc_bits(tc: &BoxTc) -> Vec<u64> {
     let mut v = vec![tc.next as u64];
     for s in &tc.slots {
         let c = &s.cache;

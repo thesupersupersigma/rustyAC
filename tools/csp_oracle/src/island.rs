@@ -38,6 +38,12 @@ unsafe fn joint(out: &mut Vec<u8>, j: usize) {
     }
 }
 
+/// Words appended to the recording (Task C5f's record 6).
+pub(crate) fn push_words(w: &[u64]) {
+    let mut out = OUT.lock().unwrap();
+    w.iter().for_each(|&x| word(&mut out, x));
+}
+
 fn word(out: &mut Vec<u8>, x: u64) {
     out.extend_from_slice(&x.to_le_bytes());
 }
@@ -403,6 +409,8 @@ struct WorldRecord {
     world: Vec<u64>,
     bodies: Vec<WorldBody>,
     joints: Vec<(u64, Vec<u64>)>,
+    /// record 6: the port's contact joints made this step, oldest first
+    own: Option<Vec<(u64, Vec<u64>)>>,
 }
 
 /// `--world <file>`: every recorded world step done again by rustyac-ode's `CspWorld::step` from
@@ -420,7 +428,14 @@ pub(crate) fn check_world(path: &str) {
         words[at.get() - n..at.get()].to_vec()
     };
     let mut records = Vec::new();
+    let mut own = None;
     while at.get() < words.len() {
+        if words[at.get()] == 6 {
+            // Task C5f: the port's contact joints for the coming record 4
+            let head = take(3);
+            own = Some((head[1], (0..head[2]).map(|_| (take(1)[0], take((JOINT + FEEDBACK) / 8))).collect::<Vec<_>>()));
+            continue;
+        }
         let head = take(4);
         assert!(head[0] == 4 || head[0] == 5, "record kind {} at word {}", head[0], at.get() - 4);
         let world = take(WORLD / 8);
@@ -437,9 +452,10 @@ pub(crate) fn check_world(path: &str) {
             .collect();
         let nj = take(1)[0] as usize;
         let joints = (0..nj).map(|_| (take(1)[0], take((JOINT + FEEDBACK) / 8))).collect();
-        records.push(WorldRecord { kind: head[0], step: head[1], h: f64::from_bits(head[2]), world, bodies, joints });
+        let own = if head[0] == 4 { own.take().filter(|o: &(u64, Vec<_>)| o.0 == head[1]).map(|o| o.1) } else { None };
+        records.push(WorldRecord { kind: head[0], step: head[1], h: f64::from_bits(head[2]), world, bodies, joints, own });
     }
-    let (mut steps, mut islands, mut max_bodies, mut contacts, mut differ) = (0, 0, 0, 0, 0usize);
+    let (mut steps, mut islands, mut max_bodies, mut contacts, mut differ, mut own_steps) = (0, 0, 0, 0, 0usize, 0);
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let buffer = |w: &[u64]| w.chunks(4).map(|c| [f64::from_bits(c[0]), f64::from_bits(c[1]), f64::from_bits(c[2])]).collect::<Vec<_>>();
     for pair in records.chunks(2) {
@@ -466,6 +482,20 @@ pub(crate) fn check_world(path: &str) {
                 .map(|b| b.4.iter().map(|&(j, o)| (before.joints.iter().position(|x| x.0 == j).expect("a node's joint in the list"), index(o))).collect())
                 .collect(),
         };
+        if let Some(own) = &before.own {
+            // CSP's contact joints out (each body's leading nodes and the list's leading joints), the port's in
+            let n = world.joints.iter().take_while(|j| matches!(j.joint.kind, JointKind::Contact { .. })).count();
+            assert!(world.joints[n..].iter().all(|j| !matches!(j.joint.kind, JointKind::Contact { .. })), "step {}: contact joints only at the list's head", before.step);
+            world.joints.drain(..n);
+            for nodes in &mut world.nodes {
+                let k = nodes.iter().take_while(|x| x.0 < n).count();
+                assert!(nodes[k..].iter().all(|x| x.0 >= n), "step {}: contact nodes only at a body's head", before.step);
+                nodes.drain(..k);
+                nodes.iter_mut().for_each(|x| x.0 -= n);
+            }
+            world.add_contacts(own.iter().map(|(_, j)| joint_of(j, &index)).collect());
+            own_steps += 1;
+        }
         contacts += world.joints.iter().filter(|j| matches!(j.joint.kind, JointKind::Contact { .. })).count();
         max_bodies = max_bodies.max(world.bodies.len());
         islands += world.step(before.h).len();
@@ -507,5 +537,6 @@ pub(crate) fn check_world(path: &str) {
             }
         }
     }
-    println!("world {steps} steps, {islands} islands, {max_bodies} bodies, {contacts} contacts: {differ} differ, after {hash:016x}");
+    let own = if own_steps > 0 { format!(" ({own_steps} on the port's contacts)") } else { String::new() };
+    println!("world {steps} steps{own}, {islands} islands, {max_bodies} bodies, {contacts} contacts: {differ} differ, after {hash:016x}");
 }
