@@ -26,6 +26,7 @@ mod acs;
 #[path = "../../car_oracle/src/track.rs"]
 #[allow(dead_code)]
 mod track;
+mod wrappers;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
 mod btl;
 mod collision;
@@ -957,6 +958,7 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 static BREAKS: Mutex<Vec<(usize, u8, char)>> = Mutex::new(Vec::new());
 static BREAK_LOG: Mutex<String> = Mutex::new(String::new());
 static BREAK_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
+const SETUP: usize = usize::MAX - 1;
 thread_local!(static REARM: Cell<usize> = const { Cell::new(0) });
 
 unsafe fn arm_breaks(dll: usize) {
@@ -965,7 +967,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('q' | 'c' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('p' | 'q' | 'c' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -978,6 +980,17 @@ unsafe fn arm_breaks(dll: usize) {
     let add_handler: extern "system" fn(u32, usize) -> *mut c_void = std::mem::transmute(GetProcAddress(GetModuleHandleA(c"kernel32.dll".as_ptr().cast()), c"AddVectoredExceptionHandler".as_ptr().cast()));
     add_handler(1, break_hit as *const () as usize);
     println!("{} breakpoints armed", breaks.len());
+}
+
+/// A break of `kind` at `ret` (a return site), once.
+unsafe fn arm_return(ret: usize, kind: char) {
+    let mut breaks = BREAKS.lock().unwrap();
+    if !breaks.iter().any(|(address, ..)| *address == ret) {
+        let mut old = 0;
+        VirtualProtect(ret as *mut c_void, 1, 0x40, &mut old);
+        breaks.push((ret, read::<u8>(ret), kind));
+        set_byte(ret, 0xcc);
+    }
 }
 
 unsafe fn set_byte(address: usize, byte: u8) {
@@ -1004,7 +1017,14 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         _ => return 0,
     };
     let step = BREAK_STEP.load(Ordering::Relaxed);
-    if step != usize::MAX {
+    if step != usize::MAX && (dump == 'p' || dump == 'o') {
+        // Task C5g: the wrapper call recorder, no text line
+        if dump == 'p' {
+            wrappers::enter(context, at - DLL_BASE.load(Ordering::Relaxed), step, GetCurrentThreadId());
+        } else {
+            wrappers::leave(context, step, GetCurrentThreadId());
+        }
+    } else if step != usize::MAX {
         let caller = read::<usize>(read::<usize>(context + 0x98));
         let [rcx, rdx, r8, r9] = [0x80, 0x88, 0xb8, 0xc0].map(|offset| read::<usize>(context + offset));
         let mut line = format!("{step} {} {:#x} {} {rcx:#x} {rdx:#x} {r8:#x} {r9:#x}", tag_of(GetCurrentThreadId()), at - DLL_BASE.load(Ordering::Relaxed), place(caller));
@@ -2351,6 +2371,10 @@ fn main() {
         }
         println!("CSP's DLL loaded at {:#x}, size {:#x}", dll as usize, DLL_SIZE.load(Ordering::Relaxed));
         arm_breaks(dll as usize);
+        if std::env::var_os("CSP_ORACLE_BREAK_SETUP").is_some() {
+            // the set-up's hits too, logged as step SETUP
+            BREAK_STEP.store(SETUP, Ordering::Relaxed);
+        }
         checkpoint("loaded", &before, &functions);
 
         ask("with CSP, reader built before CSP", reader);

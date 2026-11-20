@@ -41,7 +41,10 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5f 2. reduction, contact joints, switches | done: `csp_reduce`, `csp_collide` bit-identical to CSP's; "soft deep" is the one step switch on |
 | C5f 3. collision step, world on its own contacts | done: `csp_collision`; 600-step Spa worlds of 1 and 3 cars of both proof cars identical on the port's contacts. C5f done |
 
-Next: part 7 (`cphys::` wrappers), with the geom placement before the step and car against car.
+| C5g 1. wrapper calls recorded | done: `csp_oracle` kind `p`/`o` breaks log every outermost call into a `cphys::` wrapper and its return (records 7/8, `CSP_ORACLE_BREAK_SETUP=1` also logs the set-up); the switches decoded ([below](#task-c5g-csps-car-wrappers)) |
+| C5g 2. port fed live, set-up compared | next: `rustyac_ode::csp_core` built from the calls in process, bodies / joints / geoms against CSP's at the first world step |
+
+Next: C5g part 1 step 2 (the port fed live by the recorder hooks, compared at each world step), then car against car.
 
 ## The core in one paragraph
 
@@ -838,3 +841,25 @@ libccd and the other colliders (unused on Spa). A trimesh's own AABB (the track'
 the car spaces' trimesh is never dirty). The joints' wake-up and body attach through the user data
 (every Spa body is enabled and the geom's own). The car collision callback `+0x587cc0` (car side
 effects, part 7). The geom placement before the step (part 7).
+
+## Task C5g: CSP's car wrappers
+
+Part 7 of the plan: the `cphys::` objects the car code makes through the core built by rustyAC.
+
+### Switches decoded
+
+Read once by `+0x1402bd0` from `extension/physics.ini`-level switches into bytes the wrappers test:
+
+| Switch | Byte | Read by |
+|---|---|---|
+| `ENABLE_MESH_COLLIDER_SOONER` | `+0x280320a` | `+0x58dc00` (car collider status detour), `+0x92c9f0` (contact joints, at `+0x92d36f`) |
+| `CLAMP_MESH_COLLIDERS` | `+0x280320b`, only read when SOONER is on (else 0) | `+0x58e720` |
+| `EXTEND_COLLIDER_BOXES` | `+0x280320c` | `+0x413c20` (sets the box-size floor `+0x27f9950` to `max(INERTIA.z * 0.2, INERTIA.y * 0.5)` from car.ini `[BASIC] INERTIA` around the original call, then restores it), `+0x13ce600`, `+0x13d6840` |
+
+Other wrapper bytes: `+0x280320f` (no finite rotation for new bodies: `+0x937f90`, `+0x936950`), `+0x2803208` (track meshes forced to arg 8 true: `+0x92f0f0`), `+0x28031fd` (`+0x1696450` on new trimeshes: `+0x92ff50`, `+0x921aa0`, `+0x926430`).
+
+### The calls
+
+`CSP_ORACLE_BREAK=<rva>p,...` on every wrapper function (the 166 of `re/scratch/taskC5g/fns.txt`, shared stubs left out) with `CSP_ORACLE_ISLANDS=<file>` records each outermost call (record 7: step, rva, thread, the four register and six stack arguments, xmm0..3, 8 words behind each pointer argument) and its return (record 8: rax, xmm0, 8 words behind rax and the call's rdx / r8). `CSP_ORACLE_BREAK_SETUP=1` logs the set-up too (step `usize::MAX - 1`).
+
+On a 20-step F2004 Spa drive: set-up 6 `createRigidBody` (`+0x92ed80`), 6 `addBoxCollider` (`+0x933cc0`), 1 `addMeshCollider` (`+0x9337b0`), 20 `createDistanceJoint` (`+0x92f050`) with 20 `setERPCFM` (`+0x928310`) and 4 reseats (`+0x92fbb0` → `+0x928350`), 1 fixed joint (`+0x92fd20`), 4 raycasters (`+0x92fe80`), 455 track meshes (`+0x92f0f0`), 16986 set-up rays (`+0x92fac0`, Embree, part 8); per step about 300 calls: force / torque adders, getters, 4 ray casts, 20 `setERPCFM`, 2 reseats and the world step (`+0x92e4a0`, called twice, the one from `dwrite+0x67ee13` steps). The DUMMY / COSMIC suspensions (`+0x591f50` / `+0x592090`) are chosen by suspensions.ini `TYPE`; both proof cars are DWB on both axles, so neither runs.
