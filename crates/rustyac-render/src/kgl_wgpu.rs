@@ -325,6 +325,13 @@ struct Replay {
     encoder: Option<wgpu::CommandEncoder>,
     pass: Option<Pass>,
     upload: Vec<u8>,
+    /// the passes' uploads, one buffer kept between frames and written by the queue at
+    /// `staged`, the end of what this submit's passes wrote (a buffer made for every pass held
+    /// a 4 MB upload heap of the browser's GPU process each until it had gigabytes, Task W4)
+    stage: Option<wgpu::Buffer>,
+    staged: u64,
+    /// a stage made too small, destroyed after the submit whose passes read it
+    spent: Vec<wgpu::Buffer>,
     /// counts the flushes of the upload buffer (a copy in it is good for one)
     epoch: u64,
     programs: HashMap<(u32, u32), Option<Rc<Program>>>,
@@ -518,6 +525,9 @@ impl Kgl {
                 encoder: None,
                 pass: None,
                 upload: Vec::new(),
+                stage: None,
+                staged: 0,
+                spent: Vec::new(),
                 epoch: 0,
                 programs: HashMap::new(),
                 pipelines: HashMap::new(),
@@ -1293,10 +1303,39 @@ impl Kgl {
     /// Everything recorded goes to the queue.
     fn submit(&self) {
         self.end_pass();
-        let encoder = self.replay.borrow_mut().encoder.take();
+        let (encoder, spent) = {
+            let mut replay = self.replay.borrow_mut();
+            replay.staged = 0;
+            (replay.encoder.take(), std::mem::take(&mut replay.spent))
+        };
         if let Some(encoder) = encoder {
             self.queue.submit([encoder.finish()]);
         }
+        for buffer in spent {
+            buffer.destroy();
+        }
+    }
+
+    /// A pass's upload into the stage after what this submit wrote: the stage and where.
+    fn stage(&self, replay: &mut Replay, bytes: &[u8]) -> (Option<wgpu::Buffer>, u64) {
+        let mut at = replay.staged.div_ceil(256) * 256;
+        let size = bytes.len() as u64;
+        let capacity = replay.stage.as_ref().map_or(0, |b| b.size());
+        if at + size > capacity {
+            // twice as big, so a frame's passes soon fit in one
+            let stage = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("kgl upload"),
+                size: (capacity * 2).max(size.next_power_of_two()).max(1 << 20),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            replay.spent.extend(replay.stage.replace(stage));
+            at = 0;
+        }
+        let stage = replay.stage.clone().unwrap();
+        self.queue.write_buffer(&stage, at, bytes);
+        replay.staged = at + size;
+        (Some(stage), at)
     }
 
     /// Takes a copy of a constant buffer's or dynamic vertex buffer's bytes into the upload
@@ -1888,8 +1927,7 @@ impl Kgl {
         if pass.draws.is_empty() {
             return;
         }
-        use wgpu::util::DeviceExt;
-        let buffer = (!upload.is_empty()).then(|| self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("kgl upload"), contents: &upload, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::VERTEX }));
+        let (buffer, base) = if upload.is_empty() { (None, 0) } else { self.stage(&mut replay, &upload) };
         let mut cache = self.groups.borrow_mut();
         // shortcut: emptied whole at 4096 groups (views made for one frame would fill it), upgrade to dropping the oldest if a profile shows the refills
         if cache.len() > 4096 {
@@ -1911,7 +1949,7 @@ impl Kgl {
                         .iter()
                         .map(|(slot, offset, size)| wgpu::BindGroupEntry {
                             binding: *slot,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: buffer.as_ref().unwrap(), offset: *offset, size: wgpu::BufferSize::new(*size) }),
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: buffer.as_ref().unwrap(), offset: base + *offset, size: wgpu::BufferSize::new(*size) }),
                         })
                         .collect();
                     make(cb_layout, &entries)
@@ -1941,7 +1979,7 @@ impl Kgl {
                 if let Some((gpu, offset)) = &d.vb {
                     match gpu {
                         Some(b) => rp.set_vertex_buffer(0, b.slice(..)),
-                        None => rp.set_vertex_buffer(0, buffer.as_ref().unwrap().slice(*offset..)),
+                        None => rp.set_vertex_buffer(0, buffer.as_ref().unwrap().slice(base + *offset..)),
                     }
                 }
                 let [x, y, w, h] = d.viewport;
