@@ -8,6 +8,9 @@
 //! car hands over is an f32 and every answer goes back as an f32, as the wrappers do.
 
 use crate::csp_collide::{NewJoint, Side, Unhandled};
+#[cfg(feature = "embree")]
+use crate::csp_ray::{Cast, Scene, TraceMesh};
+use crate::csp_raycast::{self, Ray, RAY_BACKFACE_CULL, RAY_FIRST_CONTACT};
 use crate::csp_collision::{joint_of, posr, product, refresh, Collision, Geom, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_DIRTY, GEOM_ENABLED, GEOM_POSR_BAD};
 use crate::csp_space::HashSpace;
 use crate::csp_step::{Joint, JointKind, WorldParams};
@@ -45,6 +48,34 @@ pub struct Core {
     meshes: Vec<Vec<usize>>,
     /// +0x91bdb0's map (+72): key → car space
     spaces: Vec<(u32, usize)>,
+    /// the track space's hash levels, for its table built again once its geoms are cleaned
+    track_levels: (i32, i32),
+    /// a tyre ray (+0x92b970) cast: the set-up is over
+    tyre_seen: bool,
+    /// Task C5h: per CSP mesh list index (+0x2885370) the track geom the rays name; the Embree
+    /// scene of those meshes when Embree is on; +0x2812c7f
+    ray_geoms: Vec<usize>,
+    #[cfg(feature = "embree")]
+    scene: Option<Scene>,
+    below: bool,
+}
+
+/// Task C5h: a track mesh as the rays see it (its object's block +48 and flag +40), in CSP's
+/// mesh list order; `geom` its index in [`Core::set_track`]'s list.
+pub struct RayMesh {
+    pub geom: usize,
+    pub vertices: Vec<[f32; 3]>,
+    pub indices: Vec<u16>,
+    pub two_sided: bool,
+}
+
+/// What a track ray (+0x932900) writes for the tyre: point (+0), normal (+12) and the mesh hit
+/// (+24, as its CSP mesh list index; +32 the hit byte).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackRay {
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub mesh: Option<usize>,
 }
 
 /// The car container (`spaces + 8`, a hash space) as a parent.
@@ -93,6 +124,12 @@ impl Core {
             user: Vec::new(),
             meshes: Vec::new(),
             spaces: Vec::new(),
+            track_levels: (0, 0),
+            tyre_seen: false,
+            ray_geoms: Vec::new(),
+            #[cfg(feature = "embree")]
+            scene: None,
+            below: false,
         }
     }
 
@@ -482,6 +519,72 @@ impl Core {
         Ok(())
     }
 
+    /// Task C5h: the track's ray meshes (after [`Core::set_track`]); `embree`: CSP's Embree on
+    /// (`ODE_BATCH_RAYCAST=0`, the default) with its device string and robust flag (+0x2803200),
+    /// the scene built here when this build has Embree; `below`: +0x2812c7f.
+    pub fn set_rays(&mut self, meshes: &[RayMesh], embree: Option<(&std::ffi::CStr, bool)>, below: bool) -> Result<(), String> {
+        self.ray_geoms = meshes.iter().map(|m| self.col.track[m.geom]).collect();
+        self.below = below;
+        #[cfg(feature = "embree")]
+        if let Some((config, robust)) = embree {
+            let trace: Vec<Option<TraceMesh>> = meshes.iter().map(|m| Some(TraceMesh { vertices: &m.vertices, indices: &m.indices, two_sided: m.two_sided })).collect();
+            self.scene = Some(Scene::new(config, robust, &trace)?);
+        }
+        #[cfg(not(feature = "embree"))]
+        let _ = embree;
+        Ok(())
+    }
+
+    /// Whether the rays use Embree's scene now: from the first tyre ray on, the set-up's rays all
+    /// ODE's. CSP builds the scene on a pool thread from its first ray, so when it is ready is a
+    /// race; in every run seen it was ready before the first tyre ray (16,986 set-up rays on Spa,
+    /// the switch after 9,319 to all of them). The oracle pins CSP to this.
+    pub fn embree_ready(&self) -> bool {
+        #[cfg(feature = "embree")]
+        return self.scene.is_some() && self.tyre_seen;
+        #[cfg(not(feature = "embree"))]
+        false
+    }
+
+    /// Task C5h: a track ray (+0x932900) from `org` along `dir` for `length`; `tyre` with the
+    /// tyre raycaster's ray geom (+0x92b970), else none (the set-up's, +0x92fac0). Embree's scene
+    /// once ready ([`Core::embree_ready`]), ODE's ray (+0x926270, flags first contact and back-face cull as +0x92fe80 and
+    /// +0x924ff0 make them) before, without Embree, or for a downward tyre ray Embree hits from
+    /// below. `None`: Embree missed (hit byte and mesh cleared, point and normal left as they were).
+    pub fn cast(&mut self, org: [f32; 3], dir: [f32; 3], length: f32, tyre: bool) -> Result<Option<TrackRay>, Unhandled> {
+        self.tyre_seen |= tyre;
+        #[cfg(feature = "embree")]
+        if self.embree_ready() {
+            match self.scene.as_ref().unwrap().cast(org, dir, length, tyre, self.below) {
+                Cast::Miss => return Ok(None),
+                Cast::Hit { point, normal, mesh } => return Ok(Some(TrackRay { point, normal, mesh: Some(mesh as usize) })),
+                Cast::Ode => {}
+            }
+        }
+        self.clean_track()?;
+        let ray = Ray { flags: RAY_FIRST_CONTACT | RAY_BACKFACE_CULL, category: !0, collide: !0, length: length as f64 };
+        Ok(Some(match csp_raycast::cast(&self.col, org, dir, &ray)? {
+            None => TrackRay { point: [0.0; 3], normal: [0.0, 1.0, 0.0], mesh: None },
+            Some(h) => TrackRay { point: h.point, normal: h.normal, mesh: Some(self.ray_geoms.iter().position(|&g| g == h.geom).ok_or(Unhandled("a ray hit off the mesh list"))?) },
+        }))
+    }
+
+    /// The track space's `cleanGeoms` (+0x1689360) as ODE's ray (`dSpaceCollide2`) does it: stale
+    /// boxes made, dirty marks cleared, its table built again.
+    fn clean_track(&mut self) -> Result<(), Unhandled> {
+        let c = &mut self.col;
+        if !c.track.iter().any(|&t| c.geoms[t].flags & GEOM_DIRTY != 0) {
+            return Ok(());
+        }
+        for &t in &c.track {
+            refresh(&mut c.geoms, t, &[])?;
+            c.geoms[t].flags &= !GEOM_DIRTY;
+        }
+        let aabbs: Vec<[f64; 6]> = c.track.iter().map(|&t| c.geoms[t].aabb).collect();
+        c.table = HashSpace::build(&aabbs, self.track_levels.0, self.track_levels.1);
+        Ok(())
+    }
+
     /// The track as CSP loaded it (its trimeshes, their models and hash table) and the world's
     /// collision settings: collision on from here.
     #[allow(clippy::too_many_arguments)]
@@ -495,6 +598,7 @@ impl Core {
         let aabbs: Vec<[f64; 6]> = geoms.iter().map(|g| g.aabb).collect();
         let c = &mut self.col;
         c.table = HashSpace::build(&aabbs, levels.0, levels.1);
+        self.track_levels = levels;
         c.track = (g0..g0 + geoms.len()).collect();
         self.owner.extend(geoms.iter().map(|_| None));
         self.parent.extend(geoms.iter().map(|_| None));
