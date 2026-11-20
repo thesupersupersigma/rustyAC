@@ -47,7 +47,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5g 4. car against car | done: the car container's self-collide on the prepare's table, `dSpaceCollide2` of car spaces, `+0x92bab0`, the load reduction `+0x169fd90`, CSP's trimesh-trimesh collider (`csp_ttl`), two-body contact joints, kept car pairs; two F2004 touching on Spa, 1600 steps, 3200 world step entries identical with nothing copied, contacts word for word ([below](#part-2-car-against-car)). Proof area `csp` cases `core <car> <n>`. Part 2 done |
 
-Next: C5g's Vanilla checks (physics area, ODE proofs, `--quick`), then part 8 (tyre rays, Embree).
+| C5g 5. Vanilla checks | done: `--quick` all areas identical (physics 9/9, fresh 63/63) except C5f's 4 `collision` cases, whose harness still marked car geoms dirty in the dynamic step and built no container table; the harness now takes CSP's flags after the prepare and builds the table, 4/4 identical |
+
+Next: part 8 (tyre rays, Embree).
 
 ## The core in one paragraph
 

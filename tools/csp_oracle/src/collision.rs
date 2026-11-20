@@ -182,6 +182,15 @@ unsafe fn state(st: &mut State, dll: usize, w: usize, bodies: &[usize]) -> Resul
     }
     let aabbs: Vec<[f64; 6]> = track_geoms.iter().map(|&t| geoms[t].aabb).collect();
     let table = HashSpace::build(&aabbs, read(track + 0xd0), read(track + 0xd4));
+    if !static_step {
+        // the dynamic step follows the car step's "Prepare spaces", which placed the car geoms (Task C5g's
+        // csp_core proves it): their flags as they are, the container's table from the boxes it saw
+        for (g, &p) in geoms.iter_mut().zip(&ptrs) {
+            g.flags = read::<u32>(p + 0xc);
+        }
+    }
+    let aabbs: Vec<[f64; 6]> = car_spaces.iter().map(|&s| geoms[s].aabb).collect();
+    let cars_table = HashSpace::build(&aabbs, read(cars + 0xd0), read(cars + 0xd4));
     let index = |p: usize| ptrs.iter().position(|&x| x == p);
     let mut pairs = Vec::new();
     let base = read::<usize>(w + 0x50);
@@ -209,6 +218,12 @@ unsafe fn state(st: &mut State, dll: usize, w: usize, bodies: &[usize]) -> Resul
         aabb_limit: read(dll + 0x27f_995c),
         full_box_box: read::<u8>(collider + 0x144) != 0,
         switches: crate::joints::switches(dll, &[]),
+        cars_table,
+        cars_built: true,
+        cars_levels: (read(cars + 0xd0), read(cars + 0xd4)),
+        load: load(w),
+        prefilter: read::<u8>(dll + 0x27f_91a4) != 0,
+        edges: read::<u8>(dll + 0x27f_91a6) != 0,
         ..Default::default()
     };
     Ok((col, ptrs))
