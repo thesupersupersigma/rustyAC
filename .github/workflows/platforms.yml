@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Started by hand only (Actions -> Platforms -> Run workflow): what of rustyAC builds, and which
+# of its game-free bit proofs pass, on platforms other than Windows x64 (Task P1, see
+# docs/platforms.md). GitHub's standard hosted runners only, no secrets, read-only.
+# Failures are expected: a target that fails does not stop the others, and every target
+# uploads its logs and a summary table (also shown on the run's page).
+# No Assetto Corsa file is here or is fetched: tests that need the game print NOT TESTED.
+name: Platforms
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    name: ${{ matrix.target }}${{ matrix.emulated && ' (emulated)' || '' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
+          - { target: aarch64-apple-darwin, runner: macos-15 }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel }
+          - { target: aarch64-pc-windows-msvc, runner: windows-11-arm }
+          # the Windows x64 build on an ARM PC, under Windows' own x64 emulation
+          - { target: x86_64-pc-windows-msvc, runner: windows-11-arm, emulated: true }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # some runner images have no rustup
+      - name: Install rustup if missing
+        run: |
+          if command -v rustup >/dev/null 2>&1; then exit 0; fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            curl -sSfL -o rustup-init.exe https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            ./rustup-init.exe -y --no-modify-path --default-toolchain none --profile minimal
+            rm rustup-init.exe
+            echo "$USERPROFILE\\.cargo\\bin" >> "$GITHUB_PATH"
+          else
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+          EMULATED: ${{ matrix.emulated && 'yes' || '' }}
+        run: |
+          # the version and components in rust-toolchain.toml (1.97.0)
+          rustup toolchain install --no-self-update
+          rustup target add "$TARGET"
+          rustc -vV
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          # a runner label that no longer means the machine it did would build the wrong thing
+          if [ -z "$EMULATED" ] && [ "$host" != "$TARGET" ]; then
+            echo "::error::the runner's host is $host, not $TARGET"
+            exit 1
+          fi
+
+      - name: Build and test
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p logs
+          summary=logs/summary.md
+          printf '## %s on %s\n\n| what | result | NOT TESTED lines |\n|---|---|---|\n' "$TARGET" "$RUNNER_ARCH" > "$summary"
+          failed=0
+          # try <log name> <command...>: runs it into logs/<name>.log and adds a row
+          try() {
+            local name=$1; shift
+            echo "::group::$*"
+            if "$@" > "logs/$name.log" 2>&1; then result=ok; else result=FAILED; failed=1; fi
+            tail -n 30 "logs/$name.log"
+            echo "::endgroup::"
+            printf '| `%s` | %s | %s |\n' "$*" "$result" "$(grep -c 'NOT TESTED' "logs/$name.log")" >> "$summary"
+          }
+          cargo="cargo --locked"
+          # the program: on Windows the game, elsewhere the replay-only runner (src/main.rs)
+          try rustyac $cargo build --release --target "$TARGET" -p rustyac-game --bin rustyac
+          # each crate alone, so one that fails does not hide the others
+          for crate in crates/*/; do
+            crate=$(basename "$crate")
+            try "build-$crate" $cargo build --release --target "$TARGET" -p "$crate"
+          done
+          # the renderer as the browser's Full mode runs it (wgpu: Vulkan, Metal, Direct3D 12)
+          try render-wgpu $cargo build --release --target "$TARGET" -p rustyac-render --features backend-wgpu
+          try game-wgpu $cargo build --release --target "$TARGET" -p rustyac-game --features wgpu
+          # the bit proofs that need no game: recorded hashes and goldens committed in the repo
+          for crate in rustyac-math rustyac-ode rustyac-physics rustyac-net rustyac-content rustyac-gui rustyac-audio; do
+            try "test-$crate" $cargo test --release --target "$TARGET" -p "$crate"
+          done
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          exit $failed
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: logs-${{ matrix.target }}${{ matrix.emulated && '-emulated' || '' }}
+          path: logs/
+          retention-days: 30
