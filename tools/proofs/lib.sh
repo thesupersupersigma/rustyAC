@@ -226,6 +226,13 @@ need() {
     [ -e "$1" ] || { echo "missing: $1 ($2); see tools/proofs/README.md" >&2; exit 2; }
 }
 
+# serving <pid> <log>: the area's web/serve.py (started in the background as <pid>) is still up
+# 5 s on; one that could not have its port (another run's server on it) ends the area
+serving() {
+    sleep 5
+    kill -0 "$1" 2>/dev/null || { verdict "page server" ERROR "web/serve.py did not start: $(tail -n 1 "$2")"; summary; exit; }
+}
+
 summary() {
     [ "$(own_print)" = "$own_before" ] || verdict "the default own folder (target/release/cfg and the rest)" DIFFERENT "something wrote there during the run (newest: $(own_print newest)): a proof run without --cfg-dir and --documents, or rustyac.exe / the launcher started by hand from this checkout's target/release (play from another folder during a proof run)"
     identical=$(grep -c '^IDENTICAL ' "$log")

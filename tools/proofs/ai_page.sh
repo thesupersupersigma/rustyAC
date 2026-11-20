@@ -20,7 +20,7 @@ python web/build.py > "$out/build.txt" 2>&1 || { verdict "page build" DIFFERENT 
 python web/serve.py --port 8137 --pack "$gold/web/pack" > "$out/serve.txt" 2>&1 &
 sp=$!
 trap 'kill $sp 2>/dev/null; proof_unlock' EXIT
-sleep 5
+serving $sp "$out/serve.txt"
 js() { node -e 'process.stdout.write(JSON.stringify(require("fs").readFileSync(process.argv[1],"utf8")))' "$1"; }
 {
     printf 'for (let i = 0; i < 600 && !(window.rustyac && window.rustyac.frameProof && window.rustyac.launcher); i++) await new Promise((r) => setTimeout(r, 100));\n'

@@ -146,6 +146,12 @@ def make_handler(mounts):
     return Handler
 
 
+class Server(http.server.ThreadingHTTPServer):
+    # a port another server holds is refused: with SO_REUSEADDR Windows let a second server bind
+    # it while the first, left by another run, went on answering with its checkout's page (Task W4)
+    allow_reuse_address = False
+
+
 def main():
     parser = argparse.ArgumentParser(description='Serve the browser preview on this computer')
     parser.add_argument('--site', default=os.path.join(ROOT, 'dist-web', 'site'))
@@ -163,7 +169,7 @@ def main():
     if args.ac:
         mounts.append(('/ac-test/', os.path.abspath(args.ac)))
     mounts.append(('/', os.path.abspath(args.site)))
-    server = http.server.ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(mounts))
+    server = Server(('127.0.0.1', args.port), make_handler(mounts))
     server.quiet = args.quiet
     server.faults = []
     for fault in args.fault:
