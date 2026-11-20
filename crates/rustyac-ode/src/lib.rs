@@ -48,6 +48,9 @@ pub mod csp_joints;
 pub mod csp_lcp;
 pub mod csp_matrix;
 pub mod csp_opcode;
+#[cfg(feature = "embree")]
+pub mod csp_ray;
+pub mod csp_raycast;
 pub mod csp_reduce;
 pub mod csp_space;
 pub mod csp_step;

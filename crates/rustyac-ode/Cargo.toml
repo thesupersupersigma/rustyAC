@@ -9,3 +9,7 @@ license = "BSD-3-Clause"
 
 [dependencies]
 rustyac-math = { path = "../rustyac-math" }
+
+[features]
+# CSP's tyre rays on Embree 3.13.4 (csp_ray.rs, build.rs): native, csp_oracle only
+embree = []

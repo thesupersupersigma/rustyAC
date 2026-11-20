@@ -200,9 +200,9 @@ struct RayCollider<'a> {
 
 /// `CollisionFace`: a stabbed triangle.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Face {
-    face_id: u32,
-    distance: f32,
+pub(crate) struct Face {
+    pub face_id: u32,
+    pub distance: f32,
 }
 
 impl RayCollider<'_> {
@@ -356,6 +356,55 @@ impl RayCollider<'_> {
     }
 }
 
+/// OPCODE's part of `dCollideRTL` (`RayCollider::Collide`, from `InitQuery` @ 0x1403670b0) in
+/// first-contact mode with back-face culling: the ray `org` + t `n`, t below `length`, against
+/// the mesh placed by `w` (rows: the rotation transposed, then the position). CSP's build of the
+/// same code (+0x16f4a80, +0x16f65c0) groups every sum alike, so its ODE rays use this too.
+pub(crate) fn stab(mesh: &MeshInterface, model: &Model, w: &[[f32; 3]; 4], org: &[f32; 3], n: &[f32; 3], length: f32) -> Option<Face> {
+    // RayCollider::InitQuery @ 0x1403670b0
+    let dir = [
+        (n[1] * w[0][1] + n[0] * w[0][0]) + n[2] * w[0][2],
+        (n[1] * w[1][1] + n[0] * w[1][0]) + n[2] * w[1][2],
+        (n[1] * w[2][1] + n[0] * w[2][0]) + n[2] * w[2][2],
+    ];
+    // InvertPRMatrix @ 0x1403954a0
+    let inv = [
+        [w[0][0], w[1][0], w[2][0]],
+        [w[0][1], w[1][1], w[2][1]],
+        [w[0][2], w[1][2], w[2][2]],
+        [
+            -((w[3][0] * w[0][0] + w[0][1] * w[3][1]) + w[3][2] * w[0][2]),
+            -((w[1][0] * w[3][0] + w[3][1] * w[1][1]) + w[3][2] * w[1][2]),
+            -((w[2][0] * w[3][0] + w[3][1] * w[2][1]) + w[3][2] * w[2][2]),
+        ],
+    ];
+    let origin = [
+        ((org[1] * inv[1][0] + org[0] * inv[0][0]) + org[2] * inv[2][0]) + inv[3][0],
+        ((org[0] * inv[0][1] + org[1] * inv[1][1]) + org[2] * inv[2][1]) + inv[3][1],
+        ((org[0] * inv[0][2] + org[1] * inv[1][2]) + org[2] * inv[2][2]) + inv[3][2],
+    ];
+    let mut collider =
+        RayCollider { mesh, origin, dir, data: [0.0; 3], data2: [0.0; 3], fdir: [0.0; 3], max_dist: length };
+    if model.single_node {
+        // (answered inside InitQuery, with the segment's distance test in either mode)
+        collider.triangle(0)
+    } else if length.to_bits() == 0x7f7f_ffff {
+        // RayCollider::Collide @ 0x140366ed0: a length of exactly f32::MAX is a ray
+        // without an end
+        for k in 0..3 {
+            collider.fdir[k] = dir[k].abs();
+        }
+        collider.ray_stab(model)
+    } else {
+        for k in 0..3 {
+            collider.data[k] = (0.5 * dir[k]) * length;
+            collider.data2[k] = collider.data[k] + origin[k];
+            collider.fdir[k] = collider.data[k].abs();
+        }
+        collider.segment_stab(model)
+    }
+}
+
 impl StaticWorld {
     pub fn new() -> StaticWorld {
         StaticWorld::default()
@@ -487,49 +536,7 @@ impl StaticWorld {
         let (r, pos) = (&geom.r, &geom.pos);
         // the matrix handed to OPCODE: the rotation transposed into rows, the position below
         let w = [[r[0], r[4], r[8]], [r[1], r[5], r[9]], [r[2], r[6], r[10]], [pos[0], pos[1], pos[2]]];
-        // RayCollider::InitQuery @ 0x1403670b0
-        let dir = [
-            (n[1] * w[0][1] + n[0] * w[0][0]) + n[2] * w[0][2],
-            (n[1] * w[1][1] + n[0] * w[1][0]) + n[2] * w[1][2],
-            (n[1] * w[2][1] + n[0] * w[2][0]) + n[2] * w[2][2],
-        ];
-        // InvertPRMatrix @ 0x1403954a0
-        let inv = [
-            [w[0][0], w[1][0], w[2][0]],
-            [w[0][1], w[1][1], w[2][1]],
-            [w[0][2], w[1][2], w[2][2]],
-            [
-                -((w[3][0] * w[0][0] + w[0][1] * w[3][1]) + w[3][2] * w[0][2]),
-                -((w[1][0] * w[3][0] + w[3][1] * w[1][1]) + w[3][2] * w[1][2]),
-                -((w[2][0] * w[3][0] + w[3][1] * w[2][1]) + w[3][2] * w[2][2]),
-            ],
-        ];
-        let origin = [
-            ((org[1] * inv[1][0] + org[0] * inv[0][0]) + org[2] * inv[2][0]) + inv[3][0],
-            ((org[0] * inv[0][1] + org[1] * inv[1][1]) + org[2] * inv[2][1]) + inv[3][1],
-            ((org[0] * inv[0][2] + org[1] * inv[1][2]) + org[2] * inv[2][2]) + inv[3][2],
-        ];
-        let mut collider =
-            RayCollider { mesh: &geom.data.mesh, origin, dir, data: [0.0; 3], data2: [0.0; 3], fdir: [0.0; 3], max_dist: length };
-        let face = if model.single_node {
-            // (answered inside InitQuery, with the segment's distance test in either mode)
-            collider.triangle(0)
-        } else if length.to_bits() == 0x7f7f_ffff {
-            // RayCollider::Collide @ 0x140366ed0: a length of exactly f32::MAX is a ray
-            // without an end
-            for k in 0..3 {
-                collider.fdir[k] = dir[k].abs();
-            }
-            collider.ray_stab(model)
-        } else {
-            for k in 0..3 {
-                collider.data[k] = (0.5 * dir[k]) * length;
-                collider.data2[k] = collider.data[k] + origin[k];
-                collider.fdir[k] = collider.data[k].abs();
-            }
-            collider.segment_stab(model)
-        }?;
-
+        let face = stab(&geom.data.mesh, model, &w, org, n, length)?;
         // FetchTriangle @ 0x140346770: the corners in the world
         let tri = geom.data.mesh.triangle(face.face_id);
         let mut dv = [[0.0f32; 3]; 3];

@@ -138,7 +138,7 @@ fn is_space(g: &Geom) -> bool {
     matches!(g.shape, Shape::Space { .. })
 }
 
-fn enabled(g: &Geom) -> bool {
+pub(crate) fn enabled(g: &Geom) -> bool {
     g.flags & (GEOM_ENABLED | GEOM_ZERO_SIZED) == GEOM_ENABLED
 }
 
