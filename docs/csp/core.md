@@ -42,7 +42,8 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5f 3. collision step, world on its own contacts | done: `csp_collision`; 600-step Spa worlds of 1 and 3 cars of both proof cars identical on the port's contacts. C5f done |
 
 | C5g 1. wrapper calls recorded | done: `csp_oracle` kind `p`/`o` breaks log every outermost call into a `cphys::` wrapper and its return (records 7/8, `CSP_ORACLE_BREAK_SETUP=1` also logs the set-up); the switches decoded ([below](#task-c5g-csps-car-wrappers)) |
-| C5g 2. port fed live, set-up compared | next: `rustyac_ode::csp_core` built from the calls in process, bodies / joints / geoms against CSP's at the first world step |
+| C5g 2. port fed live, set-up compared | done (bodies, joints): `rustyac_ode::csp_core` fed every outermost call in process (`CSP_ORACLE_PORT=1`, `tools/csp_oracle/src/port.rs`); F2004: 6 bodies, 20 DBall + 1 fixed joint and their nodes identical at both step-0 world step entries, 85 set-up getter answers bit-exact. Getters after a world step are wrong until the port steps |
+| C5g 3. car geoms, then the step | next: `addBoxCollider` (`+0x933cc0`: min height from dword `+0x27f9950`, car space by key via `+0x91bdb0`, `dGeomSetRotation` `+0x1687da0` with the body's own R moves the body), mesh collider (`+0x9337b0`), collide bits (`+0x933750`), wrapper byte +151 (`+0x933710`); then the step: `+0x92e4a0` steps only when bytes `+0x2803210` and `+0x27f92b6` are 0, collision (`+0x92c2b0`), queued contacts `+0x91d670` (count world+16+12768), joint group `+0x168ccc0` emptied at the end (with collision v1 always world+48) |
 
 Next: C5g part 1 step 2 (the port fed live by the recorder hooks, compared at each world step), then car against car.
 
