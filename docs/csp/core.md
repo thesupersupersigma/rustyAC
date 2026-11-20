@@ -37,8 +37,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5e 1. CSP's world step decoded | done: `+0x92e4a0`, workers 0 and > 0 paths, auto-disable, island builder ([below](#task-c5e-csps-world-step)) |
 | C5e 2. `csp_world::CspWorld::step` in f64 | done: 600-step Spa worlds of 1 and 3 cars of both proof cars bit-identical to CSP's, recorded at workers 0 and 7, the two recordings the same ([below](#task-c5e-csps-world-step)). C5e done |
 
-Next: plan part 6 (collision: near callback, contact reduction and creation, the changed colliders),
-then part 7 (`cphys::` wrappers).
+| C5f 1. collision decoded, colliders on Spa | done: one pair, box against trimesh; `csp_btl` / `csp_opcode` / `csp_space` bit-identical to CSP's ([below](#task-c5f-csps-collision)) |
+| C5f 2. reduction, contact joints, switches | done: `csp_reduce`, `csp_collide` bit-identical to CSP's; "soft deep" is the one step switch on |
+| C5f 3. collision step, world on its own contacts | done: `csp_collision`; 600-step Spa worlds of 1 and 3 cars of both proof cars identical on the port's contacts. C5f done |
+
+Next: part 7 (`cphys::` wrappers), with the geom placement before the step and car against car.
 
 ## The core in one paragraph
 
@@ -199,11 +202,11 @@ density: same inputs through CSP's function and the port, every output compared 
 | 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ball / fixed rows (**done in C5c**; ray-vs-trimesh went to part 8, the LDLT / solve kernels to part 4: master rewrote them; CSP has no hinge) | 2 used (planned 4-6) | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
 | 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)), contact and dball `getInfo2`, `matrix` changes (**done in C5d**, 1 session); the box / trimesh colliders that changed (1) and libccd pairs (1) moved to part 6. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 1 used (planned 3.5-5.5) | per-stage in-process compare |
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags (**done in C5e**, 1 session; the space clean-up and geom flags go with part 6) | 1 used (planned 1-2) | whole world identical per step, workers 0 and 7 |
-| 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback; the box / trimesh colliders that changed and libccd pairs (from part 4) | 4-5 | contact lists identical per step |
+| 6 | collision: near callback, contact reduction, contact creation, the switches above; the box / trimesh colliders that changed (**done in C5f**: Spa uses box against trimesh only; libccd, car against car and the car collision callback go to part 7) | 1 used (planned 4-5) | contact joints identical per step, world on its own contacts |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5e** | **10.5-15** (parts 6-9; after C5d: 11.5-17) | |
+| | **Total left after C5f** | **7.5-11** (parts 7-9, part 7 plus 1 for car against car; after C5e: 10.5-15) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -733,3 +736,105 @@ auto-disabled body (none of CSP's stock objects found so far) would prove it.
 
 Not done in part 5: the space clean-up, the geom moved flags and the body moved callback (no geoms in
 `csp_world` yet: part 6), the `+0x3230` countdown (what reads it is not known yet), QuickStep.
+
+## Task C5f: CSP's collision
+
+**What CSP does in the collision part of a step** (`+0x92c2b0`, the "v2" path chosen by the byte
+`dll+0x2803218+5`, set on every run seen). `v = *(world+0x20)`: `v[0]` the track's hash space, `v[1]` a
+hash space holding one simple space per car (6 boxes and, for the F2004, a trimesh), `v[2]` / `v[3]`
+empty on Spa. The world's `+0x4c` flips every step:
+
+- **static steps** (`+0x4c != 0`): the kept car pairs (`+0x60`, none on Spa) through the pair processor
+  `+0x9324a0`, then `dSpaceCollide2(v[1], v[0])` (`+0x168a5b0`) with the static callback `+0x92bef0`.
+  The container has fewer children than the track, so the track's `collide2` (`+0x1689bf0`) runs once
+  per car space; each (car space, trimesh) candidate comes back to the callback, which sees a space and
+  calls `dSpaceCollide2(car space, trimesh)`: the car space's `collide2` (`+0x1688800`) cleans its
+  children, then tests each enabled child against the trimesh (`+0x16880b0`: same body, category /
+  collide bits either way, AABB overlap, both `AABBTest`s) and calls the callback with (box, trimesh).
+- **the callback on a geom pair**: category and collide bits both ways (AND), the geom with a body,
+  skip a disabled body; box (class 1 or 10): `dCollide` with 16 contacts, then reduction
+  `+0x169f060` with `{4, 1, 4, 0.95}`; other classes 32 contacts and `+0x169fd90` (not seen on Spa);
+  no contacts: done; else the contact joints (`+0x92c9f0`) and the pair is kept (`world+0x50`).
+- **dynamic steps**: each kept pair through the pair processor (tag 0: `dCollide` 16, reduction,
+  joints, no tests), the list emptied, then the car-against-car walk `+0x91bd40` (container
+  self-collide, callback `+0x92bcb0`, 32 contacts and `+0x169fd90`, pairs kept in `+0x60`).
+- `dCollide` (`+0x1687280`): `flags & 0xffff == 0`, same geom or same body: 0; poses refreshed; the
+  colliders table (`qword_1828342C0`, 40 classes, `{fn, reverse}`); a reversed pair is collided the other
+  way round, then each contact's normal negated and its geoms and sides swapped.
+
+**Pairs on Spa.** One: box (class 1, on a car body) against trimesh (class 8), 16 contacts. 600 steps,
+3 F2004s: 4,671 `dCollide` calls (4,519 from the static callback, 152 from kept pairs), 297 with
+contacts. No sphere, capsule, cylinder, plane, ray or libccd pair, no car-against-car contact (cars
+20 m apart). libccd and the other colliders are not ported: nothing on Spa calls them.
+
+**Box against trimesh** (`+0x16b1b90`, master's `dCollideBTL` with CSP's OPCODE build): the OBB query
+`+0x16d1890` (class I / II / III node tests, class III only with `fullBoxBoxTest`, which is on),
+master's `InitQuery` with temporal coherence (four cache slots per box, round robin `+0x16a8210`, fat
+box 1.1), master's triangle clip and contact merge. Port: `csp_opcode.rs` (`obb_query`, `BoxTc`,
+`aabb_test`), `csp_btl.rs` (`collide_btl`). Proof: `csp_oracle` break kind `c` runs CSP's collider on
+the live box and on 24 changed copies a call (noise, big moves, edge values, random bits, six flags
+values) under MXCSR `0x1f80` and `0x9fc0`, contacts and cache bits compared: F2004 1 car 73,696
+compared, 3 cars 228,879, RSS 3 cars 37,730, 0 differ. On Spa's meshes `Model::build` gives CSP's tree
+node for node. Hash space `collide2` (`csp_space.rs`, kind `h`): candidates in CSP's order.
+
+**Contact reduction** (`+0x169f060`): normal groups (join at `dot >= 0.95`), per-group quota, deepest
+first then farthest, the selection sort's mixed `>` / `!(>=)` (NaN rules from the machine code).
+`csp_reduce.rs`. Kind `r`: live calls plus 16 made-up inputs a call (up to 300 contacts, more than 8
+groups, NaN / denormal / random bits): F2004 3 cars 5,049 + 5,049, RSS 3 cars 1,955 + 1,955, 0 differ.
+
+**Contact joints** (`+0x92c9f0`). For a car box against the track: mode `0x701c`, mu 0.1 (0.4 with the
+grip bit of the body's user data), bounce 0, erp `0.7142857142857143`, cfm `0.0009523809523809524`; a
+contact is dropped when its float normal dotted with the body's up axis is below 0.9; deep contacts
+(`depth > 0.07f`) are softened (`+0x91c520`, CSP's "soft deep" switch, on by default). Joints go to the
+head of the world's list. `csp_collide.rs` (`contact_joints`, `soften`). Kind `j`: F2004 3 cars 297
+calls, 1,140 contacts and joints; RSS 3 cars 115 calls, 448 contacts, 252 joints (196 dropped by the
+up test); every joint word 0 differ; `soften` on 24 made-up cases a call, 0 differ.
+
+**Switches that act on Spa.** In the step: "soft deep" (on). Off on every run: surface mixing,
+depth-from-speed, the deferred batches (`+0x328c`), batched joints (`+0x3279`), the skip counter
+(`+0x48`); the port says "not ported" when one is on. `HASH_SPACE_*`, `ISOLATE_CARS`,
+`WHEEL_CAR_CONTACTS` (0) are not on the Spa path; `TRIMESH_OBB_PREFILTER` / `TRIMESH_AABB_TEST` are the
+trimesh globals the oracle reads. `ENABLE_MESH_COLLIDER_SOONER`, `CLAMP_MESH_COLLIDERS`,
+`EXTEND_COLLIDER_BOXES` act when the car's colliders are made (part 7's): their result is in the boxes
+the oracle copies (not decoded).
+
+**Geom poses and boxes.** `+0x1686600` (offset pose from the body), `+0x1686440` (rotation product),
+box AABB `+0x1699680`, simple space AABB `+0x1688460` (children's union from `±1e300`; a NaN low side
+is taken, a NaN high side is not), each with the machine code's operand order (a NaN's sign follows the
+first operand). At collision entry every geom is already clean (`flags & 7 == 0`): code before the step
+places them (part 7's). `+0x168ccc0` is not a space clean-up: it empties the contact joint group.
+
+**Port.** `crates/rustyac-ode/src/csp_collision.rs`: `Geom`, `Shape` (box with its OPCODE caches,
+trimesh, simple space), `Collision` (geoms, the track's meshes, car spaces, track hash space, kept
+pairs, step kind, switches), `refresh` (pose and box), `CspWorld::collide` (the step above for box
+against trimesh), `CspWorld::add_contacts`, `joint_of`.
+
+**Proof** (`csp_oracle` break kind `q` at `+0x92c2b0` and its return): the oracle copies CSP's geoms,
+spaces, bodies and kept pairs into a `Collision`, the car boxes and car spaces marked dirty so the port
+places them from the bodies, runs `collide`, then compares the joints CSP made (order and every word),
+the kept pairs, every box's OPCODE cache and every geom's flags, box and pose; 8 made-up poses a step go
+through CSP's space `computeAABB` and the port's `refresh`, both MXCSR settings. The world recording
+gets the port's joints (record 6) and `--world` steps every world on them instead of CSP's. 600-step Spa
+drive, workers 0, proof area `csp` case `collision <car> <n>`:
+
+| car | cars | steps compared | joints | differ | made-up poses (each MXCSR) | world on its own contacts |
+|---|---|---|---|---|---|---|
+| ks_ferrari_f2004 | 1 | 600 | 26 | 0 | 4,800, 0 differ | 600 steps, 600 islands, 0 differ |
+| ks_ferrari_f2004 | 3 | 600 | 1,140 | 0 | 4,800, 0 differ | 600 steps, 1,800 islands, 0 differ |
+| rss_formula_rss_3_v6_2026 | 1 | 600 | 0 | 0 | 4,800, 0 differ | 600 steps, 600 islands, 0 differ |
+| rss_formula_rss_3_v6_2026 | 3 | 600 | 252 | 0 | 4,800, 0 differ | 600 steps, 1,800 islands, 0 differ |
+
+Made-up poses with NaNs: 43-153 cases a run differ only as a NaN against a NaN of another sign or
+payload (LLVM may swap a commutative operation's operands); counted apart, like the colliders'.
+
+Planted bugs: clip grouping (1,517 + 1,471 differ), OBB dump order (8 + 12), reduction NaN rule and
+`d2` grouping (2 + 2), `soften` grouping (139 + 136), up test on the X axis (32), pose grouping with
+the reversed pair's side swap removed (189 steps, 727 poses): caught. Not caught: the OPCODE class II
+grouping, the 0.95 up threshold and a row-for-column up axis (no Spa value near the edge).
+
+**Not done in C5f.** Car against car (`+0x91bd40`, `+0x92bcb0`, `+0x169fd90`, pair tags 1 and 2): no
+Spa drive has two cars touching; the port says "not ported" when two car spaces pass the pair test.
+libccd and the other colliders (unused on Spa). A trimesh's own AABB (the track's are taken from CSP;
+the car spaces' trimesh is never dirty). The joints' wake-up and body attach through the user data
+(every Spa body is enabled and the geom's own). The car collision callback `+0x587cc0` (car side
+effects, part 7). The geom placement before the step (part 7).

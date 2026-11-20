@@ -10,7 +10,7 @@
 //! layout), which `--world` steps the world with in place of CSP's.
 
 use rustyac_ode::csp_collide::{NewJoint, Unhandled};
-use rustyac_ode::csp_collision::{refresh, Collision, Geom, Shape, TrackMesh};
+use rustyac_ode::csp_collision::{refresh, Collision, Geom, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_POSR_BAD};
 use rustyac_ode::csp_space::HashSpace;
 use rustyac_ode::csp_step::WorldParams;
 use rustyac_ode::csp_world::CspWorld;
@@ -120,10 +120,17 @@ unsafe fn geom(st: &mut State, dll: usize, g: usize, body_index: &dyn Fn(usize) 
     let posr = read::<usize>(g + 0x28);
     let offset = read::<usize>(g + 0x30);
     let (pos, r) = if posr != 0 { (read(posr), read(posr + 0x20)) } else { ([0.0; 3], [0.0; 12]) };
+    // CSP's geoms are always clean here (placed by code before the step, part 7's): mark the car boxes
+    // and car spaces dirty so the port places them from the bodies and the compare after the step checks it
+    let dirty = match class {
+        1 if body != 0 && offset != 0 => GEOM_POSR_BAD | GEOM_AABB_BAD,
+        11 => GEOM_AABB_BAD,
+        _ => 0,
+    };
     geoms.push(Geom {
         id: g,
         side,
-        flags: read(g + 0xc),
+        flags: read::<u32>(g + 0xc) | dirty,
         category: read(g + 0x90),
         collide: read(g + 0x94),
         offset: (offset != 0).then(|| (read(offset), read(offset + 0x20))),
