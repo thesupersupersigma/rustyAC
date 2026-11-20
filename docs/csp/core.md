@@ -45,7 +45,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5g 2. port fed live, set-up compared | done (bodies, joints): `rustyac_ode::csp_core` fed every outermost call in process (`CSP_ORACLE_PORT=1`, `tools/csp_oracle/src/port.rs`); F2004: 6 bodies, 20 DBall + 1 fixed joint and their nodes identical at both step-0 world step entries, 85 set-up getter answers bit-exact. Getters after a world step are wrong until the port steps |
 | C5g 3. car geoms, placement, the step | done: `csp_core` makes the car's boxes and mesh collider, places them with the car step's "Prepare spaces" (`+0x1688ab0` on the car container) and steps the world with its own collision; 600 Spa steps of F2004 and RSS3 with nothing copied but the track's and the car mesh's built trimesh data: 1200 world step entries each, bodies, joints, nodes, car spaces, geoms, boxes, OPCODE caches, kept pairs identical, 95655 / 83092 getter answers bit-exact. Part 1 done ([below](#part-1-proof)) |
 
-Next: C5g part 2, car against car (`+0x91bd40`, `+0x92bcb0`, the reduction `+0x169fd90`) on a drive where two cars touch.
+| C5g 4. car against car | done: the car container's self-collide on the prepare's table, `dSpaceCollide2` of car spaces, `+0x92bab0`, the load reduction `+0x169fd90`, CSP's trimesh-trimesh collider (`csp_ttl`), two-body contact joints, kept car pairs; two F2004 touching on Spa, 1600 steps, 3200 world step entries identical with nothing copied, contacts word for word ([below](#part-2-car-against-car)). Proof area `csp` cases `core <car> <n>`. Part 2 done |
+
+Next: C5g's Vanilla checks (physics area, ODE proofs, `--quick`), then part 8 (tyre rays, Embree).
 
 ## The core in one paragraph
 
@@ -861,7 +863,7 @@ Other wrapper bytes: `+0x280320f` (no finite rotation for new bodies: `+0x937f90
 
 ### The calls
 
-`CSP_ORACLE_BREAK=<rva>p,...` on every wrapper function (the 166 of `re/scratch/taskC5g/fns.txt`, shared stubs left out) with `CSP_ORACLE_ISLANDS=<file>` records each outermost call (record 7: step, rva, thread, the four register and six stack arguments, xmm0..3, 8 words behind each pointer argument) and its return (record 8: rax, xmm0, 8 words behind rax and the call's rdx / r8). `CSP_ORACLE_BREAK_SETUP=1` logs the set-up too (step `usize::MAX - 1`).
+`CSP_ORACLE_BREAK=<rva>p,...` on every wrapper function (the 166 of `tools/csp_oracle/wrappers.txt`, the wrapper vtables' functions, shared stubs left out) with `CSP_ORACLE_ISLANDS=<file>` records each outermost call (record 7: step, rva, thread, the four register and six stack arguments, xmm0..3, 8 words behind each pointer argument) and its return (record 8: rax, xmm0, 8 words behind rax and the call's rdx / r8). `CSP_ORACLE_BREAK_SETUP=1` logs the set-up too (step `usize::MAX - 1`).
 
 On a 20-step F2004 Spa drive: set-up 6 `createRigidBody` (`+0x92ed80`), 6 `addBoxCollider` (`+0x933cc0`), 1 `addMeshCollider` (`+0x9337b0`), 20 `createDistanceJoint` (`+0x92f050`) with 20 `setERPCFM` (`+0x928310`) and 4 reseats (`+0x92fbb0` → `+0x928350`), 1 fixed joint (`+0x92fd20`), 4 raycasters (`+0x92fe80`), 455 track meshes (`+0x92f0f0`), 16986 set-up rays (`+0x92fac0`, Embree, part 8); per step about 300 calls: force / torque adders, getters, 4 ray casts, 20 `setERPCFM`, 2 reseats and the world step (`+0x92e4a0`, called twice, the one from `dwrite+0x67ee13` steps). The DUMMY / COSMIC suspensions (`+0x591f50` / `+0x592090`) are chosen by suspensions.ini `TYPE`; both proof cars are DWB on both axles, so neither runs.
 
@@ -880,3 +882,27 @@ On a 20-step F2004 Spa drive: set-up 6 `createRigidBody` (`+0x92ed80`), 6 `addBo
 Proof (`PORT=1 SETUP_LOG=1 BRK=<fns.txt and 1688ab0, kind p> bash re/scratch/taskC5g/brk.sh <car> 600`): `port: 1200 world steps compared, 0 differ` for `ks_ferrari_f2004` (95655 answers) and `rss_formula_rss_3_v6_2026` (83092 answers, one box). Taken from CSP: the track's trimeshes and hash table at the first world step (C5f's reader), and the car mesh's built OPCODE data (tree, box, TC flag) at the mesh collider's return; building OPCODE trees is not ported.
 
 Not reached by the proof cars: the dynamic collider (`+0x92ff50`), the split-along body (`+0x936950`, core +0x3298), DUMMY / COSMIC suspensions, a body offset (wrapper byte +156), reseat by point velocity. Rays (`+0x92fe80`, `+0x92b970`, `+0x92fb30`, `+0x92fac0`) are part 8. The collision callback `+0x587cc0` changes car state only (damage, events), part 9.
+
+### Part 2: car against car
+
+Decoded (dwrite IDA; every op order read from the machine code):
+
+- **The dynamic step's car pass** `+0x91bd40`: the car container (a hash space) self-collides (`+0x16894f0`) with `+0x92bcb0` as callback. The self-collide rebuilds the table (`+0x1688ab0`) only when it was never built or with byte +218 and +217 set; otherwise it uses the table the car step's "Prepare spaces" built, from boxes one world step old (two world steps per car step). Pairs come out as in ODE's hash space: each entry against the cells of every level at or above its own, the first common cell only, same level only once; then each entry against each big geom, then big against big.
+- `+0x92bcb0` / `+0x92bab0`: two car spaces go through `dSpaceCollide2` (`+0x168a5b0`: the space with more geoms, the first on a tie, is queried with each of the other's children through its `collide2`, `+0x1688800`, which cleans it first). Two geoms: categories both ways, one body awake, `dCollide` up to 32 contacts, the load reduction `+0x169fd90` with weight `max(p(g1), p(g2))` (`p`: wrapper byte +159 bit 2 → 1.0, bit 4 → 0.3f, else 0) and "at least three" unless the bodies' relative speed squared is over 1 (`+0x92ba10`), the contact maker `+0x92c9f0`, and the pair kept in the car list (+0x60) for the next static step, which runs it again through `+0x9324a0` (tag 0) before the track.
+- **The load** (+0x31f8 of the core: counter, lo 50, hi 150, average, up 1.0, down 0.05): at each collision step's entry `avg = (counter - avg) * rate + avg` (down when `counter <= avg` or NaN), counter 0; `+0x169fd90` picks `per group / groups / total` from `strict = (1 - free) * (1 - weight)` and adds what the reduction kept to the counter.
+- **Trimesh against trimesh** `+0x16bc1b0` (CSP's own, double): OBB prefilter (`TRIMESH_OBB_PREFILTER`, the smaller-volume mesh's box against the other's tree, `+0x16bbea0`), then CSP's OPCODE AABB tree collider (f32, `+0x16dfb50` / `+0x16e5900`: its own box-box sums, class III only at the root, the 9 edge axes of tri-box only with byte `+0x27f91a6`), each pair's triangles clipped against each other (`+0x16bce00`: deepest face, ±1e300 starts, 1e-8 / 1e-6 limits) and merged into a 256-bucket hash of contacts (`+0x16bbbc0`: key from `floor(p * 10000)`, same point within 1.732e-4, deeper replaces, equal depth averages the normals). The hint path (one body only) is not on the car-car path.
+- **The contact maker with two bodies**: default surface (mode 0x701c, mu 0.25, bounce 0.01, erp 0.3, cfm 1e-4, softened past 0.1 m with "soft deep"), joints attached to both bodies. The callback `+0x587cc0` runs per side after it (car state, part 9).
+
+Port: `crates/rustyac-ode/src/csp_ttl.rs` (new: the trimesh collider and CSP's tree walk), `csp_space.rs` `HashSpace::self_pairs`, `csp_collision.rs` (`Load`, the dynamic car pass, kept car pairs, trimesh pairs to `collide_ttl`), `csp_collide.rs` (two bodies, `Side::weight`), `csp_core.rs` (the container's table built at "Prepare spaces" when a car moved; `Core::step` returns its contact joints).
+
+Proof: proof area `csp` case `core <car> <n>` (`tools/proofs/csp.sh`): the port fed every outermost wrapper call (`tools/csp_oracle/wrappers.txt`), nothing copied but the track and car mesh OPCODE data, compared at every world step entry (bodies, joints, nodes, car spaces, geoms, OPCODE caches, kept track and car pairs, the load) and every answer; the world recorded with the port's contact joints (record 6), `--world` checks them word for word against CSP's (bodies, contact words but the 4th words of pos / normal, which CSP's trimesh collider sets to 1.0 / the normal's length and nothing reads) and steps every world on them. The touch drive: two F2004 on Spa, car 0 parked (`CSP_ORACLE_PARK=1`, brake on), car 1 5.5 m behind (`CSP_ORACLE_GAP=5.5`) drives into it; 1600 steps, car-car contacts from step ~800. Break kind `t` (`+0x16bc1b0`) also calls CSP's trimesh collider on the live pair and on 8 moved shadows of the second geom (same body, own pose) against `collide_ttl`.
+
+| case | world steps compared | differ | answers (set-up / steps) | trimesh pairs (live / shadows) | world on the port's contacts |
+|---|---|---|---|---|---|
+| core ks_ferrari_f2004 1 | 1,200 | 0 | 85 / 95,655, 0 wrong | none | 600 steps, 26 contacts, 0 differ |
+| core rss_formula_rss_3_v6_2026 1 | 1,200 | 0 | 85 / 83,092, 0 wrong | none | 600 steps, 0 contacts, 0 differ |
+| core ks_ferrari_f2004 2 | 3,200 | 0 | 169 / 500,791, 0 wrong | 102 / 816, 0 differ | 1,600 steps, 898 contacts, 0 differ |
+
+Found on the way: the port had never read the joint maker's switches ("soft deep" stayed off; no single-car contact was deeper than 0.07 m, the touch's are 0.25 m).
+
+Not done in part 2: pair tags 1 and 2 of `+0x9324a0` (never pushed on the drive), batched car-car joints (`car_pairs` switch, body flag 0x200), the moving-surface joint (wrapper +152 and not +153), a container rebuilt at every collide (+218, asserted clear), libccd, the box-trimesh path between cars (the boxes collide only with the track's category).

@@ -20,6 +20,8 @@
 #                  n cars' recorded Spa worlds, CSP workers 0 and 7 (Task C5e)
 #   collision <car> <n>  CSP's collision step against rustyac-ode's csp_collision on n cars' Spa drive, then
 #                  the world stepped on the port's own contacts (Task C5f)
+#   core <car> <n>  CSP's cphys:: wrappers built by rustyac-ode's csp_core from the car's own calls, nothing
+#                  copied: set-up, every answer and every world step; n=2 is two F2004 that touch (Task C5g)
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -282,6 +284,44 @@ for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
             verdict "collision $car $n" DIFFERENT "$col / $wld $(why "$drive" '^  step|^  pose|panic')"
         fi
     done
+done
+
+# core <car> <n>: CSP's car physics core (Task C5g, csp_core): every call the car makes into CSP's cphys::
+# wrappers (tools/csp_oracle/wrappers.txt, the wrapper vtables' functions) is done again on the port, which
+# builds its own bodies, joints, colliders, spaces and contacts from them and nothing else: the answers
+# (getters, creators) against CSP's returns and, at every world step's entry, every body, joint, car space,
+# geom, kept pair and the contact load against CSP's. n=2: car 0 parked, car 1 5.5 m behind drives into it
+# (1600 steps, contacts from step ~800), CSP's trimesh-trimesh collider also called on the live pair and 8
+# moved shadows against csp_ttl. The world is recorded with the port's joints (record 6) and CspWorld steps
+# every recorded world on them: the contact joints word for word, every body and joint bit for bit
+for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2"; do
+    set -- $cn; car=$1; n=$2
+    keep "core $car $n" || continue
+    [ -f "$lap" ] || { skip "core $car $n" "no $lap"; continue; }
+    bin=$out/runs/core_${car}_${n}.bin; rm -f "$bin"
+    run=$out/runs/core_${car}_${n}.txt
+    drive=$out/runs/core_drive_${car}_${n}
+    brk=$(sed 's/$/p/' tools/csp_oracle/wrappers.txt | paste -sd,),1688ab0p,16c7650a,92ea7dz
+    steps=600; extra=
+    [ $n = 2 ] && { steps=1600; brk=$brk,16bc1b0t; extra="CSP_ORACLE_GAP=5.5 CSP_ORACLE_PARK=1"; }
+    # (a subshell: `oracle` is a function, `env` cannot run it)
+    if ( [ -n "$extra" ] && export $extra; CSP_ORACLE_BREAK=$brk CSP_ORACLE_ISLANDS="$(cygpath -aw "$bin")" CSP_ORACLE_PORT=1 CSP_ORACLE_BREAK_SETUP=1 oracle "core_drive_${car}_${n}" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --cars $n --workers 0 --steps $steps ) && [ -s "$bin" ]; then
+        "$CSP" --world "$(cygpath -aw "$bin")" > "$run" 2>&1
+    else
+        echo "csp_oracle failed: $(why "$drive.txt" 'error|panic|fault|exit')" > "$run"
+    fi
+    rm -f "$bin"
+    prt=$(tr -d '\r' < "$drive.txt" | grep -m1 '^port: ')
+    stop=$(tr -d '\r' < "$drive.txt" | grep -m1 '^port stopped')
+    ttl=$(tr -d '\r' < "$drive.txt" | grep -m1 '^ttl live ')
+    wld=$(tr -d '\r' < "$run" | grep -m1 '^world \|^csp_oracle failed')
+    if [ -z "$stop" ] && echo "$prt" | grep -q "^port: $((2 * steps)) world steps compared, 0 differ; answers set-up [0-9]* (0 wrong), steps [0-9]* (0 wrong)" &&
+        { [ $n = 1 ] || echo "$ttl" | grep -q "^ttl live [1-9][0-9]* calls 0 differ, shadow [1-9][0-9]* calls 0 differ"; } &&
+        echo "$wld" | grep -q "^world $steps steps ($steps on the port's contacts), .*: 0 differ, after "; then
+        verdict "core $car $n" IDENTICAL "$(echo "$prt" | sed 's/^port: //; s/; calls.*//') ${ttl:+/ $ttl }/ ${wld#world }"
+    else
+        verdict "core $car $n" DIFFERENT "$stop $prt / $ttl / $wld $(why "$drive.txt" '^  world step|^  body|panic')"
+    fi
 done
 
 summary
