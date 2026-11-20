@@ -43,9 +43,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5g 1. wrapper calls recorded | done: `csp_oracle` kind `p`/`o` breaks log every outermost call into a `cphys::` wrapper and its return (records 7/8, `CSP_ORACLE_BREAK_SETUP=1` also logs the set-up); the switches decoded ([below](#task-c5g-csps-car-wrappers)) |
 | C5g 2. port fed live, set-up compared | done (bodies, joints): `rustyac_ode::csp_core` fed every outermost call in process (`CSP_ORACLE_PORT=1`, `tools/csp_oracle/src/port.rs`); F2004: 6 bodies, 20 DBall + 1 fixed joint and their nodes identical at both step-0 world step entries, 85 set-up getter answers bit-exact. Getters after a world step are wrong until the port steps |
-| C5g 3. car geoms, then the step | next: `addBoxCollider` (`+0x933cc0`: min height from dword `+0x27f9950`, car space by key via `+0x91bdb0`, `dGeomSetRotation` `+0x1687da0` with the body's own R moves the body), mesh collider (`+0x9337b0`), collide bits (`+0x933750`), wrapper byte +151 (`+0x933710`); then the step: `+0x92e4a0` steps only when bytes `+0x2803210` and `+0x27f92b6` are 0, collision (`+0x92c2b0`), queued contacts `+0x91d670` (count world+16+12768), joint group `+0x168ccc0` emptied at the end (with collision v1 always world+48) |
+| C5g 3. car geoms, placement, the step | done: `csp_core` makes the car's boxes and mesh collider, places them with the car step's "Prepare spaces" (`+0x1688ab0` on the car container) and steps the world with its own collision; 600 Spa steps of F2004 and RSS3 with nothing copied but the track's and the car mesh's built trimesh data: 1200 world step entries each, bodies, joints, nodes, car spaces, geoms, boxes, OPCODE caches, kept pairs identical, 95655 / 83092 getter answers bit-exact. Part 1 done ([below](#part-1-proof)) |
 
-Next: C5g part 1 step 2 (the port fed live by the recorder hooks, compared at each world step), then car against car.
+Next: C5g part 2, car against car (`+0x91bd40`, `+0x92bcb0`, the reduction `+0x169fd90`) on a drive where two cars touch.
 
 ## The core in one paragraph
 
@@ -864,3 +864,19 @@ Other wrapper bytes: `+0x280320f` (no finite rotation for new bodies: `+0x937f90
 `CSP_ORACLE_BREAK=<rva>p,...` on every wrapper function (the 166 of `re/scratch/taskC5g/fns.txt`, shared stubs left out) with `CSP_ORACLE_ISLANDS=<file>` records each outermost call (record 7: step, rva, thread, the four register and six stack arguments, xmm0..3, 8 words behind each pointer argument) and its return (record 8: rax, xmm0, 8 words behind rax and the call's rdx / r8). `CSP_ORACLE_BREAK_SETUP=1` logs the set-up too (step `usize::MAX - 1`).
 
 On a 20-step F2004 Spa drive: set-up 6 `createRigidBody` (`+0x92ed80`), 6 `addBoxCollider` (`+0x933cc0`), 1 `addMeshCollider` (`+0x9337b0`), 20 `createDistanceJoint` (`+0x92f050`) with 20 `setERPCFM` (`+0x928310`) and 4 reseats (`+0x92fbb0` → `+0x928350`), 1 fixed joint (`+0x92fd20`), 4 raycasters (`+0x92fe80`), 455 track meshes (`+0x92f0f0`), 16986 set-up rays (`+0x92fac0`, Embree, part 8); per step about 300 calls: force / torque adders, getters, 4 ray casts, 20 `setERPCFM`, 2 reseats and the world step (`+0x92e4a0`, called twice, the one from `dwrite+0x67ee13` steps). The DUMMY / COSMIC suspensions (`+0x591f50` / `+0x592090`) are chosen by suspensions.ini `TYPE`; both proof cars are DWB on both axles, so neither runs.
+
+### Part 1 proof
+
+`csp_core` (in `crates/rustyac-ode/src/csp_core.rs`) now also holds the collision state:
+
+- `addBoxCollider` (`+0x933cc0`): a box lower than the f32 floor `+0x27f9950` (0 unless EXTEND_COLLIDER_BOXES raised it at load) is made that high and its centre raised by half the difference; it goes in the car space of its key (`+0x91bdb0`, the +72 map: a simple space made in the car container the first time, its data the key), gets the body, an offset position, then `dGeomSetRotation` (`+0x1687da0`) with the body's own rotation, which sets the body's rotation and position again through `getBodyPosr` (`+0x1687900`).
+- `addMeshCollider` (`+0x9337b0`, the trimesh path; the convex path behind byte `+0x280320d` and the remove path are asserted off): offset rotation the 4x4's 3x3 transposed, offset position the mesh centre (0) through the 4x4 in f32, then into the car space when wrapper byte +154 is set and the key is not -569524499 (`+0x939880`).
+- `+0x933710` sets / clears wrapper byte +159 bits (bit 0: grip 0.4 in the joint maker), `+0x933750` sets mesh collider `i`'s collide bits.
+- `dGeomMoved` (`+0x16881b0`), `dSpaceAdd`, `dGeomSetBody` keep ODE's list orders: a moved geom goes to its space's head, the space to the container's head.
+- Placement: the car step (`+0x67e2e0`) calls `+0x1688ab0` on the car container before the cars step: `cleanGeoms` (`+0x1689360`) refreshes each dirty car space's dirty children (`+0x16886d0`, stopping at the first clean one) and the space. Nothing else places a geom; the world step moves each stepped body's geoms.
+- The world step: collision (`csp_collision`) with the static and dynamic steps alternating, the ODE step, the contact joints dropped.
+- The trimesh's own box (`+0x1694130`) is ported in `csp_collision` (`Shape::Mesh` carries the data's centre and half sides).
+
+Proof (`PORT=1 SETUP_LOG=1 BRK=<fns.txt and 1688ab0, kind p> bash re/scratch/taskC5g/brk.sh <car> 600`): `port: 1200 world steps compared, 0 differ` for `ks_ferrari_f2004` (95655 answers) and `rss_formula_rss_3_v6_2026` (83092 answers, one box). Taken from CSP: the track's trimeshes and hash table at the first world step (C5f's reader), and the car mesh's built OPCODE data (tree, box, TC flag) at the mesh collider's return; building OPCODE trees is not ported.
+
+Not reached by the proof cars: the dynamic collider (`+0x92ff50`), the split-along body (`+0x936950`, core +0x3298), DUMMY / COSMIC suspensions, a body offset (wrapper byte +156), reseat by point velocity. Rays (`+0x92fe80`, `+0x92b970`, `+0x92fb30`, `+0x92fac0`) are part 8. The collision callback `+0x587cc0` changes car state only (damage, events), part 9.

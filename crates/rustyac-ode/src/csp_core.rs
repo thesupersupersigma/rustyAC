@@ -7,6 +7,9 @@
 //! `bodies - 1 - id` (non-contact joints likewise, counted from the list's tail). Every value the
 //! car hands over is an f32 and every answer goes back as an f32, as the wrappers do.
 
+use crate::csp_collide::{Side, Unhandled};
+use crate::csp_collision::{joint_of, posr, product, refresh, Collision, Geom, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_DIRTY, GEOM_ENABLED, GEOM_POSR_BAD};
+use crate::csp_space::HashSpace;
 use crate::csp_step::{Joint, JointKind, WorldParams};
 use crate::csp_world::{CspWorld, WorldJoint};
 use crate::mass::Mass;
@@ -29,7 +32,26 @@ pub struct Core {
     distance: Vec<Option<DistanceJoint>>,
     /// joints made, contact joints aside (tail ids)
     made: usize,
+    /// the collision state: the car geoms made here, the track's handed over by [`Core::set_track`]
+    pub col: Collision,
+    track_set: bool,
+    /// per geom: its body id and its space (`CARS` the car container)
+    owner: Vec<Option<usize>>,
+    parent: Vec<Option<usize>>,
+    /// per body id: its geoms in the body's list order (newest first), the wrapper's bytes
+    /// +152..+159, its mesh colliders in made order (wrapper vector +48)
+    body_geoms: Vec<Vec<usize>>,
+    user: Vec<[u8; 8]>,
+    meshes: Vec<Vec<usize>>,
+    /// +0x91bdb0's map (+72): key → car space
+    spaces: Vec<(u32, usize)>,
 }
+
+/// The car container (`spaces + 8`, a hash space) as a parent.
+const CARS: usize = usize::MAX;
+/// `dxGeom`'s constructor flags: dirty, box out of date, enabled
+const NEW_GEOM: u32 = GEOM_DIRTY | GEOM_AABB_BAD | GEOM_ENABLED;
+const IDENTITY: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
 impl Default for Core {
     fn default() -> Self {
@@ -53,6 +75,29 @@ impl Core {
             max_angular_speed: f64::from_bits(0x7e37_e43c_8800_759c),
             distance: Vec::new(),
             made: 0,
+            col: Collision {
+                geoms: Vec::new(),
+                meshes: Vec::new(),
+                cars: Vec::new(),
+                cars_level: 0,
+                cars_count: 0,
+                track: Vec::new(),
+                track_level: 0,
+                track_count: 0,
+                table: HashSpace::default(),
+                pairs: Vec::new(),
+                static_step: false,
+                aabb_limit: 0,
+                full_box_box: false,
+                switches: Default::default(),
+            },
+            track_set: false,
+            owner: Vec::new(),
+            parent: Vec::new(),
+            body_geoms: Vec::new(),
+            user: Vec::new(),
+            meshes: Vec::new(),
+            spaces: Vec::new(),
         }
     }
 
@@ -113,6 +158,10 @@ impl Core {
             j.joint.b1 = j.joint.b1.map(|b| b + 1);
         }
         self.world.nodes.iter_mut().flatten().for_each(|n| n.1 = n.1.map(|b| b + 1));
+        self.body_geoms.push(Vec::new());
+        // +152 = 0x10000: byte +154 (mesh colliders go in the car space) set
+        self.user.push([0, 0, 1, 0, 0, 0, 0, 0]);
+        self.meshes.push(Vec::new());
         self.world.bodies.len() - 1
     }
 
@@ -132,8 +181,23 @@ impl Core {
 
     /// `setPosition` (+0x937460, `dBodySetPosition` +0x52c6d0).
     pub fn set_position(&mut self, id: usize, p: [f32; 3]) {
+        self.body_set_position(id, p.map(f64::from));
+    }
+
+    /// `dBodySetPosition` (+0x168c720): the body's geoms moved.
+    fn body_set_position(&mut self, id: usize, p: [f64; 3]) {
+        self.body_mut(id).pos[..3].copy_from_slice(&p);
+        self.geoms_moved(id);
+    }
+
+    /// `dBodySetRotation` (+0x168c7c0): `r` orthogonalised, the quaternion from `r` as given,
+    /// the body's geoms moved.
+    fn body_set_rotation(&mut self, id: usize, r: [f64; 12]) {
         let body = self.body_mut(id);
-        body.pos[..3].copy_from_slice(&p.map(f64::from));
+        body.r = r;
+        orthogonalize(&mut body.r);
+        body.q = normalize4(q_from_r(&r));
+        self.geoms_moved(id);
     }
 
     /// `setRotation` (+0x937050): the f32 4x4's rows 1 (up) and 2 (forward) made an orthonormal
@@ -146,10 +210,7 @@ impl Core {
         let nd = 1.0 / ((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]).sqrt();
         let nc = 1.0 / ((c[0] * c[0] + c[1] * c[1]) + c[2] * c[2]).sqrt();
         let r = [nc * c[0], nd * d[0], nf * fx, 0.0, nc * c[1], nd * d[1], nf * fy, 0.0, nc * c[2], nd * d[2], nf * fz, 0.0];
-        let body = self.body_mut(id);
-        body.r = r;
-        orthogonalize(&mut body.r);
-        body.q = normalize4(q_from_r(&r));
+        self.body_set_rotation(id, r);
     }
 
     /// `stop` (+0x937910): velocities and accumulators zeroed.
@@ -338,9 +399,297 @@ impl Core {
         *self.dball(id).4 = d.sqrt();
     }
 
-    /// The world step (+0x92e4a0 when it steps): the ODE step of `h` (an f32 widened).
-    pub fn step(&mut self, h: f32) {
-        self.world.step(h as f64);
+    /// The world step (+0x92e4a0 when it steps): once the track is in, the collision (+0x92c2b0)
+    /// and its contact joints; the ODE step of `h` (an f32 widened); the contact joints emptied
+    /// (+0x168ccc0); each stepped body's geoms moved; the static and dynamic steps alternate.
+    pub fn step(&mut self, h: f32) -> Result<(), Unhandled> {
+        if self.track_set {
+            self.sync_sides();
+            let joints = self.world.collide(&mut self.col)?;
+            self.world.add_contacts(joints.iter().map(|j| joint_of(j, false)).collect());
+        }
+        let islands = self.world.step(h as f64);
+        let w = &mut self.world;
+        let n = w.joints.iter().take_while(|j| matches!(j.joint.kind, JointKind::Contact { .. })).count();
+        w.joints.drain(..n);
+        for nodes in &mut w.nodes {
+            nodes.retain(|x| x.0 >= n);
+            nodes.iter_mut().for_each(|x| x.0 -= n);
+        }
+        let count = self.world.bodies.len();
+        for (bodies, _) in islands {
+            for b in bodies {
+                self.geoms_moved(count - 1 - b);
+            }
+        }
+        if self.track_set {
+            self.col.static_step = !self.col.static_step;
+        }
+        Ok(())
+    }
+
+    /// Each car geom's body index and the user-data bits the joint maker reads.
+    fn sync_sides(&mut self) {
+        let n = self.world.bodies.len();
+        for (g, owner) in self.owner.iter().enumerate() {
+            if let Some(id) = *owner {
+                let u = self.user[id];
+                let side = &mut self.col.geoms[g].side;
+                side.body = Some(n - 1 - id);
+                side.grip = u[7] & 1 != 0;
+                side.special = u[0] != 0 && u[1] == 0;
+            }
+        }
+        self.col.cars_count = self.col.cars.len() as i32;
+    }
+
+    /// The car step's "Prepare spaces" (+0x67e2e0 → +0x1688ab0 on the car container): its
+    /// `cleanGeoms` (+0x1689360) over every child, each dirty car space cleaned in turn
+    /// (+0x16886d0, the dirty children at its list's head), poses and boxes out of date refreshed.
+    pub fn prepare(&mut self) -> Result<(), Unhandled> {
+        self.sync_sides();
+        let bodies = &self.world.bodies;
+        let geoms = &mut self.col.geoms;
+        for &s in &self.col.cars {
+            if geoms[s].flags & GEOM_DIRTY == 0 {
+                continue;
+            }
+            let Shape::Space { children } = &geoms[s].shape else { return Err(Unhandled("a car container child not a space")) };
+            for g in children.clone() {
+                if geoms[g].flags & GEOM_DIRTY == 0 {
+                    break;
+                }
+                refresh(geoms, g, bodies)?;
+                geoms[g].flags &= !GEOM_DIRTY;
+            }
+            refresh(geoms, s, bodies)?;
+            geoms[s].flags &= !GEOM_DIRTY;
+        }
+        if self.col.track.iter().any(|&t| self.col.geoms[t].flags & GEOM_DIRTY != 0) {
+            return Err(Unhandled("a track geom moved"));
+        }
+        Ok(())
+    }
+
+    /// The track as CSP loaded it (its trimeshes, their models and hash table) and the world's
+    /// collision settings: collision on from here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_track(&mut self, mut geoms: Vec<Geom>, meshes: Vec<TrackMesh>, track_level: i32, track_count: i32, levels: (i32, i32), cars_level: i32, static_step: bool, aabb_limit: i32, full_box_box: bool) {
+        let (g0, m0) = (self.col.geoms.len(), self.col.meshes.len());
+        for g in &mut geoms {
+            if let Shape::Mesh { mesh: Some(m), .. } = &mut g.shape {
+                *m += m0;
+            }
+        }
+        let aabbs: Vec<[f64; 6]> = geoms.iter().map(|g| g.aabb).collect();
+        let c = &mut self.col;
+        c.table = HashSpace::build(&aabbs, levels.0, levels.1);
+        c.track = (g0..g0 + geoms.len()).collect();
+        self.owner.extend(geoms.iter().map(|_| None));
+        self.parent.extend(geoms.iter().map(|_| None));
+        c.geoms.extend(geoms);
+        c.meshes.extend(meshes);
+        (c.track_level, c.track_count, c.cars_level, c.static_step, c.aabb_limit, c.full_box_box) = (track_level, track_count, cars_level, static_step, aabb_limit, full_box_box);
+        self.track_set = true;
+    }
+
+    /// A new geom (`dxGeom`'s constructor, no space): flags dirty, box out of date, enabled,
+    /// placeable (8) but for a space; category and collide bits all set.
+    fn new_geom(&mut self, id: usize, class: i32, shape: Shape) -> usize {
+        let side = Side { class, no_data: true, body: None, grip: false, special: false };
+        let flags = if class == 11 { NEW_GEOM } else { NEW_GEOM | 8 };
+        self.col.geoms.push(Geom { id, side, flags, category: !0, collide: !0, offset: None, pos: [0.0; 3], r: [0.0; 12], aabb: [0.0; 6], shape });
+        self.owner.push(None);
+        self.parent.push(None);
+        self.col.geoms.len() - 1
+    }
+
+    /// `dGeomMoved` (+0x16881b0): an offset geom's pose out of date; up the spaces while the geom
+    /// was clean: marked dirty with its box, moved to its space's head; the rest marked.
+    fn moved(&mut self, g: usize) {
+        let geoms = &mut self.col.geoms;
+        if geoms[g].offset.is_some() {
+            geoms[g].flags |= GEOM_POSR_BAD;
+        }
+        let mut a = Some(g);
+        while let Some(x) = a {
+            let Some(p) = self.parent[x] else { break };
+            if geoms[x].flags & GEOM_DIRTY != 0 {
+                break;
+            }
+            geoms[x].flags |= GEOM_DIRTY | GEOM_AABB_BAD;
+            let list = match p {
+                CARS => &mut self.col.cars,
+                _ => match &mut geoms[p].shape {
+                    Shape::Space { children } => children,
+                    _ => unreachable!("a parent not a space"),
+                },
+            };
+            list.retain(|&k| k != x);
+            list.insert(0, x);
+            // the container's own flags are never read
+            a = (p != CARS).then_some(p);
+        }
+        while let Some(x) = a {
+            geoms[x].flags |= GEOM_DIRTY | GEOM_AABB_BAD;
+            a = self.parent[x].filter(|&p| p != CARS);
+        }
+    }
+
+    /// Each geom of body `id`, in the body's list order.
+    fn geoms_moved(&mut self, id: usize) {
+        for g in self.body_geoms[id].clone() {
+            self.moved(g);
+        }
+    }
+
+    /// `dSpaceAdd` (vtable +40): at the list's head, the space moved.
+    fn space_add(&mut self, space: usize, g: usize) {
+        self.parent[g] = Some(space);
+        let list = match space {
+            CARS => &mut self.col.cars,
+            _ => match &mut self.col.geoms[space].shape {
+                Shape::Space { children } => children,
+                _ => unreachable!("not a space"),
+            },
+        };
+        list.insert(0, g);
+        if space != CARS {
+            self.moved(space);
+        }
+    }
+
+    /// +0x91bdb0 on the map (+72) path: the car space of `key`, made (`dSimpleSpaceCreate` in
+    /// the car container, +0x168a3f0) the first time.
+    fn car_space(&mut self, key: u32) -> usize {
+        if let Some(&(_, s)) = self.spaces.iter().find(|x| x.0 == key) {
+            return s;
+        }
+        let s = self.new_geom(0, 11, Shape::Space { children: Vec::new() });
+        // the space's data is its key (a set low bit counts as no data)
+        self.col.geoms[s].side.no_data = key == 0 || key & 1 != 0;
+        self.space_add(CARS, s);
+        self.spaces.push((key, s));
+        s
+    }
+
+    /// `dGeomSetBody` (+0x1687a40): the body's pose shared, at the head of its geom list, moved.
+    fn geom_set_body(&mut self, g: usize, id: usize) {
+        self.owner[g] = Some(id);
+        self.body_geoms[id].insert(0, g);
+        let b = self.body(id);
+        let (pos, r) = ([b.pos[0], b.pos[1], b.pos[2]], b.r);
+        let geom = &mut self.col.geoms[g];
+        (geom.pos, geom.r) = (pos, r);
+        self.moved(g);
+    }
+
+    /// `dGeomCreateOffset` (+0x1687f40) when the geom has none: zero, identity, pose out of date.
+    fn create_offset(&mut self, g: usize) {
+        let geom = &mut self.col.geoms[g];
+        if geom.offset.is_none() {
+            geom.offset = Some(([0.0; 3], IDENTITY));
+            geom.flags |= GEOM_POSR_BAD;
+        }
+    }
+
+    /// `dGeomSetOffsetPosition` (+0x1688030).
+    fn set_offset_position(&mut self, g: usize, p: [f64; 3]) {
+        self.create_offset(g);
+        self.col.geoms[g].offset.as_mut().unwrap().0 = p;
+        self.moved(g);
+    }
+
+    /// `dGeomSetRotation` (+0x1687da0) of an offset geom: the body turned so the geom's final
+    /// rotation is `r` at its current final position (`getBodyPosr` +0x1687900).
+    fn geom_set_rotation(&mut self, g: usize, r: [f64; 12]) -> Result<(), Unhandled> {
+        let id = self.owner[g].expect("a geom on a body");
+        self.sync_sides();
+        let geom = &mut self.col.geoms[g];
+        posr(geom, &self.world.bodies)?;
+        let (o, or) = geom.offset.expect("an offset");
+        let t = [or[0], or[4], or[8], 0.0, or[1], or[5], or[9], 0.0, or[2], or[6], or[10], 0.0];
+        let br = product(&r, &t);
+        let p = geom.pos;
+        let bp = [
+            p[0] - ((o[1] * br[1] + o[0] * br[0]) + o[2] * br[2]),
+            p[1] - ((o[1] * br[5] + o[0] * br[4]) + o[2] * br[6]),
+            p[2] - ((o[1] * br[9] + o[0] * br[8]) + o[2] * br[10]),
+        ];
+        self.body_set_rotation(id, br);
+        self.body_set_position(id, bp);
+        Ok(())
+    }
+
+    /// `addBoxCollider` (+0x933cc0): a box of f32 sides `size` at `pos` in body `id`'s frame, in
+    /// the car space of `key`; a box lower than `min_height` (+0x27f9950, raised at load by
+    /// EXTEND_COLLIDER_BOXES) is made that high, its centre raised by half the difference. `gid` is
+    /// CSP's geom (what contacts name it by).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_box_collider(&mut self, id: usize, pos: [f32; 3], size: [f32; 3], category: u32, collide: u32, key: u32, min_height: f32, gid: usize) -> Result<usize, Unhandled> {
+        let (mut y, mut h) = (pos[1], size[1]);
+        if !(h >= min_height) {
+            y += (min_height - h) * 0.5;
+            h = min_height;
+        }
+        let sides = [size[0] as f64, h as f64, size[2] as f64];
+        if sides.contains(&0.0) {
+            return Err(Unhandled("a box with a zero side"));
+        }
+        let space = self.car_space(key);
+        let g = self.new_geom(gid, 1, Shape::Box { sides, tc: Default::default() });
+        self.space_add(space, g);
+        self.geom_set_body(g, id);
+        self.set_offset_position(g, [pos[0] as f64, y as f64, pos[2] as f64]);
+        let r = self.body(id).r;
+        self.geom_set_rotation(g, r)?;
+        (self.col.geoms[g].collide, self.col.geoms[g].category) = (collide, category);
+        Ok(g)
+    }
+
+    /// `addMeshCollider` (+0x9337b0, the trimesh path): a trimesh (`mesh` and the shape's model
+    /// facts taken as CSP built them) on body `id`, its offset from the f32 4x4 `m` (rows: side,
+    /// up, forward, position), then into the car space of `key` (+0x939880).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_mesh_collider(&mut self, id: usize, m: &[f32; 16], category: u32, collide: u32, key: u32, mesh: Option<TrackMesh>, shape: Shape, gid: usize) -> usize {
+        let Shape::Mesh { tc_on, key: tc_key, bounds, .. } = shape else { panic!("a trimesh") };
+        let mesh = mesh.map(|m| {
+            self.col.meshes.push(m);
+            self.col.meshes.len() - 1
+        });
+        // shortcut: AABBTest walks the tree only at an identity pose, which a car's mesh never
+        // has once placed; make tree_test follow the pose if a car ever sits at one.
+        let g = self.new_geom(gid, 8, Shape::Mesh { mesh, tc_on, key: tc_key, tree_test: false, bounds });
+        // geom +16 is the collision mesh object
+        self.col.geoms[g].side.no_data = false;
+        self.geom_set_body(g, id);
+        self.create_offset(g);
+        let mf = m.map(f64::from);
+        self.col.geoms[g].offset.as_mut().unwrap().1 = [mf[0], mf[4], mf[8], 0.0, mf[1], mf[5], mf[9], 0.0, mf[2], mf[6], mf[10], 0.0];
+        self.moved(g);
+        // the mesh's centre (object +44, zero on the trimesh path) through `m`, in f32
+        let p: [f64; 3] = std::array::from_fn(|j| (((0.0f32 * m[j] + 0.0 * m[4 + j]) + 0.0 * m[8 + j]) + m[12 + j]) as f64);
+        self.set_offset_position(g, p);
+        (self.col.geoms[g].collide, self.col.geoms[g].category) = (collide, category);
+        self.meshes[id].push(g);
+        if key as i32 != -569_524_499 && self.user[id][2] != 0 {
+            let space = self.car_space(key);
+            self.space_add(space, g);
+        }
+        g
+    }
+
+    /// +0x933710 (cphys slot): the wrapper's byte +159 bits `mask` set or cleared.
+    pub fn set_user_bits(&mut self, id: usize, mask: u8, on: bool) {
+        let u = &mut self.user[id][7];
+        *u = if on { *u | mask } else { *u & !mask };
+    }
+
+    /// +0x933750: mesh collider `i`'s collide bits.
+    pub fn set_mesh_collide(&mut self, id: usize, i: usize, collide: u32) {
+        if let Some(&g) = self.meshes[id].get(i) {
+            self.col.geoms[g].collide = collide;
+        }
     }
 
     /// `setERPCFM` on a distance joint (+0x928310): values <= 0 are ignored.
@@ -605,5 +954,21 @@ mod tests {
         core.set_rotation(b, &m);
         assert_eq!(core.body(b).q, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(core.world_matrix(b), m);
+    }
+
+    #[test]
+    fn box_collider_placed_by_prepare_after_a_move() {
+        let mut core = Core::new();
+        let b = core.create_body(false);
+        let g = core.add_box_collider(b, [0.0, 0.1, 0.0], [2.0, 0.2, 4.0], 4, 1, 1, 0.5, 7).unwrap();
+        core.set_position(b, [1.0, 2.0, 3.0]);
+        core.prepare().unwrap();
+        let geom = &core.col.geoms[g];
+        // the 0.2 high box made 0.5 high, its centre raised by 0.15
+        assert_eq!(geom.pos[0], 1.0);
+        assert!((geom.pos[1] - 2.25).abs() < 1e-6 && (geom.aabb[3] - geom.aabb[2] - 0.5).abs() < 1e-6);
+        assert_eq!(geom.flags & (GEOM_DIRTY | GEOM_POSR_BAD | GEOM_AABB_BAD), 0);
+        // the space was moved to the container's head and cleaned with it
+        assert_eq!(core.col.geoms[core.col.cars[0]].flags & GEOM_DIRTY, 0);
     }
 }

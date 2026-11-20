@@ -35,9 +35,10 @@ pub enum Shape {
     /// a box: sides (+0xa0) and its OPCODE temporal-coherence block (+0x98)
     Box { sides: [f64; 3], tc: BoxTc },
     /// a trimesh: index into [`Collision::meshes`] (none for a tree kind not ported), `doBoxTC`
-    /// (+0xc9), its TC key (data +0xf0) and
+    /// (+0xc9), its TC key (data +0xf0),
     /// whether its `AABBTest` (+0x1693970) walks the tree (the switch on, a tree, an identity pose)
-    Mesh { mesh: Option<usize>, tc_on: bool, key: u32, tree_test: bool },
+    /// and the data's box: centre (+0xa0) and half sides (+0xc0)
+    Mesh { mesh: Option<usize>, tc_on: bool, key: u32, tree_test: bool, bounds: [f64; 6] },
     /// a simple space: children in list order
     Space { children: Vec<usize> },
 }
@@ -105,7 +106,7 @@ fn enabled(g: &Geom) -> bool {
 }
 
 /// The pose from the body and the offset (+0x1686600) when `GEOM_POSR_BAD`.
-fn posr(g: &mut Geom, bodies: &[Body<f64>]) -> Result<(), Unhandled> {
+pub fn posr(g: &mut Geom, bodies: &[Body<f64>]) -> Result<(), Unhandled> {
     if g.flags & GEOM_POSR_BAD == 0 {
         return Ok(());
     }
@@ -115,15 +116,25 @@ fn posr(g: &mut Geom, bodies: &[Body<f64>]) -> Result<(), Unhandled> {
     for i in 0..3 {
         let r = 4 * i;
         g.pos[i] = bp[i] + ((o[1] * a[r + 1] + o[0] * a[r]) + o[2] * a[r + 2]);
-        g.r[r] = (a[r] * orr[0] + a[r + 1] * orr[4]) + a[r + 2] * orr[8];
-        // clippy sees a + b and b + a as the same block; the order is CSP's (NaN sign follows the first operand)
-        #[allow(clippy::if_same_then_else)]
-        let m = if i < 2 { a[r + 1] * orr[5] + a[r] * orr[1] } else { a[r] * orr[1] + a[r + 1] * orr[5] };
-        g.r[r + 1] = m + a[r + 2] * orr[9];
-        g.r[r + 2] = (a[r + 1] * orr[6] + a[r] * orr[2]) + a[r + 2] * orr[10];
     }
+    g.r = product(a, &orr);
     g.flags &= !GEOM_POSR_BAD;
     Ok(())
+}
+
+/// The rotation product `a b` of +0x1686440, in its operand order.
+pub fn product(a: &[f64; 12], b: &[f64; 12]) -> [f64; 12] {
+    let mut out = [0.0; 12];
+    for i in 0..3 {
+        let r = 4 * i;
+        out[r] = (a[r] * b[0] + a[r + 1] * b[4]) + a[r + 2] * b[8];
+        // clippy sees a + b and b + a as the same block; the order is CSP's (NaN sign follows the first operand)
+        #[allow(clippy::if_same_then_else)]
+        let m = if i < 2 { a[r + 1] * b[5] + a[r] * b[1] } else { a[r] * b[1] + a[r + 1] * b[5] };
+        out[r + 1] = m + a[r + 2] * b[9];
+        out[r + 2] = (a[r + 1] * b[6] + a[r] * b[2]) + a[r + 2] * b[10];
+    }
+    out
 }
 
 /// `recomputeAABB` of `geoms[i]`: the pose, then the class's `computeAABB` when `GEOM_AABB_BAD`.
@@ -164,7 +175,17 @@ pub fn refresh(geoms: &mut [Geom], i: usize, bodies: &[Body<f64>]) -> Result<(),
             }
             a
         }
-        Shape::Mesh { .. } => return Err(Unhandled("a trimesh's box")),
+        // +0x1694130: the data's box turned by the pose
+        Shape::Mesh { bounds: [c0, c1, c2, e0, e1, e2], .. } => {
+            let (p, r) = (g.pos, g.r);
+            let t0 = (c0 * r[0] + r[1] * c1) + r[2] * c2;
+            let t1 = (c1 * r[5] + r[4] * c0) + c2 * r[6];
+            let t2 = (c1 * r[9] + r[8] * c0) + c2 * r[10];
+            let d0 = ((e0 * r[0]).abs() + (e1 * r[1]).abs()) + (e2 * r[2]).abs();
+            let d1 = ((e1 * r[5]).abs() + (r[4] * e0).abs()) + (e2 * r[6]).abs();
+            let d2 = ((e1 * r[9]).abs() + (r[8] * e0).abs()) + (e2 * r[10]).abs();
+            [(t0 + p[0]) - d0, (t0 + p[0]) + d0, (t1 + p[1]) - d1, (t1 + p[1]) + d1, (t2 + p[2]) - d2, (t2 + p[2]) + d2]
+        }
     };
     let g = &mut geoms[i];
     g.aabb = aabb;

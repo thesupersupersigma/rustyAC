@@ -22,6 +22,11 @@ pub(crate) enum Expect {
     Out(usize, Vec<f32>, bool),
     /// an f32 returned in xmm0
     Float(f32, bool),
+    /// the port's box geom: named by CSP's at the return
+    Geom(usize),
+    /// a mesh collider on (body, wrapper, matrix, category, collide, key): made at the return,
+    /// from the trimesh data CSP built
+    Mesh(usize, usize, [f32; 16], u32, u32, u32),
 }
 
 struct Port {
@@ -37,6 +42,9 @@ struct Port {
     worlds: usize,
     differ: usize,
     log: String,
+    track: bool,
+    /// the first thing the port could not do; nothing more is done once set
+    broken: Option<String>,
 }
 
 static PORT: Mutex<Option<Port>> = Mutex::new(None);
@@ -77,7 +85,13 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
         worlds: 0,
         differ: 0,
         log: String::new(),
+        track: false,
+        broken: None,
     });
+    if port.broken.is_some() {
+        return Expect::Nothing;
+    }
+    let dll = crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed);
     let b = body_of(&port.bodies, rcx);
     let expect = match (rva, b) {
         (0x92ed80, _) => {
@@ -101,10 +115,28 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
             port.core.set_erp_cfm(port.joints[&rcx], xmm(1), xmm(2));
             Expect::Nothing
         }
+        (0x1688ab0, _) => {
+            // "Prepare spaces" on the car container (the track's is never dirty)
+            let v6 = std::ptr::read_unaligned((std::ptr::read_unaligned((dll + 0x281_7690) as *const usize) + 16) as *const usize);
+            if rcx != std::ptr::read_unaligned((v6 + 8) as *const usize) {
+                *port.ignored.entry(rva).or_default() += 1;
+                return Expect::Nothing;
+            }
+            if let Err(e) = port.core.prepare() {
+                port.broken = Some(format!("prepare: {}", e.0));
+            }
+            Expect::Nothing
+        }
         (0x92e4a0, _) => {
             port.worlds += 1;
+            if !port.track {
+                match crate::collision::port_track(dll, rcx) {
+                    Ok(t) => port.core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box),
+                    Err(e) => port.broken = Some(format!("track: {}", e.0)),
+                }
+                port.track = true;
+            }
             compare(port, rcx, step);
-            let dll = crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed);
             if *((dll + 0x280_3210) as *const u8) != 0 || *((dll + 0x27f_92b6) as *const u8) != 0 {
                 // the late world step's byte: this call does nothing
                 Expect::Nothing
@@ -131,6 +163,8 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
                 0x936f00 => c.add_force_at_local_pos(b, v3(rdx), v3(r8)),
                 0x936fc0 => c.add_force_at_pos(b, v3(rdx), v3(r8)),
                 0x934100 => c.add_torque(b, v3(rdx)),
+                0x933710 => c.set_user_bits(b, rdx as u8, r8 as u8 != 0),
+                0x933750 => c.set_mesh_collide(b, rdx as u32 as usize, r8 as u32),
                 _ => {}
             }
             let setup = step == crate::SETUP;
@@ -153,7 +187,21 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
                 0x933e30 => out(&c.point_velocity(b, v3(r8))),
                 0x936db0 => out(&c.local_point_velocity(b, v3(r8))),
                 0x9378d0 => Expect::Float(c.mass(b), setup),
-                0x937780 | 0x937460 | 0x937050 | 0x937910 | 0x936ea0 | 0x936f00 | 0x936fc0 | 0x934100 => Expect::Nothing,
+                0x933cc0 => {
+                    let min_height = *((dll + 0x27f_9950) as *const f32);
+                    match c.add_box_collider(b, v3(rdx), v3(r8), r9 as u32, stack(0) as u32, stack(1) as u32, min_height, 0) {
+                        Ok(g) => Expect::Geom(g),
+                        Err(e) => {
+                            port.broken = Some(format!("addBoxCollider: {}", e.0));
+                            Expect::Nothing
+                        }
+                    }
+                }
+                0x9337b0 => {
+                    assert!(stack(0) as u32 != 0 && *((dll + 0x280_320d) as *const u8) == 0, "a mesh collider removed or convex: not ported");
+                    Expect::Mesh(b, rcx, f32s(stack(1), 16).try_into().unwrap(), stack(2) as u32, stack(3) as u32, stack(4) as u32)
+                }
+                0x937780 | 0x937460 | 0x937050 | 0x937910 | 0x936ea0 | 0x936f00 | 0x936fc0 | 0x934100 | 0x933710 | 0x933750 => Expect::Nothing,
                 _ => {
                     *port.ignored.entry(rva).or_default() += 1;
                     return Expect::Nothing;
@@ -176,7 +224,25 @@ pub(crate) unsafe fn leave(rva: usize, rax: usize, xmm0: usize, expect: Expect) 
     let (ok, setup) = match expect {
         Expect::Nothing => return,
         Expect::Step(h) => {
-            port.core.step(h);
+            if let Err(e) = port.core.step(h) {
+                port.broken = Some(format!("step: {}", e.0));
+            }
+            return;
+        }
+        Expect::Geom(g) => {
+            port.core.col.geoms[g].id = rax;
+            return;
+        }
+        Expect::Mesh(b, w, m, category, collide, key) => {
+            let r = |a: usize| std::ptr::read_unaligned(a as *const usize);
+            // the wrapper's last mesh collider (+48 vector of 16-byte entries): its geom at +16
+            let geom = r(r(r(w + 56) - 16) + 16);
+            match crate::collision::port_mesh(crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed), geom) {
+                Ok((mesh, shape)) => {
+                    port.core.add_mesh_collider(b, &m, category, collide, key, mesh, shape, geom);
+                }
+                Err(e) => port.broken = Some(format!("mesh collider: {}", e.0)),
+            }
             return;
         }
         Expect::Body(b) => {
@@ -266,6 +332,36 @@ unsafe fn compare(port: &mut Port, core: usize, step: usize) {
             bad.push(format!("joint {i}:\n    csp  {a}\n    port {b}"));
         }
     }
+    if port.track {
+        let dll = crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed);
+        match crate::collision::port_cars(dll, core) {
+            Ok((csp, pairs, static_step)) => {
+                let c = &port.core.col;
+                let tc = |g: usize| match &c.geoms[g].shape {
+                    rustyac_ode::csp_collision::Shape::Box { tc, .. } => crate::btl::tc_bits(tc),
+                    _ => Vec::new(),
+                };
+                let mine: Vec<String> = c.cars.iter().map(|&s| crate::collision::describe(&c.geoms, s, &tc)).collect();
+                if csp.len() != mine.len() {
+                    bad.push(format!("{} car spaces, port {}", csp.len(), mine.len()));
+                }
+                for (i, (a, b)) in csp.iter().zip(&mine).enumerate() {
+                    if a != b {
+                        bad.push(format!("car space {i}:
+    csp  {a}
+    port {b}"));
+                    }
+                }
+                let name = |g: usize| if matches!(c.geoms[g].shape, rustyac_ode::csp_collision::Shape::Space { .. }) { 0 } else { c.geoms[g].id };
+                let theirs: Vec<(usize, usize)> = pairs.iter().map(|&(a, b)| (crate::collision::space_or(a), crate::collision::space_or(b))).collect();
+                let ours: Vec<(usize, usize)> = c.pairs.iter().map(|&(a, b)| (name(a), name(b))).collect();
+                if theirs != ours || static_step != c.static_step {
+                    bad.push(format!("pairs / static step: csp {theirs:x?} {static_step} port {ours:x?} {}", c.static_step));
+                }
+            }
+            Err(e) => bad.push(format!("car spaces: {}", e.0)),
+        }
+    }
     port.differ += bad.len();
     if !bad.is_empty() && port.log.len() < 20000 {
         port.log.push_str(&format!("  world step {} (step {step}): {} differ\n", port.worlds, bad.len()));
@@ -280,5 +376,7 @@ pub(crate) fn finish() -> String {
     let Some(p) = guard.as_ref() else { return String::new() };
     let calls: Vec<String> = p.calls.iter().map(|(rva, (n, bad))| format!("{rva:x} {n}/{bad}")).collect();
     let ignored: Vec<String> = p.ignored.iter().map(|(rva, n)| format!("{rva:x} {n}")).collect();
-    format!("port: {} world steps compared, {} differ; answers set-up {} ({} wrong), steps {} ({} wrong); calls (n/wrong) {}; not ported {}\n{}", p.worlds, p.differ, p.answers[0], p.wrong[0], p.answers[1], p.wrong[1], calls.join(" "), ignored.join(" "), p.log)
+    let broken = p.broken.as_ref().map_or(String::new(), |b| format!("port stopped: {b}
+"));
+    broken + &format!("port: {} world steps compared, {} differ; answers set-up {} ({} wrong), steps {} ({} wrong); calls (n/wrong) {}; not ported {}\n{}", p.worlds, p.differ, p.answers[0], p.wrong[0], p.answers[1], p.wrong[1], calls.join(" "), ignored.join(" "), p.log)
 }

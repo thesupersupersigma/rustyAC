@@ -103,7 +103,8 @@ unsafe fn geom(st: &mut State, dll: usize, g: usize, body_index: &dyn Fn(usize) 
             let identity = [0usize, 1, 2, 5, 6, 8, 10, 12, 13].iter().all(|&i| same(posr[i], 0.0)) && [4usize, 9, 14].iter().all(|&i| same(posr[i], 1.0));
             let tree = read::<usize>(data + 0x60);
             let tree_test = identity && read::<u32>(data + 0x50) & 3 == 2 && tree != 0 && read::<u32>(tree + 8) != 0;
-            Shape::Mesh { mesh, tc_on: read::<u8>(g + 0xc9) != 0, key: read(data + 0xf0), tree_test }
+            let [c, e]: [[f64; 3]; 2] = [read(data + 0xa0), read(data + 0xc0)];
+            Shape::Mesh { mesh, tc_on: read::<u8>(g + 0xc9) != 0, key: read(data + 0xf0), tree_test, bounds: [c[0], c[1], c[2], e[0], e[1], e[2]] }
         }
         11 => {
             let mut children = Vec::new();
@@ -467,4 +468,110 @@ pub(crate) fn finish() -> String {
     s.push_str(&st.log);
     st.notes.iter().for_each(|n| s.push_str(&format!("  {n}\n")));
     s
+}
+
+/// Task C5g's port: the track and the world's collision settings as CSP loaded them.
+pub(crate) struct PortTrack {
+    pub geoms: Vec<Geom>,
+    pub meshes: Vec<TrackMesh>,
+    pub level: i32,
+    pub count: i32,
+    pub levels: (i32, i32),
+    pub cars_level: i32,
+    pub static_step: bool,
+    pub aabb_limit: i32,
+    pub full_box_box: bool,
+}
+
+/// The port's reads keep their own mesh cache.
+static PORT_STATE: Mutex<Option<State>> = Mutex::new(None);
+
+/// The track hash space's trimeshes (`w` CSP's world wrapper), with the checks `state` makes.
+pub(crate) unsafe fn port_track(dll: usize, w: usize) -> Result<PortTrack, Unhandled> {
+    if read::<u8>(dll + 0x280_3218 + 5) == 0 {
+        return Err(Unhandled("collision v1"));
+    }
+    let v11 = read::<usize>(w + 0x20);
+    let [track, cars, other, other2] = [0, 8, 0x10, 0x18].map(|o| read::<usize>(v11 + o));
+    if other != 0 || other2 != 0 || read::<i32>(track + 8) != 12 || read::<i32>(cars + 8) != 12 {
+        return Err(Unhandled("spaces of another shape"));
+    }
+    if read::<u32>(w + 0x58) != 0 {
+        return Err(Unhandled("kept pairs before the first step"));
+    }
+    let mut st = State::default();
+    let (mut geoms, mut ptrs) = (Vec::new(), Vec::new());
+    for t in list(read(track + 0xa8), 0x38) {
+        geom(&mut st, dll, t, &|_| None, &mut geoms, &mut ptrs)?;
+    }
+    if geoms.iter().any(|g| g.side.body.is_some() || !matches!(g.shape, Shape::Mesh { .. })) {
+        return Err(Unhandled("a track geom on a body or not a trimesh"));
+    }
+    let collider = std::mem::transmute::<usize, extern "C" fn() -> usize>(dll + 0x16c_b700)() + 0x4870;
+    Ok(PortTrack {
+        geoms,
+        meshes: std::mem::take(&mut st.meshes),
+        level: read(track + 0xb4),
+        count: read(track + 0xa0),
+        levels: (read(track + 0xd0), read(track + 0xd4)),
+        cars_level: read(cars + 0xb4),
+        static_step: read::<u32>(w + 0x4c) != 0,
+        aabb_limit: read(dll + 0x27f_995c),
+        full_box_box: read::<u8>(collider + 0x144) != 0,
+    })
+}
+
+/// A geom tree as text for the port's compare: every field the collision reads, children in
+/// list order (a space's own pointer left out), a box's OPCODE cache.
+pub(crate) fn describe(geoms: &[Geom], g: usize, tc: &dyn Fn(usize) -> Vec<u64>) -> String {
+    let x = &geoms[g];
+    let head = format!("flags {:#x} cat {:#x} col {:#x} aabb {:?} side {:?}", x.flags, x.category, x.collide, x.aabb, x.side);
+    let pose = format!("offset {:?} pos {:?} r {:?}", x.offset, x.pos, x.r);
+    match &x.shape {
+        Shape::Space { children } => format!("space {head} [{}]", children.iter().map(|&k| describe(geoms, k, tc)).collect::<Vec<_>>().join("; ")),
+        Shape::Box { sides, .. } => format!("box {:#x} {head} {pose} sides {sides:?} tc {:?}", x.id, tc(g)),
+        Shape::Mesh { tc_on, key, tree_test, bounds, .. } => format!("mesh {:#x} {head} {pose} tc {tc_on} key {key:#x} tree {tree_test} bounds {bounds:?}", x.id),
+    }
+}
+
+/// The car spaces described, the kept pairs, the static step's flag.
+type Cars = (Vec<String>, Vec<(usize, usize)>, bool);
+
+/// CSP's car spaces (`w` the world wrapper) as [`Cars`].
+pub(crate) unsafe fn port_cars(dll: usize, w: usize) -> Result<Cars, Unhandled> {
+    let mut guard = PORT_STATE.lock().unwrap();
+    let st = guard.get_or_insert_with(Default::default);
+    let ode = read::<usize>(w + 0x10);
+    let bodies = list(read(ode + 0x28), 0x10);
+    let body_index = |b: usize| bodies.iter().position(|&x| x == b);
+    let cars = read::<usize>(read::<usize>(w + 0x20) + 8);
+    let (mut geoms, mut ptrs) = (Vec::new(), Vec::new());
+    let mut roots = Vec::new();
+    for s in list(read(cars + 0xa8), 0x38) {
+        roots.push(geom(st, dll, s, &body_index, &mut geoms, &mut ptrs)?);
+    }
+    // the flags as they are (`geom` marks the car geoms dirty for C5f's compare)
+    for (g, &p) in geoms.iter_mut().zip(&ptrs) {
+        g.flags = read::<u32>(p + 0xc);
+        if matches!(g.shape, Shape::Space { .. }) {
+            g.id = 0;
+        }
+    }
+    let tc = |g: usize| crate::btl::tc_bits(&crate::btl::read_tc(ptrs[g], 0));
+    let base = read::<usize>(w + 0x50);
+    let pairs = (0..read::<u32>(w + 0x58) as usize).map(|i| (read(base + 16 * i), read(base + 16 * i + 8))).collect();
+    Ok((roots.iter().map(|&s| describe(&geoms, s, &tc)).collect(), pairs, read::<u32>(w + 0x4c) != 0))
+}
+
+/// The trimesh CSP made at `g` (a car's mesh collider): its mesh and shape.
+pub(crate) unsafe fn port_mesh(dll: usize, g: usize) -> Result<(Option<TrackMesh>, Shape), Unhandled> {
+    let mut st = State::default();
+    let (mut geoms, mut ptrs) = (Vec::new(), Vec::new());
+    let i = geom(&mut st, dll, g, &|_| Some(0), &mut geoms, &mut ptrs)?;
+    Ok((st.meshes.pop(), geoms.swap_remove(i).shape))
+}
+
+/// A geom pointer for a pair compare: a space as 0.
+pub(crate) fn space_or(g: usize) -> usize {
+    if unsafe { read::<i32>(g + 8) } == 11 { 0 } else { g }
 }
