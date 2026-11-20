@@ -88,6 +88,8 @@ pick_lanes() {
 $a"; done
     echo "$p" | grep .
 }
+# a fallback list left by an earlier --farm run must not move this run's areas (farm_up clears it on --farm)
+[ -n "$farm" ] || rm -f "$out/farm/fallback"
 # --farm: can the VM take its areas (tools/proofs/farm.sh; those it can't run here, from the start)
 if [ -n "$farm_areas" ]; then
     . "$here/farm.sh"
