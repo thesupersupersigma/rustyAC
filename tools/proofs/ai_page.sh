@@ -21,12 +21,19 @@ python web/serve.py --port 8137 --pack "$gold/web/pack" > "$out/serve.txt" 2>&1 
 sp=$!
 trap 'kill $sp 2>/dev/null; proof_unlock' EXIT
 serving $sp "$out/serve.txt"
+# Task W4: the GPU process of each page run stays under this (it reached 18.5 GB when kgl made an
+# upload buffer for every pass); check.mjs stops a run that goes over, before the PC runs out
+mem_limit=4000
+peak() { # peak <name> <page.json> <page.err>: that run's GPU-process peak, MB, or why there is none
+    { grep -m1 '^Error: memory:' "$3" || node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log((r.peak_mb || {})["gpu-process"] ?? "no sample")' "$2" 2>/dev/null || echo "no report"; } | sed "s/^/$1 /" >> "$out/peaks.txt"
+}
 js() { node -e 'process.stdout.write(JSON.stringify(require("fs").readFileSync(process.argv[1],"utf8")))' "$1"; }
 {
     printf 'for (let i = 0; i < 600 && !(window.rustyac && window.rustyac.frameProof && window.rustyac.launcher); i++) await new Promise((r) => setTimeout(r, 100));\n'
     printf 'return await window.rustyac.frameProof(%s, %s, "%s", 0, 0);\n' "$(js "$q/race.ini")" "$(js "$q/assists.ini")" "$(base64 -w0 "$q/full.ryin")"
 } > "$out/page.js"
-node web/check.mjs --url "http://127.0.0.1:8137/?seed=28005" --launcher --script "$out/page.js" --profile "$out/chrome_profile" --port 9338 --timeout 3600 > "$out/page.json" 2> "$out/page.err"
+node web/check.mjs --url "http://127.0.0.1:8137/?seed=28005" --launcher --script "$out/page.js" --profile "$out/chrome_profile" --port 9338 --timeout 3600 --memory-limit $mem_limit > "$out/page.json" 2> "$out/page.err"
+peak race "$out/page.json" "$out/page.err"
 node -e '
 const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 const s = r.script || {};
@@ -67,7 +74,8 @@ for name in ta drift drag; do
         printf 'for (let i = 0; i < 600 && !(window.rustyac && window.rustyac.frameProof && window.rustyac.launcher); i++) await new Promise((r) => setTimeout(r, 100));\n'
         printf 'return await window.rustyac.frameProof(%s, %s, "%s", 0, 0);\n' "$(js "$m/$name/race.ini")" "$(js "$m/$name/assists.ini")" "$(base64 -w0 "$m/$name/drive.ryin")"
     } > "$m/$name/page.js"
-    node web/check.mjs --url "http://127.0.0.1:8137/?seed=$seed" --launcher --script "$m/$name/page.js" --profile "$out/chrome_profile_$name" --port 9338 --timeout 3600 > "$m/$name/page.json" 2> "$m/$name/page.err"
+    node web/check.mjs --url "http://127.0.0.1:8137/?seed=$seed" --launcher --script "$m/$name/page.js" --profile "$out/chrome_profile_$name" --port 9338 --timeout 3600 --memory-limit $mem_limit > "$m/$name/page.json" 2> "$m/$name/page.err"
+    peak $name "$m/$name/page.json" "$m/$name/page.err"
     node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); require("fs").writeFileSync(process.argv[2], (r.script || {}).race_out || ""); console.log(`step ${(r.script||{}).step}, error ${r.error}`);' "$m/$name/page.json" "$m/$name/page_race_out.json" > "$m/$name/page.txt" 2>&1
     cmp -s "$m/$name/page_race_out.json" "$m/$name/desktop/race_out.json" && verdict "$name: page frameProof race_out.json" IDENTICAL "$(cat "$m/$name/page.txt")" \
         || verdict "$name: page frameProof race_out.json" DIFFERENT "$(cat "$m/$name/page.txt")"
@@ -75,4 +83,6 @@ for name in ta drift drag; do
 done
 kill $sp 2>/dev/null
 rm -rf "$out"/chrome_profile*
+awk -v l=$mem_limit '!($2 ~ /^[0-9]+$/ && $2 < l) { bad = 1 } END { exit bad || NR != 4 }' "$out/peaks.txt" && verdict "page GPU process under $mem_limit MB" IDENTICAL "$(paste -sd, "$out/peaks.txt")" \
+    || verdict "page GPU process under $mem_limit MB" DIFFERENT "$(paste -sd, "$out/peaks.txt")"
 summary

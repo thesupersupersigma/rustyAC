@@ -27,6 +27,8 @@
 //        [--launcher]      do not wait for a drive: AC's launcher in the page (?launcher=1) is enough
 //        [--script <file.js>]   run that file's text in the page at the end (the body of an
 //                          async function; what it returns is the report's `script`)
+//        [--memory-limit <MB>]  every 10 s, this browser's private memory per process kind
+//                          (Windows): the report's `peak_mb`; a kind over the limit stops --script
 //        [--pick-folder <folder>]   with --menu: press "Open it as a file list" and answer the
 //                          browser's file chooser with that folder (what `<input
 //                          webkitdirectory>` does with it is the report's `picked`)
@@ -36,7 +38,7 @@
 // physics steps per second and the page's notes as JSON. A self test with `&keys=...` in the
 // address reports its key presses in `selftest.presses`.
 
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +110,52 @@ const flags = [
 ];
 const browser = spawn(chrome, flags, { env, stdio: 'ignore' });
 let closed = false;
+
+// this browser's processes (by its profile folder) and their private memory in MB, per kind
+// (gpu-process, renderer, ...); Windows only
+function processes() {
+  if (process.platform !== 'win32') return Promise.reject(new Error('processes: Windows only'));
+  const ps = `Get-CimInstance Win32_Process -Filter "Name like '%chrome%' or Name like '%msedge%'" | Where-Object { $_.CommandLine -like '*${profile.replace(/'/g, "''")}*' } | ForEach-Object { $t = if ($_.CommandLine -match '--type=([a-z-]+)') { $matches[1] } else { 'browser' }; $m = (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).PrivateMemorySize64; "$t $m" }`;
+  return new Promise((done, failed) =>
+    execFile('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 60000 }, (error, out) => {
+      if (error) return failed(error);
+      const kinds = {};
+      for (const line of out.trim().split('\n')) {
+        const [kind, bytes] = line.trim().split(' ');
+        if (kind) kinds[kind] = (kinds[kind] || 0) + Math.round(Number(bytes) / 2 ** 20);
+      }
+      done(kinds);
+    }),
+  );
+}
+// --memory-limit: each kind's peak, sampled every 10 s, and the first kind over the limit (Task
+// W4: ai_page's GPU process reached 18.5 GB and the PC ran out of memory)
+const memoryLimit = Number(option('--memory-limit', 0));
+const peakMb = {};
+let overLimit = null;
+if (memoryLimit) {
+  let sampling = false;
+  setInterval(async () => {
+    if (sampling || closed) return;
+    sampling = true;
+    try {
+      for (const [kind, mb] of Object.entries(await processes())) {
+        peakMb[kind] = Math.max(peakMb[kind] || 0, mb);
+        if (mb > memoryLimit && !overLimit) overLimit = `memory: ${kind} ${mb} MB, over --memory-limit ${memoryLimit} MB`;
+      }
+    } catch {
+      // the browser going away between the listing and the sizes
+    }
+    sampling = false;
+  }, 10000).unref();
+}
+// fails once a kind is over the limit (never without a limit): raced against --script
+const memoryOver = new Promise((_, failed) => {
+  if (!memoryLimit) return;
+  const check = setInterval(() => overLimit && (clearInterval(check), failed(new Error(overLimit))), 1000);
+  check.unref();
+});
+memoryOver.catch(() => {});
 browser.on('exit', () => {
   closed = true;
 });
@@ -265,16 +313,8 @@ try {
           await answered(send('Page.reload', {}));
           report.flow.push({ at, reload: true });
         } else if (step.processes) {
-          // { processes: true }: this browser's processes (by its profile folder) and their private
-          // memory in MB, per kind (gpu-process, renderer, ...); Windows only
-          if (process.platform !== 'win32') throw new Error('processes: Windows only');
-          const ps = `Get-CimInstance Win32_Process -Filter "Name like '%chrome%' or Name like '%msedge%'" | Where-Object { $_.CommandLine -like '*${profile.replace(/'/g, "''")}*' } | ForEach-Object { $t = if ($_.CommandLine -match '--type=([a-z-]+)') { $matches[1] } else { 'browser' }; $m = (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).PrivateMemorySize64; "$t $m" }`;
-          const kinds = {};
-          for (const line of execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).trim().split('\n')) {
-            const [kind, bytes] = line.trim().split(' ');
-            if (kind) kinds[kind] = (kinds[kind] || 0) + Math.round(Number(bytes) / 2 ** 20);
-          }
-          report.flow.push({ at, processes: kinds });
+          // { processes: true }: this browser's processes' private memory in MB, per kind
+          report.flow.push({ at, processes: await processes() });
         } else if (step.js) {
           report.flow.push({ at, js: step.js.slice(0, 80), value: await evaluate(step.js) });
         } else if (step.pick) {
@@ -467,7 +507,7 @@ try {
   }
   report.content = now.content;
   const script = option('--script');
-  if (script) report.script = await evaluate(`(async () => { ${readFileSync(resolve(script), 'utf8')}\n})()`);
+  if (script) report.script = await Promise.race([evaluate(`(async () => { ${readFileSync(resolve(script), 'utf8')}\n})()`), memoryOver]);
   const shot = option('--screenshot');
   if (shot) {
     const { data } = await send('Page.captureScreenshot', { format: shot.toLowerCase().endsWith('.png') ? 'png' : 'jpeg', quality: 82 });
@@ -476,6 +516,7 @@ try {
     report.screenshot = shot;
   }
   report.console = messages.filter((m) => !m.startsWith('log:')).slice(0, 20);
+  if (memoryLimit) report.peak_mb = peakMb;
   console.log(JSON.stringify(report, null, 2));
   if (option('--end') === 'kill') {
     // a tab that vanishes: the page gets no chance to say goodbye
