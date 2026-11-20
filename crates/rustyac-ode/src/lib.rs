@@ -45,6 +45,7 @@ pub mod csp_joints;
 pub mod csp_lcp;
 pub mod csp_matrix;
 pub mod csp_opcode;
+pub mod csp_reduce;
 pub mod csp_space;
 pub mod csp_step;
 pub mod csp_world;

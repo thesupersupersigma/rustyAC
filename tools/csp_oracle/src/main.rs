@@ -30,6 +30,7 @@ mod track;
 mod btl;
 mod island;
 mod ode;
+mod reduce;
 mod solver;
 mod space;
 #[path = "../../car_oracle/src/setup_screen.rs"]
@@ -962,7 +963,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('c' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('c' | 'r' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1043,6 +1044,9 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         }
         if dump == 'c' {
             crate::btl::hit(rcx, rdx, r8 as u32, at, original, DLL_BASE.load(Ordering::Relaxed), &mut line);
+        }
+        if dump == 'r' {
+            crate::reduce::hit(rcx, rdx as i32, r9, at, original, DLL_BASE.load(Ordering::Relaxed), &mut line);
         }
         if dump == 'm' {
             // raw words of rcx's object, for reading struct layouts
@@ -1763,7 +1767,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     island::save();
-    let btl = btl::finish() + &space::finish();
+    let btl = btl::finish() + &space::finish() + &reduce::finish();
     print!("{btl}");
     BREAK_LOG.lock().unwrap().push_str(&btl);
     if !BREAKS.lock().unwrap().is_empty() {
