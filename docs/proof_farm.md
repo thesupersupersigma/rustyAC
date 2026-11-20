@@ -27,9 +27,12 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
   286/286 IDENTICAL in 0h45m (PC alone 0h59m).
 - **F3** (below): the settings moved to `%USERPROFILE%\.rustyac\farm.env`; `--farm` stops at
   once when the farm isn't set up or doesn't answer.
-- **Resume here: part 5's `--full --farm`**, only with Super's go (about 3.5-4 h the first time);
-  compare its verdicts and time with the PC's last full run, fix what it finds, retune `FARM_LANES`
-  from its area times. Optional: browser and ai_page in two PC lanes (see part 5).
+- **F3 done**: the full run's 4 non-identical cases explained, fixed and IDENTICAL again; the copy
+  leaves out the PC's kept game results; `--quick --farm` 288/288 IDENTICAL, all farm areas on the VM.
+- **Resume here: the first real `--full --farm`**, only with Super's go, with F3's first-run
+  `FARM_LANES` (about 3h50m-6h on the VM plus about 50 min of results back); compare its verdicts and
+  time with the PC's full run of 2026-11-19, then retune `farm_lanes_full` from its area times.
+  Optional: browser and ai_page in two PC lanes (part 5; not tried in F3: 16 GB free).
 
 ## Part 1: what the processor changes (from the code)
 
@@ -918,6 +921,37 @@ render and yebis_sweep 2.0, gui 1.56, replays 1.7, net 1.5, dumps 1.3), the VM's
 
   plus about 50 min to bring the VM's new kept recordings back (about 15 GB at Wi-Fi speed): about
   **4h40m**, against 7h11m for this run on the PC alone.
+- **A range, not a number**: F3's quick farm run (below) ran the WARP areas slower than part 5's
+  (render 28m28s against 17m40s, gui 40m02s against 29m32s, same cases), so with its ratios the
+  same lanes come to about **4h55m** later and **5h55m** the first time (the yebis_sweep lane then
+  the longest). The first full farm run's own area times are what to pack the lanes from next.
 - The PC half beside it (browser 116, ai_page 32, shaders 7 min, one lane) is about 2h35m, inside
   both. Shards split an area's cases by key, not by time, so a lane can be off by a few minutes; the
   physics ratio comes from 9 quick cases on the pure maths path and is the least certain.
+
+### `run_all.sh --quick --farm` (step 3)
+
+From the worktree on `web` (the main folder is on master, without F3, and C5e was working there;
+after the merge it reads the same `%USERPROFILE%\.rustyac\farm.env`), with no `target/farm.env`
+in the checkout any more: every farm area ran on the VM, **288 of 288 IDENTICAL, 0 ERROR, 0h45m**.
+
+| area | where | cases | time |
+|---|---|---|---|
+| physics | VM | 9 | 14m38s (its side-by-side multi recorded again: 753 s, once) |
+| fresh | VM, 2 shards | 63 | 29m47s |
+| csp | VM | 53 | 38m33s |
+| sound | VM | 4 | 1m00s |
+| render | VM, 2 shards | 18 | 28m28s |
+| gui | VM, 2 shards | 29 | 40m02s |
+| python | VM | 1 | 0m49s |
+| replays | VM | 6 | 9m32s |
+| net | VM | 16 | 13m10s |
+| launcher | VM | 1 | 2m42s |
+| dumps | VM | 6 | 3m33s |
+| browser | PC | 18 | 11m40s |
+| ai_page | PC | 9 | 26m05s |
+| shaders | PC | 4 | 1m36s |
+
+The copy 29 s, the VM's run 42m37s, the results back 2m50s (one new kept folder). The long pole is
+now the VM (part 5: the PC's browser + ai_page lane). Step 3.3 (browser and ai_page in two PC lanes)
+was not tried: two headless Chromes need about 8 GB more and the PC had 16 GB free.
