@@ -417,7 +417,9 @@ impl Core {
             nodes.iter_mut().for_each(|x| x.0 -= n);
         }
         let count = self.world.bodies.len();
-        for (bodies, _) in islands {
+        // last island first: two cars' spaces end in CSP's order only this way (C5g part 2's
+        // touching drive); which part of CSP's job queue reverses them was not read
+        for (bodies, _) in islands.into_iter().rev() {
             for b in bodies {
                 self.geoms_moved(count - 1 - b);
             }

@@ -1589,6 +1589,9 @@ extern "C" fn track_create_ray_caster(_this: *mut u8, _length: f32) -> *mut u8 {
 /// The current step's 40-byte .ryin record (crates/rustyac-game/src/input_file.rs StepInput), read by
 /// every car's controls device: with workers the cars poll on CSP's worker threads.
 static RECORD: Mutex<[u8; 40]> = Mutex::new([0; 40]);
+/// `CSP_ORACLE_PARK=1` (Task C5g, cars that touch): car 0's controls device; that car stands on
+/// its brakes while the others drive the tape.
+static PARKED: AtomicUsize = AtomicUsize::new(0);
 
 fn record_word(k: usize) -> u32 {
     record_bytes_word(&*RECORD.lock().unwrap(), k)
@@ -1599,7 +1602,13 @@ extern "C" fn device_destructor(_this: *mut u8, _flags: u32) -> *mut u8 {
 }
 
 /// car_oracle's `device_acquire_controls` for a scenario that is not a whole-car one (no DRS/KERS).
-extern "C" fn device_acquire_controls(_this: *mut u8, controls: *mut u8, _dt: f32, _input: *const f32) {
+extern "C" fn device_acquire_controls(this: *mut u8, controls: *mut u8, _dt: f32, _input: *const f32) {
+    if this as usize == PARKED.load(Ordering::Relaxed) {
+        unsafe {
+            put(controls, 0x28, 1.0f32); // brake, nothing else
+        }
+        return;
+    }
     let flags = record_word(6);
     unsafe {
         put(controls, 0, (flags & 1) as u8); // gearUp
@@ -1689,6 +1698,9 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         let device = acs.alloc(0x120);
         put(device, 0, table);
         put(car, 0x3d80, device); // controlsProvider
+        if i == 0 && std::env::var_os("CSP_ORACLE_PARK").is_some() {
+            PARKED.store(device as usize, Ordering::Relaxed);
+        }
         put(car, 0x3560, 0u8); // performanceMeter.isEnabled
         put(car, 0x3258, 0u8); // telemetry.isEnabled
         let auto_clutch = header.get("auto_clutch").map(String::as_str) == Some("1");
@@ -1703,11 +1715,13 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             if header.get("oracle_armed").map(String::as_str) == Some("1") {
                 put(car, 0x1f8 + 0x80, 1u8); // CarAvatar::armFirstLap (transponder)
             }
-            // more cars (Task C5e): 20 m apart along the spawn's heading, each driven by the same tape
+            // more cars (Task C5e): 20 m apart (CSP_ORACLE_GAP m) along the spawn's heading, each
+            // driven by the same tape
+            let gap = std::env::var("CSP_ORACLE_GAP").ok().map_or(20.0, |g| g.parse::<f32>().expect("CSP_ORACLE_GAP is metres"));
             let (tail, at) = (vector("oracle_spawn_tail"), vector("oracle_spawn_position"));
             let n = (tail[0] * tail[0] + tail[1] * tail[1] + tail[2] * tail[2]).sqrt();
             force_rotation(car, &tail);
-            force_position(car, &std::array::from_fn(|k| at[k] + tail[k] / n * 20.0 * i as f32), 1);
+            force_position(car, &std::array::from_fn(|k| at[k] + tail[k] / n * gap * i as f32), 1);
         } else {
             // side by side 4 m apart, nose towards +z
             force_rotation(car, &[0.0, 0.0, -1.0]);
