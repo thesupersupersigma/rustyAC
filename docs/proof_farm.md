@@ -821,7 +821,7 @@ The settings live in **`%USERPROFILE%\.rustyac\farm.env`**, beside the proof loc
 checkout of the PC reads the same file (never in the repo: it names the VM). `target\farm.env` is
 no longer read (one place only; the worktree's was moved there). On a new PC or user:
 
-1. The VM as in F2 parts 3-4 (its farm folder `C:ustyac-farm`, shared as `rustyac-farm`; its
+1. The VM as in F2 parts 3-4 (its farm folder `C:\rustyac-farm`, shared as `rustyac-farm`; its
    user logged in at the console, ssh with key login from the PC).
 2. `%USERPROFILE%\.rustyac\farm.env`, two lines (a bash file; the environment wins over it):
 

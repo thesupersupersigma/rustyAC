@@ -62,9 +62,11 @@ drive() {
     echo "${c#"$repo"/}"
 }
 # own_print: what a run without --cfg-dir would read and write: the default own folder beside
-# target/release/rustyac.exe (summary() fails the area when it changed during the run)
+# target/release/rustyac.exe (summary() fails the area when it changed during the run);
+# own_print newest: the last file written there, with its time
 own_print() {
-    (cd "$repo/target/release" 2>/dev/null && find cfg setups replay GhostCar ctelemetry out screenshots rustyac_cache rustyac_net.ini rustyac_controls.ini -printf '%p %s %T@\n' 2>/dev/null | sort) | sha1sum
+    (cd "$repo/target/release" 2>/dev/null && find cfg setups replay GhostCar ctelemetry out screenshots rustyac_cache rustyac_net.ini rustyac_controls.ini -printf "${1:+%TY-%Tm-%Td %TH:%TM }%p %s %T@\n" 2>/dev/null | sort) |
+        if [ -n "$1" ]; then tail -n 1 | cut -d' ' -f1-3; else sha1sum; fi
 }
 own_before=$(own_print)
 
@@ -225,7 +227,7 @@ need() {
 }
 
 summary() {
-    [ "$(own_print)" = "$own_before" ] || verdict "the default own folder (target/release/cfg and the rest)" DIFFERENT "a run wrote there: proof runs must have --cfg-dir and --documents"
+    [ "$(own_print)" = "$own_before" ] || verdict "the default own folder (target/release/cfg and the rest)" DIFFERENT "something wrote there during the run (newest: $(own_print newest)): a proof run without --cfg-dir and --documents, or rustyac.exe / the launcher started by hand from this checkout's target/release (play from another folder during a proof run)"
     identical=$(grep -c '^IDENTICAL ' "$log")
     different=$(grep -c '^DIFFERENT ' "$log")
     errors=$(grep -c '^ERROR ' "$log")
