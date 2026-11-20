@@ -1029,8 +1029,8 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
     } else if dump == 'n' {
         // Task C5h: rtcNewDevice's config, with CSP_ORACLE_ISA's max_isa=
         *((context + 0x80) as *mut usize) = Box::leak(Box::new(rays::config())).as_ptr() as usize;
-    } else if step != usize::MAX && matches!(dump, 'e' | 'y' | 'v' | 'u') {
-        // Task C5h: tyre rays against the port's Embree; 'u' the return sites ('x' and 'k' are the island recorder's)
+    } else if step != usize::MAX && matches!(dump, 'e' | 'y' | 'v' | 's') {
+        // Task C5h: tyre rays against the port's Embree; 's' the return sites (every other letter is taken)
         let dll = DLL_BASE.load(Ordering::Relaxed);
         let rsp = read::<usize>(context + 0x98);
         let [rcx, rdx, r8, r9] = [0x80, 0x88, 0xb8, 0xc0].map(|offset| read::<usize>(context + offset));
@@ -1040,8 +1040,8 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
             'y' => rays::cast(dll, rcx, rdx, r8, read::<f32>(context + 0x1a0 + 0x30), read::<usize>(rsp + 0x28), rsp),
             _ => rays::leave(dll, rsp),
         }
-        if dump != 'u' {
-            arm_return(read::<usize>(rsp), 'u');
+        if dump != 's' {
+            arm_return(read::<usize>(rsp), 's');
         }
     } else if step != usize::MAX {
         let caller = read::<usize>(read::<usize>(context + 0x98));
