@@ -843,3 +843,81 @@ running on the VM, `prebuild.sh` failing. **`--farm-fallback`** is `--farm` with
 (those areas run on the PC, the reason in the "where" column). A failure **during** the run (the
 copy, the task not starting, a stall, results not coming back) still falls back area by area, as
 in F2. Checked: no file and a dead host, each `exit=2` before any area, the lock released.
+
+### The run's 4 non-identical cases (all on the PC)
+
+**fresh and yebis_sweep: "the default own folder" DIFFERENT (the guard was right).** Between 16:28
+and 16:57 `target/release` of the main folder got `cfg/launcher.ini` (the launcher's window
+settings), `cfg/audio.ini`, `controls.ini` and the rest of a first start (16:28), a new
+`setups/ks_ferrari_488_gt3/` (16:29), then `race.ini` (ks_ferrari_488_gt3 at ks_laguna_seca,
+practice), `camera_*.ini`, `acos.ini` and a 1:25.223 lap in `personalbest.ini` (16:57): rustyAC's
+launcher and game **started by hand from the main folder** and driven for half an hour. It was not
+a task: no Claude session ran a command in that window (C5d's only watched its queued csp run, which
+waited for the lock), no proof case drives a 488 GT3 at Laguna Seca, and the only areas running then
+were fresh and yebis_sweep, which both caught it. The proofs' own runs all have `--cfg-dir` and
+`--documents`, so their verdicts were not touched; the guard can't tell who wrote. Fix: the guard's
+line now names the newest file written there and its time, and says that a rustyAC started by hand
+from the checkout's `target/release` trips it too (**play from another folder during a proof run**).
+Nine old `tools/web_checks/` scripts (task38j-44c) still start `target/release/rustyac.exe` without
+`--cfg-dir`; none ran here, so they are left as they are.
+
+**sound: `ks_ferrari_f2004 spa_kerb_strike cockpit` and `ks_ferrari_250_gto trk_kerb_strike
+cockpit` DIFFERENT (FMOD crashed on every try; the proof script called it DIFFERENT).** The crashes
+are the known FMOD 1.08.12 bug in the clock-less setup (docs/port/leftovers.md, the FMOD row; sites
+`fmod64.dll+0x8fc37` and `+0xf5776`). `audio_oracle compare` already makes a crashed side again (four
+tries a side) and recognised these crashes; what failed is that each side crashed four times. Measured
+here, run by run (`re/scratch/taskF3/fmod_side.sh`):
+
+| tape, side | crashed |
+|---|---|
+| f2004 spa_kerb_strike, port | 12 of 30 (40 %) |
+| f2004 spa_kerb_strike, game | 1 of 30 |
+| 250_gto trk_kerb_strike, game, idle PC | 2 of 30 |
+| 250_gto trk_kerb_strike, game, every CPU busy | 5 of 30 |
+
+At 40 % a compare fails about 0.4⁴ = 2.6 % of the time (1 of 10 compares here), and load raises the
+rate. `sound.sh` then gave `verdict` the last line of audio_oracle's output, a stack frame, so the
+crash became a DIFFERENT and never got run_all.sh's "an ERROR runs once more, alone, after all lanes".
+Fix (`sound.sh`): the crash line goes to the verdict, which makes it an **ERROR**, run again alone;
+a real difference stays DIFFERENT (both checked on the run's text). The farm runs the same `sound.sh`
+under the VM's own `run_all.sh`, which reruns its ERROR cases the same way.
+
+**Rerun** (`re/scratch/taskF3/rerun.sh`, the worktree, its own output): sound's 2 cases IDENTICAL,
+fresh's `conditions spa_cold_green_wind` and yebis_sweep's `x_pp3_g0_d0_r1` IDENTICAL with the guard
+quiet (no `default own folder` line). In 10 more compares each, f2004 spa_kerb_strike was ok 9 times
+(5 with a crashed run made again) and failed once with every try crashed; 250_gto 10 of 10 ok.
+
+### The copy leaves out the PC's kept game results
+
+The first try of step 3's quick farm run spent its first 17 min copying `re/gold` to the VM: the
+main folder's full run had recorded fresh again (16 GB of new kept folders). Every kept folder's key
+(`fresh/rec` through `salt_of`, `dumps` through its `key_salt`) holds `install_key`, which holds the
+maths path off FMA3, so the VM never reads one the PC made. `farm_sync.sh`'s repo part now leaves out
+`re/gold/fresh/rec` and `re/gold/dumps` (the VM keeps its own there; the copy never deletes). That
+run was stopped and made again. It then showed why the old `re\gold\web` exclusion had never
+worked either: robocopy's `/XD` takes a folder's name or its **full** path, and `cygpath -w` gave
+a relative one; the excludes are now `cygpath -aw`. Checked with `/L` (`re/scratch/taskF3/gold_l.sh`):
+the step now lists 61 files, 248 MB.
+
+### `--full --farm`: lanes and time
+
+From the full run's PC area times (`rows/*.secs`, minutes: physics 101, render 136, gui 111, dumps
+102, yebis_sweep 108, replays 54, net 44, csp 8, launcher 5, sound 4; fresh 354 recording every case
+again, 205 from kept results (P1)) times part 5's VM/PC ratios (physics 2.6, fresh 1.47, csp 2.4,
+render and yebis_sweep 2.0, gui 1.56, replays 1.7, net 1.5, dumps 1.3), the VM's area time is about
+1,570 min, packed longest-first into 8 lanes with shards (all lanes within 3 min of each other):
+
+- **Later runs** (the default `farm_lanes_full` in `farm.sh` now), about **3h20m** on the VM:
+
+      yebis_sweep.1 gui.1|yebis_sweep.2 gui.2|physics.1 replays.2 csp|physics.2 net|render.1 dumps.3 launcher|render.2 replays.1 sound python|fresh.1 dumps.1|fresh.2 dumps.2
+
+- **The first one**: the VM has no full-run kept recordings, so fresh records every case again
+  (about 520 min of VM time, 1,790 in all); with these lanes, about **3h50m**:
+
+      FARM_LANES="fresh.1 net replays.1|gui dumps.1 sound|physics.2 dumps.3 replays.3 csp|fresh.4 render.3|fresh.3 render.2|fresh.2 render.1|yebis_sweep|physics.1 dumps.2 replays.2 launcher python" bash tools/proofs/run_all.sh --full --farm
+
+  plus about 50 min to bring the VM's new kept recordings back (about 15 GB at Wi-Fi speed): about
+  **4h40m**, against 7h11m for this run on the PC alone.
+- The PC half beside it (browser 116, ai_page 32, shaders 7 min, one lane) is about 2h35m, inside
+  both. Shards split an area's cases by key, not by time, so a lane can be off by a few minutes; the
+  physics ratio comes from 9 quick cases on the pure maths path and is the least certain.

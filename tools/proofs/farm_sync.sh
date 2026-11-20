@@ -78,7 +78,7 @@ part_ac() {
 }
 part_repo() {
     rc oracle repo/oracle /E
-    rc re/gold repo/re/gold /E /XD "$(cygpath -w re/gold/web)" "$(cygpath -w re/gold/fresh/rec)" "$(cygpath -w re/gold/dumps)"
+    rc re/gold repo/re/gold /E /XD "$(cygpath -aw re/gold/web)" "$(cygpath -aw re/gold/fresh/rec)" "$(cygpath -aw re/gold/dumps)"
     rc tools/render_oracle/py_apps repo/tools/render_oracle/py_apps /E
     rc tools/csp_oracle/src repo/tools/csp_oracle/src main.rs
     rc crates/rustyac-render/tests/data repo/crates/rustyac-render/tests/data /E  # render's --pose files
