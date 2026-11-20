@@ -420,3 +420,36 @@ pub fn obb_query(
     }
     (q.contact, q.touched)
 }
+
+/// CSP's trimesh `AABBTest` (+0x1693970) once its gates passed (`TRIMESH_AABB_TEST` = `limit` not
+/// 0, the other geom without flag 0x80000, a no-leaf tree, the mesh at the origin unrotated): does
+/// the box `aabb` (min x, max x, min y, ...) reach the tree's root box, or a node `limit` levels
+/// down, or a node with a triangle child? Centres and half sizes in f64, the tree's f32 widened;
+/// the comparisons as CSP compiled them (a NaN mostly passes).
+pub fn aabb_test(nodes: &[AabbNoLeafNode], aabb: &[f64; 6], limit: i32) -> bool {
+    let Some(root) = nodes.first() else { return true };
+    let c = [(aabb[0] + aabb[1]) * 0.5, (aabb[2] + aabb[3]) * 0.5, (aabb[4] + aabb[5]) * 0.5];
+    let e = [(aabb[1] - aabb[0]) * 0.5, (aabb[3] - aabb[2]) * 0.5, (aabb[5] - aabb[4]) * 0.5];
+    if (0..3).all(|k| {
+        !(c[k] - e[k] > (root.center[k] - root.extents[k]) as f64) && e[k] + c[k] >= (root.center[k] + root.extents[k]) as f64
+    }) {
+        return true;
+    }
+    let mut stack = vec![(0u32, 0)];
+    while let Some((index, depth)) = stack.pop() {
+        let node = &nodes[index as usize];
+        if (0..3).all(|k| !((c[k] - node.center[k] as f64).abs() > node.extents[k] as f64 + e[k])) {
+            if depth >= limit {
+                return true;
+            }
+            match (node.pos, node.neg) {
+                (Child::Node(pos), Child::Node(neg)) => {
+                    stack.push((pos, depth + 1));
+                    stack.push((neg, depth + 1));
+                }
+                _ => return true,
+            }
+        }
+    }
+    false
+}

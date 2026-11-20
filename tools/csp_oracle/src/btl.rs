@@ -39,7 +39,7 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 /// The trimesh's vertices, indices and OPCODE tree from CSP's memory; the tree is also built by
 /// rustyac-ode and compared node by node.
-unsafe fn load_mesh(data: usize, log: &mut String) -> (MeshInterface, Model) {
+pub(crate) unsafe fn load_mesh(data: usize, log: &mut String) -> (MeshInterface, Model) {
     let iface = data + 0x68;
     let (nb_tris, nb_verts) = (read::<u32>(iface) as usize, read::<u32>(iface + 4) as usize);
     let (tri_stride, vert_stride) = (read::<u32>(iface + 8) as usize, read::<u32>(iface + 0xc) as usize);
