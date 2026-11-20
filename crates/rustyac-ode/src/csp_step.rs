@@ -450,12 +450,16 @@ pub fn step_island_probed(world: &WorldParams, bodies: &mut [Body<f64>], joints:
             let mut cf = [0.0; 6];
             for &(i, side) in links[bi].iter().rev() {
                 let (ofs, im) = (mindex[i], mindex[i + 1] - mindex[i]);
-                let mut s = [0.0; 6];
-                for r in 0..im {
+                // CSP starts the sum from row 0's product, not +0 (all-(-0) products stay -0)
+                let row = |r: usize| {
                     let x = &j_all[16 * ofs + 8 * (side * im + r)..];
-                    let l = lambda[ofs + r];
-                    for (k, xk) in [0, 1, 2, 4, 5, 6].into_iter().enumerate() {
-                        s[k] += x[xk] * l;
+                    [0, 1, 2, 4, 5, 6].map(|xk| x[xk] * lambda[ofs + r])
+                };
+                let mut s = row(0);
+                for r in 1..im {
+                    let p = row(r);
+                    for k in 0..6 {
+                        s[k] += p[k];
                     }
                 }
                 if let Some(fb) = &mut joints[infos[i].0].feedback {
