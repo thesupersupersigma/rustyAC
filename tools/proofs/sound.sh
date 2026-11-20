@@ -21,7 +21,9 @@ while read -r car scenario camera; do
         row=$(grep -m1 "^$car |" "$out/row.txt")
         case "$row" in *"| identical | identical | identical |"*"| FAIL") ;; *) break ;; esac
     done
-    case "$row" in *"| ok"|*"| ok ("*) verdict "$car $scenario $camera" IDENTICAL ;; *) verdict "$car $scenario $camera" DIFFERENT "${row:-$(tail -n 1 "$out/row.txt")}" ;; esac
+    # a side FMOD crashed on each of audio_oracle's tries: its crash line makes the verdict an ERROR,
+    # which run_all.sh runs again alone after the lanes (F3: 40 % of the port's runs on spa_kerb_strike)
+    case "$row" in *"| ok"|*"| ok ("*) verdict "$car $scenario $camera" IDENTICAL ;; *) verdict "$car $scenario $camera" DIFFERENT "${row:-$(grep -m1 -E "$crash_re" "$out/row.txt" || tail -n 1 "$out/row.txt")}" ;; esac
     rm -rf "$out/cmp"
 done <<ROWS
 ks_ferrari_f2004 spa_launch cockpit
