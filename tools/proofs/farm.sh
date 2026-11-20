@@ -24,9 +24,11 @@ fw=$(echo "$fs" | tr / '\\')           # \\vm\share, for robocopy
 fo=$out/farm
 fp=$fs/repo/target/proofs              # the VM's target/proofs
 # the VM's lanes (12 virtual CPUs, 32 GB; WARP 1.5-2.2 x the PC's time there, F2 part 3): eight,
-# the long areas split into shards
+# the long areas split into shards; --full packed longest-first from the PC's full-run area times
+# x part 5's VM ratios (F3: about 197 min each lane with fresh's kept results; a first run, when
+# fresh records every case again, wants FARM_LANES from docs/proof_farm.md's F3 part)
 farm_lanes_quick="fresh.1|fresh.2|gui.1 sound|gui.2 python launcher|render.1 replays|render.2 dumps|csp|physics net"
-farm_lanes_full="fresh.1 sound python|fresh.2 launcher csp|fresh.3 dumps|gui.1 physics.1|gui.2 physics.2|render.1 yebis_sweep.1|render.2 yebis_sweep.2|net replays yebis_sweep.3"
+farm_lanes_full="yebis_sweep.1 gui.1|yebis_sweep.2 gui.2|physics.1 replays.2 csp|physics.2 net|render.1 dumps.3 launcher|render.2 replays.1 sound python|fresh.1 dumps.1|fresh.2 dumps.2"
 
 farm_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$FARM_HOST" "$@" < /dev/null; }
 # farm_off <reason>: every farm area left runs on this PC instead
