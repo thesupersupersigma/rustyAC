@@ -47,12 +47,13 @@ impl CspWorld {
                     joint
                 })
                 .collect();
-            step_island(&self.params, &mut island_bodies, &mut island_joints, h);
+            let tags = step_island(&self.params, &mut island_bodies, &mut island_joints, h);
             for (i, (&b, mut body)) in bodies.iter().zip(island_bodies).enumerate() {
                 body.tag = i as i32; // step.cpp: body[i]->tag = i
                 self.bodies[b] = body;
             }
-            for (&j, joint) in joints.iter().zip(island_joints) {
+            for ((&j, joint), tag) in joints.iter().zip(island_joints).zip(tags) {
+                self.joints[j].tag = tag;
                 self.joints[j].joint.feedback = joint.feedback;
                 self.joints[j].joint.kind = joint.kind;
             }

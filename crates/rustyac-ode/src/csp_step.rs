@@ -268,13 +268,14 @@ pub struct LcpInputs<'a> {
     pub bodies: &'a [Body<f64>],
 }
 
-/// `dxStepIsland` for one thread: steps the bodies by `h`.
-pub fn step_island(world: &WorldParams, bodies: &mut [Body<f64>], joints: &mut [Joint], h: f64) {
-    step_island_probed(world, bodies, joints, h, &mut |_| {});
+/// `dxStepIsland` for one thread: steps the bodies by `h`; returns each joint's tag after it (its
+/// place in the solver's order, -1 without rows).
+pub fn step_island(world: &WorldParams, bodies: &mut [Body<f64>], joints: &mut [Joint], h: f64) -> Vec<i32> {
+    step_island_probed(world, bodies, joints, h, &mut |_| {})
 }
 
 /// [`step_island`], `probe` seeing the solver's inputs.
-pub fn step_island_probed(world: &WorldParams, bodies: &mut [Body<f64>], joints: &mut [Joint], h: f64, probe: &mut dyn FnMut(&LcpInputs)) {
+pub fn step_island_probed(world: &WorldParams, bodies: &mut [Body<f64>], joints: &mut [Joint], h: f64, probe: &mut dyn FnMut(&LcpInputs)) -> Vec<i32> {
     let nb = bodies.len();
     // Stage0 bodies: gravity, one component at a time
     for k in 0..3 {
@@ -486,4 +487,5 @@ pub fn step_island_probed(world: &WorldParams, bodies: &mut [Body<f64>], joints:
         b.facc = [0.0; 4];
         b.tacc = [0.0; 4];
     }
+    tag
 }

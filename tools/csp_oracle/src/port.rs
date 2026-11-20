@@ -13,6 +13,8 @@ use std::sync::Mutex;
 /// What a call's return is checked against or tells the port.
 pub(crate) enum Expect {
     Nothing,
+    /// a world step of this size, done on the port at the return
+    Step(f32),
     /// the creator returned this body / joint of the port's
     Body(usize),
     Joint(usize),
@@ -102,7 +104,21 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
         (0x92e4a0, _) => {
             port.worlds += 1;
             compare(port, rcx, step);
-            Expect::Nothing
+            let dll = crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed);
+            if *((dll + 0x280_3210) as *const u8) != 0 || *((dll + 0x27f_92b6) as *const u8) != 0 {
+                // the late world step's byte: this call does nothing
+                Expect::Nothing
+            } else {
+                let r32 = |o: usize| std::ptr::read_unaligned((rcx + o) as *const u32);
+                // the step's parts the car's calls never fill (deferred batches, queued contacts,
+                // joints to release, the 12960 list, threads, the threaded world step)
+                assert_eq!((*((rcx + 12940) as *const u8), r32(16 + 12768), r32(72)), (0, 0, 0), "deferred batches, queued contacts or skipped collision");
+                let empty = |a: usize| std::ptr::read_unaligned((rcx + a) as *const usize) == std::ptr::read_unaligned((rcx + a + 8) as *const usize);
+                assert!(empty(12856) && empty(12960), "joints to release or the 12960 list");
+                assert!(*((dll + 0x281_7680) as *const i32) <= 0, "threads");
+                assert!(*((dll + 0x280_3222) as *const u8) == 0 || *((dll + 0x267_b338) as *const u32) == 0, "the threaded world step");
+                Expect::Step(xmm(1))
+            }
         }
         (rva, Some(b)) => {
             let c = &mut port.core;
@@ -159,6 +175,10 @@ pub(crate) unsafe fn leave(rva: usize, rax: usize, xmm0: usize, expect: Expect) 
     let Some(port) = guard.as_mut() else { return };
     let (ok, setup) = match expect {
         Expect::Nothing => return,
+        Expect::Step(h) => {
+            port.core.step(h);
+            return;
+        }
         Expect::Body(b) => {
             port.bodies.insert(rax, b);
             return;

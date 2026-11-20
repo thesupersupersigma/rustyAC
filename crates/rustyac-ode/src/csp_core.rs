@@ -338,6 +338,11 @@ impl Core {
         *self.dball(id).4 = d.sqrt();
     }
 
+    /// The world step (+0x92e4a0 when it steps): the ODE step of `h` (an f32 widened).
+    pub fn step(&mut self, h: f32) {
+        self.world.step(h as f64);
+    }
+
     /// `setERPCFM` on a distance joint (+0x928310): values <= 0 are ignored.
     pub fn set_erp_cfm(&mut self, id: usize, erp: f32, cfm: f32) {
         let (_, _, e, c, _) = self.dball(id);
