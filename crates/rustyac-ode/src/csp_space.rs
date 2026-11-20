@@ -201,6 +201,40 @@ impl HashSpace {
             }
         }
     }
+
+    /// The pairs of the space's own collide (+0x16894f0) in CSP's order, as (child, child): each
+    /// entry walks its cells on its own level and, shifted, on every higher one, and meets an
+    /// entry of that level in the first cell both cover (on its own level only the later
+    /// entries); then every entry against every big geom, then the big geoms among themselves.
+    pub fn self_pairs(&self, mut visit: impl FnMut(usize, usize)) {
+        for (i, e) in self.entries.iter().enumerate() {
+            for &level in self.levels.iter().filter(|&&l| l >= e.level) {
+                let c = e.cells.map(|x| x >> (level - e.level));
+                for x in c[0]..=c[1] {
+                    for y in c[2]..=c[3] {
+                        let m = mix(x, y, level);
+                        for z in c[4]..=c[5] {
+                            let mut n = self.heads[(self.mask & m.wrapping_add(z as u32)) as usize];
+                            while n != u32::MAX {
+                                let node = &self.nodes[n as usize];
+                                let (j, o) = (node.entry as usize, &self.entries[node.entry as usize]);
+                                if o.level == level && node.cell == [x, y, z] && j != i && x == c[0].max(o.cells[0]) && y == c[2].max(o.cells[2]) && z == c[4].max(o.cells[4]) && (level != e.level || j > i) {
+                                    visit(e.geom, o.geom);
+                                }
+                                n = node.next;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for e in &self.entries {
+            self.big.iter().for_each(|&b| visit(e.geom, b));
+        }
+        for (k, &a) in self.big.iter().enumerate() {
+            self.big[k + 1..].iter().for_each(|&b| visit(a, b));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -218,5 +252,8 @@ mod tests {
         s.collide2(&[-50.0, 50.0, -2.0, 2.0, -2.0, 2.0], |g| seen.push(g));
         assert_eq!(seen, vec![2, 1, 0]);
         assert_eq!((exponent(1.0), exponent(0.75), exponent(f64::MIN_POSITIVE / 4.0)), (1, 0, -1023));
+        let mut pairs = Vec::new();
+        HashSpace::build(&[small, [0.75, 1.5, 0.5, 1.0, 0.5, 1.0], wide], 2, 11).self_pairs(|a, b| pairs.push((a, b)));
+        assert_eq!(pairs, vec![(0, 1), (0, 2), (1, 2)]);
     }
 }

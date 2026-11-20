@@ -80,7 +80,7 @@ type M3 = [[f32; 3]; 3];
 type M4 = [[f32; 4]; 4];
 
 /// `InvertPRMatrix` (+0x1704140).
-fn invert_pr(src: &M4) -> M4 {
+pub(crate) fn invert_pr(src: &M4) -> M4 {
     let mut d = [[0.0f32; 4]; 4];
     for j in 0..3 {
         d[0][j] = src[j][0];
@@ -93,7 +93,7 @@ fn invert_pr(src: &M4) -> M4 {
 }
 
 /// `Matrix4x4::operator*` as CSP's build groups it.
-fn mul4(a: &M4, b: &M4) -> M4 {
+pub(crate) fn mul4(a: &M4, b: &M4) -> M4 {
     let mut r = [[0.0f32; 4]; 4];
     for i in 0..4 {
         for j in 0..4 {

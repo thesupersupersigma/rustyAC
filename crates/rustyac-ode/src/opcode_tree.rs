@@ -191,7 +191,7 @@ fn plane_distances(n: &Point, d: f32, p: &[Point; 3]) -> [f32; 3] {
 
 /// `TriTriOverlap` (`OPC_TriTriOverlap.h`, Möller's interval test without divisions), as
 /// inlined eight times: do the triangles `v` and `u` meet? Not symmetric in the two.
-fn tri_tri_overlap(v: &[Point; 3], u: &[Point; 3]) -> bool {
+pub(crate) fn tri_tri_overlap(v: &[Point; 3], u: &[Point; 3]) -> bool {
     // the plane of v, and u's corners against it
     let e1 = sub(&v[1], &v[0]);
     let e2 = sub(&v[2], &v[0]);

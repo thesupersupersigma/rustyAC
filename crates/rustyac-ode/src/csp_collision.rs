@@ -7,10 +7,13 @@
 //! and collides every car geom against what it found (`dSpaceCollide2` +0x168a5b0, the simple
 //! space's `collide2` +0x1688800, the callback +0x92bef0), keeping the pairs that gave contacts; the
 //! dynamic step after it collides those pairs again (+0x9324a0) and looks for cars touching each
-//! other (+0x91bd40). A pair's contacts go through `dCollide` (+0x1687280, box against trimesh by
-//! [`crate::csp_btl`]), the reduction ([`crate::csp_reduce`]) and the joint maker
-//! ([`crate::csp_collide`]). Only what a Spa drive runs is here: car spaces (simple spaces of boxes)
-//! in one container, the track's hash space of trimeshes; anything else gives [`Unhandled`].
+//! other (+0x91bd40: the car container's hash table, then the two car spaces' geoms, +0x92bab0),
+//! whose pairs the next static step collides again. A pair's contacts go through `dCollide`
+//! (+0x1687280: box against trimesh by [`crate::csp_btl`], trimesh against trimesh by
+//! [`crate::csp_ttl`]), the reduction ([`crate::csp_reduce`], for trimeshes with limits from the
+//! step's contact load, +0x169fd90) and the joint maker ([`crate::csp_collide`]). Only what a Spa
+//! drive runs is here: car spaces (simple spaces of boxes and a trimesh) in one container, the
+//! track's hash space of trimeshes; anything else gives [`Unhandled`].
 
 use crate::csp_btl::{collide_btl, ContactGeom, Mesh};
 use crate::csp_collide::{contact_joints, NewJoint, Side, Switches, Unhandled};
@@ -18,6 +21,7 @@ use crate::csp_opcode::{aabb_test, BoxTc};
 use crate::csp_reduce::{reduce, Reduce};
 use crate::csp_space::{overlap, HashSpace};
 use crate::csp_step::{Joint, JointKind};
+use crate::csp_ttl::collide_ttl;
 use crate::csp_world::{CspWorld, WorldJoint};
 use crate::opcode::{MeshInterface, Model};
 use crate::world::{Body, BODY_DISABLED};
@@ -70,7 +74,27 @@ pub struct TrackMesh {
     pub model: Model,
 }
 
+/// The contact load (+0x31f8 on): contacts kept this step, the limits between which the
+/// reduction gets stricter, the running average and its rise and fall rates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Load {
+    pub counter: i32,
+    pub lo: i32,
+    pub hi: i32,
+    pub avg: f64,
+    pub up: f64,
+    pub down: f64,
+}
+
+impl Default for Load {
+    /// as the core's constructor (+0x6149c0) sets it
+    fn default() -> Load {
+        Load { counter: 0, lo: 50, hi: 150, avg: 0.0, up: 1.0, down: 0.05 }
+    }
+}
+
 /// The world's collision state at a step's start.
+#[derive(Default)]
 pub struct Collision {
     pub geoms: Vec<Geom>,
     pub meshes: Vec<TrackMesh>,
@@ -91,6 +115,17 @@ pub struct Collision {
     pub static_step: bool,
     /// the car container's +217: a car space moved since its table was built
     pub cars_dirty: bool,
+    /// the car container's table (built when `cars_built` is clear or `cars_dirty` set) and its
+    /// lowest and highest level
+    pub cars_table: HashSpace,
+    pub cars_built: bool,
+    pub cars_levels: (i32, i32),
+    /// world +0x60: the car-car pairs the last dynamic step got contacts from
+    pub car_pairs: Vec<(usize, usize)>,
+    pub load: Load,
+    /// `TRIMESH_OBB_PREFILTER` (byte +0x27f91a4) and the tree collider's edge axes (byte +0x27f91a6)
+    pub prefilter: bool,
+    pub edges: bool,
     /// `TRIMESH_AABB_TEST` (+0x27f995c) and OPCODE's full box-box test (collider +0x144)
     pub aabb_limit: i32,
     pub full_box_box: bool,
@@ -230,7 +265,14 @@ fn dcollide(c: &mut Collision, bodies: &[Body<f64>], a: usize, b: usize, max: u3
     // box against trimesh is registered as (trimesh, box): called swapped, the contacts turned back
     let (bx, m) = match (&c.geoms[a].shape, &c.geoms[b].shape) {
         (Shape::Box { .. }, Shape::Mesh { .. }) => (a, b),
-        _ => return Err(Unhandled("a pair other than box against trimesh")),
+        (Shape::Mesh { mesh: m1, bounds: b1, .. }, Shape::Mesh { mesh: m2, bounds: b2, .. }) => {
+            let (Some(m1), Some(m2)) = (*m1, *m2) else { return Err(Unhandled("a trimesh tree kind not ported")) };
+            let (ga, gb) = (&c.geoms[a], &c.geoms[b]);
+            let p1 = Mesh { mesh: &c.meshes[m1].mesh, model: &c.meshes[m1].model, pos: ga.pos, r: ga.r };
+            let p2 = Mesh { mesh: &c.meshes[m2].mesh, model: &c.meshes[m2].model, pos: gb.pos, r: gb.r };
+            return Ok(collide_ttl(&p1, b1, &p2, b2, max, ga.id, gb.id, c.prefilter, c.edges));
+        }
+        _ => return Err(Unhandled("a pair other than box against trimesh or trimesh against trimesh")),
     };
     let Shape::Mesh { mesh, tc_on, key, .. } = c.geoms[m].shape else { unreachable!() };
     let mesh = mesh.ok_or(Unhandled("a trimesh tree kind not ported"))?;
@@ -248,21 +290,166 @@ fn dcollide(c: &mut Collision, bodies: &[Body<f64>], a: usize, b: usize, max: u3
     Ok(out)
 }
 
-/// One pair's contacts to joints: the reduction for a box, then the joint maker.
+/// +0x92b9d0: a geom's reduction weight (none without a body).
+fn weight(g: &Geom) -> f32 {
+    if g.side.body.is_some() {
+        g.side.weight
+    } else {
+        0.0
+    }
+}
+
+/// +0x92ba10: the pair moves apart or together faster than 1 m/s.
+fn fast(c: &Collision, bodies: &[Body<f64>], a: usize, b: usize) -> bool {
+    let l = |g: usize| c.geoms[g].side.body.map(|b| bodies[b].lvel);
+    match (l(a), l(b)) {
+        (Some(x), Some(y)) => {
+            let d = [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+            (d[1] * d[1] + d[0] * d[0]) + d[2] * d[2] > 1.0
+        }
+        (Some(x), None) | (None, Some(x)) => (x[0] * x[0] + x[1] * x[1]) + x[2] * x[2] > 1.0,
+        (None, None) => false,
+    }
+}
+
+/// +0x169fd90: the reduction with limits from the contact load and the pair's `weight`; `few`
+/// keeps at least three. Kept contacts add to the load.
+fn reduce_by_load(contacts: &mut Vec<ContactGeom>, l: &mut Load, weight: f64, few: bool) -> usize {
+    let lo = l.lo as f64;
+    let v = if l.avg > l.counter as f64 { l.avg } else { l.counter as f64 };
+    let free = if v > lo {
+        if !(v >= l.hi as f64) {
+            1.0 - (v - lo) / l.hi.wrapping_sub(l.lo) as f64
+        } else {
+            0.0
+        }
+    } else {
+        1.0
+    };
+    let w = if weight >= 0.0 {
+        if weight < 1.0 {
+            weight
+        } else {
+            1.0
+        }
+    } else {
+        0.0
+    };
+    let strict = (1.0 - free) * (1.0 - w);
+    let mut p = Reduce { per_group: 4, groups: 2, total: 8, same_normal: 0.95 };
+    if strict > 0.25 {
+        p.groups = 1;
+        (p.per_group, p.total) = if strict > 0.5 {
+            if strict > 0.75 {
+                (1, 1)
+            } else {
+                (3, 3)
+            }
+        } else {
+            (4, 4)
+        };
+    }
+    if few {
+        (p.per_group, p.total) = (p.per_group.max(3), p.total.max(3));
+    }
+    let n = reduce(contacts, &p);
+    if n > 0 {
+        l.counter += n as i32;
+    }
+    n
+}
+
+/// A kept pair again (+0x9324a0, untagged): a box by the fixed reduction, else by the load with
+/// the body geom's weight; then the joint maker.
 fn pair_joints(c: &mut Collision, bodies: &[Body<f64>], a: usize, b: usize, out: &mut Vec<NewJoint>) -> Result<bool, Unhandled> {
     let g = if c.geoms[a].side.body.is_some() { a } else { b };
-    if !matches!(c.geoms[g].side.class, 1 | 10) {
-        return Err(Unhandled("a pair whose body geom is not a box"));
-    }
-    let mut contacts = dcollide(c, bodies, a, b, 16)?;
+    let is_box = matches!(c.geoms[g].side.class, 1 | 10);
+    let mut contacts = dcollide(c, bodies, a, b, if is_box { 16 } else { 32 })?;
     if contacts.is_empty() {
         return Ok(false);
     }
-    if reduce(&mut contacts, &REDUCE) == 0 {
+    let n = if is_box {
+        reduce(&mut contacts, &REDUCE)
+    } else {
+        let l = c.geoms[g].side.body.map_or([0.0; 4], |x| bodies[x].lvel);
+        let w = weight(&c.geoms[g]) as f64;
+        reduce_by_load(&mut contacts, &mut c.load, w, l[0] * l[0] + l[1] * l[1] + l[2] * l[2] <= 1.0)
+    };
+    if n == 0 {
         return Err(Unhandled("a reduction keeping no contact"));
     }
     out.extend(contact_joints(&contacts, &c.geoms[a].side, &c.geoms[b].side, bodies, &c.switches)?);
     Ok(true)
+}
+
+/// The simple space's `cleanGeoms` (+0x16886d0): the dirty geoms at the list's head.
+fn clean(c: &mut Collision, s: usize, bodies: &[Body<f64>]) -> Result<Vec<usize>, Unhandled> {
+    let Shape::Space { children } = &c.geoms[s].shape else { return Err(Unhandled("a car container child not a space")) };
+    let children = children.clone();
+    for &g in &children {
+        if c.geoms[g].flags & GEOM_DIRTY == 0 {
+            break;
+        }
+        if is_space(&c.geoms[g]) {
+            return Err(Unhandled("a space in a car space"));
+        }
+        refresh(&mut c.geoms, g, bodies)?;
+        c.geoms[g].flags &= !GEOM_DIRTY;
+    }
+    Ok(children)
+}
+
+/// +0x92bab0 with two geoms of two cars: categories both ways, a body awake, then `dCollide`, the
+/// reduction by the load (the bigger weight, at least three unless fast) and the joint maker;
+/// a pair with contacts is kept for the next static step.
+fn car_geoms(c: &mut Collision, bodies: &[Body<f64>], a: usize, b: usize, out: &mut Vec<NewJoint>) -> Result<(), Unhandled> {
+    let (ga, gb) = (&c.geoms[a], &c.geoms[b]);
+    if gb.collide & ga.category == 0 || gb.category & ga.collide == 0 {
+        return Ok(());
+    }
+    let awake = |g: &Geom| g.side.body.is_some_and(|x| bodies[x].flags & BODY_DISABLED == 0);
+    if !awake(ga) && !awake(gb) {
+        return Ok(());
+    }
+    let mut contacts = dcollide(c, bodies, a, b, 32)?;
+    if contacts.is_empty() {
+        return Ok(());
+    }
+    let (wa, wb) = (weight(&c.geoms[a]), weight(&c.geoms[b]));
+    let w = if wa > wb { wa } else { wb };
+    let few = !fast(c, bodies, a, b);
+    if reduce_by_load(&mut contacts, &mut c.load, w as f64, few) == 0 {
+        return Err(Unhandled("a reduction keeping no contact"));
+    }
+    out.extend(contact_joints(&contacts, &c.geoms[a].side, &c.geoms[b].side, bodies, &c.switches)?);
+    c.car_pairs.push((a, b));
+    Ok(())
+}
+
+/// `dSpaceCollide2` (+0x168a5b0) of two car spaces: the space with more geoms (the first on a tie)
+/// takes each of the other's as a query (its `collide2`, +0x1688800); pairs reach the callback as
+/// (geom of `a`, geom of `b`).
+fn car_spaces(c: &mut Collision, bodies: &[Body<f64>], a: usize, b: usize, out: &mut Vec<NewJoint>) -> Result<(), Unhandled> {
+    let count = |s: usize| match &c.geoms[s].shape {
+        Shape::Space { children } => children.len(),
+        _ => 0,
+    };
+    let (big, small) = if count(a) >= count(b) { (a, b) } else { (b, a) };
+    let Shape::Space { children } = &c.geoms[small].shape else { return Err(Unhandled("a car container child not a space")) };
+    for q in children.clone() {
+        let kids = clean(c, big, bodies)?;
+        refresh(&mut c.geoms, q, bodies)?;
+        for k in kids {
+            if enabled(&c.geoms[k]) && pair_ok(c, k, q) {
+                if big == a {
+                    car_geoms(c, bodies, k, q, out)?;
+                } else {
+                    car_geoms(c, bodies, q, k, out)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl CspWorld {
@@ -271,6 +458,11 @@ impl CspWorld {
     pub fn collide(&self, c: &mut Collision) -> Result<Vec<NewJoint>, Unhandled> {
         let bodies = &self.bodies;
         let mut out = Vec::new();
+        let l = &mut c.load;
+        // comisd + cmovbe: a NaN takes the falling rate
+        let rate = if !(l.counter as f64 > l.avg) { l.down } else { l.up };
+        l.avg = (l.counter as f64 - l.avg) * rate + l.avg;
+        l.counter = 0;
         if !c.static_step {
             // +0x9324a0 on each kept pair, untagged: no category or box test
             for (a, b) in std::mem::take(&mut c.pairs) {
@@ -278,19 +470,29 @@ impl CspWorld {
                     pair_joints(c, bodies, a, b, &mut out)?;
                 }
             }
-            // +0x91bd40: cars against each other (shortcut: any two car spaces passing the pair
-            // test is unhandled, port the car-car callback +0x92bcb0 when a drive needs it)
-            for k in 0..c.cars.len() {
-                refresh(&mut c.geoms, c.cars[k], bodies)?;
-            }
-            for (i, &a) in c.cars.iter().enumerate() {
-                for &b in &c.cars[i + 1..] {
+            // +0x91bd40: the car container's self-collide (+0x16894f0) on its table, each pair of
+            // car spaces through +0x92bcb0
+            if c.cars.len() >= 2 {
+                // the table as the step's prepare left it: rebuilt only when never built or with
+                // +218 set (the oracle checks it clear), even though the cars moved since
+                if !c.cars_built {
+                    return Err(Unhandled("the car container's table never built"));
+                }
+                let mut found = Vec::new();
+                c.cars_table.self_pairs(|e, o| found.push((c.cars[e], c.cars[o])));
+                for (a, b) in found {
                     if enabled(&c.geoms[a]) && enabled(&c.geoms[b]) && pair_ok(c, a, b) {
-                        return Err(Unhandled("cars touching"));
+                        car_spaces(c, bodies, a, b, &mut out)?;
                     }
                 }
             }
             return Ok(out);
+        }
+        // the car pairs the dynamic step kept, again through +0x9324a0
+        for (a, b) in std::mem::take(&mut c.car_pairs) {
+            if !disabled(c, bodies, a, b)? {
+                pair_joints(c, bodies, a, b, &mut out)?;
+            }
         }
         // dSpaceCollide2(container, track): both spaces of one sublevel, the track has more children
         if c.cars_level != c.track_level || c.cars_count >= c.track_count {
@@ -312,19 +514,7 @@ impl CspWorld {
                 }
                 // the callback (+0x92bef0) with (car space, trimesh): a space, so dSpaceCollide2,
                 // the car space's collide2 (+0x1688800) with the trimesh as the query
-                let Shape::Space { children } = &c.geoms[s].shape else { unreachable!() };
-                let children = children.clone();
-                // cleanGeoms (+0x16886d0): the dirty geoms at the list's head
-                for &g in &children {
-                    if c.geoms[g].flags & GEOM_DIRTY == 0 {
-                        break;
-                    }
-                    if is_space(&c.geoms[g]) {
-                        return Err(Unhandled("a space in a car space"));
-                    }
-                    refresh(&mut c.geoms, g, bodies)?;
-                    c.geoms[g].flags &= !GEOM_DIRTY;
-                }
+                let children = clean(c, s, bodies)?;
                 refresh(&mut c.geoms, t, bodies)?;
                 for &g in &children {
                     if !enabled(&c.geoms[g]) || !pair_ok(c, g, t) {

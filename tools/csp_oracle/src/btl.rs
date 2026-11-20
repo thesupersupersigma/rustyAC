@@ -288,3 +288,103 @@ pub(crate) fn finish() -> String {
     st.first.iter().for_each(|f| s.push_str(&format!("btl first: {f}\n")));
     s
 }
+
+#[derive(Default)]
+struct Ttl {
+    calls: [u64; 2],
+    differ: [u64; 2],
+    contacts: u64,
+    shadow: usize,
+    shadow_posr: usize,
+    rng: u64,
+    first: Vec<String>,
+}
+
+static TTL: Mutex<Option<Ttl>> = Mutex::new(None);
+
+/// Breakpoint kind 't' (Task C5g): trimesh against trimesh (+0x16bc1b0, rcx/rdx the geoms, r8 the
+/// flags). CSP's collider on the live pair, then with the second geom's shadow (same body, its own clean pose) moved
+/// by small and large offsets, against `rustyac_ode::csp_ttl::collide_ttl`.
+pub(crate) unsafe fn ttl_hit(g1: usize, g2: usize, flags: u32, at: usize, original: u8, dll: usize, line: &mut String) {
+    let mut meshes = STATE.lock().unwrap();
+    let st = meshes.get_or_insert_with(|| State { rng: 0x9e37_79b9_7f4a_7c15, ..Default::default() });
+    for g in [g1, g2] {
+        if !st.meshes.contains_key(&g) {
+            let m = load_mesh(read::<usize>(g + 0xc0), &mut st.log);
+            st.meshes.insert(g, m);
+        }
+    }
+    let mut guard = TTL.lock().unwrap();
+    let t = guard.get_or_insert_with(|| Ttl { rng: 0x2545_f491_4f6c_dd1d, ..Default::default() });
+    let (prefilter, edges) = (read::<u8>(dll + 0x27f_91a4) != 0, read::<u8>(dll + 0x27f_91a6) != 0);
+    let bounds = |g: usize| {
+        let d = read::<usize>(g + 0xc0);
+        let (c, e) = (read::<[f64; 3]>(d + 0xa0), read::<[f64; 3]>(d + 0xc0));
+        [c[0], c[1], c[2], e[0], e[1], e[2]]
+    };
+    let csp: Collide = std::mem::transmute(dll + 0x16b_c1b0);
+    let mut buf = vec![0u8; 96 * 64];
+    let mut run = |t: &mut Ttl, b: usize, posr: usize, what: &dyn Fn() -> String, k: usize| {
+        let (m1, d1) = &st.meshes[&g1];
+        let (m2, d2) = &st.meshes[&g2];
+        let p1 = read::<usize>(g1 + 0x28);
+        let a = Mesh { mesh: m1, model: d1, pos: read(p1), r: read(p1 + 0x20) };
+        let bm = Mesh { mesh: m2, model: d2, pos: read(posr), r: read(posr + 0x20) };
+        let port = rustyac_ode::csp_ttl::collide_ttl(&a, &bounds(g1), &bm, &bounds(b), flags, g1, b, prefilter, edges);
+        buf.iter_mut().for_each(|x| *x = 0);
+        let n = csp(g1, b, flags, buf.as_mut_ptr(), 96);
+        let theirs = read_contacts(buf.as_ptr() as usize, n.max(0) as usize);
+        t.calls[k] += 1;
+        t.contacts += theirs.len() as u64;
+        if theirs.len() != port.len() || theirs.iter().zip(&port).any(|(x, y)| bits_nan(x, true) != bits_nan(y, true)) {
+            t.differ[k] += 1;
+            if t.first.len() < 6 {
+                let i = (0..theirs.len().max(port.len())).find(|&i| theirs.get(i).map(bits) != port.get(i).map(bits));
+                t.first.push(format!("{} flags {flags:x}: csp {n} port {}, first differing #{i:?}: csp {:?} port {:?}", what(), port.len(), i.and_then(|i| theirs.get(i)), i.and_then(|i| port.get(i))));
+            }
+        }
+    };
+    crate::set_byte(at, original);
+    let posr2 = read::<usize>(g2 + 0x28);
+    let hit_no = t.calls[0] + 1;
+    run(t, g2, posr2, &|| format!("ttl hit {hit_no} live"), 0);
+    if t.shadow == 0 {
+        t.shadow = Box::into_raw(vec![0u8; 0x100].into_boxed_slice()) as *mut u8 as usize;
+        t.shadow_posr = Box::into_raw(vec![0u8; 0x80].into_boxed_slice()) as *mut u8 as usize;
+    }
+    let (sh, sp) = (t.shadow, t.shadow_posr);
+    std::ptr::copy_nonoverlapping(g2 as *const u8, sh as *mut u8, 0xd0);
+    *((sh + 0x28) as *mut usize) = sp;
+    // the body kept (one body only would take CSP's hint path); the pose is clean, never recomputed
+    assert_eq!(read::<u32>(sh + 0xc) & rustyac_ode::csp_collision::GEOM_POSR_BAD, 0, "a clean shadow");
+    let live: [f64; 16] = read(posr2);
+    let count: usize = std::env::var("CSP_ORACLE_BTL_N").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    for i in 0..count {
+        let mut next = || {
+            t.rng ^= t.rng << 13;
+            t.rng ^= t.rng >> 7;
+            t.rng ^= t.rng << 17;
+            t.rng
+        };
+        let unit = |r: u64| (r >> 11) as f64 / (1u64 << 52) as f64 - 1.0;
+        let mut p = live;
+        let scale = [1e-3, 0.02, 0.1, 0.3][i % 4];
+        (0..3).for_each(|j| p[j] += unit(next()) * scale);
+        if i % 2 == 1 {
+            (4..16).for_each(|j| p[j] += unit(next()) * scale * 0.1);
+        }
+        std::ptr::copy_nonoverlapping(p.as_ptr() as *const u8, sp as *mut u8, 0x80);
+        run(t, sh, sp, &|| format!("ttl hit {hit_no} shadow #{i} pose {p:?}"), 1);
+    }
+    crate::set_byte(at, 0xcc);
+    line.push_str(&format!(" | ttl differ {:?}", t.differ));
+}
+
+/// The trimesh-trimesh summary.
+pub(crate) fn ttl_finish() -> String {
+    let guard = TTL.lock().unwrap();
+    let Some(t) = guard.as_ref() else { return String::new() };
+    let mut s = format!("ttl live {} calls {} differ, shadow {} calls {} differ, {} contacts\n", t.calls[0], t.differ[0], t.calls[1], t.differ[1], t.contacts);
+    t.first.iter().for_each(|f| s.push_str(&format!("ttl first: {f}\n")));
+    s
+}

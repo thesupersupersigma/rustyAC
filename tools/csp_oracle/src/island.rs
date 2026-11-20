@@ -436,6 +436,11 @@ pub(crate) fn check_world(path: &str) {
             own = Some((head[1], (0..head[2]).map(|_| (take(1)[0], take((JOINT + FEEDBACK) / 8))).collect::<Vec<_>>()));
             continue;
         }
+        if words[at.get()] == 7 || words[at.get()] == 8 {
+            // Task C5g: a wrapper call or its return (crate::wrappers)
+            take(if words[at.get()] == 7 { 74 } else { 30 });
+            continue;
+        }
         let head = take(4);
         assert!(head[0] == 4 || head[0] == 5, "record kind {} at word {}", head[0], at.get() - 4);
         let world = take(WORLD / 8);
@@ -485,6 +490,21 @@ pub(crate) fn check_world(path: &str) {
         if let Some(own) = &before.own {
             // CSP's contact joints out (each body's leading nodes and the list's leading joints), the port's in
             let n = world.joints.iter().take_while(|j| matches!(j.joint.kind, JointKind::Contact { .. })).count();
+            // the joints themselves first: bodies and contact words (oldest first in both)
+            let theirs: Vec<&Vec<u64>> = before.joints[..n].iter().rev().map(|(_, j)| j).collect();
+            // pos and normal's fourth words left out: the trimesh collider's 1.0 and normal length, never read
+            let words = |j: &Vec<u64>| {
+                let mut v = [&j[0x40 / 8..0x40 / 8 + 1], &j[0x58 / 8..0x58 / 8 + 1], &j[0xa8 / 8..0xa8 / 8 + 31]].concat();
+                (v[20], v[24]) = (0, 0);
+                v
+            };
+            let k = (0..theirs.len().max(own.len())).find(|&k| theirs.get(k).map(|j| words(j)) != own.get(k).map(|o| words(&o.1)));
+            if let Some(k) = k {
+                if differ < 12 {
+                    println!("step {} contact joints: csp {} port {}, first differing #{k}: csp {:x?} port {:x?}", before.step, theirs.len(), own.len(), theirs.get(k).map(|j| words(j)), own.get(k).map(|o| words(&o.1)));
+                }
+                differ += 1;
+            }
             assert!(world.joints[n..].iter().all(|j| !matches!(j.joint.kind, JointKind::Contact { .. })), "step {}: contact joints only at the list's head", before.step);
             world.joints.drain(..n);
             for nodes in &mut world.nodes {

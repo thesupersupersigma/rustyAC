@@ -13,8 +13,6 @@ use std::sync::Mutex;
 /// What a call's return is checked against or tells the port.
 pub(crate) enum Expect {
     Nothing,
-    /// a world step of this size, done on the port at the return
-    Step(f32),
     /// the creator returned this body / joint of the port's
     Body(usize),
     Joint(usize),
@@ -131,7 +129,17 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
             port.worlds += 1;
             if !port.track {
                 match crate::collision::port_track(dll, rcx) {
-                    Ok(t) => port.core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box),
+                    Ok(t) => {
+                        port.core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box);
+                        let c = &mut port.core.col;
+                        (c.cars_levels, c.prefilter, c.edges, c.load) = (t.cars_levels, t.prefilter, t.edges, t.load);
+                        c.switches = crate::joints::switches(dll, &[]);
+                        // the table CSP's first prepare built, before the port knew the levels; no
+                        // car moved since
+                        let aabbs: Vec<[f64; 6]> = c.cars.iter().map(|&s| c.geoms[s].aabb).collect();
+                        c.cars_table = rustyac_ode::csp_space::HashSpace::build(&aabbs, c.cars_levels.0, c.cars_levels.1);
+                        (c.cars_built, c.cars_dirty) = (true, false);
+                    }
                     Err(e) => port.broken = Some(format!("track: {}", e.0)),
                 }
                 port.track = true;
@@ -149,7 +157,22 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
                 assert!(empty(12856) && empty(12960), "joints to release or the 12960 list");
                 assert!(*((dll + 0x281_7680) as *const i32) <= 0, "threads");
                 assert!(*((dll + 0x280_3222) as *const u8) == 0 || *((dll + 0x267_b338) as *const u32) == 0, "the threaded world step");
-                Expect::Step(xmm(1))
+                // the port steps first, so that its contact joints (record 6) come before CSP's
+                // record 4 of the step
+                match port.core.step(xmm(1)) {
+                    Ok(joints) => {
+                        let r = |a: usize| std::ptr::read_unaligned(a as *const usize);
+                        let mut bodies = Vec::new();
+                        let mut p = r(r(rcx + 16) + 0x28);
+                        while p != 0 {
+                            bodies.push(p);
+                            p = r(p + 0x10);
+                        }
+                        crate::collision::record_joints(step, &joints, &bodies);
+                    }
+                    Err(e) => port.broken = Some(format!("step: {}", e.0)),
+                }
+                Expect::Nothing
             }
         }
         (rva, Some(b)) => {
@@ -223,12 +246,6 @@ pub(crate) unsafe fn leave(rva: usize, rax: usize, xmm0: usize, expect: Expect) 
     let Some(port) = guard.as_mut() else { return };
     let (ok, setup) = match expect {
         Expect::Nothing => return,
-        Expect::Step(h) => {
-            if let Err(e) = port.core.step(h) {
-                port.broken = Some(format!("step: {}", e.0));
-            }
-            return;
-        }
         Expect::Geom(g) => {
             port.core.col.geoms[g].id = rax;
             return;
@@ -335,7 +352,7 @@ unsafe fn compare(port: &mut Port, core: usize, step: usize) {
     if port.track {
         let dll = crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed);
         match crate::collision::port_cars(dll, core) {
-            Ok((csp, pairs, static_step)) => {
+            Ok((csp, pairs, car_pairs, static_step, load)) => {
                 let c = &port.core.col;
                 let tc = |g: usize| match &c.geoms[g].shape {
                     rustyac_ode::csp_collision::Shape::Box { tc, .. } => crate::btl::tc_bits(tc),
@@ -358,6 +375,13 @@ unsafe fn compare(port: &mut Port, core: usize, step: usize) {
                 if theirs != ours || static_step != c.static_step {
                     bad.push(format!("pairs / static step: csp {theirs:x?} {static_step} port {ours:x?} {}", c.static_step));
                 }
+                let ours: Vec<(usize, usize)> = c.car_pairs.iter().map(|&(a, b)| (name(a), name(b))).collect();
+                if car_pairs != ours {
+                    bad.push(format!("car pairs: csp {car_pairs:x?} port {ours:x?}"));
+                }
+                if load != c.load && !(load.avg.is_nan() && c.load.avg.is_nan()) {
+                    bad.push(format!("contact load: csp {load:?} port {:?}", c.load));
+                }
             }
             Err(e) => bad.push(format!("car spaces: {}", e.0)),
         }
@@ -366,6 +390,7 @@ unsafe fn compare(port: &mut Port, core: usize, step: usize) {
     if !bad.is_empty() && port.log.len() < 20000 {
         port.log.push_str(&format!("  world step {} (step {step}): {} differ\n", port.worlds, bad.len()));
         bad.iter().take(6).for_each(|x| port.log.push_str(&format!("  {x}\n")));
+        bad.iter().skip(6).for_each(|x| port.log.push_str(&format!("  {}\n", x.lines().next().unwrap_or(""))));
     }
 }
 

@@ -54,7 +54,15 @@ pub(crate) unsafe fn side(geom: usize) -> (Side, usize) {
     let user = if body != 0 { read::<usize>(body + 0x28) } else { 0 };
     let special = user != 0 && read::<u8>(user + 152) != 0 && read::<u8>(user + 153) == 0;
     let grip = user != 0 && read::<u8>(user + 159) & 1 != 0;
-    (Side { class: read::<i32>(geom + 8), no_data: data == 0 || data & 1 != 0, body: None, grip, special }, body)
+    let bits = if user != 0 { read::<u8>(user + 159) } else { 0 };
+    let weight = if bits & 2 != 0 {
+        1.0
+    } else if bits & 4 != 0 {
+        f32::from_bits(0x3e99_999a)
+    } else {
+        0.0
+    };
+    (Side { class: read::<i32>(geom + 8), no_data: data == 0 || data & 1 != 0, body: None, grip, special, weight }, body)
 }
 
 /// The maker's entry: `rsp` is the stack pointer at the break (the fifth argument at +0x28).

@@ -10,7 +10,7 @@
 //! layout), which `--world` steps the world with in place of CSP's.
 
 use rustyac_ode::csp_collide::{NewJoint, Unhandled};
-use rustyac_ode::csp_collision::{refresh, Collision, Geom, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_POSR_BAD};
+use rustyac_ode::csp_collision::{refresh, Collision, Geom, Load, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_POSR_BAD};
 use rustyac_ode::csp_space::HashSpace;
 use rustyac_ode::csp_step::WorldParams;
 use rustyac_ode::csp_world::CspWorld;
@@ -209,6 +209,7 @@ unsafe fn state(st: &mut State, dll: usize, w: usize, bodies: &[usize]) -> Resul
         aabb_limit: read(dll + 0x27f_995c),
         full_box_box: read::<u8>(collider + 0x144) != 0,
         switches: crate::joints::switches(dll, &[]),
+        ..Default::default()
     };
     Ok((col, ptrs))
 }
@@ -306,15 +307,22 @@ pub(crate) unsafe fn leave(thread: u32) {
         let s = format!("step {} {}: {}", o.step, if o.col.static_step { "static" } else { "dynamic" }, bad.join("; "));
         note(st, s);
     }
+    record_joints(o.step, port, &o.bodies);
+}
+
+/// With `CSP_ORACLE_ISLANDS`, record 6: the port's contact joints `port` of step `step` laid out as
+/// CSP's (`bodies` maps the port's body indices to CSP's pointers), for `--world`.
+pub(crate) fn record_joints(step: usize, port: &[NewJoint], bodies: &[usize]) {
     if std::env::var_os("CSP_ORACLE_ISLANDS").is_some() {
-        let mut w = vec![6, o.step as u64, port.len() as u64];
+        let mut w = vec![6, step as u64, port.len() as u64];
         for (k, p) in port.iter().enumerate() {
             let mut j = vec![0u64; (crate::island::JOINT + crate::island::FEEDBACK) / 8];
             j[0] = 0x3170;
             j[0x30 / 8] = if p.reverse { 2 } else { 0 };
-            j[0x40 / 8] = o.bodies[p.b0] as u64;
-            j[0x58 / 8] = p.b1.map_or(0, |b| o.bodies[b]) as u64;
-            j[0x68 / 8] = 1;
+            j[0x40 / 8] = bodies[p.b0] as u64;
+            j[0x58 / 8] = p.b1.map_or(0, |b| bodies[b]) as u64;
+            // a feedback as the recorder gives CSP's joints (CSP_ORACLE_FEEDBACK)
+            j[0x68 / 8] = std::env::var_os("CSP_ORACLE_FEEDBACK").is_some() as u64;
             for (i, x) in crate::joints::contact_words(p).into_iter().enumerate() {
                 j[0xa8 / 8 + i] = x;
             }
@@ -402,7 +410,7 @@ unsafe fn pose_check(st: &mut State, dll: usize, space: usize) {
             }
             // the port's view, before CSP writes
             let bodies = [crate::island::body(&(0..crate::island::BODY / 8).map(|i| read::<u64>(fb + 8 * i)).collect::<Vec<_>>())];
-            let side = |class, body| rustyac_ode::csp_collide::Side { class, no_data: true, body, grip: false, special: false };
+            let side = |class, body| rustyac_ode::csp_collide::Side { class, no_data: true, body, ..Default::default() };
             let mut geoms: Vec<Geom> = live
                 .iter()
                 .map(|&(g, posr, off)| Geom {
@@ -482,6 +490,17 @@ pub(crate) struct PortTrack {
     pub static_step: bool,
     pub aabb_limit: i32,
     pub full_box_box: bool,
+    /// the car container's levels (+0xd0, +0xd4), `TRIMESH_OBB_PREFILTER`, the tree collider's
+    /// edge axes, the contact load
+    pub cars_levels: (i32, i32),
+    pub prefilter: bool,
+    pub edges: bool,
+    pub load: Load,
+}
+
+/// The contact load at +0x31f8 of the world wrapper.
+pub(crate) unsafe fn load(w: usize) -> Load {
+    Load { counter: read(w + 0x31f8), lo: read(w + 0x31fc), hi: read(w + 0x3200), avg: read(w + 0x3208), up: read(w + 0x3210), down: read(w + 0x3218) }
 }
 
 /// The port's reads keep their own mesh cache.
@@ -499,6 +518,9 @@ pub(crate) unsafe fn port_track(dll: usize, w: usize) -> Result<PortTrack, Unhan
     }
     if read::<u32>(w + 0x58) != 0 {
         return Err(Unhandled("kept pairs before the first step"));
+    }
+    if read::<u8>(cars + 218) != 0 {
+        return Err(Unhandled("a car container rebuilt at each collide (+218)"));
     }
     let mut st = State::default();
     let (mut geoms, mut ptrs) = (Vec::new(), Vec::new());
@@ -519,6 +541,10 @@ pub(crate) unsafe fn port_track(dll: usize, w: usize) -> Result<PortTrack, Unhan
         static_step: read::<u32>(w + 0x4c) != 0,
         aabb_limit: read(dll + 0x27f_995c),
         full_box_box: read::<u8>(collider + 0x144) != 0,
+        cars_levels: (read(cars + 0xd0), read(cars + 0xd4)),
+        prefilter: read::<u8>(dll + 0x27f_91a4) != 0,
+        edges: read::<u8>(dll + 0x27f_91a6) != 0,
+        load: load(w),
     })
 }
 
@@ -535,8 +561,9 @@ pub(crate) fn describe(geoms: &[Geom], g: usize, tc: &dyn Fn(usize) -> Vec<u64>)
     }
 }
 
-/// The car spaces described, the kept pairs, the static step's flag.
-type Cars = (Vec<String>, Vec<(usize, usize)>, bool);
+/// The car spaces described, the kept track pairs (+0x50), the kept car pairs (+0x60), the static
+/// step's flag, the contact load.
+type Cars = (Vec<String>, Vec<(usize, usize)>, Vec<(usize, usize)>, bool, Load);
 
 /// CSP's car spaces (`w` the world wrapper) as [`Cars`].
 pub(crate) unsafe fn port_cars(dll: usize, w: usize) -> Result<Cars, Unhandled> {
@@ -561,7 +588,9 @@ pub(crate) unsafe fn port_cars(dll: usize, w: usize) -> Result<Cars, Unhandled> 
     let tc = |g: usize| crate::btl::tc_bits(&crate::btl::read_tc(ptrs[g], 0));
     let base = read::<usize>(w + 0x50);
     let pairs = (0..read::<u32>(w + 0x58) as usize).map(|i| (read(base + 16 * i), read(base + 16 * i + 8))).collect();
-    Ok((roots.iter().map(|&s| describe(&geoms, s, &tc)).collect(), pairs, read::<u32>(w + 0x4c) != 0))
+    let base = read::<usize>(w + 0x60);
+    let car_pairs = (0..read::<u32>(w + 0x68) as usize).map(|i| (read(base + 16 * i), read(base + 16 * i + 8))).collect();
+    Ok((roots.iter().map(|&s| describe(&geoms, s, &tc)).collect(), pairs, car_pairs, read::<u32>(w + 0x4c) != 0, load(w)))
 }
 
 /// The trimesh CSP made at `g` (a car's mesh collider): its mesh and shape.

@@ -3,17 +3,17 @@
 //! Contact joints from one pair's contacts, as Custom Shaders Patch 0.3.2 (build 4305) makes them
 //! (+0x92c9f0) for a car's box against the track's trimesh: fixed surface parameters (a box without
 //! user data, as a car's collider, gets its own and keeps only contacts near the body's up axis),
-//! CSP's softer erp/cfm for deep contacts. Only the path CSP takes on a Spa
-//! drive is here; the others (car against car, a disabled body, trimesh against trimesh,
-//! surface mixing, depth from contact speed, moving surfaces, the deferred batches) give
-//! [`Unhandled`].
+//! CSP's softer erp/cfm for deep contacts; two cars' meshes get the default surface and a joint
+//! between both bodies. Only the paths CSP takes on a Spa drive are here; the others (a disabled
+//! body, a body-less trimesh against a trimesh, surface mixing, depth from contact speed, moving
+//! surfaces, the deferred batches, batched car-car joints) give [`Unhandled`].
 
 use crate::csp_btl::ContactGeom;
 use crate::csp_contact::Contact;
 use crate::world::{Body, BODY_DISABLED};
 
 /// One geom of the pair as the joint maker sees it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Side {
     /// `dGeomGetClass` (1 box, 8 trimesh; CSP's 10 counts as a box)
     pub class: i32,
@@ -24,6 +24,8 @@ pub struct Side {
     pub grip: bool,
     /// user data bytes +152 set and +153 clear: CSP's moving-surface joint (not ported)
     pub special: bool,
+    /// the reduction weight of +0x92b9d0: user data byte +159 bit 1 gives 1.0, else bit 2 0.3
+    pub weight: f32,
 }
 
 /// CSP switches the joint maker reads; the port handles them all off.
@@ -83,8 +85,9 @@ pub fn contact_joints(contacts: &[ContactGeom], s1: &Side, s2: &Side, bodies: &[
     if s1.class == 8 && s2.class == 8 && s1.body.is_some() != s2.body.is_some() {
         return Err(Unhandled("trimesh against trimesh"));
     }
-    if s1.body.is_some() && s2.body.is_some() {
-        return Err(Unhandled("two bodies"));
+    let two = s1.body.is_some() && s2.body.is_some();
+    if two && sw.car_pairs {
+        return Err(Unhandled("batched car-car joints"));
     }
     if s1.special || s2.special {
         return Err(Unhandled("moving surface"));
@@ -97,10 +100,17 @@ pub fn contact_joints(contacts: &[ContactGeom], s1: &Side, s2: &Side, bodies: &[
     let up = ((is_box(s1.class) && s1.no_data) || (is_box(s2.class) && s2.no_data)) && (s1.class == 8 || s2.class == 8);
     let side = if s1.body.is_some() { s1 } else { s2 };
     let Some(body) = side.body else { return Err(Unhandled("no body")) };
-    // CSP wakes the body (dBodyEnable) for a deep or fast contact; a disabled car body was never seen
-    if bodies[body].flags & BODY_DISABLED != 0 {
-        return Err(Unhandled("disabled body"));
+    // CSP wakes a body (dBodyEnable) for a deep or fast contact; a disabled car body was never
+    // seen; a body flagged 0x200 takes the batched path
+    for b in [s1.body, s2.body].into_iter().flatten() {
+        if bodies[b].flags & BODY_DISABLED != 0 {
+            return Err(Unhandled("disabled body"));
+        }
+        if bodies[b].flags & 0x200 != 0 {
+            return Err(Unhandled("a body on the batched path"));
+        }
     }
+    let b1 = if two { s2.body } else { None };
     let r = &bodies[body].r;
     let mut out = Vec::new();
     for c in contacts {
@@ -126,7 +136,7 @@ pub fn contact_joints(contacts: &[ContactGeom], s1: &Side, s2: &Side, bodies: &[
         if sw.soft_deep && c.depth > limit as f64 {
             (contact.soft_erp, contact.soft_cfm) = soften(contact.soft_erp, contact.soft_cfm, c.depth as f32, limit);
         }
-        out.push(NewJoint { contact, geom: *c, b0: body, b1: None, reverse: s1.body.is_none() });
+        out.push(NewJoint { contact, geom: *c, b0: body, b1, reverse: s1.body.is_none() });
     }
     Ok(out)
 }

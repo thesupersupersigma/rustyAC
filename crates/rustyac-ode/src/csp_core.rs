@@ -7,7 +7,7 @@
 //! `bodies - 1 - id` (non-contact joints likewise, counted from the list's tail). Every value the
 //! car hands over is an f32 and every answer goes back as an f32, as the wrappers do.
 
-use crate::csp_collide::{Side, Unhandled};
+use crate::csp_collide::{NewJoint, Side, Unhandled};
 use crate::csp_collision::{joint_of, posr, product, refresh, Collision, Geom, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_DIRTY, GEOM_ENABLED, GEOM_POSR_BAD};
 use crate::csp_space::HashSpace;
 use crate::csp_step::{Joint, JointKind, WorldParams};
@@ -84,13 +84,7 @@ impl Core {
                 track: Vec::new(),
                 track_level: 0,
                 track_count: 0,
-                table: HashSpace::default(),
-                pairs: Vec::new(),
-                static_step: false,
-                cars_dirty: false,
-                aabb_limit: 0,
-                full_box_box: false,
-                switches: Default::default(),
+                ..Default::default()
             },
             track_set: false,
             owner: Vec::new(),
@@ -403,10 +397,12 @@ impl Core {
     /// The world step (+0x92e4a0 when it steps): once the track is in, the collision (+0x92c2b0)
     /// and its contact joints; the ODE step of `h` (an f32 widened); the contact joints emptied
     /// (+0x168ccc0); each stepped body's geoms moved; the static and dynamic steps alternate.
-    pub fn step(&mut self, h: f32) -> Result<(), Unhandled> {
+    /// Returns the contact joints made, in CSP's order.
+    pub fn step(&mut self, h: f32) -> Result<Vec<NewJoint>, Unhandled> {
+        let mut joints = Vec::new();
         if self.track_set {
             self.sync_sides();
-            let joints = self.world.collide(&mut self.col)?;
+            joints = self.world.collide(&mut self.col)?;
             self.world.add_contacts(joints.iter().map(|j| joint_of(j, false)).collect());
         }
         let islands = self.world.step(h as f64);
@@ -426,7 +422,7 @@ impl Core {
         if self.track_set {
             self.col.static_step = !self.col.static_step;
         }
-        Ok(())
+        Ok(joints)
     }
 
     /// Each car geom's body index and the user-data bits the joint maker reads.
@@ -439,6 +435,13 @@ impl Core {
                 side.body = Some(n - 1 - id);
                 side.grip = u[7] & 1 != 0;
                 side.special = u[0] != 0 && u[1] == 0;
+                side.weight = if u[7] & 2 != 0 {
+                    1.0
+                } else if u[7] & 4 != 0 {
+                    f32::from_bits(0x3e99_999a)
+                } else {
+                    0.0
+                };
             }
         }
         self.col.cars_count = self.col.cars.len() as i32;
@@ -469,6 +472,13 @@ impl Core {
         if self.col.track.iter().any(|&t| self.col.geoms[t].flags & GEOM_DIRTY != 0) {
             return Err(Unhandled("a track geom moved"));
         }
+        // the container's table, built again once a car space moved (+216 clear or +217 set)
+        let c = &mut self.col;
+        if self.track_set && (c.cars_dirty || !c.cars_built) {
+            let aabbs: Vec<[f64; 6]> = c.cars.iter().map(|&s| c.geoms[s].aabb).collect();
+            c.cars_table = HashSpace::build(&aabbs, c.cars_levels.0, c.cars_levels.1);
+            (c.cars_built, c.cars_dirty) = (true, false);
+        }
         Ok(())
     }
 
@@ -497,7 +507,7 @@ impl Core {
     /// A new geom (`dxGeom`'s constructor, no space): flags dirty, box out of date, enabled,
     /// placeable (8) but for a space; category and collide bits all set.
     fn new_geom(&mut self, id: usize, class: i32, shape: Shape) -> usize {
-        let side = Side { class, no_data: true, body: None, grip: false, special: false };
+        let side = Side { class, no_data: true, ..Default::default() };
         let flags = if class == 11 { NEW_GEOM } else { NEW_GEOM | 8 };
         self.col.geoms.push(Geom { id, side, flags, category: !0, collide: !0, offset: None, pos: [0.0; 3], r: [0.0; 12], aabb: [0.0; 6], shape });
         self.owner.push(None);
