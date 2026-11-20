@@ -69,14 +69,16 @@ part_physics() {
     rc re/gold/roots repo/re/gold/roots /E
 }
 # the rest, for the other areas (F2 part 3): the whole install but sdk/ (Kunos' editors, never read),
-# then every kept result and recording but re/gold/web (the browser's, which stays on the PC), and the
-# repo files areas read besides the programs (python's test apps, csp's race.ini, render's poses)
+# then every kept result and recording but re/gold/web (the browser's, which stays on the PC) and the
+# PC's kept game results (fresh/rec, dumps: their keys hold the maths path, so the VM never reads the
+# PC's; F3: a full run that recorded again sent 16 GB for nothing), and the repo files areas read
+# besides the programs (python's test apps, csp's race.ini, render's poses)
 part_ac() {
     rc "$ac" ac /E /XD "$(cygpath -w "$ac/sdk")"
 }
 part_repo() {
     rc oracle repo/oracle /E
-    rc re/gold repo/re/gold /E /XD "$(cygpath -w re/gold/web)"
+    rc re/gold repo/re/gold /E /XD "$(cygpath -w re/gold/web)" "$(cygpath -w re/gold/fresh/rec)" "$(cygpath -w re/gold/dumps)"
     rc tools/render_oracle/py_apps repo/tools/render_oracle/py_apps /E
     rc tools/csp_oracle/src repo/tools/csp_oracle/src main.rs
     rc crates/rustyac-render/tests/data repo/crates/rustyac-render/tests/data /E  # render's --pose files
