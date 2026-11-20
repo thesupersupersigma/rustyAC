@@ -16,6 +16,8 @@
 #   ode <car>      CSP's double ODE functions and solver kernels against rustyac-ode's f64 ones (Tasks C5c, C5d),
 #                  inputs from a Spa drive
 #   island <car>   CSP's dxStepIsland against rustyac-ode's csp_step on that car's recorded Spa islands (Task C5d)
+#   world <car> <n>  CSP's world step (auto-disable, islands, island steps) against rustyac-ode's csp_world on
+#                  n cars' recorded Spa worlds, CSP workers 0 and 7 (Task C5e)
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -216,6 +218,37 @@ for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
     else
         verdict "island $car" DIFFERENT "csp_oracle failed: $(why "$out/runs/island_drive_$car.txt" 'error|panic|fault|exit')"
     fi
+done
+
+# world <car> <n>: CSP's world step (Task C5e, csp_world): a 600-step Spa drive with n cars (20 m apart along
+# the spawn heading) records the whole ODE world before the auto-disable / island build and after the islands
+# were stepped (CSP_ORACLE_ISLANDS, records 4 and 5), once with CSP's worker count 0 and once with 7; rustyac-ode's
+# CspWorld steps every recorded world (the recorded contacts fed in): every body, its auto-disable state and every
+# joint feedback bit for bit in both recordings, and both recordings' after-states the same (hash)
+for car in ks_ferrari_f2004 rss_formula_rss_3_v6_2026; do
+    for n in 1 3; do
+        keep "world $car $n" || continue
+        [ -f "$lap" ] || { skip "world $car $n" "no $lap"; continue; }
+        lines=
+        for w in 0 7; do
+            bin=$out/runs/world_${car}_${n}_$w.bin; rm -f "$bin"
+            run=$out/runs/world_${car}_${n}_$w.txt
+            if CSP_ORACLE_BREAK=16c7650a,92ea7dz CSP_ORACLE_ISLANDS="$(cygpath -aw "$bin")" CSP_ORACLE_FEEDBACK=1 oracle "world_drive_${car}_${n}_$w" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --cars $n --workers $w --steps 600 && [ -s "$bin" ]; then
+                "$CSP" --world "$(cygpath -aw "$bin")" > "$run" 2>&1
+            else
+                echo "csp_oracle failed: $(why "$out/runs/world_drive_${car}_${n}_$w.txt" 'error|panic|fault|exit')" > "$run"
+            fi
+            rm -f "$bin"
+            lines="$lines$(tr -d '\r' < "$run" | grep -m1 '^world \|^csp_oracle failed')
+"
+        done
+        w0=$(echo "$lines" | sed -n 1p); w7=$(echo "$lines" | sed -n 2p)
+        if echo "$w0" | grep -q "^world 600 steps, $((600 * n)) islands, .*: 0 differ, after " && [ "$w0" = "$w7" ]; then
+            verdict "world $car $n" IDENTICAL "${w0#world } (workers 7 the same)"
+        else
+            verdict "world $car $n" DIFFERENT "workers 0: $w0 / workers 7: $w7 $(why "$out/runs/world_${car}_${n}_0.txt" '^step|panic')"
+        fi
+    done
 done
 
 summary

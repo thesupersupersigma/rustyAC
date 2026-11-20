@@ -945,7 +945,7 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 // ending in "d" also the 12 doubles at rdx; ending in "g" the ODE geoms at rcx and rdx: 8 qwords from +0
 // and the 3 doubles at the position pointer +0x28, the body's 6 qwords; ending in "b" the dxBody at
 // rcx as `dxStepBody` reads it: h from xmm1, the flags, then ode::BODY_FIELDS; "i" / "w" the island
-// recorder, island.rs), puts the byte back,
+// recorder, "a" / "z" the world recorder, island.rs), puts the byte back,
 // single-steps it and re-arms. shortcut: another thread passing during that one instruction is not
 // logged, upgrade if a count looks short
 
@@ -960,7 +960,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('d' | 'g' | 'b' | 'i' | 'w' | 'l')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('d' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1026,6 +1026,12 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         }
         if dump == 'x' {
             crate::island::leave(step);
+        }
+        if dump == 'a' {
+            crate::island::world_enter(rcx, read::<f64>(context + 0x1c0), step);
+        }
+        if dump == 'z' {
+            crate::island::world_leave(step);
         }
         if dump == 'l' {
             crate::island::lcp(rdx, r8, r9, read::<usize>(context + 0x98));
@@ -1581,9 +1587,6 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     if tape_track.as_deref() != track.map(|t| t.0) {
         stop(2, &format!("{ryin}: the tape's track is {tape_track:?}, csp_oracle drives {:?}", track.map(|t| t.0)));
     }
-    if track.is_some() && cars.len() != 1 {
-        stop(2, "a real track takes one car (its tape's spawn)");
-    }
     // the tape's spawn: f32 bits, three per vector
     let vector = |key: &str| -> [f32; 3] {
         let bits: Vec<u32> = header.get(key).map(|v| v.split(',').map(|w| u32::from_str_radix(w, 16).expect("a spawn word")).collect()).unwrap_or_default();
@@ -1629,8 +1632,11 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             if header.get("oracle_armed").map(String::as_str) == Some("1") {
                 put(car, 0x1f8 + 0x80, 1u8); // CarAvatar::armFirstLap (transponder)
             }
-            force_rotation(car, &vector("oracle_spawn_tail"));
-            force_position(car, &vector("oracle_spawn_position"), 1);
+            // more cars (Task C5e): 20 m apart along the spawn's heading, each driven by the same tape
+            let (tail, at) = (vector("oracle_spawn_tail"), vector("oracle_spawn_position"));
+            let n = (tail[0] * tail[0] + tail[1] * tail[1] + tail[2] * tail[2]).sqrt();
+            force_rotation(car, &tail);
+            force_position(car, &std::array::from_fn(|k| at[k] + tail[k] / n * 20.0 * i as f32), 1);
         } else {
             // side by side 4 m apart, nose towards +z
             force_rotation(car, &[0.0, 0.0, -1.0]);
@@ -2095,6 +2101,9 @@ unsafe fn maths(dll: usize) {
 fn main() {
     let mut arguments: Vec<String> = std::env::args().collect();
     // --islands <file>: recorded CSP islands stepped by rustyac-ode's csp_step (Task C5d), no AC
+    if let Some(i) = arguments.iter().position(|a| a == "--world") {
+        return island::check_world(&arguments[i + 1]);
+    }
     if let Some(i) = arguments.iter().position(|a| a == "--islands") {
         return island::check(&arguments[i + 1]);
     }

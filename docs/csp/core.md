@@ -34,8 +34,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5d 2.2 `dxStepIsland` in f64 | done: `csp_step::step_island` bit-identical to CSP's on 1,200 recorded car islands (bodies, joint feedback, solver inputs) ([below](#task-c5d-part-2-dxstepisland-in-double)). C5d done |
 
-Next: plan part 5 (C5e): `csp_step` inside `World` (islands from the body / joint lists, auto-disable),
-then the car's f64 world in rustyAC's CSP mode.
+| C5e 1. CSP's world step decoded | done: `+0x92e4a0`, workers 0 and > 0 paths, auto-disable, island builder ([below](#task-c5e-csps-world-step)) |
+| C5e 2. `csp_world::CspWorld::step` in f64 | done: 600-step Spa worlds of 1 and 3 cars of both proof cars bit-identical to CSP's, recorded at workers 0 and 7, the two recordings the same ([below](#task-c5e-csps-world-step)). C5e done |
+
+Next: plan part 6 (collision: near callback, contact reduction and creation, the changed colliders),
+then part 7 (`cphys::` wrappers).
 
 ## The core in one paragraph
 
@@ -195,12 +198,12 @@ density: same inputs through CSP's function and the port, every output compared 
 | 2 | Q3: owner of the origin contacts, fix the stand-in or document it | 0.5-1 | **done in C5b** |
 | 3 | `rustyac-ode` generic over the number type (f32 Vanilla, f64 CSP; the float path's results must not move), then the code that is the same in 0.13.1 and `66615b8a` proven in double: rotation, mass, odemath and matrix helpers that did not change, body integration, ball / fixed rows (**done in C5c**; ray-vs-trimesh went to part 8, the LDLT / solve kernels to part 4: master rewrote them; CSP has no hinge) | 2 used (planned 4-6) | existing ODE proofs unchanged; each ODE function vs CSP's copy in-process, bits |
 | 4 | the `66615b8a` code 0.13.1 does not have (C5d): `step.cpp` changes and the new LDLT / LCP solvers (CSP steps cars with `dWorldStep`, [answer](#does-csp-call-dworldstep-yes-every-physics-step)), contact and dball `getInfo2`, `matrix` changes (**done in C5d**, 1 session); the box / trimesh colliders that changed (1) and libccd pairs (1) moved to part 6. QuickStep (3,600 lines) only runs for islands whose bodies all carry CSP's flag `0x200`, never seen for cars: later, not counted | 1 used (planned 3.5-5.5) | per-stage in-process compare |
-| 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags | 1-2 | `steps.txt` identical at workers 0 and 7 |
+| 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags (**done in C5e**, 1 session; the space clean-up and geom flags go with part 6) | 1 used (planned 1-2) | whole world identical per step, workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above, car collision callback; the box / trimesh colliders that changed and libccd pairs (from part 4) | 4-5 | contact lists identical per step |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5d** | **11.5-17** (parts 5-9; after C5c: 13-20.5) | |
+| | **Total left after C5e** | **10.5-15** (parts 6-9; after C5d: 11.5-17) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -656,3 +659,77 @@ the gyroscopic y row in source order plus a feedback nudge: 30,900 / 31,783 (sol
 Not done in part 2: the other fixed path (CSP's shifting joint, decoded in step 3, no car of the proof
 uses it) and hinge (CSP has none) are not in `JointKind`; ray-vs-trimesh stays part 8. Wiring
 `csp_step` into `World` (body / joint lists, islands, auto-disable) is the next part's (5).
+
+## Task C5e: CSP's world step
+
+**What CSP does each physics step** (`+0x92e4a0`, CSP's physics world's step; addresses are offsets in
+CSP's `dwrite.dll`):
+
+1. Leaves at once while the late-step byte is set (C4a's `0x2803210` and its twin).
+2. Collision: the pending contact batches (world `+0x328c` / `+0x3280` / `+0x3288`, `+0x92c9f0`) or
+   the space collide (`+0x92c2b0`), then `+0x91d670` and the callbacks `+0x92b140`, `+0x938b40`,
+   `+0x1226fa0`. Part 6's.
+3. The ODE step, by worker count (`dll+0x267b338`, the dword `--workers` sets):
+   - **workers 0** (CSP mode's rule): `h` as float widened to double, then
+     `dxReallocateWorldProcessContext` (`+0x16c7650`, estimator `+0x16c5850`) and `dxProcessIslands`
+     (`+0x16c6d00`) with the stepper hard-coded to `dxStepIsland` (`+0x16c24b0`). QuickStep never runs.
+   - **workers > 0** (and the multi-thread byte): `+0x168d1c0` calls the same `+0x16c7650` with an
+     estimator chooser (`+0x168d180`) and writes one 0x14-byte record per island (first body, first
+     joint, body count, joint count, a byte "every body has flag `0x200`"); the job pool (`+0x5864f0`,
+     job `+0x92ebd0`) hands islands out by an atomic counter, each job steps its island on one thread
+     with `dxStepIsland`, or QuickStep (`+0x16bd3f0`) when that byte is set. After the jobs CSP marks
+     every island body's geoms moved (geom `+0xc |= 2`, parents through `dGeomMoved`) and calls the
+     body's moved callback (`+0x2c0`): the workers never call them.
+4. Both paths join at `+0x92ea7d`: timing, the world's `+0x3230` countdown (back to 6), and with a
+   global byte set the space clean-up `+0x168ccc0`. Part 6's.
+
+`+0x16c7650` calls `+0x16c6ab0` (master's `BuildIslandsAndEstimateStepperMemoryRequirements`), which
+runs auto-disable (`+0x16c5e60`) first. Both are master `66615b8a` with these differences:
+
+| | CSP | master's C |
+|---|---|---|
+| joint enabled for islands | `flags & 8 == 0 && (!(0 >= b0.invMass) \|\| (b1 && !(0 >= b1.invMass)))` (`comisd`: a NaN mass counts as movable) | `invMass > 0` |
+| auto-disable average | `buffer[0] + buffer[1] + …` then `(1.0 / samples) * sum` | same, but `dIASSERT` checks (none in CSP) |
+| idle test | `!(dot > threshold)`: a NaN speed counts as idle | same expression |
+
+**Port.** `crates/rustyac-ode/src/csp_world.rs`: `CspWorld { params, bodies, joints, nodes }` in
+ODE's list order (newest first), `step(h)` = auto-disable, the island build above (body tag = its
+index in its island), each island through C5d's `csp_step::step_island` and back. A type of its own,
+not `World<f64>`: `World` holds f32 joints, geoms and spaces, and making all of it generic is part 7's
+size, not this part's. Joint tags after the step are not set the way master does (`i` / `-1`); the
+next build resets them, nothing reads them in between.
+
+Found on the way: `step_island`'s constraint-force sum started from `+0.0`; CSP starts from the first
+row's product, so a joint whose rows are all `-0` gives `-0` (seen in 3-car contact feedback). Fixed in
+`csp_step`; the `island` cases re-run identical.
+
+**Proof.** csp_oracle breaks at `+0x16c7650` (`a`: the whole world before auto-disable: world block,
+every body with its sample buffers and joint list, every joint with feedback) and at the join
+`+0x92ea7d` (`z`: the whole world after), so the same recording works at workers 0 and 7. `csp_oracle
+--world <file>` steps each recorded world with `CspWorld::step` and compares every body (pos, q, R,
+lvel, avel, facc, tacc, flags, tag, auto-disable state) and every joint feedback bit for bit, and prints
+a hash of the after-states. The contacts are CSP's recorded ones (this proves the step, not
+collision). 600-step Spa drive, cars 20 m apart along the spawn heading:
+
+| car | cars | islands | contacts | differ (workers 0 / 7) | after-hash workers 0 = 7 |
+|---|---|---|---|---|---|
+| ks_ferrari_f2004 | 1 | 600 | 26 | 0 / 0 | yes |
+| ks_ferrari_f2004 | 3 | 1,800 | 1,140 | 0 / 0 | yes |
+| rss_formula_rss_3_v6_2026 | 1 | 600 | 0 | 0 / 0 | yes |
+| rss_formula_rss_3_v6_2026 | 3 | 1,800 | 252 | 0 / 0 | yes |
+
+Proof area `csp`, case `world <car> <n>`.
+
+**Workers 7 against 0: identical, and why.** Islands share no body and no joint, every island is
+stepped whole by one thread with `dxStepIsland`, and the moved callbacks and geom flags run after all
+jobs on the calling thread in island order; so the order the jobs finish in cannot reach a bit. The
+one way the worker count could change a result is QuickStep: an island whose bodies all carry flag
+`0x200` takes QuickStep with workers > 0 but `dxStepIsland` with workers 0. No car body has that flag
+(C5c, again here); who sets it stays an open question.
+
+Auto-disable is ported but not proven: every recorded car body carries only flag `0x100` (gyroscopic), never
+`0x10` (auto-disable), so CSP's `+0x16c5e60` skips every car body and so does the port. A world with an
+auto-disabled body (none of CSP's stock objects found so far) would prove it.
+
+Not done in part 5: the space clean-up, the geom moved flags and the body moved callback (no geoms in
+`csp_world` yet: part 6), the `+0x3230` countdown (what reads it is not known yet), QuickStep.
