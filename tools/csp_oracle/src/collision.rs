@@ -205,6 +205,7 @@ unsafe fn state(st: &mut State, dll: usize, w: usize, bodies: &[usize]) -> Resul
         table,
         pairs,
         static_step,
+        cars_dirty: read::<u8>(cars + 217) != 0,
         aabb_limit: read(dll + 0x27f_995c),
         full_box_box: read::<u8>(collider + 0x144) != 0,
         switches: crate::joints::switches(dll, &[]),

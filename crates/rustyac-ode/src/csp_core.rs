@@ -87,6 +87,7 @@ impl Core {
                 table: HashSpace::default(),
                 pairs: Vec::new(),
                 static_step: false,
+                cars_dirty: false,
                 aabb_limit: 0,
                 full_box_box: false,
                 switches: Default::default(),
@@ -417,9 +418,7 @@ impl Core {
             nodes.iter_mut().for_each(|x| x.0 -= n);
         }
         let count = self.world.bodies.len();
-        // last island first: two cars' spaces end in CSP's order only this way (C5g part 2's
-        // touching drive); which part of CSP's job queue reverses them was not read
-        for (bodies, _) in islands.into_iter().rev() {
+        for (bodies, _) in islands {
             for b in bodies {
                 self.geoms_moved(count - 1 - b);
             }
@@ -520,17 +519,16 @@ impl Core {
                 break;
             }
             geoms[x].flags |= GEOM_DIRTY | GEOM_AABB_BAD;
-            let list = match p {
-                CARS => &mut self.col.cars,
-                _ => match &mut geoms[p].shape {
-                    Shape::Space { children } => children,
-                    _ => unreachable!("a parent not a space"),
-                },
-            };
-            list.retain(|&k| k != x);
-            list.insert(0, x);
-            // the container's own flags are never read
-            a = (p != CARS).then_some(p);
+            if p == CARS {
+                // the container is a hash space: its `dirty` (+0x1688aa0) only asks for a table
+                // rebuild (+217) and keeps the list; its own flags are never read
+                self.col.cars_dirty = true;
+                break;
+            }
+            let Shape::Space { children } = &mut geoms[p].shape else { unreachable!("a parent not a space") };
+            children.retain(|&k| k != x);
+            children.insert(0, x);
+            a = Some(p);
         }
         while let Some(x) = a {
             geoms[x].flags |= GEOM_DIRTY | GEOM_AABB_BAD;

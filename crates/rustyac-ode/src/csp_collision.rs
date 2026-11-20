@@ -89,6 +89,8 @@ pub struct Collision {
     pub pairs: Vec<(usize, usize)>,
     /// world +0x4c set
     pub static_step: bool,
+    /// the car container's +217: a car space moved since its table was built
+    pub cars_dirty: bool,
     /// `TRIMESH_AABB_TEST` (+0x27f995c) and OPCODE's full box-box test (collider +0x144)
     pub aabb_limit: i32,
     pub full_box_box: bool,
