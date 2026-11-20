@@ -49,7 +49,12 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5g 5. Vanilla checks | done: `--quick` all areas identical (physics 9/9, fresh 63/63) except C5f's 4 `collision` cases, whose harness still marked car geoms dirty in the dynamic step and built no container table; the harness now takes CSP's flags after the prepare and builds the table, 4/4 identical |
 
-Next: part 8 (tyre rays, Embree).
+| C5h 1. Embree linked, CSP's raycaster | done: `rustyac-ode` feature `embree` builds Embree 3.13.4 as CSP did (`build.rs`); `csp_ray` = `+0x932900`'s Embree half; every Embree ray of both proof cars identical to CSP's, at SSE2, AVX and AVX2 ([below](#task-c5h-the-tyre-rays)) |
+| C5h 2. ODE's ray | done: `csp_raycast` = `+0x926270` in f64; 19,387 rays per car identical to CSP's with `ODE_BATCH_RAYCAST=1`, and every ODE ray of the default mode; builds for wasm |
+| C5h 3. the whole world with own rays | done: `csp_core` casts the set-up's and the tyres' rays itself (Embree scene from the track's meshes, ODE ray on its own track space); 600 Spa steps of both cars and 1,600 of two F2004 touching identical with nothing taken from CSP |
+| C5h 4. Vanilla | see [below](#vanilla-c5h) |
+
+Next: part 9 (whole-car rows, `rustyac --csp` steps CSP's core).
 
 ## The core in one paragraph
 
@@ -165,11 +170,10 @@ run's `steps.txt`. The steps are byte-identical with and without the log. Result
 | Dispatch | at run time, by CPU: best of SSE2 / AVX / AVX2. CSP also picks its packet width from the device (8 if native RAY8, 4 if RAY4, else 1) |
 | Used | by the raycaster when `BYTE3(+0x28031fc)` is set, i.e. `ODE_BATCH_RAYCAST` is 0, the default (`rtcIntersect1` in `+0x932900`); otherwise ODE's ray (`+0x926270`) |
 
-**Does a hit depend on the CPU?** Not measured. The AVX2 kernels use FMA and AVX traverses BVH8
-where SSE2 uses BVH4, so the last bits of a hit distance, and a tie between two triangles, can
-differ between an AVX2 PC and an older one (the proof farm's Westmere has SSE only). A proof must
-run the oracle and the port on the same machine, or pin both to one ISA (Embree's `max_isa=`
-device option on the oracle side as well).
+**Does a hit depend on the CPU?** Yes, CSP's own does (C5h): pinned to SSE2 or AVX the F2004's
+600-step drive hashes `1a094e29d506e081`, at AVX2 (this PC's default) `c26ebd88f4c50b6e`. The port
+matches CSP at each ISA when both are pinned to it (`CSP_ORACLE_ISA`), so the farm VM (SSE2 only)
+needs its own kept results for the `csp` rows, or every side pinned to one ISA.
 
 **Port or link: link.** Embree is Apache-2.0; the car-physics tools are GPL-3.0-or-later, which may
 use Apache-2.0 code ([LICENSING.md](../../LICENSING.md), SwiftShader is the precedent). Bit-exact
@@ -212,9 +216,9 @@ density: same inputs through CSP's function and the port, every output compared 
 | 5 | CSP's world step: island builder, island jobs, worker count rule, post-step flags (**done in C5e**, 1 session; the space clean-up and geom flags go with part 6) | 1 used (planned 1-2) | whole world identical per step, workers 0 and 7 |
 | 6 | collision: near callback, contact reduction, contact creation, the switches above; the box / trimesh colliders that changed (**done in C5f**: Spa uses box against trimesh only; libccd, car against car and the car collision callback go to part 7) | 1 used (planned 4-5) | contact joints identical per step, world on its own contacts |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
-| 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) | 3-4 | hit points identical |
+| 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) (**done in C5h**, 1 session) | 1 used (planned 3-4) | hit points identical |
 | 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5f** | **7.5-11** (parts 7-9, part 7 plus 1 for car against car; after C5e: 10.5-15) | |
+| | **Total left after C5h** | **1-2** (part 9; after C5f: 7.5-11) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -908,3 +912,123 @@ Proof: proof area `csp` case `core <car> <n>` (`tools/proofs/csp.sh`): the port 
 Found on the way: the port had never read the joint maker's switches ("soft deep" stayed off; no single-car contact was deeper than 0.07 m, the touch's are 0.25 m).
 
 Not done in part 2: pair tags 1 and 2 of `+0x9324a0` (never pushed on the drive), batched car-car joints (`car_pairs` switch, body flag 0x200), the moving-surface joint (wrapper +152 and not +153), a container rebuilt at every collide (+218, asserted clear), libccd, the box-trimesh path between cars (the boxes collide only with the track's category).
+
+## Task C5h: the tyre rays
+
+### The raycaster (dwrite IDA)
+
+- `+0x92fe80(core, length)`: a tyre raycaster (32 bytes, `cphys::ode_impl_raycaster`): +24 the length,
+  +16 an ODE ray geom (`+0x169dbb0`, class 5) with flags |= 0x10000 (first contact) | 0x20000 (back-face
+  cull). Four per car, made in the set-up.
+- `+0x92b970(raycaster, out, org, dir)`: the tyre's ray, `+0x92fac0(_, out, org, dir, length)`: the set-up's
+  (16,986 on Spa for either car); both call the hook `+0x2817688` when set and `dir.y == -1` (never set),
+  else `+0x932900(out, org, dir, length, ray geom or null)`.
+- `+0x932900`: Embree when `+0x2820270` is null, byte `+0x28031ff` (Embree on: `ODE_BATCH_RAYCAST` 0) is 1 and
+  `+0x9229f0`'s state byte (`+0x2838668`) is > 0. `rtcIntersect1` (tnear 0, tfar = length, mask and id left
+  as they were, context flags 0, instID -1); miss: hit byte +32 and mesh +24 cleared; a hit is taken unless
+  the ray is "down" (`dir.y == -1`, a ray geom, byte `+0x2812c7f` clear) and the face's `Ng.y < 0`: point =
+  org + dir * tfar per axis, normal = Ng * (1 / sqrt((x² + y²) + z²)), flipped by `+0x922b80` when the mesh
+  is two-sided (+40, all 455 Spa meshes) and faces away, mesh = list entry of `geomID`. Otherwise ODE's
+  ray `+0x926270` (the thread's own ray `+0x924ff0`, flags |= 0x30000, when the caller gave none; its
+  length was the cast's in every proof).
+- `+0x9229f0`: the first call sets the state byte to -1 and posts the scene build (`+0x922b70` →
+  `+0x9223e0`) to a pool; the state becomes 1 when it is done. **Which rays find it ready is a race**:
+  4 runs switched after 16,986, 11,806, 9,431 and 9,319 of the 16,986 set-up rays; never later, so
+  every tyre ray of every run went through Embree.
+- `+0x926270(_, ray, out, org, dir)`: out = point 0, normal (0, 1, 0), mesh 0, hit 0; `dGeomRaySet`
+  (`+0x169dc30`, origin and normalised direction in double); `dSpaceCollide2` (`+0x168a5b0`) of the ray
+  against the track space (`**(+0x2817690 + 16)`) under its SRW lock with `+0x932f70`: spaces recursed,
+  else both bodies null → `dCollide` with one contact, kept when its depth < the best (strict). Hit: point
+  and normal to f32, mesh = the other geom's user data. The ray-first collider is the swapped
+  `dCollideRTL` (`+0x16b2490`): ray flags at +12, max distance (f32) the ray length, the mesh's
+  rotation as floats with no translation, origin (f32)(ray pos - mesh pos), OPCODE's `InitQuery`
+  (`+0x16f4a80`) and segment stab (`+0x16f65c0`), groupings as the Vanilla port's; per face the
+  world triangle in double (`+0x1694600`), its normal by the cross product, `dSafeNormalize3`, depth =
+  the face distance, pos = depth * dir + ray pos.
+- The mesh list `+0x2885370`: 455 mesh objects on Spa, newest first against the track space's geoms
+  (list i = geom 454 - i), each with its ODE geom (+16), two-sided flag (+40), vertex / index block
+  (+48: f32 vertices, u16 indices, the same arrays the trimesh got).
+
+### Embree's build (part 1)
+
+`crates/rustyac-ode/build.rs`, only with the feature `embree` (on in `tools/csp_oracle` only; the
+browser and `rustyac` without `--csp` never link it): the source from `EMBREE_DIR`, else
+`git archive v3.13.4` of `ignored/embree`; CMake with Ninja inside `vcvars64` (found by `vswhere`;
+Visual Studio ships both), Release, `EMBREE_STATIC_LIB`, tasking INTERNAL, ISPC, tutorials and
+filter functions off, ISA SSE2 + AVX + AVX2 on, SSE4.2 and AVX-512 off (CSP's strings: no ray masks,
+back-face culling or filter functions, every geometry type), `CMAKE_POLICY_VERSION_MINIMUM=3.5` for
+CMake 4. Needs on the PC: Visual Studio with the C++ tools (found by `vswhere -latest`), git (for the archive);
+about 23 minutes at 4 jobs, 390 MB of build output per target folder. CI: a step clones
+v3.13.4 into `$RUNNER_TEMP/embree` and sets `EMBREE_DIR`; the job's timeout is 90 minutes for an
+uncached build. Built with MSVC 19.51; CSP used 19.29 (VS 2019 16.11): identical on every ray, so
+the compiler does not matter here. Licence: Apache-2.0 rows in `LICENSING.md` and
+`THIRD_PARTY_NOTICES.txt` (`tools/notices.py`).
+
+Port: `crates/rustyac-ode/src/csp_ray.rs`: `Scene::new` (device string, quality HIGH, robust from
+CSP's byte, one triangle geometry per list mesh with the list index as id, u16 indices widened),
+`intersect` and `cast` (`+0x932900`'s Embree half: `Cast::Miss` / `Hit` / `Ode`).
+
+### Proofs (parts 1 and 2)
+
+`csp_oracle` break kinds `e` (`rtcIntersect1` `+0x18d40f0`, inside a cast only), `y` (`+0x932900`), `n`
+(`rtcNewDevice` `+0x18d4260`: CSP's device string replaced by the oracle's, `CSP_ORACLE_ISA=<isa>` adds
+`max_isa=` on both sides), `v` (`+0x926270`, the port's ODE ray against a copy of CSP's track space;
+return sites `s`: `x`, `k` and `u` are the island and collision recorders'),
+`tools/csp_oracle/src/rays.rs`. `SETUP_LOG=1 BRK=18d40f0e,932900y,18d4260n,926270v bash
+re/scratch/taskC5h/brk.sh <car> 600` (`ODE=1` writes `[PHYSICS_EXPERIMENTS] ODE_BATCH_RAYCAST=1`):
+
+| run | Embree intersections / casts (wrong) | ODE casts (wrong) | drive hash |
+|---|---|---|---|
+| F2004, default | 9,955 / 9,955 (0) | 9,432 (0) | `c26ebd88f4c50b6e` |
+| RSS3, default | 9,447 / 9,447 (0) | 9,940 (0) | `9dfc977c30fa86af` |
+| F2004, `ODE_BATCH_RAYCAST=1` | none | 19,387 (0) | `410bb67f9225aab0` |
+| RSS3, `ODE_BATCH_RAYCAST=1` | none | 19,387 (0) | |
+| F2004 pinned to SSE2 / AVX / AVX2 | 2,400 / 2,400 (0) each | | `1a094e29…` / `1a094e29…` / `c26ebd88…` |
+
+Every compare is bits: Embree's tfar, geomID and on a hit Ng, u, v, primID; the out struct's point,
+normal, mesh and hit byte. The ODE rays' flags are only ever 0x3001d / 0x30019 (first contact and
+cull, no closest hit). wasm: `CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="--sysroot <target/wasm-sysroot,
+Windows form>" cargo clippy -p rustyac-ode --target wasm32-unknown-unknown -- -D warnings` clean.
+
+Port of the ODE ray: `crates/rustyac-ode/src/csp_raycast.rs` (`cast(&Collision, org, dir, &Ray)`), the
+OPCODE half shared with Vanilla's `collide_ray_mesh` through `collision::stab` (Vanilla unchanged).
+Unhandled: closest-hit rays, trimesh ray callbacks, quantised OPCODE trees (one Spa mesh has one; no
+ray reached it).
+
+### Part 3: the whole world with own rays
+
+`csp_core::Core::set_rays` (the list's meshes, Embree's settings, `+0x2812c7f`) and `Core::cast`
+(`+0x932900`: Embree once ready, else ODE's ray on the port's own track space, cleaned as
+`dSpaceCollide2` cleans it: stale boxes made, dirty marks cleared, table rebuilt). The port's track
+now comes in at the first ray (`port.rs` `track_in`; the core is `+0x2817690` less 16), not at the
+first world step, since 16,986 rays come first. **The race**: the port's model is "ODE until the first
+tyre ray, Embree from it", what every run above did; the oracle pins CSP to it (`rays.rs` `pin`: the
+state byte held at -1 until then, then CSP's build started and waited for). Drive hashes with the pin
+equal the unpinned ones above.
+
+Proof (`tools/proofs/csp.sh` `core <car> <n>`, breaks `932900y,18d4260n` added; run by
+`re/scratch/taskC5h/p3.sh`), nothing taken from CSP but the track's built data:
+
+| case | world steps compared | differ | answers set-up / steps, wrong | rays set-up / tyre | trimesh pairs |
+|---|---|---|---|---|---|
+| core ks_ferrari_f2004 1 | 1,200 | 0 | 17,071 / 98,055, 0 | 16,986 / 2,400 | |
+| core rss_formula_rss_3_v6_2026 1 | 1,200 | 0 | 17,071 / 85,492, 0 | 16,986 / 2,400 | |
+| core ks_ferrari_f2004 2 | 3,200 | 0 | 17,155 / 513,591, 0 | 16,986 / 12,800 | 102 / 816, 0 differ |
+| F2004 with `ODE_BATCH_RAYCAST=1` | 1,200 | 0 | 17,071 / 98,055, 0 | all ODE | |
+
+Traps: Embree's first device made inside a break hung (`rtcNewDevice` never returned; on its own
+thread too): the oracle makes an empty scene at start when the port is on. Before the first world
+step the track's boxes are stale (flags 0x1d): ODE's ray cleans the space first, so the port must too.
+The track space is `**(+0x2817690 + 16)`, not `*(+0x2817690 + 16)`.
+
+### Vanilla (C5h)
+
+
+Vanilla's ray against the trimesh (`collision.rs` `collide_ray_mesh`) now calls the OPCODE half it shares
+with `csp_raycast` (`collision::stab`), unchanged otherwise; `rustyac-ode` and `rustyac-physics` unit tests
+pass. `tools/proofs/run_all.sh --quick` (2026-11-20, 1 h 06 min): physics 9/9, fresh 63/63, render 18/18,
+gui 29/29, browser 18/18, ai_page 10/10, net 16/16, replays 6/6, dumps 6/6, shaders 4/4, sound 4/4,
+python 1/1, launcher 1/1 identical. The csp area's first run found two oracle faults of this task (both
+fixed): the ray break kinds had taken the island and collision recorders' letters (`x`,
+`k`, `u`; the ray kinds are now `v` and `s`), and a script edit had turned `csp.sh`'s literal CR in
+`tr -d` into a newline (every `words` case). Rerun of the csp area: 64/64 identical (13 min), the three `core` cases on the port's own rays among them.
