@@ -54,6 +54,10 @@ def main():
              '']
     for (lic, text), used in sorted(texts.items(), key=lambda t: (t[0][0], sorted(t[1])[0])):
         lines += ['=' * 100, f'{lic}, used by: {", ".join(sorted(used))}', '=' * 100, '', text, '']
+    # not a crate: crates/rustyac-ode's feature `embree` builds it from source (LICENSE.txt there is LICENSE-APACHE)
+    apache = open(os.path.join(ROOT, 'LICENSE-APACHE'), encoding='utf-8').read().replace('\r\n', '\n').strip()
+    lines += ['=' * 100, 'Apache-2.0, used by: Embree 3.13.4 (C++ library, the Custom Shaders Patch mode\'s ray casts)', '=' * 100, '',
+              'Copyright 2009-2021 Intel Corporation', '', apache, '']
     with open(os.path.join(ROOT, 'THIRD_PARTY_NOTICES.txt'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines))
     print(f'THIRD_PARTY_NOTICES.txt: {len(crates)} crates, {len(texts)} license texts, from {len(manifests)} lock files')

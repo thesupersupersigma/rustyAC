@@ -25,7 +25,8 @@ jobs:
   build:
     name: build and test
     runs-on: windows-latest
-    timeout-minutes: 60
+    # an uncached Embree build (csp_oracle, below) takes about 25 minutes
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -73,6 +74,12 @@ jobs:
       # the code has an #[allow] with its reason instead.
       - name: Clippy
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+      # csp_oracle turns on rustyac-ode's feature `embree`: its build.rs builds Embree from this source
+      - name: Embree 3.13.4 source
+        run: |
+          git clone --depth 1 --branch v3.13.4 https://github.com/embree/embree.git "$RUNNER_TEMP/embree"
+          echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
 
       # build only: they need acs.exe to run
       - name: Build the tools
