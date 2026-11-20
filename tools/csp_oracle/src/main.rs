@@ -27,6 +27,7 @@ mod acs;
 #[allow(dead_code)]
 mod track;
 mod port;
+mod rays;
 mod wrappers;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
 mod btl;
@@ -968,7 +969,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'x')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1024,6 +1025,23 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
             wrappers::enter(context, at - DLL_BASE.load(Ordering::Relaxed), step, GetCurrentThreadId());
         } else {
             wrappers::leave(context, step, GetCurrentThreadId());
+        }
+    } else if dump == 'n' {
+        // Task C5h: rtcNewDevice's config, with CSP_ORACLE_ISA's max_isa=
+        *((context + 0x80) as *mut usize) = Box::leak(Box::new(rays::config())).as_ptr() as usize;
+    } else if step != usize::MAX && matches!(dump, 'e' | 'y' | 'x' | 'k') {
+        // Task C5h: tyre rays against the port's Embree; 'k' the return sites
+        let dll = DLL_BASE.load(Ordering::Relaxed);
+        let rsp = read::<usize>(context + 0x98);
+        let [rcx, rdx, r8, r9] = [0x80, 0x88, 0xb8, 0xc0].map(|offset| read::<usize>(context + offset));
+        match dump {
+            'e' => rays::intersect(dll, r8, rsp),
+            'x' => rays::ode(dll, rdx, r8, r9, read::<usize>(rsp + 0x28), rsp),
+            'y' => rays::cast(dll, rcx, rdx, r8, read::<f32>(context + 0x1a0 + 0x30), read::<usize>(rsp + 0x28), rsp),
+            _ => rays::leave(dll, rsp),
+        }
+        if dump != 'k' {
+            arm_return(read::<usize>(rsp), 'k');
         }
     } else if step != usize::MAX {
         let caller = read::<usize>(read::<usize>(context + 0x98));
@@ -1838,7 +1856,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     island::save();
-    let btl = btl::finish() + &btl::ttl_finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish() + &port::finish();
+    let btl = btl::finish() + &btl::ttl_finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish() + &port::finish() + &rays::finish();
     print!("{btl}");
     BREAK_LOG.lock().unwrap().push_str(&btl);
     if !BREAKS.lock().unwrap().is_empty() {
@@ -2190,6 +2208,10 @@ unsafe fn maths(dll: usize) {
 }
 
 fn main() {
+    // Embree's first device made inside a break never returned (C5h): make one before CSP runs
+    if port::on() {
+        drop(rustyac_ode::csp_ray::Scene::new(&rays::config(), false, &[]));
+    }
     let mut arguments: Vec<String> = std::env::args().collect();
     // --islands <file>: recorded CSP islands stepped by rustyac-ode's csp_step (Task C5d), no AC
     if let Some(i) = arguments.iter().position(|a| a == "--world") {

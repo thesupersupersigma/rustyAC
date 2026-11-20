@@ -69,7 +69,8 @@ for car in $extended $plain; do
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
     if oracle "${car}_van" --car "$car" --car-data "$out/plain/$car" --vanilla && oracle "${car}_csp" --car "$car"; then
-        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '' | grep -m1 '^PRESSURES ')
+        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '
+' | grep -m1 '^PRESSURES ')
         line=$(python tools/proofs/csp_words.py "$out/runs/${car}_van/car_root/car_words.txt" "$out/runs/${car}_csp/car_root/car_words.txt" "$port")
         verdict "words $car" "${line%% |*}" "${line#* | }"
     else
@@ -293,7 +294,9 @@ done
 # geom, kept pair and the contact load against CSP's. n=2: car 0 parked, car 1 5.5 m behind drives into it
 # (1600 steps, contacts from step ~800), CSP's trimesh-trimesh collider also called on the live pair and 8
 # moved shadows against csp_ttl. The world is recorded with the port's joints (record 6) and CspWorld steps
-# every recorded world on them: the contact joints word for word, every body and joint bit for bit
+# every recorded world on them: the contact joints word for word, every body and joint bit for bit.
+# C5h: the track rays too (+0x92fac0 set-up, +0x92b970 tyre): the port's own Embree scene and ODE ray,
+# CSP's Embree-ready race pinned to the port's (932900y), CSP's Embree device "threads=1" (18d4260n)
 for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2"; do
     set -- $cn; car=$1; n=$2
     keep "core $car $n" || continue
@@ -301,7 +304,7 @@ for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2
     bin=$out/runs/core_${car}_${n}.bin; rm -f "$bin"
     run=$out/runs/core_${car}_${n}.txt
     drive=$out/runs/core_drive_${car}_${n}
-    brk=$(sed 's/$/p/' tools/csp_oracle/wrappers.txt | paste -sd,),1688ab0p,16c7650a,92ea7dz
+    brk=$(sed 's/$/p/' tools/csp_oracle/wrappers.txt | paste -sd,),1688ab0p,16c7650a,92ea7dz,932900y,18d4260n
     steps=600; extra=
     [ $n = 2 ] && { steps=1600; brk=$brk,16bc1b0t; extra="CSP_ORACLE_GAP=5.5 CSP_ORACLE_PARK=1"; }
     # (a subshell: `oracle` is a function, `env` cannot run it)

@@ -620,3 +620,29 @@ pub(crate) unsafe fn port_mesh(dll: usize, g: usize) -> Result<(Option<TrackMesh
 pub(crate) fn space_or(g: usize) -> usize {
     if unsafe { read::<i32>(g + 8) } == 11 { 0 } else { g }
 }
+
+/// Task C5h: the space CSP's ODE rays ask (`space`, read from `**(+0x2817690 + 16)` by
+/// +0x926270) as a [`Collision`] of its trimeshes and its hash table.
+pub(crate) unsafe fn port_ray_space(dll: usize, space: usize) -> Result<Collision, Unhandled> {
+    if read::<i32>(space + 8) != 12 {
+        return Err(Unhandled("a ray space other than a hash space"));
+    }
+    let mut st = State::default();
+    let (mut geoms, mut ptrs) = (Vec::new(), Vec::new());
+    for t in list(read(space + 0xa8), 0x38) {
+        geom(&mut st, dll, t, &|_| None, &mut geoms, &mut ptrs)?;
+    }
+    // before the first world step the boxes are still stale: the space's clean-up (+0x1689bf0) makes them
+    for i in 0..geoms.len() {
+        refresh(&mut geoms, i, &[])?;
+    }
+    let aabbs: Vec<[f64; 6]> = geoms.iter().map(|g| g.aabb).collect();
+    Ok(Collision {
+        table: HashSpace::build(&aabbs, read(space + 0xd0), read(space + 0xd4)),
+        track: (0..geoms.len()).collect(),
+        geoms,
+        meshes: std::mem::take(&mut st.meshes),
+        aabb_limit: read(dll + 0x27f_995c),
+        ..Default::default()
+    })
+}

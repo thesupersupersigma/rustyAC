@@ -5,7 +5,8 @@
 //! into CSP's cphys:: wrappers as it happens, nothing copied from CSP's world. Each getter's answer
 //! is checked at its return, and the port's world against CSP's at each world step's entry.
 
-use rustyac_ode::csp_core::Core;
+use rustyac_ode::csp_collide::Unhandled;
+use rustyac_ode::csp_core::{Core, TrackRay};
 use rustyac_ode::csp_step::JointKind;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -25,6 +26,10 @@ pub(crate) enum Expect {
     /// a mesh collider on (body, wrapper, matrix, category, collide, key): made at the return,
     /// from the trimesh data CSP built
     Mesh(usize, usize, [f32; 16], u32, u32, u32),
+    /// Task C5h: a tyre raycaster of this length made (+0x92fe80): named by CSP's at the return
+    Raycaster(f32),
+    /// Task C5h: a track ray's out struct (address, the port's, set-up)
+    Ray(usize, Option<TrackRay>, bool),
 }
 
 struct Port {
@@ -41,11 +46,48 @@ struct Port {
     differ: usize,
     log: String,
     track: bool,
+    /// Task C5h: CSP's tyre raycasters and their lengths
+    raycasters: HashMap<usize, f32>,
     /// the first thing the port could not do; nothing more is done once set
     broken: Option<String>,
 }
 
 static PORT: Mutex<Option<Port>> = Mutex::new(None);
+
+/// Part 3: whether the port's rays use Embree now (`None`: the port is off).
+pub(crate) fn embree_ready() -> Option<bool> {
+    PORT.lock().unwrap().as_ref().map(|p| p.core.embree_ready())
+}
+
+/// The track handed to the port once, at the first ray or world step (`w` the core): its
+/// trimeshes as CSP loaded them, the ray meshes in CSP's list order, Embree's settings.
+unsafe fn track_in(port: &mut Port, dll: usize, w: usize) {
+    if std::mem::replace(&mut port.track, true) {
+        return;
+    }
+    let t = match crate::collision::port_track(dll, w) {
+        Ok(t) => t,
+        Err(e) => {
+            port.broken = Some(format!("track: {}", e.0));
+            return;
+        }
+    };
+    let ids: Vec<usize> = t.geoms.iter().map(|g| g.id).collect();
+    port.core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box);
+    let c = &mut port.core.col;
+    (c.cars_levels, c.prefilter, c.edges, c.load) = (t.cars_levels, t.prefilter, t.edges, t.load);
+    let r8 = |a: usize| *((dll + a) as *const u8);
+    let config = crate::rays::config();
+    let embree = (std::ptr::read_unaligned((dll + 0x282_0270) as *const usize) == 0 && r8(0x280_31ff) == 1).then_some((config.as_c_str(), r8(0x280_3200) != 0));
+    match crate::rays::ray_meshes(dll, &ids) {
+        Ok(meshes) => {
+            if let Err(e) = port.core.set_rays(&meshes, embree, r8(0x281_2c7f) != 0) {
+                port.broken = Some(format!("Embree: {e}"));
+            }
+        }
+        Err(e) => port.broken = Some(format!("ray meshes: {}", e.0)),
+    }
+}
 
 pub(crate) fn on() -> bool {
     std::env::var_os("CSP_ORACLE_PORT").is_some()
@@ -84,6 +126,7 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
         differ: 0,
         log: String::new(),
         track: false,
+        raycasters: HashMap::new(),
         broken: None,
     });
     if port.broken.is_some() {
@@ -127,22 +170,15 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
         }
         (0x92e4a0, _) => {
             port.worlds += 1;
-            if !port.track {
-                match crate::collision::port_track(dll, rcx) {
-                    Ok(t) => {
-                        port.core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box);
-                        let c = &mut port.core.col;
-                        (c.cars_levels, c.prefilter, c.edges, c.load) = (t.cars_levels, t.prefilter, t.edges, t.load);
-                        c.switches = crate::joints::switches(dll, &[]);
-                        // the table CSP's first prepare built, before the port knew the levels; no
-                        // car moved since
-                        let aabbs: Vec<[f64; 6]> = c.cars.iter().map(|&s| c.geoms[s].aabb).collect();
-                        c.cars_table = rustyac_ode::csp_space::HashSpace::build(&aabbs, c.cars_levels.0, c.cars_levels.1);
-                        (c.cars_built, c.cars_dirty) = (true, false);
-                    }
-                    Err(e) => port.broken = Some(format!("track: {}", e.0)),
-                }
-                port.track = true;
+            track_in(port, dll, rcx);
+            if port.worlds == 1 && port.broken.is_none() {
+                let c = &mut port.core.col;
+                c.switches = crate::joints::switches(dll, &[]);
+                // the table CSP's first prepare built, before the port knew the levels; no car
+                // moved since
+                let aabbs: Vec<[f64; 6]> = c.cars.iter().map(|&s| c.geoms[s].aabb).collect();
+                c.cars_table = rustyac_ode::csp_space::HashSpace::build(&aabbs, c.cars_levels.0, c.cars_levels.1);
+                (c.cars_built, c.cars_dirty) = (true, false);
             }
             compare(port, rcx, step);
             if *((dll + 0x280_3210) as *const u8) != 0 || *((dll + 0x27f_92b6) as *const u8) != 0 {
@@ -173,6 +209,21 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
                     Err(e) => port.broken = Some(format!("step: {}", e.0)),
                 }
                 Expect::Nothing
+            }
+        }
+        (0x92fe80, _) => Expect::Raycaster(xmm(1)),
+        (0x92b970 | 0x92fac0, _) => {
+            assert_eq!(std::ptr::read_unaligned((dll + 0x281_7688) as *const usize), 0, "a raycast hook (+0x2817688)");
+            // the core (+0x92e4a0's rcx) is the global +0x2817690 less 16
+            track_in(port, dll, std::ptr::read_unaligned((dll + 0x281_7690) as *const usize) - 16);
+            let (length, tyre) = if rva == 0x92b970 { (port.raycasters.get(&rcx).copied(), true) } else { (Some(f32::from_bits(stack(0) as u32)), false) };
+            let setup = step == crate::SETUP;
+            match length.ok_or(Unhandled("a raycaster made before the port")).and_then(|l| port.core.cast(v3(r8), v3(r9), l, tyre)) {
+                Ok(ray) => Expect::Ray(rdx, ray, setup),
+                Err(e) => {
+                    port.broken = Some(format!("ray: {}", e.0));
+                    Expect::Nothing
+                }
             }
         }
         (rva, Some(b)) => {
@@ -265,6 +316,25 @@ pub(crate) unsafe fn leave(rva: usize, rax: usize, xmm0: usize, expect: Expect) 
         Expect::Body(b) => {
             port.bodies.insert(rax, b);
             return;
+        }
+        Expect::Raycaster(length) => {
+            port.raycasters.insert(rax, length);
+            return;
+        }
+        Expect::Ray(out, want, setup) => {
+            let r = |a: usize| std::ptr::read_unaligned(a as *const usize);
+            let (mesh, hit) = (r(out + 24), *((out + 32) as *const u8));
+            let list = crate::rays::list(crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed));
+            let named = (mesh != 0).then(|| list.iter().position(|&m| m == mesh).unwrap_or(usize::MAX));
+            let got = f32s(out, 6);
+            let ok = match want {
+                None => hit == 0 && mesh == 0,
+                Some(w) => (hit != 0) == w.mesh.is_some() && named == w.mesh && got.iter().zip(w.point.iter().chain(&w.normal)).all(|(a, b)| a.to_bits() == b.to_bits()),
+            };
+            if !ok && port.wrong[0] + port.wrong[1] < 8 {
+                port.log.push_str(&format!("  {rva:#x}: csp {got:?} mesh {named:?} hit {hit} port {want:?}\n"));
+            }
+            (ok, setup)
         }
         Expect::Joint(j) => {
             port.joints.insert(rax, j);

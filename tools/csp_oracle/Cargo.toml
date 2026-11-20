@@ -11,7 +11,7 @@ description = "Spike oracle for Custom Shaders Patch: loads CSP's dwrite.dll nex
 rustyac-math = { path = "../../crates/rustyac-math" }
 rustyac-physics = { path = "../../crates/rustyac-physics" }
 # Task C5c: the f64 ODE functions held against CSP's
-rustyac-ode = { path = "../../crates/rustyac-ode" }
+rustyac-ode = { path = "../../crates/rustyac-ode", features = ["embree"] }
 
 [profile.release]
 opt-level = 3
