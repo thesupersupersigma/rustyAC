@@ -118,5 +118,6 @@ ai_page (they stay on the PC); the dumps area's old release is built once per ta
 `FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [part ...]` sends a part's files to
 the farm with robocopy, only what changed. `run_all.sh --farm` (with `--quick` or `--full`) does
 both itself, then runs the farm's areas there (`farm.sh`, `farm_run.sh`) while the others run here;
-it needs `target/farm.env` (`FARM_HOST`, `FARM_SHARE`). `PROOF_LANES` sets other lanes; a lane word
+it needs `%USERPROFILE%\.rustyac\farm.env` (`FARM_HOST`, `FARM_SHARE`) and stops at once
+when the farm isn't set up or doesn't answer (`--farm-fallback`: its areas run here instead). `PROOF_LANES` sets other lanes; a lane word
 `<area>.<i>` runs shard i of the area's cases (`PROOF_SHARD`). docs/proof_farm.md has the rest.

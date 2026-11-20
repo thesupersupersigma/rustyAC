@@ -25,6 +25,8 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
 - Part 4 done: `run_all.sh --farm` (`farm.sh`, `farm_run.sh`, `farm_task.cmd`, lane shards, the
   fallback to the PC, `proof_tui`'s VM lanes, `old_exe.sh` for new tags). Part 5: `--quick --farm`
   286/286 IDENTICAL in 0h45m (PC alone 0h59m).
+- **F3** (below): the settings moved to `%USERPROFILE%\.rustyac\farm.env`; `--farm` stops at
+  once when the farm isn't set up or doesn't answer.
 - **Resume here: part 5's `--full --farm`**, only with Super's go (about 3.5-4 h the first time);
   compare its verdicts and time with the PC's last full run, fix what it finds, retune `FARM_LANES`
   from its area times. Optional: browser and ai_page in two PC lanes (see part 5).
@@ -708,7 +710,7 @@ scheduled task: a locked desktop still makes WARP's windows and swap chains. Not
 
     bash tools/proofs/run_all.sh --quick --farm     (or --full --farm, or with area names)
 
-needs `target/farm.env` (never committed: it names the VM), with `FARM_HOST` (ssh's user@host, key
+needs the farm's settings (F3: `%USERPROFILE%\.rustyac\farm.env`, see "Setting up the farm"), with `FARM_HOST` (ssh's user@host, key
 login; the user is also the scheduled task's) and `FARM_SHARE` (`//<vm>/rustyac-farm`); the
 environment wins over the file. The pieces (`tools/proofs/`):
 
@@ -806,3 +808,38 @@ the eight full lanes. The first one is longer: the VM has no full-run kept recor
 (fresh records every case again with the game, SSE2 keys), and they come back to the PC once, about
 15 GB at Wi-Fi speed (~50 min, ~15 GB of the PC's disk). So about **3.5-4 h the first time, then
 about 3 h**, against about 6.5 h on the PC alone.
+
+## F3: the settings every checkout reads, the run's 4 non-identical cases
+
+Super's first `--full --farm` (main folder, 2026-11-19, 7h11m) ran **every** farm area on the PC:
+F2 had written its settings to the worktree's `target\farm.env`, the main folder had none, and
+`farm_up` fell back to the PC area by area without a word until the summary's "where" column.
+
+### Setting up the farm
+
+The settings live in **`%USERPROFILE%\.rustyac\farm.env`**, beside the proof lock, so every
+checkout of the PC reads the same file (never in the repo: it names the VM). `target\farm.env` is
+no longer read (one place only; the worktree's was moved there). On a new PC or user:
+
+1. The VM as in F2 parts 3-4 (its farm folder `C:ustyac-farm`, shared as `rustyac-farm`; its
+   user logged in at the console, ssh with key login from the PC).
+2. `%USERPROFILE%\.rustyac\farm.env`, two lines (a bash file; the environment wins over it):
+
+       FARM_HOST=<user>@<vm>
+       FARM_SHARE=//<vm>/rustyac-farm
+
+3. Once: `FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh` (the whole copy, hours over
+   Wi-Fi); later runs send only what changed themselves.
+
+A new checkout of the same PC needs nothing: `run_all.sh --farm` finds the file.
+
+**`--farm` without settings, or with a VM that doesn't answer**, now stops before any area runs,
+exit code 2, with one line, e.g.
+
+    the farm isn't set up: no FARM_SHARE in .../.rustyac/farm.env; run without --farm (or with --farm-fallback to run its areas here), or set it up: docs/proof_farm.md, "Setting up the farm"
+
+The same for: no `FARM_HOST`, ssh not answering, the share not answering, an earlier farm run still
+running on the VM, `prebuild.sh` failing. **`--farm-fallback`** is `--farm` with the old behaviour
+(those areas run on the PC, the reason in the "where" column). A failure **during** the run (the
+copy, the task not starting, a stall, results not coming back) still falls back area by area, as
+in F2. Checked: no file and a dead host, each `exit=2` before any area, the lock released.

@@ -2,7 +2,8 @@
 #
 # run_all.sh --farm (sourced by run_all.sh, never run): the areas of areas.map's @farm line run on
 # the proof farm's VM (docs/proof_farm.md) while the others run here. Needs, from the environment
-# or target/farm.env (never committed: it names the VM):
+# or %USERPROFILE%\.rustyac\farm.env (beside the proof lock, so every checkout reads the same one;
+# never in the repo: it names the VM):
 #   FARM_HOST   ssh's user@host (key login); the user is also the scheduled task's
 #   FARM_SHARE  //<vm>/<share>, the VM's farm folder (repo\, ac\, home\, run\) over SMB
 #   FARM_DIR    that folder on the VM (default C:\rustyac-farm)
@@ -13,8 +14,9 @@
 #   FARM_STALL  minutes with no new verdict on the VM before the farm counts as stalled (default 60)
 # Everything the farm half says is in target/proofs/farm/ (its log farm.txt; the VM's status files,
 # mirrored for proof_tui; fallback: "<area> <reason>" for each area that runs here instead).
+farm_env=${USERPROFILE:-$HOME}/.rustyac/farm.env
 _h=$FARM_HOST _s=$FARM_SHARE  # the environment wins over farm.env
-[ ! -f "$repo/target/farm.env" ] || . "$repo/target/farm.env"
+[ ! -f "$farm_env" ] || . "$farm_env"
 FARM_HOST=${_h:-$FARM_HOST} FARM_SHARE=${_s:-$FARM_SHARE}
 farm_dir=${FARM_DIR:-'C:\rustyac-farm'}
 fs=$(echo "$FARM_SHARE" | tr '\\' /)   # //vm/share, for bash
@@ -33,6 +35,13 @@ farm_off() {
     echo "farm off: $1" >> "$fo/farm.txt"
     farm_areas=
 }
+# farm_stop <reason>: at the start, the farm can't take the run: stop before any area runs (a run
+# that silently goes to the PC takes hours longer), or with --farm-fallback run its areas here
+farm_stop() {
+    [ -z "$farm_fallback" ] || { farm_off "$1"; return; }
+    echo "the farm $1; run without --farm (or with --farm-fallback to run its areas here), or set it up: docs/proof_farm.md, \"Setting up the farm\"" >&2
+    exit 2
+}
 # back <dir under the share> <local dir> [robocopy options and file names]: from the VM to here
 back() {
     _s="$fw\\$(echo "$1" | tr / '\\')"; _d=$(cygpath -w "$2"); shift 2
@@ -43,16 +52,16 @@ back() {
 # farm_up: before any lane starts (run_all.sh's shell): can the VM take the run, and its programs
 farm_up() {
     rm -rf "$fo"; mkdir -p "$fo"
-    case $fs in //?*/?*) ;; *) farm_off "FARM_SHARE is not set (target/farm.env)"; return ;; esac
-    [ -n "$FARM_HOST" ] || { farm_off "FARM_HOST is not set (target/farm.env)"; return; }
-    farm_ssh exit 2> "$fo/ssh.txt" || { farm_off "the VM does not answer ssh ($(tail -n 1 "$fo/ssh.txt"))"; return; }
-    [ -d "$fs/repo" ] || { farm_off "the VM's share does not answer"; return; }
+    case $fs in //?*/?*) ;; *) farm_stop "isn't set up: no FARM_SHARE in $farm_env"; return ;; esac
+    [ -n "$FARM_HOST" ] || { farm_stop "isn't set up: no FARM_HOST in $farm_env"; return; }
+    farm_ssh exit 2> "$fo/ssh.txt" || { farm_stop "doesn't answer: ssh $FARM_HOST: $(tail -n 1 "$fo/ssh.txt")"; return; }
+    [ -d "$fs/repo" ] || { farm_stop "doesn't answer: no $fs/repo"; return; }
     if farm_ssh schtasks /query /tn rustyac_farm /fo csv /nh 2> /dev/null | grep -q '"Running"'; then
-        farm_off "the VM is still running an earlier farm run"; return
+        farm_stop "is busy: the VM is still running an earlier farm run"; return
     fi
     # every program the VM runs, the dumps area's old release for the newest tag included
     echo "building the farm's programs (prebuild.sh)"
-    bash "$here/prebuild.sh" > "$fo/prebuild.txt" 2>&1 || farm_off "prebuild.sh failed ($fo/prebuild.txt)"
+    bash "$here/prebuild.sh" > "$fo/prebuild.txt" 2>&1 || farm_stop "can't start: prebuild.sh failed ($fo/prebuild.txt)"
 }
 
 # farm_go: the farm half, beside the PC's lanes (in the background): the copy, the VM's run, the

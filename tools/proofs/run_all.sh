@@ -10,7 +10,9 @@
 #   ... [--rerecord] [--dry-run] [area ...]        record the game's recordings again / only say which
 #                                                  areas would run / only these areas
 #   ... --farm                                     the areas of areas.map's @farm line on the proof farm's
-#                                                  VM (tools/proofs/farm.sh, docs/proof_farm.md), the rest here
+#                                                  VM (tools/proofs/farm.sh, docs/proof_farm.md), the rest here;
+#                                                  stops at once if the farm isn't set up or doesn't answer
+#   ... --farm-fallback                            the same, but then (only then) its areas run here
 # Needs: this repository, the ignored oracle/ and re/gold/ folders, the AC install (read only).
 # Each area writes into target/proofs/<area> and ends with "PROOF <area> cases= identical= different= errors= skipped= expected=";
 # the table below is made from those lines. Exit code 0 only when no area has a difference or an
@@ -27,7 +29,7 @@ all="physics fresh csp sound render gui python replays net browser ai_page shade
 # (the proof farm's); a word <area>.<i> runs shard i of n of the area's cases (lib.sh's PROOF_SHARD,
 # i from 1 to n, n the number of such words), merged into one row once every lane is done
 lanes=${PROOF_LANES:-"render gui python yebis_sweep|fresh csp sound replays launcher|physics dumps shaders|net browser ai_page"}
-mode=full; tag=; want=; dry=; farm=
+mode=full; tag=; want=; dry=; farm=; farm_fallback=
 while [ $# -gt 0 ]; do
     case "$1" in
         --quick) mode=quick ;;
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
         --rerecord) export PROOF_RERECORD=1 ;;
         --dry-run) dry=1 ;;
         --farm) farm=1 ;;
+        --farm-fallback) farm=1; farm_fallback=1 ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
         *) want="$want $1" ;;
     esac
