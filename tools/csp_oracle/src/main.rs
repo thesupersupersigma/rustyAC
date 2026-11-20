@@ -27,6 +27,7 @@ mod acs;
 #[allow(dead_code)]
 mod track;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
+mod btl;
 mod island;
 mod ode;
 mod solver;
@@ -960,7 +961,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('d' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('c' | 'd' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1035,6 +1036,9 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         }
         if dump == 'l' {
             crate::island::lcp(rdx, r8, r9, read::<usize>(context + 0x98));
+        }
+        if dump == 'c' {
+            crate::btl::hit(rcx, rdx, r8 as u32, at, original, DLL_BASE.load(Ordering::Relaxed), &mut line);
         }
         if dump == 'g' {
             for geom in [rcx, rdx] {
@@ -1750,6 +1754,9 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     island::save();
+    let btl = btl::finish();
+    print!("{btl}");
+    BREAK_LOG.lock().unwrap().push_str(&btl);
     if !BREAKS.lock().unwrap().is_empty() {
         std::fs::write("breaks.txt", &*BREAK_LOG.lock().unwrap()).expect("breaks.txt can be written");
     }
