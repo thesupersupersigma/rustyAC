@@ -26,6 +26,7 @@ mod acs;
 #[path = "../../car_oracle/src/track.rs"]
 #[allow(dead_code)]
 mod track;
+mod port;
 mod wrappers;
 // Task C5c: rustyac-ode's f64 functions against CSP's ODE (--ode)
 mod btl;
@@ -958,7 +959,7 @@ unsafe extern "system" fn fault_places(pointers: *const *const usize) -> i32 {
 static BREAKS: Mutex<Vec<(usize, u8, char)>> = Mutex::new(Vec::new());
 static BREAK_LOG: Mutex<String> = Mutex::new(String::new());
 static BREAK_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
-const SETUP: usize = usize::MAX - 1;
+pub(crate) const SETUP: usize = usize::MAX - 1;
 thread_local!(static REARM: Cell<usize> = const { Cell::new(0) });
 
 unsafe fn arm_breaks(dll: usize) {
@@ -1820,7 +1821,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     island::save();
-    let btl = btl::finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish();
+    let btl = btl::finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish() + &port::finish();
     print!("{btl}");
     BREAK_LOG.lock().unwrap().push_str(&btl);
     if !BREAKS.lock().unwrap().is_empty() {

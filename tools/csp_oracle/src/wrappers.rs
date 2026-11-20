@@ -11,13 +11,17 @@
 //! rdx and r8.
 
 use std::cell::RefCell;
+use crate::port::Expect;
 use std::ffi::c_void;
 
 extern "system" {
     fn VirtualQuery(address: *const c_void, buffer: *mut [usize; 6], length: usize) -> usize;
 }
 
-thread_local!(static OPEN: RefCell<Vec<(usize, usize, usize, usize)>> = const { RefCell::new(Vec::new()) });
+/// An open call: (rsp, rva, rdx, r8, what the port expects at its return).
+type Open = (usize, usize, usize, usize, Expect);
+
+thread_local!(static OPEN: RefCell<Vec<Open>> = const { RefCell::new(Vec::new()) });
 
 unsafe fn readable(p: usize) -> bool {
     (0x10000..0x7fff_ffff_0000).contains(&p) && [p, p + 63].iter().all(|&a| {
@@ -54,6 +58,12 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize, thread: u32)
     }
     let [rcx, rdx, r8, r9] = [0x80, 0x88, 0xb8, 0xc0].map(r);
     let stack: Vec<usize> = (0..6).map(|i| std::ptr::read_unaligned((rsp + 0x28 + 8 * i) as *const usize)).collect();
+    let expect = if crate::port::on() { crate::port::enter(context, rva, step) } else { Expect::Nothing };
+    if std::env::var_os("CSP_ORACLE_ISLANDS").is_none() {
+        OPEN.with(|open| open.borrow_mut().push((rsp, rva, rdx, r8, expect)));
+        crate::arm_return(std::ptr::read_unaligned(rsp as *const usize), 'o');
+        return;
+    }
     let mut out = vec![7, step as u64, rva as u64, thread as u64, rcx as u64, rdx as u64, r8 as u64, r9 as u64];
     (0..4).for_each(|i| out.push(r(0x1a0 + 0x10 * i) as u64));
     out.extend(stack.iter().map(|&s| s as u64));
@@ -61,7 +71,7 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize, thread: u32)
         words(&mut out, p);
     }
     crate::island::push_words(&out);
-    OPEN.with(|open| open.borrow_mut().push((rsp, rva, rdx, r8)));
+    OPEN.with(|open| open.borrow_mut().push((rsp, rva, rdx, r8, expect)));
     crate::arm_return(std::ptr::read_unaligned(rsp as *const usize), 'o');
 }
 
@@ -80,8 +90,12 @@ pub(crate) unsafe fn leave(context: usize, step: usize, thread: u32) {
             None
         }
     });
-    let Some((_, rva, rdx, r8)) = call else { return };
+    let Some((_, rva, rdx, r8, expect)) = call else { return };
     let rax = r(0x78);
+    crate::port::leave(rva, rax, r(0x1a0), expect);
+    if std::env::var_os("CSP_ORACLE_ISLANDS").is_none() {
+        return;
+    }
     let mut out = vec![8, step as u64, rva as u64, thread as u64, rax as u64, r(0x1a0) as u64];
     for p in [rax, rdx, r8] {
         words(&mut out, p);

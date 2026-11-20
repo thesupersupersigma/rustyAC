@@ -166,7 +166,7 @@ pub(crate) fn body(b: &[u64]) -> Body<f64> {
 
 /// A recorded joint (0x200 bytes) by its vtable's low 16 bits; `index` maps a body pointer to its
 /// place in the island.
-fn joint_of(j: &[u64], index: &dyn Fn(u64) -> Option<usize>) -> Joint {
+pub(crate) fn joint_of(j: &[u64], index: &dyn Fn(u64) -> Option<usize>) -> Joint {
     let kind = match j[0] & 0xffff {
         0x2928 => JointKind::Fixed { qrel: v4(j, 0xa0), offset: v4(j, 0xc0), erp: f(j, 0xe0), cfm: f(j, 0xf8) },
         0x29e8 => JointKind::DBall { anchor1: v4(j, 0xa0), anchor2: v4(j, 0xc0), erp: f(j, 0xe0), cfm: f(j, 0xe8), target_distance: f(j, 0xf0) },

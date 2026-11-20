@@ -43,6 +43,7 @@ pub mod csp_btl;
 pub mod csp_collide;
 pub mod csp_collision;
 pub mod csp_contact;
+pub mod csp_core;
 pub mod csp_joints;
 pub mod csp_lcp;
 pub mod csp_matrix;
