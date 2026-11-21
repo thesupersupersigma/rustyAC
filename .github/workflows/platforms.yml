@@ -72,6 +72,13 @@ jobs:
             exit 1
           fi
 
+      # x64 Windows: rustyac.exe builds Embree (rustyac-ode's feature `embree`) from this source
+      - name: Embree 3.13.4 source
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          git clone --depth 1 --branch v3.13.4 https://github.com/embree/embree.git "$RUNNER_TEMP/embree"
+          echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
+
       - name: Build and test
         env:
           TARGET: ${{ matrix.target }}

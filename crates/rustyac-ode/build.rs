@@ -12,6 +12,12 @@ fn run(c: &mut Command) {
     assert!(status.success(), "{c:?}: {status}");
 }
 
+/// A build error that says what to install, instead of a panic's backtrace.
+fn fail(why: &str) -> ! {
+    eprintln!("error: rustyac-ode's feature `embree` (the Windows rustyac.exe, tools/csp_oracle): {why}");
+    std::process::exit(1);
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=EMBREE_DIR");
@@ -19,12 +25,18 @@ fn main() {
         return;
     }
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let lib = out.join("embree-build");
+    // one build for every profile and check of this target folder (OUT_DIR is
+    // <target>/<profile>/build/<package>/out): clippy and the tests do not build it again
+    let lib = out.ancestors().nth(4).unwrap_or(&out).join("embree-3.13.4");
     if !lib.join("embree3.lib").exists() {
+        let build = out.join("embree-build");
         let src = match std::env::var_os("EMBREE_DIR") {
             Some(d) => PathBuf::from(d),
             None => {
                 let clone = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ignored/embree");
+                if !clone.join(".git").exists() {
+                    fail("no Embree source: set EMBREE_DIR to Embree 3.13.4's source, or clone it into ignored/embree (git clone --branch v3.13.4 https://github.com/embree/embree.git ignored/embree)");
+                }
                 let src = out.join("embree-src");
                 let tar = out.join("embree.tar");
                 std::fs::create_dir_all(&src).unwrap();
@@ -34,8 +46,12 @@ fn main() {
             }
         };
         let vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe";
-        let vs = Command::new(vswhere).args(["-latest", "-products", "*", "-property", "installationPath"]).output().expect("vswhere");
-        let vs = String::from_utf8(vs.stdout).unwrap().trim().to_string();
+        // only an install with the C++ compiler (the "Desktop development with C++" workload)
+        let vs = Command::new(vswhere).args(["-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"]).output();
+        let vs = vs.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        if vs.is_empty() || !Path::new(&vs).join(r"VC\Auxiliary\Build\vcvars64.bat").exists() {
+            fail("no Visual Studio with its C++ tools was found (vswhere): install Visual Studio or its Build Tools with the \"Desktop development with C++\" workload (MSVC, CMake and Ninja)");
+        }
         let jobs = std::env::var("NUM_JOBS").unwrap_or("4".into());
         // CSP's options (docs/csp/core.md "Embree"): ISAs SSE2 / AVX / AVX2, internal tasking,
         // no filter functions, ray masks or back-face culling; CMake 4 needs the policy floor
@@ -50,12 +66,19 @@ fn main() {
                  -DEMBREE_ISA_AVX2=ON -DEMBREE_ISA_AVX512=OFF || exit /b 1\r\n\
                  cmake --build \"{}\" -j {jobs} || exit /b 1\r\n",
                 src.display(),
-                lib.display(),
-                lib.display()
+                build.display(),
+                build.display()
             ),
         )
         .unwrap();
-        run(Command::new("cmd").arg("/c").arg(&bat));
+        let status = Command::new("cmd").arg("/c").arg(&bat).status().unwrap_or_else(|e| fail(&format!("cmd: {e}")));
+        if !status.success() {
+            fail("CMake or Ninja failed (above): both come with Visual Studio's \"C++ CMake tools for Windows\", or put them on PATH");
+        }
+        // whole or not at all; a build of another profile that got there first is as good
+        if std::fs::rename(&build, &lib).is_err() && !lib.join("embree3.lib").exists() {
+            fail(&format!("could not move {} to {}", build.display(), lib.display()));
+        }
     }
     println!("cargo:rustc-link-search=native={}", lib.display());
     for f in std::fs::read_dir(&lib).unwrap() {

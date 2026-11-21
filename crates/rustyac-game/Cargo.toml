@@ -77,6 +77,12 @@ rustyac-render = { path = "../rustyac-render" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 
+# x64 Windows (the release's rustyac.exe): CSP mode's tyre rays on Embree 3.13.4 as CSP casts them
+# (Task C5i-a; built by rustyac-ode's build.rs, which needs Visual Studio's C++ tools, CMake and
+# Ninja). Elsewhere, the browser too: ODE's rays.
+[target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
+rustyac-ode = { path = "../rustyac-ode", features = ["embree"] }
+
 # Off Windows and the browser: AC's renderer only with the `wgpu` feature (native Full mode)
 [target.'cfg(not(any(windows, all(target_arch = "wasm32", target_os = "unknown"))))'.dependencies]
 rustyac-render = { path = "../rustyac-render", optional = true }

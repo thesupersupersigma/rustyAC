@@ -90,10 +90,11 @@ Windows, Rust through [rustup](https://rustup.rs) (the exact compiler version is
 ```
 git clone https://github.com/thesupersupersigma/rustyAC
 cd rustyAC
+git clone --branch v3.13.4 https://github.com/embree/embree.git ignored/embree
 cargo build --release
 ```
 
-The release and browser builds are described in [docs/release.md](docs/release.md) and [docs/web.md](docs/web.md).
+The Embree clone is for the Custom Shaders Patch mode's ray casts; building it needs Visual Studio (or its Build Tools) with the "Desktop development with C++" workload. The release and browser builds are described in [docs/release.md](docs/release.md) and [docs/web.md](docs/web.md).
 
 ---
 

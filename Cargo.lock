@@ -827,6 +827,7 @@ dependencies = [
  "rustyac-gui",
  "rustyac-math",
  "rustyac-net",
+ "rustyac-ode",
  "rustyac-physics",
  "rustyac-python",
  "rustyac-render",

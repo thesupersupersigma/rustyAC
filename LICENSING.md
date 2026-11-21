@@ -42,8 +42,10 @@ everything that links the car physics is GPL.
   `Apache-2.0` (text in [LICENSE-APACHE](LICENSE-APACHE), the same as Embree's `LICENSE.txt`).
   Custom Shaders Patch casts its tyre rays with it, so the CSP mode does too: `crates/rustyac-ode`'s
   feature `embree` builds it from its source at tag v3.13.4 into a static library
-  (`crates/rustyac-ode/build.rs`) and `crates/rustyac-ode/src/csp_ray.rs` calls it. Only native
-  CSP-mode builds turn the feature on; the browser preview and the Vanilla mode never link it.
+  (`crates/rustyac-ode/build.rs`) and `crates/rustyac-ode/src/csp_ray.rs` calls it. The Windows
+  `rustyac.exe` (the release zip) and `tools/csp_oracle` turn the feature on, and only the CSP mode
+  calls it. The browser preview never links it. Only Embree's own Intel files go into the library:
+  the Kitware files are CMake scripts, and `sse2neon.h` (MIT) is for ARM only.
   No Embree file is in this repository; its listing is in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 - **MSVCR120.dll**, Microsoft's Visual C++ 2013 runtime. rustyAC loads it at run time from the
   user's system, when it is installed, to get the same maths results as the game. It is never

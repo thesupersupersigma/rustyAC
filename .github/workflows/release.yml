@@ -34,7 +34,8 @@ jobs:
   release:
     name: build and publish
     runs-on: windows-latest
-    timeout-minutes: 60
+    # the build is uncached: Embree alone is about 20 minutes
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -90,6 +91,13 @@ jobs:
             echo "::error::MSVCR120.dll is not in System32 after installing vcredist2013: the tests would run on Rust's own maths"
             exit 1
           fi
+
+      # rustyac.exe's CSP mode casts its tyre rays on Embree: rustyac-ode's build.rs builds it from
+      # this source (uncached here, about 20 minutes of the build)
+      - name: Embree 3.13.4 source
+        run: |
+          git clone --depth 1 --branch v3.13.4 https://github.com/embree/embree.git "$RUNNER_TEMP/embree"
+          echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --workspace --locked

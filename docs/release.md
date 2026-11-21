@@ -57,7 +57,7 @@
 
    `--follow-tags` only pushes annotated tags (`git tag -a`), which is what step 4 makes.
 
-About ten minutes later the release is on the [Releases page](https://github.com/thesupersupersigma/rustyAC/releases).
+About half an hour later (Embree's uncached build is about 20 minutes of it) the release is on the [Releases page](https://github.com/thesupersupersigma/rustyAC/releases).
 
 ## What the workflows do
 
@@ -66,7 +66,13 @@ version, components and wasm targets in `rust-toolchain.toml` (rustup installs t
 version only in its own task, with a full proof run). Neither has any Assetto
 Corsa file: the tests that need the game's folder or `cardata/` print NOT TESTED and pass, and the bit-exact
 tests that work from the recordings in the repo run in full. The Visual C++ 2013 runtime is installed first,
-so the tests compute with `MSVCR120.dll`, the game's own maths.
+so the tests compute with `MSVCR120.dll`, the game's own maths. Then Embree 3.13.4's source is cloned
+(`EMBREE_DIR`): the x64 Windows `rustyac.exe` casts CSP mode's tyre rays on Embree (Task C5i-a), and
+`crates/rustyac-ode/build.rs` builds it as a static library with Visual Studio's C++ tools, CMake and
+Ninja, once per target folder (`target/embree-3.13.4`; uncached about 20 minutes). On your own PC,
+clone it into `ignored/embree` (`git clone --branch v3.13.4 https://github.com/embree/embree.git
+ignored/embree`) or set `EMBREE_DIR`. Without either, or without the C++ tools, the build stops and
+says what is missing.
 
 **`.github/workflows/ci.yml`**: on every push to `master` and on every pull request. It can only read the repo.
 
@@ -86,7 +92,7 @@ Cargo's downloads and the build output are cached between runs.
 
 1. stops if the tag does not exist, is not of the form `vX.Y.Z`, or is not `v` + the version in `Cargo.toml`
 2. stops if a release for that tag already exists (a release is never deleted or overwritten)
-3. builds and tests from scratch (no cache)
+3. builds and tests from scratch (no cache, Embree included)
 4. `packaging/package.ps1` makes `rustyAC-vX.Y.Z-windows-x64.zip` with `rustyac.exe`, `rustyac-launcher.exe` (Assetto Corsa's
    launcher, `docs/port/launcher.md`), `README.md`,
    `LICENSING.md`, the four license files (ODE's under `crates/rustyac-ode/`, where `LICENSING.md` says it
