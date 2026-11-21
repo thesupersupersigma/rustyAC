@@ -17,7 +17,10 @@
 //! `--pressures`: one line per built car, `PRESSURES <data folder>` and each tyre's static and
 //! dynamic pressure bits as the car is built (the csp proof area holds them against CSP's build).
 //!
-//!     acd_check [--cardata <folder>] [--steps N] [--only <car>] [--verbose] [--refused] [--csp] [--pressures]
+//! `--strut`: only list the cars with a strut suspension (`STRUT <car> FRONT REAR`), which CSP mode
+//! cannot build yet (Task C5i-b).
+//!
+//!     acd_check [--cardata <folder>] [--steps N] [--only <car>] [--verbose] [--refused] [--csp] [--pressures] [--strut]
 
 use std::path::{Path, PathBuf};
 
@@ -81,6 +84,21 @@ fn main() {
         names.retain(|n| n == only);
     }
     println!("{} cars with a data.acd under {}", names.len(), cars_folder.display());
+    if args.iter().any(|a| a == "--strut") {
+        // the cars whose strut suspension asserts in CSP mode (Task C5i-b): suspensions.ini read from the archive, no drive
+        for name in &names {
+            match rustyac_physics::data::ini::IniReader::load(&cars_folder.join(name).join("data").join("suspensions.ini")) {
+                Ok(ini) => {
+                    let ends: Vec<&str> = ["FRONT", "REAR"].into_iter().filter(|s| ini.get_string(s, "TYPE") == "STRUT").collect();
+                    if !ends.is_empty() {
+                        println!("STRUT {name} {}", ends.join(" "));
+                    }
+                }
+                Err(message) => println!("UNREAD {name} {message}"),
+            }
+        }
+        return;
+    }
 
     let (mut files_same, mut files_differ, mut no_extract) = (0usize, 0usize, 0usize);
     let (mut cars_same, mut cars_refused_same, mut cars_differ) = (0usize, 0usize, 0usize);
