@@ -393,12 +393,32 @@ impl Tree<'_> {
         self.tri_down0(a);
     }
 
-    /// +0x16e5900: node against node, slots (a.pos, b.pos), (a.pos, b.neg), (a.neg, b.pos), (a.neg, b.neg).
+    /// +0x16e5900: node against node, slots (a.pos, b.pos), (a.pos, b.neg), (a.neg, b.pos), (a.neg, b.neg);
+    /// but when both of a's children are nodes and b has a leaf, b's slots come first (+0x16e6032,
+    /// +0x16e5fe8): each b leaf fetched once and walked down a.pos then a.neg.
     fn collide(&mut self, mut a: u32, mut b: u32) {
         loop {
             let (na, nb) = (self.nodes0[a as usize], self.nodes1[b as usize]);
             if !self.box_box(&na, &nb) {
                 return;
+            }
+            if let (Child::Node(ap), Child::Node(an)) = (na.pos, na.neg) {
+                if !matches!((nb.pos, nb.neg), (Child::Node(_), Child::Node(_))) {
+                    for slot in [nb.pos, nb.neg] {
+                        match slot {
+                            Child::Triangle(leaf) => {
+                                self.fetch(leaf, false);
+                                self.tri_down0(ap);
+                                self.tri_down0(an);
+                            }
+                            Child::Node(child) => {
+                                self.collide(ap, child);
+                                self.collide(an, child);
+                            }
+                        }
+                    }
+                    return;
+                }
             }
             match na.pos {
                 Child::Triangle(leaf) => self.leaf_against(leaf, &nb),
