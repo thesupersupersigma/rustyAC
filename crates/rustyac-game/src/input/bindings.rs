@@ -624,6 +624,7 @@ mod tests {
         // an AC file without a [KEYBOARD] section still gives a keyboard that steers
         let pad_only = Bindings::from_ini(&ControlsIni::parse("[HEADER]\nINPUT_METHOD=X360\n[X360]\nSTEER_THUMB=LEFT\n"), "test".to_string());
         assert_eq!(KeyboardCarControl::from_ini(&pad_only.ini).keys.left, 0x25);
+        #[cfg(windows)]
         assert!(!usable(&ControlsIni::parse("[VIDEO]\nX=1\n")));
     }
 
