@@ -93,14 +93,16 @@ use std::path::Path;
 /// time a step took (stderr). `physics_threads`: the worker threads of a drive with several
 /// cars (`None`: as the game decides).
 pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>) -> Result<u64, String> {
-    run_replay_headless_saving(replay, dump_states, state_hash, physics_threads, None, None, None)
+    run_replay_headless_saving(replay, dump_states, None, state_hash, physics_threads, None, None, None)
 }
 
 /// [`run_replay_headless`] that also records AC's replay of the drive (`ReplayManager`, at
 /// its default 33 frames a second) and writes it to `save_replay` at the end, and that runs
 /// AC's ghost car recorder and its telemetry recorder beside the drive (`ghost`, `telemetry`;
-/// their files are written at the end).
-pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>, save_replay: Option<&Path>, mut ghost: Option<&mut ghost::GhostRig>, mut telemetry: Option<&mut telemetry::TelemetryRig>) -> Result<u64, String> {
+/// their files are written at the end). `physics_states`: every car's `CarPhysicsState` after
+/// every step, in the game's 0xb70-byte layout, the player's car first (Task C5i-b).
+#[allow(clippy::too_many_arguments)]
+pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, physics_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>, save_replay: Option<&Path>, mut ghost: Option<&mut ghost::GhostRig>, mut telemetry: Option<&mut telemetry::TelemetryRig>) -> Result<u64, String> {
     let mut rig = save_replay.map(|path| ac_replay::ReplayRig::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), None, -16.0, 1));
     let file = input_file::InputFile::read(replay)?;
     let mut setup = file.setup.clone();
@@ -108,6 +110,10 @@ pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, sta
     let mut sim = sim::GameSim::new(setup, Box::new(sim::ReplaySource::default()))?;
     let mut writer = match dump_states {
         Some(path) => Some(dump::DumpWriter::create(path)?),
+        None => None,
+    };
+    let mut physics_states = match physics_states {
+        Some(path) => Some(std::io::BufWriter::new(rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?)),
         None => None,
     };
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
@@ -127,12 +133,21 @@ pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, sta
         if let Some(writer) = &mut writer {
             writer.push(&dump::StepDump::capture(&sim.car.car))?;
         }
+        if let Some(file) = &mut physics_states {
+            use std::io::Write as _;
+            for view in view::CarView::capture_world(&sim, sim.sim_seconds()) {
+                file.write_all(&view.physics_state().to_game_bytes()).map_err(|e| format!("--physics-states: {e}"))?;
+            }
+        }
         if state_hash {
             hash = sim.state_hash(hash);
         }
     }
     if let Some(writer) = writer {
         writer.finish()?;
+    }
+    if let Some(mut file) = physics_states {
+        std::io::Write::flush(&mut file).map_err(|e| format!("--physics-states: {e}"))?;
     }
     if let (Some(rig), Some(path)) = (&mut rig, save_replay) {
         let bytes = rig.save_to(path)?;

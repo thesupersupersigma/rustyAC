@@ -3004,7 +3004,7 @@ fn run(options: &Options) -> Result<(), String> {
             let mut ghost = ghost.as_ref().map(|ghost| ghost.lock().unwrap());
             let telemetry = telemetry_rig(options, false);
             let mut telemetry = telemetry.as_ref().map(|rig| rig.lock().unwrap());
-            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay), ghost.as_deref_mut(), telemetry.as_deref_mut())?;
+            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.physics_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay), ghost.as_deref_mut(), telemetry.as_deref_mut())?;
             let seconds = started.elapsed().as_secs_f64();
             // the dump may be going to the standard output
             eprintln!(

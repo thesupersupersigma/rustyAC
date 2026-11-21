@@ -33,6 +33,8 @@ pub struct Options {
     pub duration: Option<f64>,
     /// `--dump-states <file>`: with `--replay --headless`, write the car's state after every step.
     pub dump_states: Option<PathBuf>,
+    /// `--physics-states <file>`: with `--replay --headless`, every car's `CarPhysicsState` after every step.
+    pub physics_states: Option<PathBuf>,
     /// `--screenshot <png>`: draw one frame off screen into a PNG and stop (no window).
     pub screenshot: Option<PathBuf>,
     /// `--at <s>`: with `--screenshot`, how far into the drive the picture is taken.
@@ -402,6 +404,7 @@ impl Default for Options {
             realtime: false,
             duration: None,
             dump_states: None,
+            physics_states: None,
             screenshot: None,
             pose_out: None,
             supersample: 1,
@@ -817,6 +820,7 @@ for checks, without anybody at the controls:
   --realtime            with --replay --headless: keep to the clock, publish shared memory
   --duration <s>        stop by itself after this many seconds
   --dump-states <file>  with --replay --headless: write the car's state after every step
+  --physics-states <file>  with --replay --headless: every car's CarPhysicsState (game layout) after every step
   --debug-view          the debug view (own shader, fast, shows the physics) instead of Assetto Corsa's renderer
   --warp                draw with WARP, Windows' software rasteriser (slow; no graphics card needed)
   --csp                 Custom Shaders Patch mode: CSP's extended car and track data (also [CSP] ENABLED=1 in cfg\\rustyac.ini)
@@ -990,6 +994,7 @@ impl Options {
                 "--realtime" => o.realtime = true,
                 "--duration" => o.duration = Some(value("--duration")?.parse().map_err(|e| format!("--duration: {e}"))?),
                 "--dump-states" => o.dump_states = Some(absolute(value("--dump-states")?)),
+                "--physics-states" => o.physics_states = Some(absolute(value("--physics-states")?)),
                 "--screenshot" => o.screenshot = Some(absolute(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
                 "--no-hud" => o.no_hud = true,
@@ -1282,11 +1287,13 @@ impl Options {
         if o.record.is_some() && o.screenshot.is_some() && !o.autodrive && !o.flat_out {
             return Err("--record with --screenshot needs --autodrive or --flat-out (otherwise nobody drives)".to_string());
         }
-        if o.dump_states.is_some() && !(o.replay.is_some() && o.headless) {
-            return Err("--dump-states needs --replay and --headless".to_string());
-        }
-        if o.dump_states.is_some() && o.realtime {
-            return Err("--dump-states cannot be used with --realtime".to_string());
+        for (name, set) in [("--dump-states", o.dump_states.is_some()), ("--physics-states", o.physics_states.is_some())] {
+            if set && !(o.replay.is_some() && o.headless) {
+                return Err(format!("{name} needs --replay and --headless"));
+            }
+            if set && o.realtime {
+                return Err(format!("{name} cannot be used with --realtime"));
+            }
         }
         for (name, value) in [("--duration", o.duration), ("--at", o.at)] {
             if value.is_some_and(|seconds| !(0.0..=1.0e9).contains(&seconds)) {

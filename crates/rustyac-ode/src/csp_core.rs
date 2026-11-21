@@ -27,6 +27,17 @@ struct DistanceJoint {
     target: f64,
 }
 
+/// Task C5i-b: `CSP_CORE_TRACE=<file>` writes a line per force call and per world step (each
+/// body's state at its entry), the same lines from `csp_oracle`'s port and `rustyac --csp`.
+fn trace(line: std::fmt::Arguments) {
+    use std::io::Write;
+    static FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::io::LineWriter<std::fs::File>>>> = std::sync::OnceLock::new();
+    let file = FILE.get_or_init(|| std::env::var_os("CSP_CORE_TRACE").and_then(|p| std::fs::File::create(p).ok()).map(|f| std::sync::Mutex::new(std::io::LineWriter::new(f))));
+    if let Some(f) = file {
+        let _ = writeln!(f.lock().unwrap(), "{line}");
+    }
+}
+
 #[derive(Clone)]
 pub struct Core {
     pub world: CspWorld,
@@ -294,6 +305,7 @@ impl Core {
 
     /// `addLocalForceAtLocalPos` (+0x936ea0, `dBodyAddRelForceAtRelPos` +0x91b2d0).
     pub fn add_local_force_at_local_pos(&mut self, id: usize, f: [f32; 3], p: [f32; 3]) {
+        trace(format_args!("add_local_force_at_local_pos {id} {f:?} {p:?}"));
         let body = self.body_mut(id);
         let (f, p, r) = (f.map(f64::from), p.map(f64::from), body.r);
         let rf = rot(&r, f);
@@ -303,6 +315,7 @@ impl Core {
 
     /// `addForceAtLocalPos` (+0x936f00, `dBodyAddForceAtRelPos` +0x91b000).
     pub fn add_force_at_local_pos(&mut self, id: usize, f: [f32; 3], p: [f32; 3]) {
+        trace(format_args!("add_force_at_local_pos {id} {f:?} {p:?}"));
         let body = self.body_mut(id);
         let (f, p, r) = (f.map(f64::from), p.map(f64::from), body.r);
         let rp = [(p[1] * r[1] + p[0] * r[0]) + p[2] * r[2], (p[1] * r[5] + p[0] * r[4]) + p[2] * r[6], (p[1] * r[9] + p[0] * r[8]) + p[2] * r[10]];
@@ -311,6 +324,7 @@ impl Core {
 
     /// `addForceAtPos` (+0x936fc0, `dBodyAddForceAtPos` +0x91af10).
     pub fn add_force_at_pos(&mut self, id: usize, f: [f32; 3], p: [f32; 3]) {
+        trace(format_args!("add_force_at_pos {id} {f:?} {p:?}"));
         let body = self.body_mut(id);
         let (f, p) = (f.map(f64::from), p.map(f64::from));
         let rp = [p[0] - body.pos[0], p[1] - body.pos[1], p[2] - body.pos[2]];
@@ -319,6 +333,7 @@ impl Core {
 
     /// `addTorque` (+0x934100).
     pub fn add_torque(&mut self, id: usize, t: [f32; 3]) {
+        trace(format_args!("add_torque {id} {t:?}"));
         let body = self.body_mut(id);
         (0..3).for_each(|k| body.tacc[k] = t[k] as f64 + body.tacc[k]);
     }
@@ -494,6 +509,13 @@ impl Core {
 
     /// The second half of [`Core::step`]: the ODE step and what follows it.
     pub fn step_world(&mut self, h: f32) {
+        for (i, b) in self.world.bodies.iter().enumerate() {
+            trace(format_args!("step {h} body {i} {b:?}"));
+        }
+        for (i, j) in self.world.joints.iter().enumerate() {
+            trace(format_args!("step {h} joint {i} {j:?}"));
+        }
+        trace(format_args!("step {h} params {:?}", self.world.params));
         let islands = self.world.step(h as f64);
         let w = &mut self.world;
         let n = w.joints.iter().take_while(|j| matches!(j.joint.kind, JointKind::Contact { .. })).count();

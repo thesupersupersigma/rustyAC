@@ -250,6 +250,7 @@ All **checks**: for the project's tests and for developers.
 | `--duration <s>` | | Stops by itself after this many seconds. |
 | `--realtime` | | With `--replay --headless`: keeps to the clock and publishes shared memory. |
 | `--dump-states <file>` | | With `--replay --headless`: writes the car's state after every step. |
+| `--physics-states <file>` | | With `--replay --headless`: writes every car's `CarPhysicsState` (the game's 0xb70-byte layout, the player's car first) after every step (Task C5i-b). |
 | `--state-hash` | | With `--replay --headless`: prints a hash over every car's state of every step, and how long a step took. |
 | `--drawn-frames <seed>` | | With `--headless`: Time Attack, Drift and Drag on drawn frames of uneven length. |
 | `--bench-render` | | With `--headless`: also draws frames off screen and reports their rate. |
@@ -276,7 +277,7 @@ All **checks**: for the project's tests and for developers.
 - `--supersample`, `--free-camera`, `--no-hud`, `--at`, `--lead-in`, `--flat-out`, `--show-lights`,
   `--show-damage` and `--pose-out` need `--screenshot`. `--flat-out-brake` needs `--flat-out`.
 - `--layout` and `--autodrive` need `--track <name>`.
-- `--state-hash`, `--dump-states` and `--realtime` need `--replay` and `--headless`.
+- `--state-hash`, `--dump-states`, `--physics-states` and `--realtime` need `--replay` and `--headless`.
 - `--bench-render` and `--drawn-frames` need `--headless`; `--bench-shot` needs `--bench-render`.
 - `--sound-tape` needs `--audio-wav`. `--replay-script` needs `--replay` in a window.
 - `--record` with `--screenshot` needs `--autodrive` or `--flat-out` (somebody has to drive).
@@ -476,6 +477,8 @@ rustyAC; `--controls` wins over it, and it wins over Assetto Corsa's controls.in
 | `RUSTYAC_AUDIO_VERBOSE` | More lines from the sound engine. **checks** |
 | `RUSTYAC_DISPLAY_MODES` | The launcher's list of display sizes, fixed (`1920x1080,1280x720`). **checks** |
 | `RUSTYAC_ROW_DUMP`, `RUSTYAC_ALSO` | What a replay that differs from its recording prints. **checks** |
+| `CSP_CORE_TRACE` | A file: in CSP mode (`--csp`, and `csp_oracle`'s port) every force, torque, body, joint and world step of CSP's core as one line, to compare with CSP's own (Task C5i-b). **checks** |
+| `RUSTYAC_EMBREE_LIB` | Building: the folder Embree is built into and linked from, instead of `<target>/embree-3.13.4` (CI points every target folder at one). **checks** |
 | `RUSTYAC_FW1_GLYPHS` | A file to dump every drawn letter into. **checks** |
 | `RENDER_ORACLE_TEXTURE_DATA` | 1: the graphics log hashes a texture again after each upload. **checks** |
 | `RUSTYAC_DIAG_DRAW_ONE_CAR`, `RUSTYAC_DIAG_NO_CUBE_MIPS`, `RUSTYAC_DIAG_FINISH_SPIN` | 1: diagnosis switches of the renderer (only your car is drawn; no smaller copies of the reflections; wait for the frame without yielding). **not AC**, **checks** |

@@ -38,6 +38,8 @@ mod ode;
 mod reduce;
 mod solver;
 mod space;
+// Task C5i-b: the whole car's CarPhysicsState against rustyAC's (--compare-states)
+mod states;
 #[path = "../../car_oracle/src/setup_screen.rs"]
 mod setup_screen;
 /// What track.rs takes from car_oracle's game.rs.
@@ -1788,6 +1790,8 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     let mut pages = HashMap::new();
     let mut lines = String::new();
     let mut body0 = String::new();
+    // Task C5i-b: every car's state after every step (states.bin, csp_oracle --compare-states)
+    let mut all_states: Vec<u8> = Vec::new();
     let count = steps.min(records.len() / 40);
     let mut air = air.map(|spec| AirCheck::new(acs, csp.expect("--air needs CSP"), spec, cars[0]));
     for (i, record) in records.chunks_exact(40).take(count).enumerate() {
@@ -1843,6 +1847,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             let (car_words, _) = words_of(car, CAR_SIZE, &mut pages);
             let (state_words, _) = words_of(state, 0xb70, &mut pages);
             lines.push_str(&format!(" {:016x} {:016x}", fnv(&car_words), fnv(&state_words)));
+            all_states.extend_from_slice(std::slice::from_raw_parts(state, 0xb70));
         }
         lines.push('\n');
         if track.is_some() && csp.is_none() {
@@ -1856,6 +1861,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         }
     }
     std::fs::write("steps.txt", &lines).expect("steps.txt can be written");
+    std::fs::write("states.bin", &all_states).expect("states.bin can be written");
     if let Some(dll) = csp {
         // after the drive: which ray path the tyres took (docs/csp/core.md, switches): Embree when this byte is 1, which
         // CSP sets from ODE_BATCH_RAYCAST=0 in general.ini or from the forcing flag
@@ -2225,6 +2231,9 @@ fn main() {
         drop(rustyac_ode::csp_ray::Scene::new(&rays::config(), false, &[]));
     }
     let mut arguments: Vec<String> = std::env::args().collect();
+    if let Some(i) = arguments.iter().position(|a| a == "--compare-states") {
+        return states::compare(&arguments[i + 1], &arguments[i + 2], arguments[i + 3].parse().expect("--compare-states <game> <port> <cars>"));
+    }
     // --islands <file>: recorded CSP islands stepped by rustyac-ode's csp_step (Task C5d), no AC
     if let Some(i) = arguments.iter().position(|a| a == "--world") {
         return island::check_world(&arguments[i + 1]);
