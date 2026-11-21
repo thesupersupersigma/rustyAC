@@ -55,9 +55,12 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5h 4. Vanilla | see [below](#vanilla-c5h) |
 
 | C5i sizing | stopped before part 1 step 1 (rule 32): part 9 is 4-7 sessions, not 1-2 ([below](#task-c5i-sizing-the-whole-car)) |
+| C5i-a 1. CSP's set-up from rustyAC's loaders | done: track, car boxes and mesh collider (`CLAMP_MESH_COLLIDERS`) 0 differ for both proof cars; the `core` cases run on them; `csp_ttl` b-major fix ([below](#c5i-a-part-1-csps-set-up-from-rustyacs-loaders)) |
+| C5i-a 2. `PhysicsCore`'s second backend | done: `rustyac --csp` steps `csp_core`; smoke case `csp/smoke`; Vanilla bits and step time unchanged ([below](#c5i-a-part-2-physicscores-second-backend)) |
+| C5i-a 3. Embree in `rustyac.exe`, CI, release | done: x64 Windows builds link Embree; uncached release build 24 min 52 s ([below](#c5i-a-part-3-embree-in-rustyacexe-ci-and-the-release)) |
 | C5i part 3 | done, nothing to change: the `csp` area keeps no results (CSP and the port run live on one CPU), and the port's Embree has CSP's ISA set, so both take SSE2 on the farm VM (Xeon E5620: SSE2, SSE4.2; no AVX, AVX2, AVX-512, FMA3) and AVX2 on this PC (i9-9980HK: all but AVX-512) |
 
-**Resume here:** C5i-a, part 1 step 1 (`PhysicsCore` on `csp_core`), split as [below](#task-c5i-sizing-the-whole-car).
+**Resume here:** C5i-b (whole-car rows), split as [below](#task-c5i-sizing-the-whole-car).
 
 ## The core in one paragraph
 
@@ -1107,4 +1110,83 @@ OPCODE: when both of a's children are nodes and b has a leaf, b's slots are the 
 leaf fetched once, walked down a.pos then a.neg; b node children `collide(a.pos, ·)`,
 `collide(a.neg, ·)`). Every other case is a-major as before.
 
-**Resume here (C5i-a):** part 2, the second `PhysicsCore` backend.
+### C5i-a part 2: `PhysicsCore`'s second backend
+
+**Shape.** `PhysicsCore` (crates/rustyac-physics/src/car/body.rs) keeps Vanilla's f32 `World` as it was
+and gains `csp: Option<Box<CspBody>>` (crates/rustyac-physics/src/csp/core_body.rs). `None` is Vanilla:
+every method runs its old code. `Some` is CSP mode: each method's first line hands the call to
+`CspBody`, which drives `rustyac_ode::csp_core::Core` (the double world, CSP's wrappers, collision and
+ray code proven in C5g/C5h). One check of an `Option` is what Vanilla pays. A body's `RigidBody` id
+is the CSP body id, a joint's `JointId` the CSP joint id, a `GeomId` the index into CSP's geoms.
+`PhysicsEngine::set_track` turns the backend on (`use_csp`) when CSP mode is on, before any body is made.
+
+**One track core.** `Track::csp_core()` builds CSP's track once per loaded track (part 1's
+`core_track::build` → `Core::set_track`, `set_rays`, the track space cleaned as the cars' first tyre ray
+cleans it). Every physics core of CSP mode starts as a copy of it (the trimesh data is shared,
+`Arc<TrackMesh>`). The tyres' rays go to a second copy behind a lock (`CspCore::tyre_ray`):
+`Track::ray_cast` asks it in CSP mode, so cars, replays, the net session and the recorder get CSP's rays
+through the same `RayTrackCollisionProvider` as before.
+
+**The engine's copies.** The engine keeps one world and each car a copy (as in Vanilla). The direct
+`.world` reads and writes in the engine, the state hash, the HUD, the AI's car view, the net replay rows,
+the chassis trace and the recorder go through neutral calls instead: `body_state` (pos, q, velocities,
+R, mass, inertia, force accumulators as f32), `slot_counts`, `copy_body_state_from`,
+`copy_joint_state_from`, `copy_geom_bits_from`. `csp_core::Core` got the matching pieces: `step` split
+into `collide` + `step_world`, `copy_body_from`, `copy_joint_from`, `geom_body`, `joints_made`, `clean_track`.
+Left on Vanilla's world on purpose: `car/replay.rs`'s 18 sites (the oracle runner replaying the game's
+own Vanilla calls), the recorder's fault injection, and the oracles in `tools/`.
+
+**What CSP mode does not have yet (shortcuts, each marked in the code).**
+- Slider and ball joints (only the strut suspension makes them): CSP mode asserts. No strut car is
+  among the CSP cars tested.
+- Loose track objects (cones, `--track-objects`): CSP mode builds none.
+- `set_contacts` (the oracles' recorded contacts) and the force tape stay Vanilla-only.
+- `no_finite` (CSP byte +0x280320f) is taken as false (its default).
+- Local-force calls CSP never recorded (`ADD_LOCAL_FORCE_AT_POS`, `ADD_LOCAL_TORQUE`, the
+  velocity setters, `local_to_world_normal`) are made from world vectors with CSP's own maths.
+- A build without Embree (the browser, non-x64 targets) casts ODE's rays (CSP's `ODE_BATCH_RAYCAST=1`
+  path). Since part 3 the Windows `rustyac.exe` casts Embree's, as CSP does by default.
+
+**Smoke test** (proof case `csp/smoke`). `rustyac --csp`: the F2004 (autodriver) and the RSS
+(`--opponent …:auto`) together for 10 s at Spa, recorded, then replayed twice. Result: 3700 steps, no panic, the F2004
+at 59.8 km/h on the road, both replays hash `120d2b99955bbd8b`. Also by hand: each car alone for 20 s
+(after 20 s the F2004 is at 298.1 km/h in CSP mode and in Vanilla, 1 m apart), two
+F2004, and a F2004 against an AI F2004 (the autodriver runs into the AI car at La Source in both modes).
+Replaying a CSP recording runs CSP mode (`csp=1` in the header). The same inputs with `csp=0` give
+another hash, so the backend is really in use.
+
+**Step time.** Vanilla, the same 60 s Spa drive (20463 steps, hash `bd3caf77f90d3989` before and after),
+7 replays each, interleaved, while another program loaded the PC: before median 0.1441 ms a step,
+after median 0.1440. (Earlier, with the PC idle, before was 0.0573.) CSP mode, one F2004, 3791 steps:
+0.066 ms a step on ODE's rays, against 0.053 in Vanilla. Two cars: 0.35 ms (the car-against-car tree
+collider). With Embree (part 3): 0.043 ms.
+
+### C5i-a part 3: Embree in `rustyac.exe`, CI and the release
+
+- **Which builds.** `crates/rustyac-game/Cargo.toml` turns on `rustyac-ode`'s `embree` for
+  `cfg(all(windows, target_arch = "x86_64"))`: the release's `rustyac.exe` (and the launcher, which links
+  rustyac-game). The browser (wasm) and the other `platforms.yml` targets keep ODE's rays: Windows on
+  ARM cannot build Embree's x86 ISAs. Vanilla never calls it.
+- **Build.** `crates/rustyac-ode/build.rs` builds Embree once per target folder (`target/embree-3.13.4`,
+  shared by the profiles, clippy and the tests; built in `OUT_DIR`, then moved). Source: `EMBREE_DIR`,
+  else `ignored/embree` at tag v3.13.4. It stops with what is missing: no source (with the clone line),
+  no Visual Studio with the C++ tools (vswhere), or CMake / Ninja failing.
+- **CI.** `ci.yml`, `release.yml` and (x64 Windows only) `platforms.yml` clone v3.13.4 into
+  `$RUNNER_TEMP/embree` before the build. CI caches `target` and `tools/*/target`, so the Embree build is
+  cached with them (a cache miss: about 20 minutes, three times: the workspace's, `csp_oracle`'s and
+  `web_pack`'s, which links rustyac-game through rustyac-web). The release builds the workspace
+  without a cache: `timeout-minutes` 60 → 120.
+- **Build time.** An uncached `cargo build --release --workspace --locked` on this PC (4 jobs): 24 min
+  52 s, Embree about 20 of them (no other crate built while it ran). `rustyac.exe`: 12.1 → 30.1 MB.
+- **Licence.** Embree is Apache-2.0: `LICENSE-APACHE` is the same text as Embree's `LICENSE.txt`, and
+  `tools/notices.py` already writes its row (`THIRD_PARTY_NOTICES.txt`; Embree is not a crate, so the row
+  is fixed in the script). The library's sources (`common`, `kernels`, `include`) carry only Intel's
+  copyright; Kitware's lines are on CMake scripts and `sse2neon.h` (MIT) is ARM only. LICENSING.md
+  says so.
+- **Proofs.** The `csp/smoke` case on the Embree build: 3778 steps, the F2004 at 61.3 km/h, both replays
+  `d20a8d396f2d1309`. Vanilla, the 60 s Spa drive with the PC idle, 5 runs each, interleaved: before
+  median 0.0517 ms a step, after (Embree linked) 0.0506; hash `bd3caf77f90d3989` both. `run_all.sh
+  --quick` (the `csp` area is all its cases): every area identical (physics 9, fresh 63, csp 65,
+  render 18, gui 29, browser 18, ai_page 10, net 16, the rest too); workspace clippy clean.
+
+**Resume here (C5i-a):** done. Next: C5i-b ([sizing](#task-c5i-sizing-the-whole-car)).
