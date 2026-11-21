@@ -5,7 +5,8 @@
 # docs/platforms.md). GitHub's standard hosted runners only, no secrets, read-only.
 # Failures are expected: a target that fails does not stop the others, and every target
 # uploads its logs and a summary table (also shown on the run's page).
-# No Assetto Corsa file is here or is fetched: tests that need the game print NOT TESTED.
+# No Assetto Corsa file is here or is fetched: tests that need the game print NOT TESTED and
+# pass without stepping anything, so the summary counts them as skipped (Task P2).
 name: Platforms
 
 on:
@@ -77,16 +78,30 @@ jobs:
         run: |
           mkdir -p logs
           summary=logs/summary.md
-          printf '## %s on %s\n\n| what | result | NOT TESTED lines |\n|---|---|---|\n' "$TARGET" "$RUNNER_ARCH" > "$summary"
+          printf '## %s on %s\n\n| what | result | tests run / skipped (NOT TESTED) |\n|---|---|---|\n' "$TARGET" "$RUNNER_ARCH" > "$summary"
           failed=0
+          # rows that fail by design off Windows: rustyac-render needs backend-wgpu there, and
+          # rustyac-web is the wasm crate (its native build is the Windows desktop's)
+          expected=" "
+          if [ "$RUNNER_OS" != Windows ]; then expected=" build-rustyac-render build-rustyac-web "; fi
           # try <log name> <command...>: runs it into logs/<name>.log and adds a row
           try() {
             local name=$1; shift
             echo "::group::$*"
-            if "$@" > "logs/$name.log" 2>&1; then result=ok; else result=FAILED; failed=1; fi
+            if "$@" > "logs/$name.log" 2>&1; then result=ok
+            elif [[ "$expected" == *" $name "* ]]; then result="expected (by design)"
+            else result=FAILED; failed=1; fi
             tail -n 30 "logs/$name.log"
             echo "::endgroup::"
-            printf '| `%s` | %s | %s |\n' "$*" "$result" "$(grep -c 'NOT TESTED' "logs/$name.log")" >> "$summary"
+            # a golden without the game's files returns early after NOT TESTED and still passes:
+            # count those tests (their output is shown by --show-output) apart from the ones that ran
+            counts=
+            if [[ "$name" == test-* ]]; then
+              counts=$(awk '/^ *Running /{bin=$0} /^---- .* stdout ----$/{t=bin" "$2} /^(successes|failures):$/{t=""}
+                /NOT TESTED/ && t!=""{s[t]=1} /^test result:/{for(i=2;i<=NF;i++) if($i ~ /^passed/) p+=$(i-1)}
+                END{n=0; for(k in s) n++; print p-n " / " n}' "logs/$name.log")
+            fi
+            printf '| `%s` | %s | %s |\n' "$*" "$result" "$counts" >> "$summary"
           }
           cargo="cargo --locked"
           # the program: on Windows the game, elsewhere the replay-only runner (src/main.rs)
@@ -101,14 +116,14 @@ jobs:
           try game-wgpu $cargo build --release --target "$TARGET" -p rustyac-game --features wgpu
           # the bit proofs that need no game: recorded hashes and goldens committed in the repo
           for crate in rustyac-math rustyac-ode rustyac-physics rustyac-net rustyac-content rustyac-gui rustyac-audio; do
-            try "test-$crate" $cargo test --release --target "$TARGET" -p "$crate"
+            try "test-$crate" $cargo test --release --target "$TARGET" -p "$crate" -- --show-output
           done
           cat "$summary" >> "$GITHUB_STEP_SUMMARY"
           exit $failed
 
       - name: Upload the logs
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: logs-${{ matrix.target }}${{ matrix.emulated && '-emulated' || '' }}
           path: logs/
