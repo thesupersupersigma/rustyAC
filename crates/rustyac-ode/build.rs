@@ -2,7 +2,8 @@
 
 //! Feature `embree` (Task C5h): Embree 3.13.4 built as CSP built it, a static library. The
 //! source is `EMBREE_DIR`, else tag v3.13.4 of the clone in `ignored/embree`. Needs CMake,
-//! Ninja and MSVC (found with vswhere, set up with vcvars64).
+//! Ninja and MSVC (found with vswhere, set up with vcvars64). The library goes to
+//! `RUSTYAC_EMBREE_LIB` (a folder several target folders share, CI), else `<target>/embree-3.13.4`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,13 +22,14 @@ fn fail(why: &str) -> ! {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=EMBREE_DIR");
+    println!("cargo:rerun-if-env-changed=RUSTYAC_EMBREE_LIB");
     if std::env::var_os("CARGO_FEATURE_EMBREE").is_none() {
         return;
     }
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // one build for every profile and check of this target folder (OUT_DIR is
     // <target>/<profile>/build/<package>/out): clippy and the tests do not build it again
-    let lib = out.ancestors().nth(4).unwrap_or(&out).join("embree-3.13.4");
+    let lib = std::env::var_os("RUSTYAC_EMBREE_LIB").map(PathBuf::from).unwrap_or_else(|| out.ancestors().nth(4).unwrap_or(&out).join("embree-3.13.4"));
     if !lib.join("embree3.lib").exists() {
         let build = out.join("embree-build");
         let src = match std::env::var_os("EMBREE_DIR") {
@@ -76,6 +78,7 @@ fn main() {
             fail("CMake or Ninja failed (above): both come with Visual Studio's \"C++ CMake tools for Windows\", or put them on PATH");
         }
         // whole or not at all; a build of another profile that got there first is as good
+        let _ = std::fs::create_dir_all(lib.parent().unwrap_or(&lib));
         if std::fs::rename(&build, &lib).is_err() && !lib.join("embree3.lib").exists() {
             fail(&format!("could not move {} to {}", build.display(), lib.display()));
         }
