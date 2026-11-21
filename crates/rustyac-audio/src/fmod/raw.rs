@@ -184,6 +184,7 @@ mod web_extra {
     }
 }
 
+#[cfg(any(windows, target_arch = "wasm32"))]
 fn keep(fns: Fns, extra: Extra, folder: &Path, output: Output) -> Result<&'static Api, String> {
     let wav_file = match &output {
         Output::WavNrt { file, .. } => {
