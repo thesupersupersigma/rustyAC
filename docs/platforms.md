@@ -6,10 +6,13 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
 
 ## Resume here
 
-- Done: the inventory (section 2), the workflow (section 3, not run yet), the bit-exactness
-  section (4), the game files, FMOD and Python decisions (5 to 7), the plan (8).
-- Next: Super runs the workflow (section 3.2). Read its logs and replace the "expected" column of
-  section 3.3 with what happened. Then start the plan at step L1.
+- P1 done: the inventory (section 2), the workflow (section 3), the bit-exactness section (4), the
+  game files, FMOD and Python decisions (5 to 7), the plan (8).
+- P2 done (section 10): run 1 read (3.3), the workflow counts skipped goldens, the physics, ODE,
+  maths and net goldens are identical on x86 Linux and on ARM under QEMU, the NaN sign audit
+  (nothing reads it), and `rustyac-audio` and `rustyac-game --features wgpu` build off Windows.
+- Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
+  the native game from section 8's L1, starting with the list in 10.4.
 
 ## 1. Plain-English summary
 
@@ -28,9 +31,12 @@ targets are small after that.
 
 The physics gives the same bits on every target, because it runs AC's maths in plain Rust
 (including the FMA3 paths, through a correctly rounded software `fma`). Where there is no
-`rcpps` instruction it uses Intel's `rcpps` table. One thing is unproven on ARM: **the sign of a
-NaN** made by an invalid operation (x86 makes a negative one, ARM a positive one), and AC's states
-do carry NaNs. The workflow's ARM test jobs and one replay on a Mac settle it.
+`rcpps` instruction it uses Intel's `rcpps` table. Task P2 checked this: every physics, ODE, net
+and maths golden gives the game's bits on x86 Linux and on ARM Linux under QEMU, with the real
+car and track files. **The sign of a NaN** made by an invalid operation (negative on x86,
+positive on ARM) does differ, but nothing in the drive reads it, so only the proofs' compares need
+to treat NaNs as equal, which they already do. A replay on a real Apple Silicon Mac is the last
+check.
 
 ## 2. The Windows-only inventory
 
@@ -101,15 +107,42 @@ secrets, GitHub's standard hosted runners (free on a public repo), Rust 1.97.0 f
 A red target is expected (see the table below). The job is red when any row failed, so a mistake
 is never shown as green.
 
-### 3.3 Expected results (from the code, until the run is back)
+### 3.3 Results of the first run (run 44794455197, P1's workflow, read in Task P2)
+
+Logs: `re/scratch/taskP1/run/logs-<target>/`.
 
 | Row | Linux x64 / ARM, macOS ARM / Intel | Windows ARM64 | x64 emulated |
 |---|---|---|---|
-| `rustyac` | ok: the replay runner (`main.rs`'s non-Windows branch) | full game: ok if `ring` (rustls) finds clang on the image, else FAILED | ok if the image has the x64 MSVC libraries |
-| each crate | ok **except `rustyac-render`**: its `compile_error!` (off Windows it needs `backend-wgpu`). `rustyac-web`'s native build has never been tried off Windows | ok, but ring as above | ok |
-| `render-wgpu` | ok likely (wgpu needs no system libraries to build) | ok | ok |
-| `game-wgpu` | unknown: only ever built on Windows. The most useful row | ok | ok |
-| tests | ok; math's DLL sample is NOT TESTED. **ARM: watch `rustyac-ode` and `rustyac-physics`** (NaN sign, section 4) | ok (pure maths, rcpps table) | **watch `rustyac-ode`**: `rcpps` is executed by the emulator |
+| `rustyac` | ok (the replay runner) | ok (the full game, D3D11 included) | ok |
+| each crate | ok **except** `rustyac-render` (its `compile_error!` without `backend-wgpu`: by design) and `rustyac-web` (unresolved `render::ac`, `gui_apps`, `rustyac_game::audio`: they are Windows / wasm only) | ok | ok |
+| `render-wgpu` | ok | ok | ok |
+| `game-wgpu` | FAILED: `rustyac_render` not found (the dependency was Windows / wasm only; fixed in P2) | ok | ok |
+| tests | ok except `rustyac-audio` (`raw::load` missing in its golden test and `fmod_smoke`; fixed in P2). **But every golden that needs car data or the track returned early after NOT TESTED and passed in 0.00 s**: libtest hides the output of passing tests, so the "NOT TESTED lines" column read 0. No car was stepped on any runner | ok | ok, and `rcpps_tests::the_table_is_the_instruction_on_an_intel_processor` ran and passed: Windows' x64 emulator answers `rcpps` as Intel does |
+
+So the run proved that everything builds on every target apart from the four rows above, and that
+the game-free tests pass everywhere. It did **not** prove the physics bit-exact on ARM: Task P2's
+step 2 (section 10.2) does that on this PC.
+
+### 3.4 What the next run should show (after Task P2)
+
+The summary's last column is now **tests run / skipped**: tests run with `--show-output`, and a
+test that printed NOT TESTED counts as skipped, not as run. Rows that fail by design say
+**expected (by design)** and don't fail the job.
+
+| Row | Linux x64 / ARM, macOS ARM / Intel | Windows ARM64 / x64 emulated |
+|---|---|---|
+| `rustyac`, crates, `render-wgpu` | ok; `rustyac-render` and `rustyac-web` say expected | ok |
+| `game-wgpu` | **ok** on Linux x64 (built here, section 10.4); macOS's Metal side of wgpu not tried | ok |
+| `test-rustyac-math` | 4 / 1 (the MSVCR120 sample is skipped) | more run: the DLL's tests are Windows only |
+| `test-rustyac-ode` | 27 / 0 | the same |
+| `test-rustyac-physics` | 107 / 28 (the goldens with car data or a track, section 10.1) | the same |
+| `test-rustyac-net` | 19 / 2 (the two Laguna Seca join goldens) | the same |
+| `test-rustyac-content`, `-gui` | as in run 1 (not counted here) | the same |
+| `test-rustyac-audio` | **ok**, 9 / 1 (the FMOD 1.08 golden) | 9 / 1 (no AC on the runner) |
+
+A Linux or macOS job is green unless something fails that isn't by design. The numbers are this
+PC's Linux x64 run with the game files hidden (section 10.1); a macOS row may differ by a few
+platform-gated tests.
 
 ## 4. What stays bit-exact
 
@@ -130,23 +163,23 @@ is never shown as green.
 
 **Not proven yet:**
 
-- **The NaN sign on ARM.** An invalid operation (0/0, ∞−∞) gives `0xFFC00000` on x86 and
-  `0x7FC00000` on ARM. AC's states do hold NaNs (the AI line's side velocity, `web.md` 3.2), and
-  so far they were only compared on x86 hosts (the browser too). Where a NaN only passes through,
-  `replay_hash`'s NaN-blind hash still matches. Where code tests its sign or its bits, the drive
-  could part. The proof is the workflow's ARM test rows, plus one replay on an Apple Silicon Mac:
-  `rustyac --replay x.ryin --headless --dump-states` against the Windows dump, the WASI proof's
-  recipe.
-- **x64 under emulation** (Windows on ARM's Prism, macOS's Rosetta 2): `rcpps` runs through the
-  emulator, which may not answer as Intel's table does. `MSVCR120`'s FMA3 or SSE2 choice follows
-  the CPUID the emulator reports. The emulated workflow row shows the first. The fix, if needed,
-  is small: use the table when `IsWow64Process2` says the machine is ARM64.
+- **The NaN sign on ARM** (settled by Task P2, section 10.3: a platform difference, not a bug).
+  An invalid operation (0/0, ∞−∞) gives `0xFFC00000` on x86 and `0x7FC00000` on ARM. AC's states
+  do hold NaNs (the AI line's side velocity, `web.md` 3.2), but nothing in the drive reads their
+  sign. Comparisons between platforms must count any NaN as equal to any NaN (`replay_hash`'s
+  NaN-blind hash, the golden tests' compares). Still to do on real hardware: one replay on an
+  Apple Silicon Mac, `rustyac --replay x.ryin --headless --dump-states` against the Windows dump
+  (the WASI proof's recipe), compared NaN-blind. The ARM goldens already pass under QEMU (10.2).
+- **x64 under emulation** (Windows on ARM's Prism, macOS's Rosetta 2): run 1 showed that Prism
+  answers `rcpps` as Intel's table does (the emulated row's ODE test). Rosetta 2 isn't tried yet.
+  `MSVCR120`'s FMA3 or SSE2 choice follows the CPUID the emulator reports.
 
 **What CI can prove without the game:** only what is committed. That is the physics goldens
 (`crates/rustyac-physics/tests/golden`, 37 files, 4.6 MB: tyre, SCTM, replays.rs), the ODE's
 recorded operations (`crates/rustyac-ode/tests/data`, 34 files, 1.2 MB), the maths' recorded
 hashes, and the net and audio goldens (176 KB, 140 KB). All of that is already in the repo and
-already in the workflow. **No kept recording can go in the repo.** A replay needs the car's and
+already in the workflow (Task P2 measured it: 157 tests run and 31 skip without the game's files,
+section 10.1). **No kept recording can go in the repo.** A replay needs the car's and
 track's own data files (AC's, rule 7), and `re/gold` is untracked (0 files in git). Replays off
 Windows therefore run where AC's files are: a player's or Super's Mac or Linux PC, or a Linux VM
 on the farm with Super's own copy of the files (the farm's `physics` area, already
@@ -264,15 +297,171 @@ ARM: ship nothing new until the emulated row is green.
 
 ## 9. Not done, and open questions
 
-- **Not done:** the workflow hasn't run (Super pushes and starts it). Section 3.3 is the expectation
-  from the code. No game code changed, and no cross build was tried locally (the target's C
-  toolchains, like ring's, aren't on this PC).
+- **Not done (P1):** no game code changed. Run 1 was read in P2 (section 3.3), and P2 built and
+  ran Linux x64 and ARM locally in WSL (section 10.2).
+- **Not done (P2):** the rerun of the workflow with P2's changes (Super, 10.5); the made-up whole
+  car for runners (10.1, about one session); a replay on a real ARM Mac; the native game itself
+  (P3).
 - The base-game size of the required-files list isn't measured (step L6 generates it).
-- `actions/upload-artifact@v5`: the repo had no pinned version to copy. If GitHub says the major
-  is retired, raise it.
+- `actions/upload-artifact`: raised from v5 (Node 20) to v7 (Node 24) in P2.
 - Questions for Super: (1) SDL3 for window, input and FFB (one C library, zlib licence, shipped or
   from the distro) instead of `winit` + `gilrs` + our own FFB: recommended, because it is the only
   one with wheel FFB on Linux and macOS. (2) Unsigned macOS app for now? (3) Is Super's wheel
   testable under Linux (a live USB is enough)? (4) Once the NaN check is done on a Mac, does a
   difference there count as "the game's" (`differences.md`) or as a bug to fix? A fix would
-  canonicalise NaNs at the few places that make them.
+  canonicalise NaNs at the few places that make them. (Answered by Task P2's audit, section 10.3:
+  nothing in the drive reads a new NaN's sign, so it is a platform difference for the compare
+  tools.)
+
+## 10. Task P2: what the first run proved, the ARM bits, the cheap build fixes
+
+### 10.1 An honest workflow
+
+- **The blind spot:** a golden that needs car data (`cardata/`) or AC's folder prints NOT TESTED
+  and returns, so it passes in 0.00 s. libtest only shows the output of failing tests, so run 1's
+  column counted nothing. The tests now run with `-- --show-output`, and the summary counts the
+  tests whose output says NOT TESTED as **skipped**, apart from the ones that **ran** (an awk over
+  the log, the same as `re/scratch/taskP2/counts.awk`). What passes is unchanged.
+- **Rows that fail by design** off Windows (`rustyac-render` without `backend-wgpu`, and
+  `rustyac-web`) say "expected (by design)" and don't fail the job. If one starts to build, it
+  says ok.
+- `actions/upload-artifact@v7` (Node 24; v5 ran on Node 20), the same major as
+  `actions/checkout@v7`.
+- **What a runner with no game files proves** (measured: the Linux x64 test binaries run again
+  with `cardata/` hidden and no `AC_ROOT`, `re/scratch/taskP2/nofiles.sh`): 157 tests run and 31
+  skip. The ones that run are all of **ODE**'s recorded operations, functions and car rows (27);
+  the **tyre** and **SCTM** goldens, the **replay** save/load/play tests, the **referee** against
+  the oracle's approved file and the weekend sessions, three pit-stop and eight chassis tests
+  (file read-backs, damper branches) and the physics unit tests (107 in all); **net**'s unit and
+  robustness tests (19); the **maths**' recorded sample hash (4). The 31 skipped are every
+  whole-car replay: the chassis, track, collision, AWD/ERS and Task 17 goldens, the whole-car
+  F2004 tests, several cars, AI, pit stops, the race start, the Laguna Seca join (twice), the
+  tyre tester, Spa's AI-line grid, plus the MSVCR120 sample.
+- **Could a small car run on a runner?** **Yes, as our own made-up car, never AC's.** The repo
+  already does this for tyres (`tests/golden/synthetic_car/`: invented `tyres.ini` and LUTs whose
+  golden was recorded from the game's own code). The whole-car tests drive the F2004 on a flat
+  road with no track (`whole_car.rs`), so a made-up car (every ini and LUT written by us), driven
+  on that flat road in `acs.exe` by the car oracle, would give a whole-car golden with no AC file
+  in it. Not done: about one session (the car's files, the oracle recording, the test). AC's own
+  cars and tracks: never (rule 7).
+
+### 10.2 The ARM bits, on this PC (WSL + QEMU)
+
+Set-up (inside the WSL distro `Ubuntu` 26.04 only): `build-essential`, `gcc-aarch64-linux-gnu`,
+`libc6-dev-arm64-cross`, `qemu-user`, and rustup with 1.97.0 and `aarch64-unknown-linux-gnu`:
+2.3 GB in the distro, whose disk is on C:. Sources, `target/` and logs stay in the repo through
+`/mnt/c`, in `re/scratch/taskP2/`. `wsl_tests.sh <target>` builds and runs the math, ODE, physics
+and net tests with `AC_ROOT` and `cardata/` on the real files (read only). The aarch64 binaries
+are aarch64 ELF files and run under `qemu-aarch64 -L /usr/aarch64-linux-gnu`. Run it from Git
+Bash as `MSYS_NO_PATHCONV=1 wsl -d Ubuntu -- bash /mnt/c/…/re/scratch/taskP2/wsl_tests.sh
+aarch64-unknown-linux-gnu` (without `MSYS_NO_PATHCONV`, Git Bash rewrites the `/mnt/c` path).
+
+| Golden test (steps, from the golden files' names) | x86 Windows | x86 Linux (WSL) | ARM Linux (QEMU) |
+|---|---|---|---|
+| `golden_ai_race` (3000) | identical, 3.96 s | identical, 10.2 s | identical, 53.6 s |
+| `golden_ai_passes_a_car_asleep_on_the_grid` (2400) | identical, 3.31 s | identical, 7.7 s | identical, 41.1 s |
+| `golden_pit_stops_on_fed_states` (3600) | identical, 1.69 s | identical, 4.9 s | identical, 32.5 s |
+| `golden_race_start_with_the_referee` (2700) | identical, 2.56 s | identical, 7.3 s | identical, 39.7 s |
+| `golden_rear_end` (1900) and `one_car_in_the_engine_is_the_car_alone` | identical, 1.53 + 0.39 s | identical, 8.1 + 1.8 s | identical, 31.5 + 6.7 s |
+| `golden_laguna_join` and `…_the_browsers_way` (3000 each) | identical, 2.8 s each | identical, 7.7 s each | identical, 39.0 / 39.8 s |
+| `the_car_on_spa_matches_the_game` (300 + 200) | identical, 0.67 s | identical, 8.9 s | identical, 16.6 s |
+| `the_car_on_magione_matches_the_game` (200 + 300) | identical, 1.18 s | identical, 10.8 s | identical, 23.9 s |
+| `the_car_hits_spa_s_walls_and_lands_on_its_roof_like_the_game` (200 + 200 + 340 + 420) | identical, 0.98 s | identical, 11.1 s | identical, 24.0 s |
+| `the_awd_car_and_the_ers_car_match_the_game` (300 + 400) | identical, 0.39 s | identical, 6.5 s | identical, 6.0 s |
+| `strut_axle_rear_steer_and_old_tyre_match_the_game` (4 × 300) | identical, 0.44 s | identical, 6.9 s | identical, 7.7 s |
+| chassis `golden_steps_are_ac_s` (300 + 300 + 460 + 400 + 400) | identical, 0.52 s | identical, 7.4 s | identical, 9.4 s |
+| `track::spline` lookup grid (Spa's AI line) | identical, 12.1 s | identical, 10.9 s | identical, 110 s |
+| the whole-car F2004 tests, the referee, weekend, tyre, SCTM and ODE goldens | identical | identical | identical |
+| `rcpps` is the instruction on an Intel processor | identical | identical | not run (x86 only; ARM uses the table) |
+| maths: `sample_matches_msvcr120` | identical (the DLL) | not run (no DLL) | not run (no DLL) |
+
+Totals: Windows 190 run / 0 skipped, Linux x64 187 / 1, ARM 186 / 1. The skips are the MSVCR120
+sample, and the totals differ by the Windows-only and x86-only tests. **No golden differs
+anywhere**, and none printed NOT TESTED. Linux is slower than Windows because the car and track
+files are read through `/mnt/c`.
+
+**What QEMU proves and doesn't.** QEMU runs the real aarch64 machine code the compiler made, with
+ARM's floating-point rules done in software. An invalid operation gives ARM's default NaN
+(`0x7FC00000`, positive), NaNs propagate by ARM's operand rules, and flush-to-zero is off, as
+Linux and macOS leave it. So it proves that the code paths ARM takes (the `rcpps` table, no
+`MXCSR`, the pure maths) give the game's bits. Fused multiply-add: Rust never fuses on its own and
+our `fma` is software (`libm::fma`), so no `fmadd` is executed either way. What it doesn't prove:
+a real core's hardware (QEMU's soft-float models the spec, not the silicon), and macOS's own
+runtime. A replay on an Apple Silicon Mac (section 4's `--dump-states` check) confirms it.
+
+**x86 Linux against Windows:** no difference, so no bug to find.
+
+**NaN in the goldens:** the comparisons count any NaN as equal to any NaN (`same_word` in
+`engine/record.rs`, `car/replay.rs`'s field compare and hash), and the committed goldens hold
+almost no NaN words (three byte matches of a NaN pattern in `chassis_kerb_2684_300.chgold`,
+alignment not checked). So step 2 shows that every non-NaN value is identical on ARM. That a NaN's
+sign never changes one is section 10.3's audit.
+
+### 10.3 The NaN sign audit
+
+x86 makes `0xFFC00000` from an invalid operation, ARM makes `0x7FC00000`. Only a **new** NaN
+differs: a NaN that is passed through keeps its sign on both. I searched physics, ODE, net, maths,
+replays and the proofs for `copysign`, `signum`, `is_sign_*`, `total_cmp`, `to_bits`/`from_bits`
+on floats, sign-bit masks, and float bits compared as integers.
+
+| Hit | Can a NaN reach it? | Would the sign change a result? |
+|---|---|---|
+| `race/output.rs` `stream_float` (`-1.#IND` vs `1.#QNAN`) | No known source: it prints mode scores, speeds and times from finite state, and pit presets read from files | Yes, the text, if one ever got there |
+| `rustyac-ode` `collision.rs` ray/triangle sign-bit tests of `u`, `v`, `dist` | Only from a NaN ray origin (a car already at NaN): the mesh and the direction are finite | Yes then (hit or no hit), but that drive is already lost |
+| `odemath.rs` `safe_normalize3` `copysign`; the same in `csp_core.rs` | No: `a[idx]` is the largest component and never NaN (a NaN first component takes the zero-vector branch) | — |
+| `dxmath.rs` `xm_atan2` sign bits | In `xm_quaternion_slerp` (net cars, replays, ghosts): `sin_omega = sqrt(1 - cos²)` is NaN only when cos > 1, and then the linear branch throws `omega` away | No |
+| `dxmath.rs` `xm_sin` sign masks | Only from a NaN angle, whose result is NaN either way | Only the NaN's own sign |
+| `track/spline.rs` `side_velocity` (0/0 every step: the game's post-step divides by a zero time step) | **Yes, every step** | No: it is only stored, traced and saved. Nothing reads it |
+| `world.rs` body moved (bits), `chassis.rs` ray cache (bits), `collide_ttl.rs` contact key (bits) | Only from a NaN body position | No in practice: both sides come from the same machine |
+| `replay/half.rs`, the state savers, net packets, `referee.rs`/`pitstop.rs` proof lines | Yes: `side_velocity` in a trace or a state | Only in the saved or printed bits, never in the drive |
+| CSP: `csp_lcp.rs` `copysign(∞, -w)`, `csp_space.rs` `is_sign_negative` | CSP is a Windows x64 DLL: never on ARM | — |
+| `total_cmp` sorts in `track_info.rs`, the desktop and the renderer | Tools and the D3D11 debug view, not the physics | — |
+
+**Decision: a platform difference, not a bug.** Nothing in the drive reads a new NaN's sign, so
+proofs that compare different platforms treat any two NaNs as equal, in the **compare tools only,
+never the physics**. The golden tests already do (above), and `replay_hash` has its NaN-blind
+second hash. The Mac check of section 4 must use that hash (or a NaN-blind dump compare), not the
+plain one. No code change: nothing reachable needs canonicalising.
+
+### 10.4 The cheap build fixes
+
+- `rustyac-audio`: its golden test and the `fmod_smoke` example are gated like `raw::load`
+  (Windows and wasm). Elsewhere the test prints NOT TESTED and the example says it needs FMOD
+  1.08. The loader's private `keep` got the same gate (it was dead code off Windows). `cargo test
+  -p rustyac-audio` passes on Linux x64 (9 run / 1 skipped) and clippy is clean.
+- `rustyac-game --features wgpu`: `rustyac-render` is now an optional dependency off Windows and
+  the browser, turned on by `wgpu`. **The library and `rustyac` (the replay runner) then build on
+  Linux x64 with no error**, clippy clean, with the wgpu stack and `render::ac` compiled. One lib
+  test line (`usable`, Windows only) got its `cfg`. The lock file is unchanged.
+- **The next layer (for P3):** `cargo clippy -p rustyac-game --features wgpu --all-targets` off
+  Windows has 6 errors in 4 targets, all of one kind: they import modules that are still
+  `cfg(windows)`. They are `examples/achievements_check.rs` (`achievements`, `steam`),
+  `examples/steam_check.rs` (`steam`), `tests/replay.rs` (`shm`, twice) and
+  `tests/write_guard.rs` (`cli`). They are compile errors only in tests and examples. The real next
+  layer is the gate itself: the window, the loop, input, sound, shared memory, the CLI and the
+  rest of `lib.rs`'s `cfg(windows)` modules, which is section 8's L1–L6. Not started (P3).
+- `rustyac-web` for a native target: **excluded** (expected by design). It is the wasm crate, and
+  its desktop build only exists for the Windows desktop's tests of its plain logic. What it lacks
+  off Windows (`render::ac` without `wgpu`, `gui_apps`, `rustyac_game::audio`) is exactly what P3
+  ports, so gating it now would only move that code around. Revisit once the native game has
+  sound.
+
+### 10.5 Steps for Super
+
+1. Merge `web` into `master` and push.
+2. `gh workflow run platforms.yml --ref master`, then `gh run watch`.
+3. `gh run download <run id> --dir re/scratch/taskP2/run` and give the next session the run id.
+4. What it should show is section 3.4. A Linux or macOS job going red means a row failed that
+   isn't by design: `game-wgpu` on macOS is the one not tried here.
+
+### 10.6 Checks run for P2
+
+- Windows x64: `cargo test --release -p rustyac-math -p rustyac-ode -p rustyac-physics -p
+  rustyac-net` with the game files (190 run, 0 skipped); clippy `-D warnings --all-targets` on
+  `rustyac-audio` and `rustyac-game`, with and without `wgpu`.
+- Linux x64 (WSL) and ARM (QEMU): the same tests (section 10.2); Linux x64 also ran `cargo test -p
+  rustyac-audio` and clippy on `rustyac-audio` and on `rustyac-game --features wgpu` (lib and bins).
+- Skipped: `run_all.sh --quick`, because the Windows build compiles the same code as before (the
+  audio and game changes are `cfg` gates for other targets, and the Windows dependency graph and
+  lock file are unchanged), so it can't break what the quick lane proves. Wasm clippy also skipped:
+  the wasm side compiles the same code as before (the gates include `wasm32`).
