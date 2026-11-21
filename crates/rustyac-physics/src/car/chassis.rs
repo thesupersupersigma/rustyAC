@@ -988,8 +988,15 @@ impl RollingChassis {
         objects: &[crate::track::TrackObjectDef],
     ) -> Result<RollingChassis, String> {
         let mut core = PhysicsCore::new();
-        for object in objects {
-            core.create_track_object(&object.matrix, object.vertices.clone(), object.indices.clone());
+        match ground.track().filter(|_| crate::csp::enabled()) {
+            // Task C5i-b: a car alone (no engine; the oracle runner's too) on CSP's core in CSP
+            // mode, as `PhysicsEngine::set_track` does for several (no loose objects there either)
+            Some(track) => core.use_csp(track)?,
+            None => {
+                for object in objects {
+                    core.create_track_object(&object.matrix, object.vertices.clone(), object.indices.clone());
+                }
+            }
         }
         RollingChassis::new_in_core(core, 0, data_path, env, ground, rand_seed, physics_time)
     }

@@ -155,6 +155,11 @@ pub trait RayTrackCollisionProvider {
     fn has_ray_caster(&self) -> bool {
         false
     }
+
+    /// The track behind the provider (CSP mode puts it into the car's core).
+    fn track(&self) -> Option<&crate::track::Track> {
+        None
+    }
 }
 
 /// AC's `TorqueModeEX` (`Car::torqueModeEx`): how the tyre hands its forces to the hub.

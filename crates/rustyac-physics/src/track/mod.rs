@@ -314,6 +314,10 @@ impl RayTrackCollisionProvider for TrackGround {
     fn has_ray_caster(&self) -> bool {
         true
     }
+
+    fn track(&self) -> Option<&Track> {
+        Some(&self.0)
+    }
 }
 
 /// `DynamicTrackData` and `Track::dynamicGripLevel`: the one grip number of the whole track.

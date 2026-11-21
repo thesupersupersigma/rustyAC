@@ -49,9 +49,9 @@ impl CspBody {
     }
 
     pub fn create_rigid_body(&mut self) -> usize {
-        // shortcut: `no_finite` is CSP's byte +0x280320f, false (finite rotation) with the default
-        // settings; read it from the settings when a car changes it
-        self.core.create_body(false)
+        // `no_finite` is CSP's byte +0x280320f: general.ini [PHYSICS_EXPERIMENTS_DONE]
+        // OPTIMIZE_ROTATION (read by +0x1402bd0), 1 by default, so no finite rotation
+        self.core.create_body(true)
     }
 
     pub fn world_matrix(&self, body: RigidBody) -> Mat44f {
@@ -155,13 +155,15 @@ impl CspBody {
         (JointId(j as u32), target_distance as f32)
     }
 
-    /// `setERPCFM`: a distance joint through CSP's wrapper (+0x928310), any other joint's fields
-    /// written the same way (values <= 0 ignored).
+    /// `setERPCFM`: a distance joint through CSP's wrapper (+0x928310); a fixed joint's slot
+    /// (`ode_impl_fixed_joint` vtable +0x23051f0, slot 1) is a bare `ret`, so nothing changes;
+    /// a ball joint's fields written the way the distance joint's are (values <= 0 ignored).
     pub fn joint_set_erp_cfm(&mut self, joint: JointId, erp: f32, cfm: f32) {
         let i = self.core.joint_index(joint.0 as usize);
         match &mut self.core.world.joints[i].joint.kind {
             JointKind::DBall { .. } => self.core.set_erp_cfm(joint.0 as usize, erp, cfm),
-            JointKind::Fixed { erp: e, cfm: c, .. } | JointKind::Ball { erp: e, cfm: c, .. } => {
+            JointKind::Fixed { .. } => {}
+            JointKind::Ball { erp: e, cfm: c, .. } => {
                 if erp > 0.0 {
                     *e = erp as f64;
                 }
