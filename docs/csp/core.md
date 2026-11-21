@@ -58,9 +58,13 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5i-a 1. CSP's set-up from rustyAC's loaders | done: track, car boxes and mesh collider (`CLAMP_MESH_COLLIDERS`) 0 differ for both proof cars; the `core` cases run on them; `csp_ttl` b-major fix ([below](#c5i-a-part-1-csps-set-up-from-rustyacs-loaders)) |
 | C5i-a 2. `PhysicsCore`'s second backend | done: `rustyac --csp` steps `csp_core`; smoke case `csp/smoke`; Vanilla bits and step time unchanged ([below](#c5i-a-part-2-physicscores-second-backend)) |
 | C5i-a 3. Embree in `rustyac.exe`, CI, release | done: x64 Windows builds link Embree; uncached release build 24 min 52 s ([below](#c5i-a-part-3-embree-in-rustyacexe-ci-and-the-release)) |
+| C5i-b 1. CSP's own record | done: `states.bin` per step, repeatable; `--compare-states` checked on Vanilla (1071 of 1106, the rest view-only) ([below](#task-c5i-b-the-whole-car-against-csp)) |
+| C5i-b 2. rows | done: three C5i-a wiring mistakes fixed (lone car, `no_finite`, fixed joint ERP); proof cases `csp/row …` DIFFERENT, first difference CSP's tyre step (b) |
+| C5i-b 3. CI's Embree, shortcut lists | done: one Embree build per CI cache miss (`RUSTYAC_EMBREE_LIB`); strut cars and loose-object tracks listed |
 | C5i part 3 | done, nothing to change: the `csp` area keeps no results (CSP and the port run live on one CPU), and the port's Embree has CSP's ISA set, so both take SSE2 on the farm VM (Xeon E5620: SSE2, SSE4.2; no AVX, AVX2, AVX-512, FMA3) and AVX2 on this PC (i9-9980HK: all but AVX-512) |
 
-**Resume here:** C5i-b (whole-car rows), split as [below](#task-c5i-sizing-the-whole-car).
+**Resume here:** C5i-c: CSP's tyre step for stock cars (the first difference of every row), the callback
+`+0x587cc0`, the two-car row on the port, then v1.1.5 ([C5i-b](#task-c5i-b-the-whole-car-against-csp)).
 
 ## The core in one paragraph
 
@@ -1141,7 +1145,8 @@ own Vanilla calls), the recorder's fault injection, and the oracles in `tools/`.
   among the CSP cars tested.
 - Loose track objects (cones, `--track-objects`): CSP mode builds none.
 - `set_contacts` (the oracles' recorded contacts) and the force tape stay Vanilla-only.
-- `no_finite` (CSP byte +0x280320f) is taken as false (its default).
+- `no_finite` (CSP byte +0x280320f) is taken as false (its default). Wrong: it is `OPTIMIZE_ROTATION`,
+  default 1; fixed in C5i-b ([below](#task-c5i-b-the-whole-car-against-csp)).
 - Local-force calls CSP never recorded (`ADD_LOCAL_FORCE_AT_POS`, `ADD_LOCAL_TORQUE`, the
   velocity setters, `local_to_world_normal`) are made from world vectors with CSP's own maths.
 - A build without Embree (the browser, non-x64 targets) casts ODE's rays (CSP's `ODE_BATCH_RAYCAST=1`
@@ -1150,7 +1155,8 @@ own Vanilla calls), the recorder's fault injection, and the oracles in `tools/`.
 **Smoke test** (proof case `csp/smoke`). `rustyac --csp`: the F2004 (autodriver) and the RSS
 (`--opponent …:auto`) together for 10 s at Spa, recorded, then replayed twice. Result: 3700 steps, no panic, the F2004
 at 59.8 km/h on the road, both replays hash `120d2b99955bbd8b`. Also by hand: each car alone for 20 s
-(after 20 s the F2004 is at 298.1 km/h in CSP mode and in Vanilla, 1 m apart), two
+(after 20 s the F2004 is at 298.1 km/h in CSP mode and in Vanilla, 1 m apart: C5i-b found a lone car
+still on Vanilla's world), two
 F2004, and a F2004 against an AI F2004 (the autodriver runs into the AI car at La Source in both modes).
 Replaying a CSP recording runs CSP mode (`csp=1` in the header). The same inputs with `csp=0` give
 another hash, so the backend is really in use.
@@ -1190,3 +1196,128 @@ collider). With Embree (part 3): 0.043 ms.
   render 18, gui 29, browser 18, ai_page 10, net 16, the rest too); workspace clippy clean.
 
 **Resume here (C5i-a):** done. Next: C5i-b ([sizing](#task-c5i-sizing-the-whole-car)).
+
+## Task C5i-b: the whole car against CSP
+
+### Part 1: CSP's own record
+
+`csp_oracle --drive` writes `car_root/states.bin`: after every physics step, every car's
+`CarPhysicsState` as CSP's `Car::getPhysicsState` gives it (the game's 0xb70-byte layout, the one the
+Vanilla physics area compares). `rustyac --physics-states <file>` writes the same layout from
+`rustyac --replay --headless` (`CarView::capture_world`). `csp_oracle --compare-states <game> <port>
+<cars>` compares them value by value (`member[k]`: line k of the member's `{:#?}` text; an f32 prints
+so it reads back to its bits) and prints, per value, the first step it differs, earliest first.
+
+- **Repeatable.** The F2004 on the Spa lap tape, 1000 steps, run twice: `states.bin` byte for byte the
+  same (steps hash `fab5e99c7314a9b6` both).
+- **The comparison itself, on Vanilla.** `csp_oracle --vanilla` (acs.exe's own car, CSP not loaded)
+  against `rustyac --replay` of the same tape, F2004, 300 steps: 1071 of 1106 values equal at every step.
+  The 35 others are fields rustyAC's view does not fill like the game's (sector ids of
+  `tyre_surface_def`, `last_ff_final`, `body_work_volume`, `time_stamp`, `ride_height`, `setup_state`,
+  `gear_rpm_window`, the view half of `tyre_thermal_states`, `lock_controls_time`, `anti_squat`,
+  `caster`), all constant from step 0. Pose, velocities, every tyre value, suspension, engine and gear
+  are bit-equal.
+- **CSP's view.** CSP's `getPhysicsState` hook (`+0x590220`, first chunk 3076 bytes) rewrites some
+  fields after the step: it low-passes `acc_g` (0.25) and the wheels' angular speed (the wall row's
+  step-1 tyre speeds are exactly 0.25 × the port's), and fills `ground_plane` and
+  `normalized_spline_position` from its own plane and spline. Those are view values; the proof case
+  skips them when it names the first differing value.
+
+### Part 2: the rows (proof area `csp`, cases `row <car> <drive>`)
+
+Each case: CSP live drives the tape (`csp_oracle`, workers 0, `RANDOMIZE_WHEEL_ANGLES=0`), the same tape
+(car swapped, `csp=1`, cut after the case's steps) replayed by `rustyac --csp` with the same start, the
+two records compared; `CSP_ORACLE_BREAK=587cc0` counts CSP's car collision callback. Live on one PC, no
+kept recording (so no Embree ISA key).
+
+**Two wiring mistakes of C5i-a found and fixed (a).** A per-step core trace (`CSP_CORE_TRACE=<file>`:
+every force, torque, body, joint and world step of `csp_core`, written by `rustyac --csp` and by
+`csp_oracle`'s port fed CSP's own calls) found them:
+
+1. **A lone car never used CSP's core.** Only `PhysicsEngine::set_track` (two or more cars) switched the
+   core to CSP's; a car alone (and the replay runner's car) built Vanilla's f32 world with CSP's rays.
+   C5i-a's "alone, CSP and Vanilla 1 m apart after 20 s" was that. `RayTrackCollisionProvider::track`
+   now gives the track and `RollingChassis::new_with_objects` calls `use_csp` in CSP mode.
+2. **Body flags.** CSP makes every car body with `no_finite` set: the byte `+0x280320f` is general.ini
+   `[PHYSICS_EXPERIMENTS_DONE] OPTIMIZE_ROTATION` (hidden, default 1; written by `+0x1402bd0` at
+   `+0x1403f04`), not false as C5i-a took it.
+3. **The fuel tank's fixed joint.** rustyAC set its ERP to 0.9 below 1 m/s, as Vanilla does; CSP's fixed
+   joint's `setERPCFM` (vtable `+0x23051f0` slot 1) is a bare `ret`, so it stays 0.3.
+
+After them the first three world steps' entries (bodies, joints, parameters) are identical, and the
+first difference is a tyre force at physics step 2.
+
+| Row | Steps | Verdict | Values equal at every step | First differing value (past CSP's view) | `+0x587cc0` calls | Class |
+|---|---|---|---|---|---|---|
+| `row ks_ferrari_f2004 lap` | 4000 | DIFFERENT | 644 of 1106 | step 2 `world_matrix`: 2.0008296e-5 (CSP) vs 2.005232e-5; from front-left tyre's force at step 2 (load 259.70 vs 259.30) | 26 | (b) CSP's tyre step |
+| `row rss_formula_rss_3_v6_2026 lap` | 4000 | DIFFERENT | 610 of 1106 | step 0 `air_density`: 1.1855999 (CSP, Vanilla's law) vs 1.1127756 (port, CSP's extended law) | 621 | open (oracle limit) |
+| `row ks_ferrari_f2004 wall` | 6667 | DIFFERENT | 621 of 1106 | step 154 `world_matrix[3]`: -0.5623173 vs -0.56231904 (CSP's view fields differ from step 1) | 3977 (from step 55) | (b) as the lap row |
+| two F2004 touching (C5g layout) | 1600 (CSP only) | not run on the port | | | 1599 (from step 65) | C5i-c |
+
+- **F2004 (b).** Every core call before the tyres' first forces matches; the front-left tyre's force at
+  step 2 has the same direction and 0.15 % more load in CSP. The force comes from `Tyre::step`, which
+  CSP replaces for stock cars too (`docs/csp/physics_tyres_suspension.md` §1-2: gas-law pressure,
+  vertical-stiffness conditioning, brake torque limit, CSP's contact search, `getCorrectedD`,
+  `stepDirtyLevel`; plan item CSP-7). The exact item is not found yet. Three hidden switches set to 0 in
+  the oracle's `general.ini` (`BRAKES_LIMIT`, `SLIDING_FIX`, `SMOOTH_CONTROLS_LOCKING`) left the row as it
+  was (877 of 1106 at 50 steps each time).
+- **RSS 3 (open).** The car is `extended-2`, so the port uses CSP's air law (C4a, proven against CSP's
+  own function). CSP live in the oracle keeps Vanilla's density at every step, though its extended-car
+  creator (`+0x5e32e0`) runs once and `+0x588850` / `+0x5bdfa0` every step: in the oracle CSP has no
+  track config (C4a: a registered record makes CSP's whole extended step run, which needs it), so this row
+  cannot tell which side is right until the oracle loads CSP's track config.
+- **The callback.** `+0x587cc0` (first chunk 2946 bytes; car state only: damage, events) is reached by
+  every row, the lap too (26 times in 4000 steps), not ported.
+- **Two cars.** Not run on the port: the oracle-tape runner is a lone car, and the C5g layout (the second
+  F2004 parked 5.5 m beside) has no spawn on the replay side. The callback is reached; the row goes to
+  C5i-c with the rest, as the single car already differs at step 2.
+
+**(b) list for C5i-c.**
+
+| Item | Where | Size | Rows |
+|---|---|---|---|
+| CSP's `Tyre::step` for stock cars (the first difference) | Tyre hooks, `Tyre::step`; `addTyreForcesV10` body; `addGroundContact` body | 152,494 bytes of pseudo-C (2,544 lines for `Tyre::step`); 10,040 B; 4,532 B | all |
+| CSP's `getPhysicsState` view (low-passed `acc_g` / wheel speed, plane, spline) | `+0x590220` | 3,076 B | all (view only) |
+| car collision callback | `+0x587cc0` | 2,946 B | all |
+| CSP's extended air in the oracle (track config) | `0x2821430` | unknown (C4a: grows without end) | RSS 3 |
+
+### Part 3
+
+- **CI's Embree.** `web_pack` builds Embree because it depends on `rustyac-web`, which depends on
+  `rustyac-game`, which turns `rustyac-ode`'s `embree` on for x64 Windows; `web_pack` itself only packs
+  content and never casts a ray. Not cut (moving the feature out of `rustyac-game` would touch every
+  desktop build). Instead `build.rs` reads `RUSTYAC_EMBREE_LIB` (the folder to build into and link from),
+  and `ci.yml` points it at `$GITHUB_WORKSPACE/target/embree-3.13.4`: the workspace builds it, and
+  `csp_oracle` and `web_pack` find it there. A cache miss builds it once instead of three times. The
+  release stays one uncached build.
+- **CSP mode's shortcuts on the installed content** (no drive; C5i-c decides port or refusal; today
+  both are silent or an assert, which must not reach players):
+  - **Strut suspension asserts** (`PhysicsCore::create_slider_joint` / `create_ball_joint`, "CSP mode has
+    no slider joint yet"): `acd_check --strut` lists 55 of the 207 installed cars: abarth500,
+    abarth500_s1, alfa_romeo_giulietta_qv(_le), bmw_1m(_s3), bmw_m3_e30 (+ _drift, _dtm, _gra, _s1),
+    bmw_m3_e92 (+ _drift, _s1), bmw_m3_gt2, bmw_z4 (+ _drift, _gt3, _s1), ks_abarth500_assetto_corse,
+    ks_alfa_mito_qv, ks_alfa_romeo_155_v6 (front and rear), ks_alfa_romeo_4c (rear), ks_audi_a1s1,
+    ks_audi_sport_quattro (+ _rally, _s1; front and rear), ks_audi_tt_cup, ks_audi_tt_vln,
+    ks_bmw_m235i_racing, ks_bmw_m4 (+ _akrapovic), ks_ford_escort_mk1, ks_ford_mustang_2015,
+    ks_porsche_718_boxster_s (+ _pdk) and _cayman_s (front and rear), ks_porsche_911_carrera_rsr,
+    _911_gt3_cup_2017, _911_gt3_r_2016, _911_gt3_rs, _911_r, _935_78_moby_dick, _991_carrera_s,
+    _991_turbo_s, ks_porsche_cayman_gt4_clubsport / _std (front and rear), ks_ruf_rt12r (+ _awd),
+    ks_toyota_ae86 (+ _drift, _tuned), ks_toyota_celica_st185 (front and rear), ks_toyota_gt86,
+    ruf_yellowbird.
+  - **Loose track objects not built** (`track_survey --csp`, the loose-objects column): 37 of the 66
+    installed layouts have some: ks_barcelona (3 layouts, 13), ks_black_cat_county (3, 3), ks_brands_hatch
+    (2, 20), ks_laguna_seca (33), ks_monza66 (3, 13), ks_nordschleife (endurance 35, endurance_cup 25,
+    nordschleife / touristenfahrten 14), ks_nurburgring (4, 21-23), ks_red_bull_ring (3, 11),
+    ks_silverstone (4, 24-26), ks_silverstone1967 (41), ks_vallelunga (14 / 10 / 6), ks_zandvoort (8),
+    monza (2, 20), mugello (8), spa (2, 6). Spa's 6 are on the rows' track: a row that hits one would
+    differ there.
+
+### Vanilla
+
+Vanilla's code paths are unchanged (the fixes only run with `--csp`). `run_all.sh csp physics`: csp 65 of
+68 identical (the 3 others are the new rows), physics 121 of 121. `run_all.sh --quick`: every area
+identical but the 3 rows and browser's flags.md check, which failed only because the edit had turned
+`docs/flags.md` into CRLF (web_pack's test splits on `
+## `); LF again, `usage_and_docs` passes.
+
+**Resume here (C5i-b):** see the table at the top.
