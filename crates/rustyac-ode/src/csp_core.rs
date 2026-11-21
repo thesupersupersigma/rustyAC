@@ -20,12 +20,14 @@ use crate::world::{AutoDisable, Body, Damping};
 
 /// A distance joint wrapper (+0x928000, 104 bytes): its two bodies, the distance it was made with
 /// (+48, put back after every reseat) and the anchor offset (+88, never set by the calls seen).
+#[derive(Clone)]
 struct DistanceJoint {
     b1: usize,
     b2: usize,
     target: f64,
 }
 
+#[derive(Clone)]
 pub struct Core {
     pub world: CspWorld,
     /// `dWorldCreate` +0x168cf90 defaults every new body takes
@@ -56,7 +58,7 @@ pub struct Core {
     /// scene of those meshes when Embree is on; +0x2812c7f
     ray_geoms: Vec<usize>,
     #[cfg(feature = "embree")]
-    scene: Option<Scene>,
+    scene: Option<std::sync::Arc<Scene>>,
     below: bool,
 }
 
@@ -137,9 +139,46 @@ impl Core {
         &self.world.bodies[self.world.bodies.len() - 1 - id]
     }
 
-    fn body_mut(&mut self, id: usize) -> &mut Body<f64> {
+    pub fn body_mut(&mut self, id: usize) -> &mut Body<f64> {
         let n = self.world.bodies.len();
         &mut self.world.bodies[n - 1 - id]
+    }
+
+    /// The body id a geom is on.
+    pub fn geom_body(&self, g: usize) -> Option<usize> {
+        self.owner.get(g).copied().flatten()
+    }
+
+    /// Task C5i-a: body `id`'s state as `from` (another copy of this core) has it, its geoms
+    /// moved when it was put somewhere else; true then.
+    pub fn copy_body_from(&mut self, from: &Core, id: usize) -> bool {
+        let src = from.body(id);
+        let dst = self.body_mut(id);
+        let moved = dst.pos != src.pos || dst.r != src.r;
+        let (next, first_joint, first_geom) = (dst.next, dst.first_joint, dst.first_geom);
+        *dst = src.clone();
+        (dst.next, dst.first_joint, dst.first_geom) = (next, first_joint, first_geom);
+        if moved {
+            self.geoms_moved(id);
+        }
+        moved
+    }
+
+    /// Task C5i-a: joint `id`'s parameters (anchors, erp, cfm, distance) as `from` has them.
+    pub fn copy_joint_from(&mut self, from: &Core, id: usize) {
+        let (i, j) = (self.joint_index(id), from.joint_index(id));
+        self.world.joints[i].joint.kind = from.world.joints[j].joint.kind.clone();
+        if let Some(d) = from.distance.get(id) {
+            if self.distance.len() <= id {
+                self.distance.resize_with(id + 1, || None);
+            }
+            self.distance[id] = d.clone();
+        }
+    }
+
+    /// Joints made so far (contact joints aside): the next joint's id.
+    pub fn joints_made(&self) -> usize {
+        self.made
     }
 
     /// A joint's world index by its tail id.
@@ -436,12 +475,25 @@ impl Core {
     /// (+0x168ccc0); each stepped body's geoms moved; the static and dynamic steps alternate.
     /// Returns the contact joints made, in CSP's order.
     pub fn step(&mut self, h: f32) -> Result<Vec<NewJoint>, Unhandled> {
+        let joints = self.collide()?;
+        self.step_world(h);
+        Ok(joints)
+    }
+
+    /// The first half of [`Core::step`]: the collision and its contact joints (none before the
+    /// track is in).
+    pub fn collide(&mut self) -> Result<Vec<NewJoint>, Unhandled> {
         let mut joints = Vec::new();
         if self.track_set {
             self.sync_sides();
             joints = self.world.collide(&mut self.col)?;
             self.world.add_contacts(joints.iter().map(|j| joint_of(j, false)).collect());
         }
+        Ok(joints)
+    }
+
+    /// The second half of [`Core::step`]: the ODE step and what follows it.
+    pub fn step_world(&mut self, h: f32) {
         let islands = self.world.step(h as f64);
         let w = &mut self.world;
         let n = w.joints.iter().take_while(|j| matches!(j.joint.kind, JointKind::Contact { .. })).count();
@@ -459,7 +511,6 @@ impl Core {
         if self.track_set {
             self.col.static_step = !self.col.static_step;
         }
-        Ok(joints)
     }
 
     /// Each car geom's body index and the user-data bits the joint maker reads.
@@ -528,7 +579,7 @@ impl Core {
         #[cfg(feature = "embree")]
         if let Some((config, robust)) = embree {
             let trace: Vec<Option<TraceMesh>> = meshes.iter().map(|m| Some(TraceMesh { vertices: &m.vertices, indices: &m.indices, two_sided: m.two_sided })).collect();
-            self.scene = Some(Scene::new(config, robust, &trace)?);
+            self.scene = Some(std::sync::Arc::new(Scene::new(config, robust, &trace)?));
         }
         #[cfg(not(feature = "embree"))]
         let _ = embree;
@@ -571,7 +622,7 @@ impl Core {
 
     /// The track space's `cleanGeoms` (+0x1689360) as ODE's ray (`dSpaceCollide2`) does it: stale
     /// boxes made, dirty marks cleared, its table built again.
-    fn clean_track(&mut self) -> Result<(), Unhandled> {
+    pub fn clean_track(&mut self) -> Result<(), Unhandled> {
         let c = &mut self.col;
         if !c.track.iter().any(|&t| c.geoms[t].flags & GEOM_DIRTY != 0) {
             return Ok(());
@@ -603,7 +654,7 @@ impl Core {
         self.owner.extend(geoms.iter().map(|_| None));
         self.parent.extend(geoms.iter().map(|_| None));
         c.geoms.extend(geoms);
-        c.meshes.extend(meshes);
+        c.meshes.extend(meshes.into_iter().map(std::sync::Arc::new));
         (c.track_level, c.track_count, c.cars_level, c.static_step, c.aabb_limit, c.full_box_box) = (track_level, track_count, cars_level, static_step, aabb_limit, full_box_box);
         self.track_set = true;
     }
@@ -768,7 +819,7 @@ impl Core {
     pub fn add_mesh_collider(&mut self, id: usize, m: &[f32; 16], category: u32, collide: u32, key: u32, mesh: Option<TrackMesh>, shape: Shape, gid: usize) -> usize {
         let Shape::Mesh { tc_on, key: tc_key, bounds, .. } = shape else { panic!("a trimesh") };
         let mesh = mesh.map(|m| {
-            self.col.meshes.push(m);
+            self.col.meshes.push(std::sync::Arc::new(m));
             self.col.meshes.len() - 1
         });
         // shortcut: AABBTest walks the tree only at an identity pose, which a car's mesh never

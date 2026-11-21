@@ -362,7 +362,10 @@ impl PhysicsEngine {
     /// while it loads the track, before any car). Call it before the first car is built.
     pub fn set_track(&mut self, track: Arc<Track>, with_objects: bool) {
         assert!(self.parts.is_empty(), "the track comes before the cars");
-        if with_objects {
+        if crate::csp::enabled() {
+            // CSP mode: the cars' physics in CSP's core, the track in it
+            self.core.use_csp(&track).unwrap_or_else(|e| panic!("CSP's core: {e}"));
+        } else if with_objects {
             self.create_track_objects(&track.objects);
         }
         self.track = Some(track);
@@ -413,8 +416,7 @@ impl PhysicsEngine {
         let guid = self.parts.len() as u32;
         let core = std::mem::take(&mut self.core);
         let bodies_before = core.bodies().count();
-        let (_, joints_before) = core.world.slot_counts();
-        let geoms_before = core.world.collision.geoms.len();
+        let (_, joints_before, geoms_before) = core.slot_counts();
         self.building = true;
         let mut car = build(core, guid)?;
         self.building = false;
@@ -424,8 +426,8 @@ impl PhysicsEngine {
         let parts = CarParts {
             body: Some(car.body),
             bodies: self.core.bodies().skip(bodies_before).map(|b| b.id).collect(),
-            joints: (joints_before..self.core.world.slot_counts().1).map(JointId).collect(),
-            geoms: (geoms_before..self.core.world.collision.geoms.len()).map(|g| GeomId(g as u32)).collect(),
+            joints: (joints_before..self.core.slot_counts().1).map(|j| JointId(j as u32)).collect(),
+            geoms: (geoms_before..self.core.slot_counts().2).map(|g| GeomId(g as u32)).collect(),
         };
         self.parts.push(parts);
         // the car's own tape and callbacks are its own business
@@ -462,19 +464,13 @@ impl PhysicsEngine {
     fn write_back(&mut self, index: usize, car: &RollingChassis) {
         let parts = &self.parts[index];
         for &body in &parts.bodies {
-            if self.core.world.copy_body_state_from(&car.core.world, body) {
-                self.core.world.body_geoms_moved(body);
-            }
+            self.core.copy_body_state_from(&car.core, body, true);
         }
         for &joint in &parts.joints {
-            self.core.world.copy_joint_state_from(&car.core.world, joint);
+            self.core.copy_joint_state_from(&car.core, joint);
         }
         for &geom in &parts.geoms {
-            let from = car.core.world.collision.geom(geom);
-            let (category, collide) = (from.category_bits, from.collide_bits);
-            let to = self.core.world.collision.geom_mut(geom);
-            to.category_bits = category;
-            to.collide_bits = collide;
+            self.core.copy_geom_bits_from(&car.core, geom);
         }
     }
 
@@ -604,7 +600,7 @@ impl PhysicsEngine {
         // every car gets its bodies back (plain copies: in the game there is one world)
         for (index, slot) in cars.iter_mut().enumerate() {
             for &body in &self.parts[index].bodies {
-                slot.car.core.world.copy_body_state_from(&self.core.world, body);
+                slot.car.core.copy_body_state_from(&self.core, body, false);
             }
             slot.car.step_stats = self.step_stats;
             // (the collision pass's clock and parity, for whoever reads them off the car)

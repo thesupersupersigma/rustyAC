@@ -20,6 +20,7 @@ pub struct WorldJoint {
 
 pub const JOINT_DISABLED: u32 = 8;
 
+#[derive(Clone)]
 pub struct CspWorld {
     pub params: WorldParams,
     /// in the world's list order (newest first); joints name bodies by index here

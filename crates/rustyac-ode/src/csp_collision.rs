@@ -94,10 +94,11 @@ impl Default for Load {
 }
 
 /// The world's collision state at a step's start.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Collision {
     pub geoms: Vec<Geom>,
-    pub meshes: Vec<TrackMesh>,
+    /// shared: a cloned world (a car's working copy) keeps the track's meshes once
+    pub meshes: Vec<std::sync::Arc<TrackMesh>>,
     /// the car container's children (car spaces), list order, with the container's sublevel
     /// (+0xb4) and child count (+0xa0)
     pub cars: Vec<usize>,

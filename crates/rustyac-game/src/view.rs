@@ -1135,7 +1135,7 @@ pub fn engineer_masses(sim: &GameSim) -> rustyac_gui::app_car_engineer::CarEngin
 pub fn car_physics(sim: &GameSim) -> rustyac_gui::app_car_physics::CarPhysicsExtra {
     let car = &sim.car.car;
     let z = |k: usize| car.suspensions.get(k).map_or(0.0, |s| s.get_base_position().z);
-    rustyac_gui::app_car_physics::CarPhysicsExtra { base_z: [z(0), z(2)], mass: car.core.get_mass(car.body), iyy: car.core.world.body(car.body.id).mass.i[5], ..Default::default() }
+    rustyac_gui::app_car_physics::CarPhysicsExtra { base_z: [z(0), z(2)], mass: car.core.get_mass(car.body), iyy: car.core.body_state(car.body.id).inertia[5], ..Default::default() }
 }
 
 /// What the Telemetry app (`FormTelemetry::initChannels`) reads of the player's car once.

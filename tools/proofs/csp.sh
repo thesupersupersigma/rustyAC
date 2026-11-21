@@ -22,6 +22,7 @@
 #                  the world stepped on the port's own contacts (Task C5f)
 #   core <car> <n>  CSP's cphys:: wrappers built by rustyac-ode's csp_core from the car's own calls, nothing
 #                  copied: set-up, every answer and every world step; n=2 is two F2004 that touch (Task C5g)
+#   smoke          rustyAC's own CSP mode (Task C5i-a): both proof cars driven at Spa, the drive replayed twice
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -328,5 +329,27 @@ for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2
         verdict "core $car $n" DIFFERENT "$stop $ldr / $prt / $ttl / $wld $(why "$drive.txt" '^  world step|^  body|panic')"
     fi
 done
+
+# smoke: rustyAC's own CSP mode (Task C5i-a part 2: its cars' physics in csp_core, the tyres on CSP's rays):
+# both proof cars driven 10 s at Spa (the F2004 by the autodriver, the RSS beside it on its own), then the
+# recording played back twice: no panic, the car still on the road (finite, under 400 km/h), one hash
+if keep "smoke"; then
+    build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
+    s=$out/runs/smoke; rm -rf "$s"; mkdir -p "$s"
+    rustyac target/release/rustyac.exe --csp --headless --no-shm --no-audio --car ks_ferrari_f2004 --opponent rss_formula_rss_3_v6_2026:auto \
+        --track spa --no-race-ini --spawn start --autodrive --duration 10 --record "$s/drive.ryin" > "$s/drive.txt" 2>&1
+    car=$(tr -d '\r' < "$s/drive.txt" | grep -m1 '^the car after ')
+    for i in 1 2; do
+        rustyac target/release/rustyac.exe --replay "$s/drive.ryin" --headless --no-shm --state-hash --physics-threads 0 > "$s/replay$i.txt" 2>&1
+    done
+    h1=$(tr -d '\r' < "$s/replay1.txt" | grep -m1 '^state hash ' | cut -d' ' -f3-7)
+    h2=$(tr -d '\r' < "$s/replay2.txt" | grep -m1 '^state hash ' | cut -d' ' -f3-7)
+    if echo "$car" | grep -qE '^the car after [0-9]{4,} steps: [0-3]?[0-9]?[0-9]\.[0-9] km/h' && ! grep -qwiE 'nan|inf' "$s/drive.txt" &&
+        echo "$h1" | grep -qE '^[0-9a-f]{16}: 2 cars, [0-9]{4,} steps' && [ "$h1" = "$h2" ]; then
+        verdict "smoke" IDENTICAL "${car#the car after } / replayed twice: $h1"
+    else
+        verdict "smoke" DIFFERENT "$car / $h1 / $h2 $(why "$s/drive.txt" 'panic|error|rustyac:') $(why "$s/replay1.txt" 'panic|error|rustyac:')"
+    fi
+fi
 
 summary

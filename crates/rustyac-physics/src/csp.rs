@@ -8,6 +8,7 @@
 //! thread) and `RANDOMIZE_WHEEL_ANGLES=0` (docs/csp/port_c3.md).
 
 pub mod air;
+pub mod core_body;
 pub mod core_car;
 pub mod core_track;
 

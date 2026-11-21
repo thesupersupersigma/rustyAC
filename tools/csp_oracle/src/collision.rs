@@ -204,7 +204,7 @@ unsafe fn state(st: &mut State, dll: usize, w: usize, bodies: &[usize]) -> Resul
     let collider = std::mem::transmute::<usize, extern "C" fn() -> usize>(dll + 0x16c_b700)() + 0x4870;
     let col = Collision {
         geoms,
-        meshes: std::mem::take(&mut st.meshes),
+        meshes: std::mem::take(&mut st.meshes).into_iter().map(std::sync::Arc::new).collect(),
         cars: car_spaces,
         cars_level: read(cars + 0xb4),
         cars_count: read(cars + 0xa0),
@@ -252,7 +252,7 @@ pub(crate) unsafe fn enter(w: usize, dll: usize, thread: u32, step: usize) {
             return;
         }
     };
-    st.meshes = std::mem::take(&mut col.meshes);
+    st.meshes = std::mem::take(&mut col.meshes).into_iter().map(|m| std::sync::Arc::try_unwrap(m).ok().expect("the only copy of a track mesh")).collect();
     if let Some(&s) = col.cars.first() {
         pose_check(st, dll, col.geoms[s].id);
     }
@@ -641,7 +641,7 @@ pub(crate) unsafe fn port_ray_space(dll: usize, space: usize) -> Result<Collisio
         table: HashSpace::build(&aabbs, read(space + 0xd0), read(space + 0xd4)),
         track: (0..geoms.len()).collect(),
         geoms,
-        meshes: std::mem::take(&mut st.meshes),
+        meshes: std::mem::take(&mut st.meshes).into_iter().map(std::sync::Arc::new).collect(),
         aabb_limit: read(dll + 0x27f_995c),
         ..Default::default()
     })

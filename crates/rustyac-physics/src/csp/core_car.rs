@@ -30,18 +30,28 @@ pub struct CspCar {
 /// `game_root`.
 pub fn build(data_folder: &Path, game_root: &Path, name: &str) -> Result<CspCar, String> {
     let loaded = colliders::load(data_folder, Some(game_root), name)?;
-    let inertia = IniReader::load(&append_path(data_folder, "car.ini"))?.get_float3("BASIC", "INERTIA")?;
-    let min_height = if extend_boxes(data_folder)? { (inertia[2] * 0.2).max(inertia[1] * 0.5) } else { 0.0 };
+    let min_height = box_floor(data_folder)?;
     let mesh = loaded.mesh.map(|m| -> Result<CspMesh, String> {
         let matrix: [f32; 16] = std::array::from_fn(|i| m.matrix.m[i / 4][i % 4]);
         let vertices = clamp_mesh(data_folder, &m.vertices, &matrix)?.unwrap_or_else(|| m.vertices.clone());
-        let mesh = MeshInterface::new(vertices.clone(), m.indices.clone());
-        let model = Model::build(&mesh);
-        let shape = Shape::Mesh { mesh: Some(0), tc_on: true, key: 0, tree_test: true, bounds: super::core_track::bounds(&vertices) };
-        Ok(CspMesh { mesh: TrackMesh { mesh, model }, shape, matrix })
+        Ok(mesh(vertices, m.indices.clone(), matrix))
     });
     let mesh = mesh.transpose()?;
     Ok(CspCar { boxes: loaded.boxes, min_height, mesh })
+}
+
+/// The box floor (`+0x27f9950`) while the car's boxes are made.
+pub fn box_floor(data_folder: &Path) -> Result<f32, String> {
+    let inertia = IniReader::load(&append_path(data_folder, "car.ini"))?.get_float3("BASIC", "INERTIA")?;
+    Ok(if extend_boxes(data_folder)? { (inertia[2] * 0.2).max(inertia[1] * 0.5) } else { 0.0 })
+}
+
+/// A mesh collider's built data and shape (vertices already clamped).
+pub fn mesh(vertices: Vec<[f32; 3]>, indices: Vec<u16>, matrix: [f32; 16]) -> CspMesh {
+    let bounds = super::core_track::bounds(&vertices);
+    let mesh = MeshInterface::new(vertices, indices);
+    let model = Model::build(&mesh);
+    CspMesh { mesh: TrackMesh { mesh, model }, shape: Shape::Mesh { mesh: Some(0), tc_on: true, key: 0, tree_test: true, bounds }, matrix }
 }
 
 /// `+0x413850`: whether `EXTEND_COLLIDER_BOXES` (on by default) acts on the car: no `script.lua`
@@ -66,7 +76,7 @@ fn extend_boxes(data_folder: &Path) -> Result<bool, String> {
 // shortcut: `[_EXTENSION] MESH_OFFSET` of colliders.ini is added to the vertices (CSP: only while
 // its car-config flag +0xe0 is set) and not moved into the matrix when unclamped; upgrade when a car
 // with that key is proven
-fn clamp_mesh(data_folder: &Path, vertices: &[[f32; 3]], a: &[f32; 16]) -> Result<Option<Vec<[f32; 3]>>, String> {
+pub fn clamp_mesh(data_folder: &Path, vertices: &[[f32; 3]], a: &[f32; 16]) -> Result<Option<Vec<[f32; 3]>>, String> {
     if vertices.is_empty() {
         return Ok(None);
     }

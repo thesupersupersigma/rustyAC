@@ -90,9 +90,7 @@ pub struct CarView {
 impl CarView {
     /// The view of `car` as it is now.
     pub fn of(car: &RollingChassis) -> CarView {
-        let body = car.core.world.body(car.body.id);
-        let mut rotation = [0.0f32; 12];
-        rotation.copy_from_slice(&body.r[..12]);
+        let rotation = car.core.body_state(car.body.id).r;
         let d = &car.spline_locator_data;
         CarView {
             position: car.core.get_position(car.body),

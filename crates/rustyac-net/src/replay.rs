@@ -168,11 +168,11 @@ impl<T: Transport> NetReplay<T> {
         let core = &self.world.engine.core;
         let mut row = Vec::with_capacity(self.session.cars.len() * remote_words());
         for car in &self.session.cars {
-            let body = core.world.body(car.body.id);
-            row.extend(body.pos[..3].iter().map(|x| x.to_bits()));
+            let body = core.body_state(car.body.id);
+            row.extend(body.pos.iter().map(|x| x.to_bits()));
             row.extend(body.q.iter().map(|x| x.to_bits()));
-            row.extend(body.lvel[..3].iter().map(|x| x.to_bits()));
-            row.extend(body.avel[..3].iter().map(|x| x.to_bits()));
+            row.extend(body.lvel.iter().map(|x| x.to_bits()));
+            row.extend(body.avel.iter().map(|x| x.to_bits()));
             row.push(core.get_mesh_collide_category(car.body, 0).unwrap_or(0));
             let matrix = |m: &Mat44f, row: &mut Vec<u32>| row.extend(m.m.iter().flatten().map(|x| x.to_bits()));
             matrix(&car.body_matrix, &mut row);

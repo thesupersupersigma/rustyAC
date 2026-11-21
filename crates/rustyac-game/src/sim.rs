@@ -1445,8 +1445,8 @@ impl GameSim {
     pub fn state_hash(&self, mut hash: u64) -> u64 {
         for car in self.cars() {
             for body in car.own_bodies() {
-                let b = car.core.world.body(body);
-                for word in b.pos[..3].iter().chain(&b.q).chain(&b.lvel[..3]).chain(&b.avel[..3]) {
+                let b = car.core.body_state(body);
+                for word in b.pos.iter().chain(&b.q).chain(&b.lvel).chain(&b.avel) {
                     for byte in word.to_bits().to_le_bytes() {
                         hash ^= byte as u64;
                         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);

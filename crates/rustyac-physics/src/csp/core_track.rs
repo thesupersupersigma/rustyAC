@@ -7,7 +7,8 @@
 use crate::track::Track;
 use rustyac_ode::csp_collide::Side;
 use rustyac_ode::csp_collision::{Geom, Load, Shape, TrackMesh, GEOM_AABB_BAD, GEOM_DIRTY, GEOM_ENABLED};
-use rustyac_ode::csp_core::RayMesh;
+use rustyac_ode::csp_core::{Core, RayMesh, TrackRay};
+use std::sync::Mutex;
 
 /// What `Core::set_track` and `Core::set_rays` take, and the cars' space settings.
 pub struct CspTrack {
@@ -68,4 +69,40 @@ pub fn build(track: &Track) -> CspTrack {
     }
     rays.reverse();
     CspTrack { geoms, meshes, rays, level: 0, count: n as i32, levels: (2, 11), cars_level: 0, static_step: false, aabb_limit: 8, full_box_box: true, cars_levels: (0, 5), prefilter: true, edges: false, load: Load::default() }
+}
+
+/// Task C5i-a part 2: the track in CSP's core, made once per track: a core with only the track in
+/// (each physics core of CSP mode starts as a copy of it) and the tyre rays' own copy (behind a
+/// lock: a ray notes the first tyre ray and cleans the track space once).
+pub struct CspCore {
+    pub core: Core,
+    rays: Mutex<Core>,
+}
+
+impl std::fmt::Debug for CspCore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CspCore({} geoms)", self.core.col.geoms.len())
+    }
+}
+
+pub fn core(track: &Track) -> Result<CspCore, String> {
+    let t = build(track);
+    let mut core = Core::new();
+    core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box);
+    let c = &mut core.col;
+    (c.cars_levels, c.prefilter, c.edges, c.load) = (t.cars_levels, t.prefilter, t.edges, t.load);
+    // CSP's defaults: Embree on (ODE_BATCH_RAYCAST=0), device "threads=1", INTEL_EMBREE_ROBUST=0,
+    // +0x2812c7f clear. A build without rustyac-ode's `embree` (the browser) casts ODE's rays.
+    core.set_rays(&t.rays, Some((c"threads=1", false)), false)?;
+    // the cars' first tyre rays clean the track space before any collision (the rays are a copy)
+    core.clean_track().map_err(|e| e.0.to_string())?;
+    Ok(CspCore { rays: Mutex::new(core.clone()), core })
+}
+
+impl CspCore {
+    /// A tyre's ray (`+0x92b970`): the point, normal and track mesh index of the hit.
+    pub fn tyre_ray(&self, org: [f32; 3], dir: [f32; 3], length: f32) -> Option<TrackRay> {
+        let hit = self.rays.lock().unwrap().cast(org, dir, length, true).unwrap_or_else(|e| panic!("CSP ray: {}", e.0))?;
+        hit.mesh.map(|_| hit)
+    }
 }

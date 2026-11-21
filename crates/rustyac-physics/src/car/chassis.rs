@@ -2792,7 +2792,7 @@ impl RollingChassis {
 
     /// The state of a body as the comparison with the recordings wants it.
     pub fn body_trace(&self, body: RigidBody) -> BodyTrace {
-        let b = self.core.world.body(body.id);
+        let b = self.core.body_state(body.id);
         let mut r = [0.0; 9];
         for row in 0..3 {
             for col in 0..3 {
@@ -2800,15 +2800,15 @@ impl RollingChassis {
             }
         }
         BodyTrace {
-            mass: b.mass.mass,
-            inertia: [b.mass.i[0], b.mass.i[5], b.mass.i[10]],
-            pos: [b.pos[0], b.pos[1], b.pos[2]],
+            mass: b.mass,
+            inertia: [b.inertia[0], b.inertia[5], b.inertia[10]],
+            pos: b.pos,
             q: b.q,
             r,
-            lvel: [b.lvel[0], b.lvel[1], b.lvel[2]],
-            avel: [b.avel[0], b.avel[1], b.avel[2]],
-            facc: [b.facc[0], b.facc[1], b.facc[2]],
-            tacc: [b.tacc[0], b.tacc[1], b.tacc[2]],
+            lvel: b.lvel,
+            avel: b.avel,
+            facc: b.facc,
+            tacc: b.tacc,
         }
     }
 
@@ -3067,6 +3067,9 @@ impl RollingChassis {
     fn install_box_colliders(&mut self) -> Result<(), String> {
         debug_assert!(!self.in_engine, "a car of an engine gets its shapes while it is built (PhysicsEngine::build_car)");
         let boxes = super::colliders::load_boxes(&self.data_path)?;
+        if let Some(c) = &mut self.core.csp {
+            c.box_floor = crate::csp::core_car::box_floor(&self.data_path)?;
+        }
         for def in &boxes {
             self.core.add_box_collider(self.body, &def.centre, &def.size, super::body::category::CAR, super::body::category::SURFACE, self.physics_guid + 1);
         }
@@ -3080,7 +3083,15 @@ impl RollingChassis {
     pub fn init_collider_mesh(&mut self, mesh: ColliderMesh) {
         debug_assert!(!self.in_engine, "a car of an engine gets its collider mesh while it is built (PhysicsEngine::build_car)");
         self.bounds = super::colliders::bounds(&mesh);
-        self.core.add_mesh_collider(self.body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, super::body::category::CAR, 0x1e, self.physics_guid + 1);
+        let mut vertices = mesh.vertices.clone();
+        if self.core.csp.is_some() {
+            // CSP's CLAMP_MESH_COLLIDERS
+            let matrix: [f32; 16] = std::array::from_fn(|i| mesh.matrix.m[i / 4][i % 4]);
+            if let Ok(Some(clamped)) = crate::csp::core_car::clamp_mesh(&self.data_path, &vertices, &matrix) {
+                vertices = clamped;
+            }
+        }
+        self.core.add_mesh_collider(self.body, vertices, mesh.indices.clone(), &mesh.matrix, super::body::category::CAR, 0x1e, self.physics_guid + 1);
         self.colliders.mesh = Some(mesh);
     }
 

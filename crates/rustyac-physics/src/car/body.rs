@@ -141,6 +141,20 @@ pub struct FixedJoint {
     pub id: JointId,
 }
 
+/// A body's state words ([`PhysicsCore::body_state`]): ODE's 3x4 rotation and inertia.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyState {
+    pub pos: [f32; 3],
+    pub q: [f32; 4],
+    pub lvel: [f32; 3],
+    pub avel: [f32; 3],
+    pub r: [f32; 12],
+    pub mass: f32,
+    pub inertia: [f32; 12],
+    pub facc: [f32; 3],
+    pub tacc: [f32; 3],
+}
+
 fn v3(a: [f32; 3]) -> Vec3f {
     Vec3f::new(a[0], a[1], a[2])
 }
@@ -199,6 +213,9 @@ pub struct PhysicsCore {
     pub source: ForceSource,
     /// Give every new joint a feedback buffer (the constraint forces can then be read).
     pub joint_feedback: bool,
+    /// Task C5i-a: CSP mode's backend (CSP's double core holds the bodies, joints and shapes);
+    /// `None`: Vanilla's [`PhysicsCore::world`].
+    pub csp: Option<Box<crate::csp::core_body::CspBody>>,
 }
 
 impl Default for PhysicsCore {
@@ -236,12 +253,77 @@ impl PhysicsCore {
             tape: None,
             source: ForceSource::Other,
             joint_feedback: false,
+            csp: None,
         }
     }
 
     /// The bodies in creation order.
     pub fn bodies(&self) -> impl Iterator<Item = RigidBody> + '_ {
         self.bodies.iter().enumerate().map(|(index, &id)| RigidBody { id, index: index as u32 })
+    }
+
+    /// A body's state words (Vanilla's own f32; CSP's doubles rounded to f32).
+    pub fn body_state(&self, body: BodyId) -> BodyState {
+        fn f<const N: usize>(v: &[f64]) -> [f32; N] {
+            std::array::from_fn(|k| v[k] as f32)
+        }
+        if let Some(c) = &self.csp {
+            let b = c.core.body(body.0 as usize);
+            return BodyState { pos: f(&b.pos), q: f(&b.q), lvel: f(&b.lvel), avel: f(&b.avel), r: f(&b.r), mass: b.mass.mass as f32, inertia: f(&b.mass.i), facc: f(&b.facc), tacc: f(&b.tacc) };
+        }
+        let b = self.world.body(body);
+        let c = |v: &[f32]| -> [f32; 3] { [v[0], v[1], v[2]] };
+        BodyState { pos: c(&b.pos), q: b.q, lvel: c(&b.lvel), avel: c(&b.avel), r: b.r, mass: b.mass.mass, inertia: b.mass.i, facc: c(&b.facc), tacc: c(&b.tacc) }
+    }
+
+    /// Bodies, joints and shapes made so far (the next ones' handles).
+    pub fn slot_counts(&self) -> (usize, usize, usize) {
+        if let Some(c) = &self.csp {
+            return (c.core.world.bodies.len(), c.core.joints_made(), c.core.col.geoms.len());
+        }
+        let (bodies, joints) = self.world.slot_counts();
+        (bodies as usize, joints as usize, self.world.collision.geoms.len())
+    }
+
+    /// Body `body`'s state as `from` (another copy of this core) has it; with `moved`, its shapes
+    /// told when it was put somewhere else (as `dBodySetPosition` does).
+    pub fn copy_body_state_from(&mut self, from: &PhysicsCore, body: BodyId, moved: bool) {
+        if let (Some(c), Some(f)) = (&mut self.csp, &from.csp) {
+            c.core.copy_body_from(&f.core, body.0 as usize);
+            return;
+        }
+        if self.world.copy_body_state_from(&from.world, body) && moved {
+            self.world.body_geoms_moved(body);
+        }
+    }
+
+    /// Joint `joint`'s state as `from` has it.
+    pub fn copy_joint_state_from(&mut self, from: &PhysicsCore, joint: JointId) {
+        if let (Some(c), Some(f)) = (&mut self.csp, &from.csp) {
+            return c.core.copy_joint_from(&f.core, joint.0 as usize);
+        }
+        self.world.copy_joint_state_from(&from.world, joint);
+    }
+
+    /// Shape `geom`'s category and collide bits as `from` has them.
+    pub fn copy_geom_bits_from(&mut self, from: &PhysicsCore, geom: GeomId) {
+        if let (Some(c), Some(f)) = (&mut self.csp, &from.csp) {
+            let (to, from) = (&mut c.core.col.geoms[geom.0 as usize], &f.core.col.geoms[geom.0 as usize]);
+            (to.category, to.collide) = (from.category, from.collide);
+            return;
+        }
+        let from = from.world.collision.geom(geom);
+        let (category, collide) = (from.category_bits, from.collide_bits);
+        let to = self.world.collision.geom_mut(geom);
+        to.category_bits = category;
+        to.collide_bits = collide;
+    }
+
+    /// Task C5i-a: CSP mode's backend for this core, `track` in it; before any body is made.
+    pub fn use_csp(&mut self, track: &crate::track::Track) -> Result<(), String> {
+        assert!(self.bodies.is_empty() && self.track_objects.is_empty(), "CSP's core is chosen before any body");
+        self.csp = Some(Box::new(crate::csp::core_body::CspBody::new(track)?));
+        Ok(())
     }
 
     fn record(&mut self, body: RigidBody, kind: u32, a: [f32; 3], b: [f32; 3]) {
@@ -264,6 +346,7 @@ impl PhysicsCore {
     /// @ 0x1402cd800: `dBodyCreate`, finite rotation mode 1 with axis (0,0,0), linear and
     /// angular damping 0.
     pub fn create_rigid_body(&mut self) -> RigidBody {
+        if let Some(c) = &mut self.csp { let body = crate::csp::core_body::rigid_body(c.create_rigid_body()); self.bodies.push(body.id); return body; }
         let id = self.world.body_create();
         self.world.body_set_finite_rotation_mode(id, true);
         self.world.body_set_finite_rotation_axis(id, 0.0, 0.0, 0.0);
@@ -285,6 +368,7 @@ impl PhysicsCore {
 
     /// The second half of `PhysicsCore::step`: `dWorldStep`.
     pub fn world_step(&mut self, dt: f32) -> rustyac_ode::StepStats {
+        if let Some(c) = &mut self.csp { c.core.step_world(dt); return rustyac_ode::StepStats::default(); }
         self.world.step(dt)
     }
 
@@ -293,6 +377,7 @@ impl PhysicsCore {
     /// `RigidBodyODE::getWorldMatrix` @ 0x1402ce6c0: ODE's rotation transposed into the rows
     /// of a `mat44f` (row 0 = the body's x axis in world space …), position in row 3.
     pub fn get_world_matrix(&self, body: RigidBody) -> Mat44f {
+        if let Some(c) = &self.csp { return c.world_matrix(body); }
         let b = self.world.body(body.id);
         let r = &b.r;
         Mat44f {
@@ -307,26 +392,31 @@ impl PhysicsCore {
 
     /// `RigidBodyODE::localToWorld` @ 0x1402ce780: `dBodyGetRelPointPos`.
     pub fn local_to_world(&self, body: RigidBody, p: &Vec3f) -> Vec3f {
+        if let Some(c) = &self.csp { return c.local_to_world(body, p); }
         v3(self.world.body_get_rel_point_pos(body.id, a3(p)))
     }
 
     /// `RigidBodyODE::worldToLocal` @ 0x1402ceb30: `dBodyGetPosRelPoint`.
     pub fn world_to_local(&self, body: RigidBody, p: &Vec3f) -> Vec3f {
+        if let Some(c) = &self.csp { return c.world_to_local(body, p); }
         v3(self.world.body_get_pos_rel_point(body.id, a3(p)))
     }
 
     /// `RigidBodyODE::localToWorldNormal` @ 0x1402ce7c0: `dBodyVectorToWorld`.
     pub fn local_to_world_normal(&self, body: RigidBody, v: &Vec3f) -> Vec3f {
+        if let Some(c) = &self.csp { return c.local_to_world_normal(body, v); }
         v3(self.world.body_vector_to_world(body.id, a3(v)))
     }
 
     /// `RigidBodyODE::worldToLocalNormal` @ 0x1402ceb70: `dBodyVectorFromWorld`.
     pub fn world_to_local_normal(&self, body: RigidBody, v: &Vec3f) -> Vec3f {
+        if let Some(c) = &self.csp { return c.world_to_local_normal(body, v); }
         v3(self.world.body_vector_from_world(body.id, a3(v)))
     }
 
     /// `RigidBodyODE::getPosition` @ 0x1402ce640 (the interpolation argument is not used).
     pub fn get_position(&self, body: RigidBody) -> Vec3f {
+        if let Some(c) = &self.csp { return c.position(body); }
         let b = self.world.body(body.id);
         Vec3f::new(b.pos[0], b.pos[1], b.pos[2])
     }
@@ -335,11 +425,13 @@ impl PhysicsCore {
     /// `dBodyGetRelPointVel(0, 0, 0)`, the velocity of the body's origin computed like that
     /// of any other point (the same value, except for the sign of a zero).
     pub fn get_velocity(&self, body: RigidBody) -> Vec3f {
+        if let Some(c) = &self.csp { return c.velocity(body); }
         v3(self.world.body_get_rel_point_vel(body.id, [0.0; 3]))
     }
 
     /// `RigidBodyODE::getLocalVelocity` @ 0x1402ce520: `worldToLocalNormal(getVelocity())`.
     pub fn get_local_velocity(&self, body: RigidBody) -> Vec3f {
+        if let Some(c) = &self.csp { return c.local_velocity(body); }
         let v = self.get_velocity(body);
         self.world_to_local_normal(body, &v)
     }
@@ -347,12 +439,14 @@ impl PhysicsCore {
     /// `RigidBodyODE::getLocalAngularVelocity` @ 0x1402ce430:
     /// `worldToLocalNormal(getAngularVelocity())`.
     pub fn get_local_angular_velocity(&self, body: RigidBody) -> Vec3f {
+        if let Some(c) = &self.csp { return c.local_angular_velocity(body); }
         let w = self.get_angular_velocity(body);
         self.world_to_local_normal(body, &w)
     }
 
     /// `RigidBodyODE::getAngularVelocity` @ 0x1402ce3f0: `dBodyGetAngularVel`.
     pub fn get_angular_velocity(&self, body: RigidBody) -> Vec3f {
+        if let Some(c) = &self.csp { return c.angular_velocity(body); }
         let b = self.world.body(body.id);
         Vec3f::new(b.avel[0], b.avel[1], b.avel[2])
     }
@@ -360,28 +454,33 @@ impl PhysicsCore {
     /// `RigidBodyODE::getLocalPointVelocity` @ 0x1402ce4e0: `dBodyGetRelPointVel`, the
     /// world velocity of a body-frame point.
     pub fn get_local_point_velocity(&self, body: RigidBody, p: &Vec3f) -> Vec3f {
+        if let Some(c) = &self.csp { return c.local_point_velocity(body, p); }
         v3(self.world.body_get_rel_point_vel(body.id, a3(p)))
     }
 
     /// `RigidBodyODE::getPointVelocity` @ 0x1402ce600: `dBodyGetPointVel`, the world
     /// velocity of a world point.
     pub fn get_point_velocity(&self, body: RigidBody, p: &Vec3f) -> Vec3f {
+        if let Some(c) = &self.csp { return c.point_velocity(body, p); }
         v3(self.world.body_get_point_vel(body.id, a3(p)))
     }
 
     /// `RigidBodyODE::getMass` @ 0x1402ce570: `dBodyGetMass`, the total mass.
     pub fn get_mass(&self, body: RigidBody) -> f32 {
+        if let Some(c) = &self.csp { return c.mass(body); }
         self.world.body(body.id).mass.mass
     }
 
     /// `RigidBodyODE::setPosition` @ 0x1402ce9e0: `dBodySetPosition`.
     pub fn set_position(&mut self, body: RigidBody, p: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.core.set_position(body.id.0 as usize, a3(p)); }
         self.world.body_set_position(body.id, p.x, p.y, p.z);
     }
 
     /// `RigidBodyODE::setRotation` @ 0x1402cea00: the upper 3x3 of the `mat44f`, transposed
     /// into ODE's layout, to `dBodySetRotation`.
     pub fn set_rotation(&mut self, body: RigidBody, m: &Mat44f) {
+        if let Some(c) = &mut self.csp { return c.set_rotation(body, m); }
         let m = &m.m;
         let r = [
             m[0][0], m[1][0], m[2][0], 0.0, //
@@ -393,17 +492,20 @@ impl PhysicsCore {
 
     /// `RigidBodyODE::setVelocity` @ 0x1402ceab0: `dBodySetLinearVel`.
     pub fn set_velocity(&mut self, body: RigidBody, v: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.set_velocities(body, Some(v), None); }
         self.world.body_set_linear_vel(body.id, v.x, v.y, v.z);
     }
 
     /// `RigidBodyODE::setAngularVelocity` @ 0x1402ce820: `dBodySetAngularVel`.
     pub fn set_angular_velocity(&mut self, body: RigidBody, w: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.set_velocities(body, None, Some(w)); }
         self.world.body_set_angular_vel(body.id, w.x, w.y, w.z);
     }
 
     /// `RigidBodyODE::setMassBox` @ 0x1402ce890: `dMassSetBoxTotal(mass, x, y, z)`, then
     /// `dBodySetMass`.
     pub fn set_mass_box(&mut self, body: RigidBody, mass: f32, x: f32, y: f32, z: f32) {
+        if let Some(c) = &mut self.csp { return c.core.set_mass_box(body.id.0 as usize, mass, x, y, z); }
         let m = Mass::box_total(mass, x, y, z);
         self.world.body_set_mass(body.id, &m);
     }
@@ -411,6 +513,7 @@ impl PhysicsCore {
     /// `RigidBodyODE::stop` @ 0x1402cead0 (its argument is ignored): linear velocity,
     /// angular velocity, force and torque to zero.
     pub fn stop(&mut self, body: RigidBody) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::STOP, &Vec3f::new(0.0, 0.0, 0.0), &Vec3f::new(0.0, 0.0, 0.0)); }
         self.world.body_set_linear_vel(body.id, 0.0, 0.0, 0.0);
         self.world.body_set_angular_vel(body.id, 0.0, 0.0, 0.0);
         self.world.body_set_force(body.id, 0.0, 0.0, 0.0);
@@ -422,42 +525,49 @@ impl PhysicsCore {
 
     /// `RigidBodyODE::addForceAtPos` @ 0x1402cdf30: `dBodyAddForceAtPos`.
     pub fn add_force_at_pos(&mut self, body: RigidBody, f: &Vec3f, p: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_FORCE_AT_POS, f, p); }
         self.world.body_add_force_at_pos(body.id, a3(f), a3(p));
         self.record(body, kind::ADD_FORCE_AT_POS, a3(f), a3(p));
     }
 
     /// `RigidBodyODE::addForceAtLocalPos` @ 0x1402cdee0: `dBodyAddForceAtRelPos`.
     pub fn add_force_at_local_pos(&mut self, body: RigidBody, f: &Vec3f, p: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_FORCE_AT_LOCAL_POS, f, p); }
         self.world.body_add_force_at_rel_pos(body.id, a3(f), a3(p));
         self.record(body, kind::ADD_FORCE_AT_LOCAL_POS, a3(f), a3(p));
     }
 
     /// `RigidBodyODE::addLocalForce` @ 0x1402cdf80: `dBodyAddRelForceAtRelPos(f, 0, 0, 0)`.
     pub fn add_local_force(&mut self, body: RigidBody, f: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_LOCAL_FORCE, f, &Vec3f::new(0.0, 0.0, 0.0)); }
         self.world.body_add_rel_force_at_rel_pos(body.id, a3(f), [0.0; 3]);
         self.record(body, kind::ADD_LOCAL_FORCE, a3(f), [0.0; 3]);
     }
 
     /// `RigidBodyODE::addLocalForceAtPos` @ 0x1402ce010: `dBodyAddRelForceAtPos`.
     pub fn add_local_force_at_pos(&mut self, body: RigidBody, f: &Vec3f, p: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_LOCAL_FORCE_AT_POS, f, p); }
         self.world.body_add_rel_force_at_pos(body.id, a3(f), a3(p));
         self.record(body, kind::ADD_LOCAL_FORCE_AT_POS, a3(f), a3(p));
     }
 
     /// `RigidBodyODE::addLocalForceAtLocalPos` @ 0x1402cdfc0: `dBodyAddRelForceAtRelPos`.
     pub fn add_local_force_at_local_pos(&mut self, body: RigidBody, f: &Vec3f, p: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_LOCAL_FORCE_AT_LOCAL_POS, f, p); }
         self.world.body_add_rel_force_at_rel_pos(body.id, a3(f), a3(p));
         self.record(body, kind::ADD_LOCAL_FORCE_AT_LOCAL_POS, a3(f), a3(p));
     }
 
     /// `RigidBodyODE::addTorque` @ 0x1402ce3d0: `dBodyAddTorque`.
     pub fn add_torque(&mut self, body: RigidBody, t: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_TORQUE, t, &Vec3f::new(0.0, 0.0, 0.0)); }
         self.world.body_add_torque(body.id, a3(t));
         self.record(body, kind::ADD_TORQUE, a3(t), [0.0; 3]);
     }
 
     /// `RigidBodyODE::addLocalTorque` @ 0x1402ce060: `dBodyAddRelTorque`.
     pub fn add_local_torque(&mut self, body: RigidBody, t: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.force(body, kind::ADD_LOCAL_TORQUE, t, &Vec3f::new(0.0, 0.0, 0.0)); }
         self.world.body_add_rel_torque(body.id, a3(t));
         self.record(body, kind::ADD_LOCAL_TORQUE, a3(t), [0.0; 3]);
     }
@@ -485,6 +595,7 @@ impl PhysicsCore {
     /// with its two anchors given in world coordinates; the rod length ODE then reports is
     /// kept.
     pub fn create_distance_joint(&mut self, body1: RigidBody, body2: RigidBody, p1: &Vec3f, p2: &Vec3f) -> DistanceJoint {
+        if let Some(c) = &mut self.csp { let (id, distance) = c.distance_joint(body1, body2, p1, p2); return DistanceJoint { id, distance }; }
         let id = self.world.joint_create_dball();
         self.world.joint_attach(id, Some(body1.id), Some(body2.id));
         self.world.joint_set_dball_anchor1(id, p1.x, p1.y, p1.z);
@@ -499,6 +610,7 @@ impl PhysicsCore {
     /// `PhysicsCore::createFixedJoint` @ 0x1402cc2a0: a fixed joint that keeps the two
     /// bodies as they are now (`dJointSetFixed`).
     pub fn create_fixed_joint(&mut self, body1: RigidBody, body2: RigidBody) -> FixedJoint {
+        if let Some(c) = &mut self.csp { return FixedJoint { id: JointId(c.core.create_fixed_joint(body1.id.0 as usize, body2.id.0 as usize) as u32) }; }
         let id = self.world.joint_create_fixed();
         self.world.joint_attach(id, Some(body1.id), Some(body2.id));
         self.world.joint_set_fixed(id);
@@ -512,6 +624,7 @@ impl PhysicsCore {
     /// along `axis` (world), which is normalised first (left as it is when its length is 0).
     #[allow(clippy::double_comparisons)]
     pub fn create_slider_joint(&mut self, body1: RigidBody, body2: RigidBody, axis: &Vec3f) -> JointId {
+        assert!(self.csp.is_none(), "CSP mode has no slider joint yet (a strut suspension)"); // shortcut: CSP's slider wrapper is not ported; port it with a strut car's rows
         let id = self.world.joint_create_slider();
         self.world.joint_attach(id, Some(body1.id), Some(body2.id));
         let (mut x, mut y, mut z) = (axis.x, axis.y, axis.z);
@@ -532,6 +645,7 @@ impl PhysicsCore {
     /// `PhysicsCore::createBallJoint` @ 0x1402cc010: a ball joint between two bodies at a
     /// world point.
     pub fn create_ball_joint(&mut self, body1: RigidBody, body2: RigidBody, anchor: &Vec3f) -> JointId {
+        assert!(self.csp.is_none(), "CSP mode has no ball joint yet (a strut suspension)"); // shortcut: as the slider joint
         let id = self.world.joint_create_ball();
         self.world.joint_attach(id, Some(body1.id), Some(body2.id));
         self.world.joint_set_ball_anchor(id, anchor.x, anchor.y, anchor.z);
@@ -545,6 +659,7 @@ impl PhysicsCore {
     /// body's own coordinates, are converted to world (`dBodyGetRelPointPos`) and set again;
     /// then the rod gets its original length back (`dJointSetDBallDistance`).
     pub fn reseat_distance_joint_local(&mut self, joint: &DistanceJoint, p1: &Vec3f, p2: &Vec3f) {
+        if let Some(c) = &mut self.csp { return c.core.reseat(joint.id.0 as usize, a3(p1), a3(p2)); }
         let body1 = self.world.joint_get_body(joint.id, 0).expect("a distance joint has two bodies");
         let body2 = self.world.joint_get_body(joint.id, 1).expect("a distance joint has two bodies");
         let w1 = self.world.body_get_rel_point_pos(body1, a3(p1));
@@ -557,6 +672,7 @@ impl PhysicsCore {
     /// `DistanceJointODE::setERPCFM` / `FixedJointODE::setERPCFM` @ 0x1402cd5a0: each value is
     /// only written when it is above 0.
     pub fn joint_set_erp_cfm(&mut self, joint: JointId, erp: f32, cfm: f32) {
+        if let Some(c) = &mut self.csp { return c.joint_set_erp_cfm(joint, erp, cfm); }
         if erp > 0.0 {
             self.world.joint_set_param(joint, PARAM_ERP, erp);
         }
@@ -672,6 +788,7 @@ impl PhysicsCore {
     /// `RigidBodyODE::addBoxCollider` @ 0x1402cddb0: a box of `size` with its middle at
     /// `centre` in the body's frame.
     pub fn add_box_collider(&mut self, body: RigidBody, centre: &Vec3f, size: &Vec3f, category: u32, mask: u32, space: u32) -> GeomId {
+        if let Some(c) = &mut self.csp { let geom = c.add_box_collider(body, centre, size, category, mask, space); self.colliders_mut(body).boxes.push(geom); return geom; }
         let sub = self.get_dynamic_sub_space(space);
         let geom = self.world.collision.create_box(Some(sub), size.x, size.y, size.z);
         self.world.geom_set_body(geom, body.id);
@@ -699,7 +816,10 @@ impl PhysicsCore {
         mask: u32,
         space: u32,
     ) -> GeomId {
-        let geom = self.make_mesh_geom(body, vertices, indices, matrix, category, mask, space);
+        let geom = match &mut self.csp {
+            Some(c) => c.add_mesh_collider(body, vertices, indices, matrix, category, mask, space),
+            None => self.make_mesh_geom(body, vertices, indices, matrix, category, mask, space),
+        };
         self.colliders_mut(body).meshes.push(geom);
         geom
     }
@@ -741,6 +861,9 @@ impl PhysicsCore {
     /// a body without that mesh is left alone here.)
     pub fn set_mesh_collide_mask(&mut self, body: RigidBody, index: usize, mask: u32) {
         if let Some(&geom) = self.colliders.get(body.index as usize).and_then(|c| c.meshes.get(index)) {
+            if let Some(c) = &mut self.csp {
+                return c.core.set_mesh_collide(body.id.0 as usize, index, mask);
+            }
             self.world.collision.set_collide_bits(geom, mask);
         }
     }
@@ -750,6 +873,10 @@ impl PhysicsCore {
     /// it). The mesh's own group, which damage and sounds read, stays what it was made with.
     pub fn set_mesh_collide_category(&mut self, body: RigidBody, index: usize, category: u32) {
         if let Some(&geom) = self.colliders.get(body.index as usize).and_then(|c| c.meshes.get(index)) {
+            if let Some(c) = &mut self.csp {
+                c.core.col.geoms[geom.0 as usize].category = category;
+                return;
+            }
             self.world.collision.set_category_bits(geom, category);
         }
     }
@@ -757,17 +884,24 @@ impl PhysicsCore {
     /// `RigidBodyODE::getMeshCollideCategory` @ 0x1402ce5a0.
     pub fn get_mesh_collide_category(&self, body: RigidBody, index: usize) -> Option<u32> {
         let geom = *self.colliders.get(body.index as usize)?.meshes.get(index)?;
+        if let Some(c) = &self.csp {
+            return Some(c.core.col.geoms[geom.0 as usize].category);
+        }
         Some(self.world.collision.geom(geom).category_bits)
     }
 
     /// `RigidBodyODE::getMeshCollideMask` @ 0x1402ce5d0.
     pub fn get_mesh_collide_mask(&self, body: RigidBody, index: usize) -> Option<u32> {
         let geom = *self.colliders.get(body.index as usize)?.meshes.get(index)?;
+        if let Some(c) = &self.csp {
+            return Some(c.core.col.geoms[geom.0 as usize].collide);
+        }
         Some(self.world.collision.geom(geom).collide_bits)
     }
 
     /// `PhysicsCore::resetCollisions` @ 0x1402cd570: both contact groups are emptied.
     pub fn reset_collisions(&mut self) {
+        if self.csp.is_some() { return; } // CSP drops its contact joints in every step
         self.world.joint_group_empty(self.contact_group_dynamic);
         self.world.joint_group_empty(self.contact_group);
     }
@@ -782,6 +916,7 @@ impl PhysicsCore {
     /// order (the oldest first), each attached to its two bodies as given. A step that
     /// follows with [`PhysicsCore::world_step`] then solves somebody else's contacts.
     pub fn set_contacts(&mut self, contacts: &[(Contact, Option<BodyId>, Option<BodyId>)]) {
+        assert!(self.csp.is_none(), "the oracles' contacts are Vanilla's");
         self.reset_collisions();
         for (contact, body1, body2) in contacts {
             let joint = self.world.joint_create_contact(Some(self.contact_group), contact);
@@ -791,6 +926,7 @@ impl PhysicsCore {
 
     /// The contact joints that exist now, newest first (the order of the world's joint list).
     pub fn contact_joints(&self) -> Vec<JointId> {
+        if let Some(c) = &self.csp { return c.contact_joints(); }
         let mut out = Vec::new();
         let mut j = self.world.first_joint;
         while let Some(id) = j {
@@ -836,6 +972,10 @@ impl PhysicsCore {
         if self.no_collision_counter != 0 {
             self.no_collision_counter -= 1;
             return events;
+        }
+        if let Some(c) = &mut self.csp {
+            self.current_frame = self.current_frame.wrapping_add(1);
+            return c.collision_step();
         }
         let mut collector = PairCollector::default();
         if self.current_frame & 1 != 0 {
@@ -994,6 +1134,7 @@ impl PhysicsCore {
     /// order of the world's bodies decides the order of the solver's rows: call this before
     /// the car's bodies are made. Returns the object's number.
     pub fn create_track_object(&mut self, matrix: &Mat44f, vertices: Vec<[f32; 3]>, indices: Vec<u16>) -> usize {
+        assert!(self.csp.is_none(), "CSP mode has no loose track objects yet"); // shortcut: CSP's PhysicsObject not ported; port with a track that has them
         // createRigidBody, without a place in the car's own list
         let id = self.world.body_create();
         self.world.body_set_finite_rotation_mode(id, true);

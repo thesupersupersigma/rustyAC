@@ -1087,6 +1087,10 @@ impl ReplayWorld {
     /// The contact joints of the world, newest first.
     pub fn contacts(&self) -> Vec<ContactNote> {
         let core = &self.engine.core;
+        if core.csp.is_some() {
+            // CSP drops its contact joints inside the step
+            return Vec::new();
+        }
         let car_of = |body: Option<crate::ode::BodyId>| -> i32 {
             match body {
                 None => -1,
@@ -1133,11 +1137,11 @@ impl ReplayWorld {
                 None => row.extend_from_slice(inputs[n]),
             }
             for &body in self.engine.bodies_of(n) {
-                let b = car.core.world.body(body);
-                row.extend(b.pos[..3].iter().map(|x| x.to_bits()));
+                let b = car.core.body_state(body);
+                row.extend(b.pos.iter().map(|x| x.to_bits()));
                 row.extend(b.q.iter().map(|x| x.to_bits()));
-                row.extend(b.lvel[..3].iter().map(|x| x.to_bits()));
-                row.extend(b.avel[..3].iter().map(|x| x.to_bits()));
+                row.extend(b.lvel.iter().map(|x| x.to_bits()));
+                row.extend(b.avel.iter().map(|x| x.to_bits()));
             }
             row.extend(car.damage_zone_level.iter().map(|x| x.to_bits()));
             for suspension in &car.suspensions {

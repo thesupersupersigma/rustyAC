@@ -80,6 +80,7 @@ pub struct Scene {
 
 // Embree's scene is read-only once committed; rtcIntersect1 is thread-safe
 unsafe impl Send for Scene {}
+unsafe impl Sync for Scene {}
 
 impl Scene {
     /// `+0x9223e0`: a device ("threads=1", CSP's string; `max_isa=` added to pin the ISA), quality

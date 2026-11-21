@@ -88,6 +88,8 @@ pub struct Track {
     /// them at load, and the track's hints. Worked out when it is first asked for
     /// ([`Track::ai`]), or with the track when its line is older than version 7.
     pub ai_recorder: std::sync::OnceLock<Result<ai_line::AiSplineRecorder, String>>,
+    /// Task C5i-a: the track in CSP's core, made when CSP mode first asks ([`Track::csp_core`]).
+    pub csp_core: std::sync::OnceLock<Result<Arc<crate::csp::core_track::CspCore>, String>>,
     /// The lines a recording made during the session, which replace both of the above
     /// ([`Track::ai`], [`Track::ai_line`]).
     pub live_ai: ai_line::LiveAi,
@@ -251,6 +253,11 @@ impl Track {
         Ok(messages)
     }
 
+    /// The track in CSP's core (CSP mode's physics cores start from it; its tyre rays).
+    pub fn csp_core(&self) -> Result<&Arc<crate::csp::core_track::CspCore>, String> {
+        self.csp_core.get_or_init(|| crate::csp::core_track::core(self).map(Arc::new)).as_ref().map_err(Clone::clone)
+    }
+
     /// [`Track::ai`] now, with the reason when it fails.
     pub fn init_ai(&self) -> Result<(), String> {
         self.ai();
@@ -277,6 +284,13 @@ impl Track {
 
 impl RayTrackCollisionProvider for Track {
     fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult> {
+        // CSP mode: the tyres' rays are CSP's own (its ray mesh j is the track's mesh j)
+        if crate::csp::enabled() {
+            let core = self.csp_core().unwrap_or_else(|e| panic!("CSP's track core: {e}"));
+            let hit = core.tyre_ray([org.x, org.y, org.z], [dir.x, dir.y, dir.z], length)?;
+            let (p, n) = (hit.point, hit.normal);
+            return Some(RayCastResult { surface_def: self.surfaces[hit.mesh?].surface_def, pos: Vec3f::new(p[0], p[1], p[2]), normal: Vec3f::new(n[0], n[1], n[2]) });
+        }
         let hit = self.ray_cast_hit(org, dir, length)?;
         let (p, n) = (hit.contact.pos, hit.contact.normal);
         Some(RayCastResult { surface_def: hit.surface_def, pos: Vec3f::new(p[0], p[1], p[2]), normal: Vec3f::new(n[0], n[1], n[2]) })
