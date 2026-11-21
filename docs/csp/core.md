@@ -54,7 +54,10 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5h 3. the whole world with own rays | done: `csp_core` casts the set-up's and the tyres' rays itself (Embree scene from the track's meshes, ODE ray on its own track space); 600 Spa steps of both cars and 1,600 of two F2004 touching identical with nothing taken from CSP |
 | C5h 4. Vanilla | see [below](#vanilla-c5h) |
 
-Next: part 9 (whole-car rows, `rustyac --csp` steps CSP's core).
+| C5i sizing | stopped before part 1 step 1 (rule 32): part 9 is 4-7 sessions, not 1-2 ([below](#task-c5i-sizing-the-whole-car)) |
+| C5i part 3 | done, nothing to change: the `csp` area keeps no results (CSP and the port run live on one CPU), and the port's Embree has CSP's ISA set, so both take SSE2 on the farm VM (Xeon E5620: SSE2, SSE4.2; no AVX, AVX2, AVX-512, FMA3) and AVX2 on this PC (i9-9980HK: all but AVX-512) |
+
+**Resume here:** C5i-a, part 1 step 1 (`PhysicsCore` on `csp_core`), split as [below](#task-c5i-sizing-the-whole-car).
 
 ## The core in one paragraph
 
@@ -217,8 +220,8 @@ density: same inputs through CSP's function and the port, every output compared 
 | 6 | collision: near callback, contact reduction, contact creation, the switches above; the box / trimesh colliders that changed (**done in C5f**: Spa uses box against trimesh only; libccd, car against car and the car collision callback go to part 7) | 1 used (planned 4-5) | contact joints identical per step, world on its own contacts |
 | 7 | `cphys::` wrappers stock cars use: core, rigid bodies, dynamic collider, joints of the suspensions, raycaster, dummy suspension; and what CSP's loading jobs (AI grids, AI payloads, C5b) hand to the car | 2.5-4 | body states identical after set-up and per step |
 | 8 | tyre rays: Embree linked, the default for every car (2-3); ODE ray path for `ODE_BATCH_RAYCAST=1` and the browser (1) (**done in C5h**, 1 session) | 1 used (planned 3-4) | hit points identical |
-| 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core | 1-2 | rows identical on this PC |
-| | **Total left after C5h** | **1-2** (part 9; after C5f: 7.5-11) | |
+| 9 | whole-car rows in proof area `csp`, `rustyac --csp` steps CSP's core (C5i sized it: C5i-a 2-2.5, C5i-b 1-1.5, C5i-c 1-3) | 4-7 (planned 1-2) | rows identical on this PC |
+| | **Total left after C5i's sizing** | **4-7** (part 9; after C5h: 1-2) | |
 
 Later, not counted: QuickStep (bodies with CSP's flag `0x200`; who sets it is an open question), COSMIC, car-script limp, ragdoll, repairing / pits joints, virtual surfaces,
 hash spaces (all off or unused for stock cars by default).
@@ -1032,3 +1035,40 @@ python 1/1, launcher 1/1 identical. The csp area's first run found two oracle fa
 fixed): the ray break kinds had taken the island and collision recorders' letters (`x`,
 `k`, `u`; the ray kinds are now `v` and `s`), and a script edit had turned `csp.sh`'s literal CR in
 `tr -d` into a newline (every `words` case). Rerun of the csp area: 64/64 identical (13 min), the three `core` cases on the port's own rays among them.
+
+## Task C5i: sizing the whole car
+
+C5i (part 9) was planned at 1-2 sessions. It stopped before part 1 step 1 (rule 32), because the step
+is several sessions on its own:
+
+- **Nothing in rustyAC steps `csp_core` yet.** Only `tools/csp_oracle` builds a `Core`, and it feeds
+  it from CSP's wrapper calls (`port.rs`) and from CSP's memory (`collision.rs` `port_track`: geoms,
+  hash levels, `static_step`, `aabb_limit`, the prefilter / edge bytes; `rays::ray_meshes`: the Embree
+  mesh list). `rustyac --csp` (`crates/rustyac-physics/src/csp.rs`) only changes how content is read.
+- **`PhysicsCore` needs a second backend.** `car/body.rs` wraps Vanilla's f32 `World` directly
+  (about 70 methods), and 65 more places in `rustyac-physics` reach `.world.` or `JointId`
+  (`car/replay.rs` 19, `engine/mod.rs` 12, `race/referee.rs` 11, the suspensions, the track loader).
+- **The set-up must come from rustyAC's own loaders.** The pieces are proven (`Model::build` gives
+  CSP's tree node for node, `HashSpace::build`, the box floor of `EXTEND_COLLIDER_BOXES`, the mesh
+  list's newest-first order), but nothing yet builds CSP's track (455 meshes on Spa) and car colliders
+  from the track and car files instead of copying them from CSP.
+
+Estimate, as three tasks:
+
+| Task | Work | Sessions |
+|---|---|---|
+| C5i-a | `PhysicsCore` on `csp_core` with `--csp`; CSP's track and car set-up built from rustyAC's loaders and checked against `port_track`'s copy; Embree in the Windows desktop `rustyac.exe` (release workflow, CI, licence rows) | 2-2.5 |
+| C5i-b | whole-car rows: `rustyac --csp` against `csp_oracle` per step (pose, velocities, tyres, suspension, engine, controls), F2004 and RSS 3 V6 on Spa, 600+ steps; first verdicts | 1-1.5 |
+| C5i-c | the first differences: CSP car code outside the core that is not ported (unknown size until C5i-b's rows run), the car collision callback `+0x587cc0` if a row reaches it, then v1.1.5 | 1-3 |
+
+**Part 3 (CPU answer), done.** Every `csp` case runs CSP and the port live on one machine and compares
+in that run; the area keeps no results, so there is no cache key that Embree's ISA should be part of.
+The ISA only has to go into a key when a C5i-b row keeps a recording. The port's Embree is built with
+CSP's ISA set (`crates/rustyac-ode/build.rs`: SSE2, AVX, AVX2; SSE4.2 and AVX-512 off), so on any CPU
+both pick the same kernels. Measured CPU flags (`IsProcessorFeaturePresent`, FMA3 from MSVCR120's
+`_set_FMA3_enable`):
+
+| Machine | CPU | SSE2 | SSE4.2 | AVX | AVX2 | AVX-512 | FMA3 | Embree picks |
+|---|---|---|---|---|---|---|---|---|
+| farm VM | Xeon E5620 | yes | yes | no | no | no | no | SSE2 |
+| this PC | i9-9980HK | yes | yes | yes | yes | no | yes | AVX2 |
