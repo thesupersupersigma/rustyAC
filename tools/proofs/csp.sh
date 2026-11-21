@@ -296,6 +296,8 @@ done
 # every recorded world on them: the contact joints word for word, every body and joint bit for bit.
 # C5h: the track rays too (+0x92fac0 set-up, +0x92b970 tyre): the port's own Embree scene and ODE ray,
 # CSP's Embree-ready race pinned to the port's (932900y), CSP's Embree device "threads=1" (18d4260n)
+# C5i-a: the port's track and car colliders are built by rustyAC's loaders (CSP_ORACLE_LOADER=use), each
+# also compared with CSP's own ("loader track/car" lines, 0 differ).
 for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2"; do
     set -- $cn; car=$1; n=$2
     keep "core $car $n" || continue
@@ -307,7 +309,7 @@ for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2
     steps=600; extra=
     [ $n = 2 ] && { steps=1600; brk=$brk,16bc1b0t; extra="CSP_ORACLE_GAP=5.5 CSP_ORACLE_PARK=1"; }
     # (a subshell: `oracle` is a function, `env` cannot run it)
-    if ( [ -n "$extra" ] && export $extra; CSP_ORACLE_BREAK=$brk CSP_ORACLE_ISLANDS="$(cygpath -aw "$bin")" CSP_ORACLE_PORT=1 CSP_ORACLE_BREAK_SETUP=1 oracle "core_drive_${car}_${n}" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --cars $n --workers 0 --steps $steps ) && [ -s "$bin" ]; then
+    if ( [ -n "$extra" ] && export $extra; CSP_ORACLE_LOADER=use CSP_ORACLE_BREAK=$brk CSP_ORACLE_ISLANDS="$(cygpath -aw "$bin")" CSP_ORACLE_PORT=1 CSP_ORACLE_BREAK_SETUP=1 oracle "core_drive_${car}_${n}" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$lap")" --cars $n --workers 0 --steps $steps ) && [ -s "$bin" ]; then
         "$CSP" --world "$(cygpath -aw "$bin")" > "$run" 2>&1
     else
         echo "csp_oracle failed: $(why "$drive.txt" 'error|panic|fault|exit')" > "$run"
@@ -317,12 +319,13 @@ for cn in "ks_ferrari_f2004 1" "rss_formula_rss_3_v6_2026 1" "ks_ferrari_f2004 2
     stop=$(tr -d '\r' < "$drive.txt" | grep -m1 '^port stopped')
     ttl=$(tr -d '\r' < "$drive.txt" | grep -m1 '^ttl live ')
     wld=$(tr -d '\r' < "$run" | grep -m1 '^world \|^csp_oracle failed')
-    if [ -z "$stop" ] && echo "$prt" | grep -q "^port: $((2 * steps)) world steps compared, 0 differ; answers set-up [0-9]* (0 wrong), steps [0-9]* (0 wrong)" &&
+    ldr=$(tr -d '\r' < "$drive.txt" | grep '^loader ' | paste -sd' ')
+    if [ -z "$stop" ] && echo "$ldr" | grep -q "^loader .*settings same" && ! echo "$ldr" | grep -q "[1-9][0-9]* differ" && echo "$prt" | grep -q "^port: $((2 * steps)) world steps compared, 0 differ; answers set-up [0-9]* (0 wrong), steps [0-9]* (0 wrong)" &&
         { [ $n = 1 ] || echo "$ttl" | grep -q "^ttl live [1-9][0-9]* calls 0 differ, shadow [1-9][0-9]* calls 0 differ"; } &&
         echo "$wld" | grep -q "^world $steps steps ($steps on the port's contacts), .*: 0 differ, after "; then
         verdict "core $car $n" IDENTICAL "$(echo "$prt" | sed 's/^port: //; s/; calls.*//') ${ttl:+/ $ttl }/ ${wld#world }"
     else
-        verdict "core $car $n" DIFFERENT "$stop $prt / $ttl / $wld $(why "$drive.txt" '^  world step|^  body|panic')"
+        verdict "core $car $n" DIFFERENT "$stop $ldr / $prt / $ttl / $wld $(why "$drive.txt" '^  world step|^  body|panic')"
     fi
 done
 

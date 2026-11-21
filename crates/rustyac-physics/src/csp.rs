@@ -8,6 +8,8 @@
 //! thread) and `RANDOMIZE_WHEEL_ANGLES=0` (docs/csp/port_c3.md).
 
 pub mod air;
+pub mod core_car;
+pub mod core_track;
 
 use crate::data::ini::IniReader;
 use std::path::Path;

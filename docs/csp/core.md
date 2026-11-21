@@ -1072,3 +1072,39 @@ both pick the same kernels. Measured CPU flags (`IsProcessorFeaturePresent`, FMA
 |---|---|---|---|---|---|---|---|---|
 | farm VM | Xeon E5620 | yes | yes | no | no | no | no | SSE2 |
 | this PC | i9-9980HK | yes | yes | yes | yes | no | yes | AVX2 |
+
+### C5i-a part 1: CSP's set-up from rustyAC's loaders
+
+`crates/rustyac-physics/src/csp/core_track.rs` (`build(&Track) -> CspTrack`) and `core_car.rs`
+(`build(data, game_root, car) -> CspCar`) build what `port_track`, `ray_meshes` and the car's
+collider calls used to copy out of CSP. `csp_oracle` checks them with `CSP_ORACLE_LOADER=compare`
+(compare only) or `=use` (compare, then step on the loaders' set-up instead of CSP's copy); the `core`
+proof cases run with `use` and need the "loader track" / "loader car" lines at 0 differ.
+
+What the loaders had to learn:
+- **Track.** One-triangle meshes (Spa geom 391) keep no tree data (mesh `None`, `tree_test` false).
+  The Embree list is pushed per mesh geom n-1-i, then reversed. Category 1, hash levels (2, 11),
+  `aabb_limit` 8, full box-box on, car levels (0, 5), prefilter on, edges off (switch table above).
+- **Car boxes.** The `EXTEND_COLLIDER_BOXES` floor is skipped (CSP +0x413850) when the data has
+  `script.lua`, or `colliders.ini` has `[_EXTENSION]` or a `COLLIDER*` section with `MAX_WEAR`
+  (RSS 3 V6: floor 0).
+- **Car mesh (`CLAMP_MESH_COLLIDERS`, detour +0x58e720 of `Car::initColliderMesh`).** Each vertex
+  plus `[_EXTENSION] MESH_OFFSET`, through the body matrix, y raised to the lowest box bottom
+  (`min(CENTRE.y - SIZE.y/2)`, start 1.0 or suspensions.ini `[FRONT] BASEY`), back through CSP's own
+  4x4 inverse (+0x304a40, cofactors, not DirectXMath's). Under 0.3 m between top and floor: warning,
+  car flag 0x200, mesh unchanged. The f32 round trip moves most vertices by an ulp, so the clamp
+  has to run even where no vertex is raised.
+
+Proof (F2004 and RSS 3 V6 on Spa): geoms 455/455, meshes 454/454, ray meshes 455/455, settings,
+boxes (F2004 6, RSS 1) and the mesh collider (bits, node for node) 0 differ. The C5h `core` cases on
+the loaders' set-up: F2004 600 steps (1200 world steps, set-up 17071, steps 98055, 0 wrong), RSS 600
+(85492 steps, 0 wrong), two F2004 1600 steps (3200 world steps, 512937 answers, ttl live 978 and
+shadow 7824 calls, 18078 contacts, all 0 differ).
+
+**`csp_ttl` traversal fix.** With the real collider.kn5 instead of `csp_oracle`'s 8-vertex stand-in
+box, 60 of 7824 shadow calls had the same contacts in another order. `+0x16e5900` is not stock
+OPCODE: when both of a's children are nodes and b has a leaf, b's slots are the outer loop (each b
+leaf fetched once, walked down a.pos then a.neg; b node children `collide(a.pos, ·)`,
+`collide(a.neg, ·)`). Every other case is a-major as before.
+
+**Resume here (C5i-a):** part 2, the second `PhysicsCore` backend.

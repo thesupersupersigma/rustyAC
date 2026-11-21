@@ -50,6 +50,11 @@ struct Port {
     raycasters: HashMap<usize, f32>,
     /// the first thing the port could not do; nothing more is done once set
     broken: Option<String>,
+    /// Task C5i-a `CSP_ORACLE_LOADER`: the run's car from rustyAC's loaders, the boxes seen per key,
+    /// and (boxes, boxes differing, meshes, meshes differing)
+    car: Option<rustyac_physics::csp::core_car::CspCar>,
+    car_boxes: HashMap<u32, usize>,
+    car_count: [usize; 4],
 }
 
 static PORT: Mutex<Option<Port>> = Mutex::new(None);
@@ -73,13 +78,28 @@ unsafe fn track_in(port: &mut Port, dll: usize, w: usize) {
         }
     };
     let ids: Vec<usize> = t.geoms.iter().map(|g| g.id).collect();
+    let mut rays = crate::rays::ray_meshes(dll, &ids);
+    let mut t = t;
+    if let Ok(how) = std::env::var("CSP_ORACLE_LOADER") {
+        let mut l = loader_track();
+        port.log += &loader_compare(&t, rays.as_ref().ok(), &l);
+        if how == "use" {
+            // the port's geoms named by CSP's pointers, list position for list position
+            for (g, &id) in l.geoms.iter_mut().zip(&ids) {
+                g.id = id;
+            }
+            (t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box) = (l.geoms, l.meshes, l.level, l.count, l.levels, l.cars_level, l.static_step, l.aabb_limit, l.full_box_box);
+            (t.cars_levels, t.prefilter, t.edges, t.load) = (l.cars_levels, l.prefilter, l.edges, l.load);
+            rays = Ok(l.rays);
+        }
+    }
     port.core.set_track(t.geoms, t.meshes, t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box);
     let c = &mut port.core.col;
     (c.cars_levels, c.prefilter, c.edges, c.load) = (t.cars_levels, t.prefilter, t.edges, t.load);
     let r8 = |a: usize| *((dll + a) as *const u8);
     let config = crate::rays::config();
     let embree = (std::ptr::read_unaligned((dll + 0x282_0270) as *const usize) == 0 && r8(0x280_31ff) == 1).then_some((config.as_c_str(), r8(0x280_3200) != 0));
-    match crate::rays::ray_meshes(dll, &ids) {
+    match rays {
         Ok(meshes) => {
             if let Err(e) = port.core.set_rays(&meshes, embree, r8(0x281_2c7f) != 0) {
                 port.broken = Some(format!("Embree: {e}"));
@@ -87,6 +107,79 @@ unsafe fn track_in(port: &mut Port, dll: usize, w: usize) {
         }
         Err(e) => port.broken = Some(format!("ray meshes: {}", e.0)),
     }
+}
+
+/// Task C5i-a: the run's `--track` loaded by rustyAC's own loader (CSP mode) and built as CSP's
+/// collision track (`rustyac_physics::csp::core_track`).
+fn loader_track() -> rustyac_physics::csp::core_track::CspTrack {
+    let folder = std::env::args().skip_while(|a| a != "--track").nth(1).expect("--track");
+    rustyac_physics::csp::set_enabled(true);
+    let (track, _) = rustyac_physics::track::load_track(std::path::Path::new(&folder), "").expect("rustyAC loads the track");
+    rustyac_physics::csp::core_track::build(&track)
+}
+
+/// `CSP_ORACLE_LOADER`: the loader's track against CSP's (geoms but their pointers as text,
+/// meshes and trees as bits, ray meshes, settings); one line, and the first differences.
+fn loader_compare(t: &crate::collision::PortTrack, rays: Option<&Vec<rustyac_ode::csp_core::RayMesh>>, l: &rustyac_physics::csp::core_track::CspTrack) -> String {
+    let mut out = String::new();
+    let mut bad = |what: &str, i: usize, a: String, b: String, n: &mut usize| {
+        *n += 1;
+        if *n <= 3 {
+            out += &format!("loader {what} {i}:\n  csp    {a}\n  loader {b}\n");
+        }
+    };
+    let text = |gs: &[rustyac_ode::csp_collision::Geom], i: usize| {
+        let mut g = gs[i].clone();
+        g.id = 0;
+        if let rustyac_ode::csp_collision::Shape::Mesh { mesh, .. } = &mut g.shape {
+            // the data's index printed apart (shared data shows as a repeat)
+            return format!("data {mesh:?} ") + &{ *mesh = None; crate::collision::describe(std::slice::from_ref(&g), 0, &|_| Vec::new()) };
+        }
+        crate::collision::describe(std::slice::from_ref(&g), 0, &|_| Vec::new())
+    };
+    let (mut ng, mut nm, mut nr) = (0, 0, 0);
+    for i in 0..t.geoms.len().min(l.geoms.len()) {
+        let (a, b) = (text(&t.geoms, i), text(&l.geoms, i));
+        if a != b {
+            bad("geom", i, a, b, &mut ng);
+        }
+    }
+    for i in 0..t.meshes.len().min(l.meshes.len()) {
+        let (a, b) = (&t.meshes[i], &l.meshes[i]);
+        if a.mesh != b.mesh || a.model.nodes != b.model.nodes || a.model.single_node != b.model.single_node || a.model.built != b.model.built {
+            let d = |m: &rustyac_ode::csp_collision::TrackMesh| format!("{} tris {} verts {} nodes {} single {} built", m.mesh.nb_tris, m.mesh.vertices.len(), m.model.nodes.len(), m.model.single_node, m.model.built);
+            let what = format!("verts {} idx {} nodes {}", a.mesh.vertices == b.mesh.vertices, a.mesh.indices == b.mesh.indices, a.model.nodes == b.model.nodes);
+            bad("mesh", i, d(a), d(b) + " same: " + &what, &mut nm);
+        }
+    }
+    let rays = rays.map_or(&[][..], |r| &r[..]);
+    for (i, (a, b)) in rays.iter().zip(&l.rays).enumerate() {
+        if a.geom != b.geom || a.vertices != b.vertices || a.indices != b.indices || a.two_sided != b.two_sided {
+            bad("ray mesh", i, format!("geom {} {} verts {} idx {} two-sided", a.geom, a.vertices.len(), a.indices.len(), a.two_sided), format!("geom {} {} verts {} idx {} two-sided same v {} i {}", b.geom, b.vertices.len(), b.indices.len(), b.two_sided, a.vertices == b.vertices, a.indices == b.indices), &mut nr);
+        }
+    }
+    let set = |level, count, levels, cars_level, static_step, aabb_limit, full, cars_levels, prefilter, edges, load| format!("level {level} count {count} levels {levels:?} cars {cars_level} static {static_step} aabb_limit {aabb_limit} full_box_box {full} cars_levels {cars_levels:?} prefilter {prefilter} edges {edges} load {load:?}");
+    let (sa, sb) = (set(t.level, t.count, t.levels, t.cars_level, t.static_step, t.aabb_limit, t.full_box_box, t.cars_levels, t.prefilter, t.edges, t.load), set(l.level, l.count, l.levels, l.cars_level, l.static_step, l.aabb_limit, l.full_box_box, l.cars_levels, l.prefilter, l.edges, l.load));
+    let same = sa == sb;
+    if !same {
+        out += &format!("loader settings:\n  csp    {sa}\n  loader {sb}\n");
+    }
+    format!("loader track: geoms {}/{} ({ng} differ), meshes {}/{} ({nm} differ), ray meshes {}/{} ({nr} differ), settings {}\n", t.geoms.len(), l.geoms.len(), t.meshes.len(), l.meshes.len(), rays.len(), l.rays.len(), if same { "same" } else { "differ" }) + &out
+}
+
+/// Task C5i-a: the run's `--car` from rustyAC's loaders (`CSP_ORACLE_LOADER` set; loaded once),
+/// and whether the port uses it (`=use`).
+fn loader_car(car: &mut Option<rustyac_physics::csp::core_car::CspCar>) -> Option<(&rustyac_physics::csp::core_car::CspCar, bool)> {
+    let mode = std::env::var("CSP_ORACLE_LOADER").ok()?;
+    if car.is_none() {
+        let name = std::env::args().skip_while(|a| a != "--car").nth(1).expect("--car");
+        let data = std::path::Path::new("content/cars").join(&name).join("data");
+        // the game's folder (collider.kn5) is the one `--track` is in: <root>/content/tracks/<track>
+        let track = std::env::args().skip_while(|a| a != "--track").nth(1).expect("--track");
+        let root = std::path::Path::new(&track).ancestors().nth(3).expect("--track is <root>/content/tracks/<track>").to_path_buf();
+        *car = Some(rustyac_physics::csp::core_car::build(&data, &root, &name).expect("rustyAC loads the car's colliders"));
+    }
+    car.as_ref().map(|c| (c, mode == "use"))
 }
 
 pub(crate) fn on() -> bool {
@@ -128,6 +221,9 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
         track: false,
         raycasters: HashMap::new(),
         broken: None,
+        car: None,
+        car_boxes: HashMap::new(),
+        car_count: [0; 4],
     });
     if port.broken.is_some() {
         return Expect::Nothing;
@@ -262,8 +358,26 @@ pub(crate) unsafe fn enter(context: usize, rva: usize, step: usize) -> Expect {
                 0x936db0 => out(&c.local_point_velocity(b, v3(r8))),
                 0x9378d0 => Expect::Float(c.mass(b), setup),
                 0x933cc0 => {
-                    let min_height = *((dll + 0x27f_9950) as *const f32);
-                    match c.add_box_collider(b, v3(rdx), v3(r8), r9 as u32, stack(0) as u32, stack(1) as u32, min_height, 0) {
+                    let (mut pos, mut size, mut min_height) = (v3(rdx), v3(r8), *((dll + 0x27f_9950) as *const f32));
+                    if let Some((car, use_it)) = loader_car(&mut port.car) {
+                        let key = stack(1) as u32;
+                        let i = *port.car_boxes.entry(key).and_modify(|i| *i += 1).or_insert(0);
+                        let (lp, ls) = car.boxes.get(i).map_or(([f32::NAN; 3], [f32::NAN; 3]), |d| ([d.centre.x, d.centre.y, d.centre.z], [d.size.x, d.size.y, d.size.z]));
+                        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                        port.car_count[0] += 1;
+                        if bits(&pos) != bits(&lp) || bits(&size) != bits(&ls) || min_height.to_bits() != car.min_height.to_bits() {
+                            port.car_count[1] += 1;
+                            port.log += &format!("loader box {i} key {key}:
+  csp    {pos:?} {size:?} floor {min_height}
+  loader {lp:?} {ls:?} floor {}
+", car.min_height);
+                        }
+                        if use_it {
+                            (pos, size, min_height) = (lp, ls, car.min_height);
+                        }
+                    }
+                    let c = &mut port.core;
+                    match c.add_box_collider(b, pos, size, r9 as u32, stack(0) as u32, stack(1) as u32, min_height, 0) {
                         Ok(g) => Expect::Geom(g),
                         Err(e) => {
                             port.broken = Some(format!("addBoxCollider: {}", e.0));
@@ -306,7 +420,31 @@ pub(crate) unsafe fn leave(rva: usize, rax: usize, xmm0: usize, expect: Expect) 
             // the wrapper's last mesh collider (+48 vector of 16-byte entries): its geom at +16
             let geom = r(r(r(w + 56) - 16) + 16);
             match crate::collision::port_mesh(crate::DLL_BASE.load(std::sync::atomic::Ordering::Relaxed), geom) {
-                Ok((mesh, shape)) => {
+                Ok((mut mesh, mut shape)) => {
+                    let mut m = m;
+                    if let Some((car, use_it)) = loader_car(&mut port.car) {
+                        port.car_count[2] += 1;
+                        let l = car.mesh.as_ref().expect("the loader finds the collider mesh");
+                        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                        let same_mesh = mesh.as_ref().is_some_and(|a| a.mesh == l.mesh.mesh && a.model.nodes == l.mesh.model.nodes && a.model.single_node == l.mesh.model.single_node && a.model.built == l.mesh.model.built);
+                        let (sa, sb) = (format!("{shape:?}"), format!("{:?}", l.shape));
+                        if !same_mesh || sa != sb || bits(&m) != bits(&l.matrix) {
+                            port.car_count[3] += 1;
+                            let d = |t: &rustyac_ode::csp_collision::TrackMesh| format!("{} tris {} verts {} nodes", t.mesh.nb_tris, t.mesh.vertices.len(), t.model.nodes.len());
+                            if let Some(a) = &mesh {
+                                let dv: Vec<String> = a.mesh.vertices.iter().zip(&l.mesh.mesh.vertices).enumerate().filter(|(_, (x, y))| x != y).map(|(i, (x, y))| format!("{i}: {x:?} {y:?}")).collect();
+                                port.log += &format!("loader mesh collider vertices: {} differ, indices same {}; {}
+", dv.len(), a.mesh.indices == l.mesh.mesh.indices, dv.join("; "));
+                            }
+                            port.log += &format!("loader mesh collider (same data {same_mesh}):
+  csp    {} {sa} {m:?}
+  loader {} {sb} {:?}
+", mesh.as_ref().map_or("none".into(), d), d(&l.mesh), l.matrix);
+                        }
+                        if use_it {
+                            (mesh, shape, m) = (Some(rustyac_ode::csp_collision::TrackMesh { mesh: l.mesh.mesh.clone(), model: l.mesh.model.clone() }), l.shape.clone(), l.matrix);
+                        }
+                    }
                     port.core.add_mesh_collider(b, &m, category, collide, key, mesh, shape, geom);
                 }
                 Err(e) => port.broken = Some(format!("mesh collider: {}", e.0)),
@@ -473,5 +611,7 @@ pub(crate) fn finish() -> String {
     let ignored: Vec<String> = p.ignored.iter().map(|(rva, n)| format!("{rva:x} {n}")).collect();
     let broken = p.broken.as_ref().map_or(String::new(), |b| format!("port stopped: {b}
 "));
-    broken + &format!("port: {} world steps compared, {} differ; answers set-up {} ({} wrong), steps {} ({} wrong); calls (n/wrong) {}; not ported {}\n{}", p.worlds, p.differ, p.answers[0], p.wrong[0], p.answers[1], p.wrong[1], calls.join(" "), ignored.join(" "), p.log)
+    let car = if p.car.is_some() { format!("loader car: boxes {} ({} differ), mesh colliders {} ({} differ)
+", p.car_count[0], p.car_count[1], p.car_count[2], p.car_count[3]) } else { String::new() };
+    broken + &car + &format!("port: {} world steps compared, {} differ; answers set-up {} ({} wrong), steps {} ({} wrong); calls (n/wrong) {}; not ported {}\n{}", p.worlds, p.differ, p.answers[0], p.wrong[0], p.answers[1], p.wrong[1], calls.join(" "), ignored.join(" "), p.log)
 }

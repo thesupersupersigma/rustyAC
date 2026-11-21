@@ -1528,18 +1528,30 @@ unsafe fn build_car(acs: &Acs, engine: *mut u8, car_name: &str, csp: Option<usiz
         vertices[i * 11 + 1] = if i & 2 == 0 { 0.3 } else { 0.5 };
         vertices[i * 11 + 2] = if i & 4 == 0 { -0.5 } else { 0.5 };
     }
-    let indices: Vec<u16> = vec![0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7, 0, 4, 1, 1, 4, 5, 2, 3, 6, 3, 7, 6, 0, 2, 4, 2, 6, 4, 1, 5, 3, 3, 5, 7];
+    let mut indices: Vec<u16> = vec![0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7, 0, 4, 1, 1, 4, 5, 2, 3, 6, 3, 7, 6, 0, 2, 4, 2, 6, 4, 1, 5, 3, 3, 5, 7];
+    let mut matrix: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    // Task C5i-a CSP_ORACLE_LOADER: the car's own collider.kn5 and body matrix (rustyAC's loader, as
+    // CarAvatar::initPhysics hands them over) in place of the box, so CSP builds the real mesh
+    if std::env::var_os("CSP_ORACLE_LOADER").is_some() {
+        let track = std::env::args().skip_while(|a| a != "--track").nth(1).expect("--track");
+        let root = std::path::Path::new(&track).ancestors().nth(3).expect("--track is <root>/content/tracks/<track>").to_path_buf();
+        let data = std::path::Path::new("content/cars").join(car_name).join("data");
+        let m = rustyac_physics::car::colliders::load(&data, Some(&root), car_name).expect("the car's colliders").mesh.expect("a collider.kn5");
+        vertices = m.vertices.iter().flat_map(|v| [v[0], v[1], v[2], 0., 0., 0., 0., 0., 0., 0., 0.]).collect();
+        indices = m.indices;
+        matrix = std::array::from_fn(|i| m.matrix.m[i / 4][i % 4]);
+    }
+    let (nv, ni) = (vertices.len() / 11, indices.len());
     let vp = vertices.leak().as_mut_ptr().cast::<u8>();
     put(mesh, 0x108, vp);
-    put(mesh, 0x110, vp.add(8 * 0x2c));
-    put(mesh, 0x118, vp.add(8 * 0x2c));
+    put(mesh, 0x110, vp.add(nv * 0x2c));
+    put(mesh, 0x118, vp.add(nv * 0x2c));
     let ip = indices.leak().as_mut_ptr().cast::<u8>();
     put(mesh, 0x120, ip);
-    put(mesh, 0x128, ip.add(36 * 2));
-    put(mesh, 0x130, ip.add(36 * 2));
-    let identity: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    put(mesh, 0x128, ip.add(ni * 2));
+    put(mesh, 0x130, ip.add(ni * 2));
     let init_mesh: extern "C" fn(*mut u8, *mut u8, *const [f32; 16]) = std::mem::transmute(acs.va(VA_CAR_INIT_COLLIDER_MESH));
-    init_mesh(car, mesh, &identity);
+    init_mesh(car, mesh, &matrix);
     println!("collider mesh set");
     if let Some(dll) = csp {
         *((dll + 0x26b_ad10) as *mut u8) = 0;
