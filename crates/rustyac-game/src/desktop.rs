@@ -1222,7 +1222,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let view = world[focus];
             let dt = (now - last).as_secs_f32();
             let frame = camera.update(&view, shape, view.acc_g, dt);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), online: shared.online_gui.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, dt);
             renderer.finish();
             bench_stats = renderer.frame_stats();
@@ -1240,7 +1240,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let focus = options.focus.min(world.len() - 1);
             let view = world[focus];
             let frame = camera.update(&view, shape, view.acc_g, 1.0 / 60.0);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), online: shared.online_gui.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, 1.0 / 60.0);
             let pixels = renderer.read_pixels()?;
             let (width, height) = renderer.size();
