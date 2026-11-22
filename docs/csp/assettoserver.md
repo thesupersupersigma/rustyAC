@@ -366,7 +366,203 @@ packet capture. Never a public server.
 * The `ClientSecurityPlugin` (closed source, Patreon) is not in the clone. It may matter for No Hesi.
 * `re/scratch/taskNH/` was not created: research needed no scratch files.
 
+## NH-1: the first join
+
+Task NH-1 (2026-11-22, branch `web`): rustyAC joined an unmodified AssettoServer **v0.0.55-pre49**
+(the Windows release, `ignored/AssettoServer-bin/`) on this PC with every CSP requirement switched off and
+AI traffic on. **It joined with no protocol code changed**, as §1-§3 predicted: handshake, checksums,
+welcome and the `'H'` traffic batches all went through rustyAC's Kunos-protocol client as it is.
+Two players stayed **330 s** each (the long runs below) with no kick, and the four traffic slots were
+drawn at their positions and moved. Two small HUD fixes came out of it (§NH-1.5).
+
+### NH-1.1 The server
+
+* **Runtime:** none to install. The release is self-contained (`SelfContained=true` for Release in
+  `AssettoServer/AssettoServer.csproj`). Building it from source would need the .NET 11 SDK (`net11.0`);
+  this PC has only the .NET 10 runtimes.
+* **Track: `spa`** (Kunos', no layout). The server builds its spline from AC's own `ai/fast_lane.ai`
+  (`Parsed content\tracks/spa/ai/fast_lane.ai, id range 0 - 4469`, cache made in 0.3 s), so no
+  `fast_lane.aip` is needed. Spa was the prompt's first choice and it worked.
+* **Content:** a junction `server/content/tracks/spa` into AC's Spa (read only: the server writes only
+  under its working folder: `cache/`, `cfg/`, `logs/`, `crash/`, `schemas/`), copies of `data.acd` of
+  `bmw_1m` and `ks_mazda_miata`, and AC's `system/data/surfaces.ini`. Checksums: 9 track files
+  (`system/data/surfaces.ini`, Spa's `data/surfaces.ini`, `models.ini` and its six `.kn5`) plus the car.
+* **`server_cfg.ini`:** practice 600 min, TCP/UDP 9650, HTTP 8091, `REGISTER_TO_LOBBY=0`,
+  `MAX_CLIENTS=6`, a made-up admin password. **`entry_list.ini`:** `CAR_0`/`CAR_1` `bmw_1m` `AI=none`
+  (the two player slots), `CAR_2`..`CAR_5` `ks_mazda_miata` `AI=fixed`.
+* **`extra_cfg.yml`** (the whole file):
+
+  ```yaml
+  MinimumCSPVersion: ~
+  UseSteamAuth: false
+  EnableClientMessages: false
+  EnableUdpClientMessages: false
+  EnableWeatherFx: false
+  EnableCustomUpdate: false
+  EnableUPnP: false
+  EnableLegacyPluginInterface: false
+  EnableAi: true
+  DebugWelcomeMessage: true
+  DebugClientMessages: true
+  AiParams:
+    AutoAssignTrafficCars: false
+    AiPerPlayerTargetCount: 10
+    MaxAiTargetCount: 20
+    MaxPlayerDistanceToAiSplineMeters: 30
+    PlayerAfkTimeoutSeconds: 600
+  ```
+
+  Started with `--verbose` (every ini key and packet id is logged).
+* **Localhost only, and what that took** (read in the server's source):
+  * the sockets **bind `0.0.0.0` with no setting to change it** (TCP `Network/Tcp/ACTcpServer.cs:26`,
+    UDP `Network/Udp/ACUdpServer.cs:57`, HTTP `Program.cs:260`). Windows may show its firewall prompt the
+    first time; refusing it keeps other machines out and localhost working;
+  * an **unconditional** `GET http://ip-api.com/json` at start (`Server/GeoParams/GeoParamsManager.cs:27`).
+    The run script points `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` at `127.0.0.1:9`, a dead port. The log then
+    shows "Failed to get IP geolocation parameters ... refused (127.0.0.1:9)", which proves nothing left;
+  * `cfg/data_track_params.ini` missing means a download from GitHub
+    (`Server/TrackParams/IniTrackParamsProvider.cs:27-33`), and the server **refuses to start** without
+    the track's entry ("No track params found for spa"). Our file has one `[spa]` section
+    (`NAME`, `LATITUDE`, `LONGITUDE`, `TIMEZONE=Europe/Brussels`);
+  * lobby registration: `REGISTER_TO_LOBBY=0`. UPnP is on by default only when the lobby registration is
+    on (`Server/UpnpService.cs:22-23`); set `false` anyway. Steam: `UseSteamAuth: false` keeps
+    `SteamService` out entirely (`Startup.cs:131-138`);
+  * `netstat` while running: only the three listening sockets, no outgoing connection.
+* **Weight** (Get-Process, two samples each):
+
+  | When | Working set | Private | CPU |
+  |---|---|---|---|
+  | idle, no player | 113 MB | 44 MB | 0.5-1.4 % of one core |
+  | 2 players + 8 AI cars | 117-119 MB (peak 121) | 46-47 MB | 0.2-0.9 % of one core |
+
+  Start to "Server startup completed": about 12 s, most of it hashing Spa's 421 MB `spa.kn5`. **Light**:
+  it can stay on this PC; moving it to Super's server is not needed for weight.
+
+### NH-1.2 The join
+
+`rustyac --join 127.0.0.1:9650 --car bmw_1m --no-steam --guid <made-up> --headless --autodrive`
+(the line follower drives, so the server sees a player on its spline and spawns traffic).
+
+* Server: "has connected", then "AI Slot overbooking update". rustyAC: "lets you in: slot 0, bmw_1m
+  (crimson_red) at spa, session Practice, 18 updates a second", checksums answered (one `0x44`, 161 bytes
+  = 10 MD5s: the 9 track files then the car, as §1 says), welcome read, then 0x5B names, 0x78 weather,
+  0x54 sun.
+* **Long run** (`long.sh`, the worktree's own build): two rustyAC players, 330 s each, both
+  "there at the end", **no kick**, physics paced at 333.33 Hz. Earlier runs gave the same.
+* **Traffic:** `'H'` (0x48) only, 1,630 datagrams in 90 s for one player. All four slots arrive as
+  `CarConnected` names `Traffic 2..5` and **move**: about 7 km each in 330 s, the server's 80 km/h top
+  speed. rustyAC's line follower drives into them from behind (it does not see other cars). The server logs
+  "Collision between NH1 rustyAC (0) and Traffic 4 (4), rel. speed 100km/h", so the remote cars are solid
+  in rustyAC's physics too.
+* **Drawn:** an off-screen frame (`--bench-render --bench-shot`) shows a traffic Miata in its entry-list
+  skin beside the player and others further up the road, each with a name tag.
+* **Slot jumps.** Measured from `--net-arrivals` (`jumps.py`: two states in a row more than 30 m apart):
+  * with **one player**, 3-9 jumps per slot in 90 s, although each slot holds only one AI car
+    ("Overbooking: 1"). The server takes AI cars that fall too far from the players and respawns them
+    near a player. **A slot jumps even without overbooking.** NH-5 should expect this too;
+  * with **two players**, "Overbooking: 2" (target = players x min(per-player target, slots), capped by
+    `MaxAiTargetCount`: `Server/Ai/AiBehavior.cs:452-462`), 10-24 jumps per slot in 330 s, of 40 m to
+    1.1 km. **The two viewers saw different jumps** at different times for the same slot. That is the
+    per-viewer "closest state" of §3, seen on the wire;
+  * **what rustyAC does:** a teleport. AC's rule snaps any correction of 3 m or more
+    (`NetCarStateProvider` in `net_car.rs`). No crash, no stuck car: the per-viewer sequence number
+    **carries on across a jump** (no state went back in sequence, none repeated), so AC's "newer" test
+    never rejects the state after a jump. Each slot's only "out of order" count is its first state.
+
+### NH-1.3 What the captures confirm or correct
+
+No packet capture tool is installed. rustyAC's own `--net-tape` (every message both ways) and
+`--net-arrivals` are the captures, with the server's `--verbose` log and its `DebugWelcomeMessage` dumps.
+Real AC + CSP was not run (rule 4), so the CSP-side `[interp]` points stay open (NH-2's captures).
+
+* **Confirmed, `AB 02` from `HideAiCars`** (§3 item 2): 5 TCP frames `AB 02 <slot> <0|1>` after the join,
+  `1` (invisible) for each AI slot 2-5. **Correction:** one more for the player's own slot, `AB 02 00 00`
+  (visible). rustyAC skips them as unknown messages (`Other { id: 171 }`) with no harm.
+* **Confirmed, welcome payload** (§2): the 0x51 text ends with **32 tabs**, `$CSP0:`, base64 with its `=`
+  padding cut, of a **zlib** stream (`78 9c`) that decodes to exactly the server's
+  `debug_csp_extra_options.0.ini`. With Steam auth off it holds `[EXTRA_TWEAKS] VERIFY_STEAM_API_INTEGRITY = 1`
+  and `[EXTRA_TWEAKS] MIN_TIME_BETWEEN_COLLISIONS = 2` as **two separate sections with the same name**
+  (the client's INI reader must merge them), then `[SCRIPT_10-assettoserver.lua] SCRIPT =
+  'http://{ServerIP}:{ServerHTTPPort}/api/scripts/0'`. **The script entry is there even with client
+  messages off.**
+* **Confirmed, no `csp/` track name** with `MinimumCSPVersion: ~`: the handshake reply says `spa`, and
+  the checksum list uses the plain paths. The null minimum also passed the startup check with client
+  messages off (§6 table, `[interp]` there for client messages *on*: still open).
+* **Confirmed, `'H'` batches only** for traffic, no CSP message needed to see it (§3). No `AB 01` / `AB 03`
+  UDP arrived (WeatherFX and custom updates off).
+* **Confirmed, the 500 m bubble** (§3): the other *player*, often far away, arrived in sequence steps of
+  5 (361 times in one run), which is 18 Hz / 4 Hz. Inside the bubble the steps are 1. rustyAC's summary line
+  "N out of order" is AC's QoS counter (`qos_bad_packets`: sequence gaps other than 1), **not** rejected
+  states.
+* **New, the weather name** (§5): even with `EnableWeatherFx: false`, the vanilla 0x78 carries a
+  WeatherFX-style graphics name, `3_clear_type=-1_start=1795305600` (`Server/Weather/Implementation/VanillaWeatherImplementation.cs:22-31`,
+  `WeatherFxParams.ToString`: the type, then the UTC start of the day). rustyAC kept its own default
+  `3_clear` look. What acs.exe does with that name, and what CSP reads from it, is for NH-4.
+
+### NH-1.4 The game's own client on the same tape
+
+The net area's tooling replays a tape in the game's own `ACClient` (`car_oracle net`, no CSP) beside the
+port. Here it ran on an AssettoServer tape for the first time, unchanged: `car_oracle net
+join/long2a.nettape --track spa --steps 110000`, in the four scenarios of `tools/net_gold/gold.sh`.
+Results:
+
+| Scenario | Verdict | Values compared | Outgoing messages compared |
+|---|---|---|---|
+| `net_watch` | IDENTICAL over 110,000 steps | 124,190,000 | 6,428 |
+| `net_block` | IDENTICAL over 110,000 steps | 124,190,000 | 6,429 |
+| `net_drive` | IDENTICAL over 110,000 steps | 124,190,000 | 6,430 |
+| `net_pit` | IDENTICAL over 110,000 steps | 124,190,000 | 6,428 |
+
+Five remote cars (the other player and four traffic slots), 47-63 s per scenario. The tape holds the
+slot jumps of NH-1.2, so **the port's handling of AssettoServer's traffic, jumps included, is the game's
+own**: vanilla AC teleports them the same way. CSP's handling stays the open question for NH-5. The
+tape is in scratch (not a golden in `re/gold/net`: it would add a server we don't ship to the net area's
+proofs; say so if it should).
+
+### NH-1.5 Fixed
+
+* **Name tags and tables showed "Driver N" online.** The HUD's per-car names were fixed when it was
+  built (race.ini's `DRIVER_NAME`, else `Driver <n>`). The server's names (0x5A / 0x5B, which AC applies
+  in `CarAvatar::setDriverInfo`) reached only rustyAC's debug standings. Now `GameGui::update` copies the
+  online session's names into the name tags' cars and into the tables' fixed rows. **Kunos' acServer
+  players see this too**: other drivers' name tags read "Driver N" there as well (v1.1.4).
+* **The off-screen picture (`--bench-render`) had no online state.** Its HUD info left `online` empty,
+  unlike the window's. Now both pass it, so the picture shows what the window shows.
+* Neither touches the net messages or the physics: the `net` area quick run is IDENTICAL (§NH-1.6).
+
+### NH-1.6 Checks
+
+* `net` area, `run_all.sh --quick net`: **16 cases, 16 IDENTICAL** (4 min 34 s).
+* `cargo clippy -p rustyac-game --all-targets -D warnings`: clean; `--locked` release build passes.
+* Skipped: `physics` (no shared code changed: only the game crate's HUD and its off-screen picture
+  path); `gui` (the new code runs only with an online session, which no GUI proof case has; the
+  offline HUD info is unchanged).
+
+### NH-1.7 For NH-2..5
+
+* **NH-2:** the `$CSP0:` welcome payload is decoded only by CSP. rustyAC shows the whole text, tabs and
+  base64 included (AC does the same: the tabs push it out of the visible box); two `[EXTRA_TWEAKS]`
+  sections of the same name must merge; the script entry arrives even with client messages off.
+* **NH-3:** `AB 02` is ignored. The traffic keeps its name tags (now "Traffic 2..5") and, presumably, its
+  minimap dots.
+* **NH-4:** the vanilla weather name `3_clear_type=<n>_start=<unix day>`: what acs.exe and CSP do with it.
+* **NH-5:** jumps come from respawns as well as from overbooking, at any player count; after a jump the
+  remote car's collider is also somewhere new, possibly on top of the player. The line follower drives
+  into traffic, so live tests of NH-5 want a driver that keeps behind the car ahead, or a slower
+  `--autodrive` speed.
+* AssettoServer's `MaxPlayerDistanceToAiSplineMeters` (default 7 m) and `PlayerAfkTimeoutSeconds`
+  (default 10 s) decide whether traffic spawns near a test client at all: raised here to 30 m and 600 s.
+
+### NH-1.8 How to rerun
+
+Scratch `re/scratch/taskNH1/` (git-ignored): `server/` (configs, the Spa junction: remove it with a plain
+`rmdir` of the junction, never a recursive delete), `srv.sh <s>` (the server, outbound HTTP to the dead
+proxy, refuses to start if one is already running), `join.sh <label> <s> [options]` (one headless
+rustyAC with tape and arrivals; `NAME` / `GUID` from the environment), `long.sh <label> <s>` (server +
+two players + RAM/CPU samples to `long/usage.txt`), `jumps.py <arrivals.csv>`. `bin/` holds copies of the
+exe: `re` is a junction into the main folder, so copy from the worktree by its full path, not `../`.
+
 ## Resume here
 
-Task NH is finished. Next: NH-1 (needs a local AssettoServer copy and Super's go-ahead to run it on
-localhost).
+NH-1 is finished (see §NH-1). Next: NH-2 (the CSP handshake basics), which needs a capture of real AC +
+CSP joining this server; rule 4 keeps that for Super.
