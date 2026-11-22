@@ -562,7 +562,41 @@ rustyAC with tape and arrivals; `NAME` / `GUID` from the environment), `long.sh 
 two players + RAM/CPU samples to `long/usage.txt`), `jumps.py <arrivals.csv>`. `bin/` holds copies of the
 exe: `re` is a junction into the main folder, so copy from the worktree by its full path, not `../`.
 
+## NH-2: the CSP handshake
+
+### NH-2.0 The capture kit (part 0)
+
+* **CSP in AC's install is build 4305** (`extension/config/data_manifest.ini`: `0.3.2-preview2`,
+  `SHADERS_PATCH_BUILD=4305`; its `dwrite.dll` has the same MD5 as `ignored/CSP/lights-patch-v0.3.2-preview2/`).
+  No switch is needed for the capture.
+* **Config B**, `re/scratch/taskNH2/cfg/`: NH-1's server and entry list (Spa, 2 `bmw_1m` player slots,
+  4 `ks_mazda_miata` traffic slots) with an `extra_cfg.yml` that leaves every CSP key at pre49's default
+  (`MinimumCSPVersion` 2651, client messages, UDP client messages, WeatherFX, custom updates all on).
+  Only Steam auth is off, plus UPnP off, AI on, both debug dumps on, and NH-1's `AiParams`. Started with
+  `--verbose`. The server runs from NH-1's folder (content, cache, `cfg/data_track_params.ini`) with
+  `-c`/`-e` pointing at this `cfg/`, so the debug dumps land in it (`BaseFolder` is the folder of `-c`,
+  `Server/Configuration/ConfigurationLocations.cs:24-30`). Startup log: "Using minimum required CSP
+  Version 2651", track name `csp/2651/../spa`, checksums of 8 track files under that path.
+* **Why a relay.** The server logs CSP's feature list (`ACTcpClient.cs:397`, Debug), but not the raw
+  `0x3D` (ticket field and anything after it: `HandshakeRequest.cs` reads a `u16` length only if bytes
+  are left), the `0x44` MD5s (only a failure is logged) or the bytes of any frame. No capture tool is
+  installed. So `relay.py` (Python standard library, binds 127.0.0.1 only) sits in front:
+  TCP 9650 to the server's 9652, every chunk both ways in `cap/tcp.log` (time, connection, `C>S`/`S>C`,
+  hex), and HTTP 8090 to the server's 8091, with the ports Content Manager may follow (`"tport"`,
+  `"cport"`, `"wrappedPort"`, the name's `ℹ<port>` suffix; all the same length) pointed at the relay.
+  UDP goes straight to the server's 9650; the server logs what the client sends there
+  (`DebugClientMessages`). The server checks that UDP comes from the TCP peer's IP
+  (`ACTcpClient.TryAssociateUdp`), which holds: both are 127.0.0.1.
+* **Tested with rustyAC** (no CSP features): it joined through the relay and got "Missing CSP features"
+  (`0x3D` and the refusal logged both ways); `/INFO` and `/api/details` through the relay hold no
+  9652 or 8091; after the run no port stays open.
+* **The run:** `sh re/scratch/taskNH2/srv.sh [seconds]` (default 1800). It leaves `cap/out.txt` (server
+  log), `cap/tcp.log`, `cap/http.log`, `cfg/debug_welcome.<slot>.txt` and
+  `cfg/debug_csp_extra_options.<slot>.ini`. CSP's own log is `Documents\Assetto Corsa\logs\custom_shaders_patch.log`
+  (read only, overwritten by the next AC start).
+
 ## Resume here
 
-NH-1 is finished (see §NH-1). Next: NH-2 (the CSP handshake basics), which needs a capture of real AC +
-CSP joining this server; rule 4 keeps that for Super.
+NH-2 part 0 is done (§NH-2.0): waiting for Super's capture with real AC + CSP 4305 through
+`re/scratch/taskNH2/srv.sh`. Next: part 1, read `cap/tcp.log` (the `0x3D` and `0x44` frames, `AB 03`
+both ways), `cap/out.txt`, the debug dumps and CSP's log; then part 2.
