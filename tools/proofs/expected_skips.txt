@@ -22,3 +22,8 @@ replays replay-file AC_311026-163403_O_ks_corvette_c7r_ks_nordschleife_touristen
 dumps oracle/game/conditions_spa_setup_launch.ryin | the old exe dumps nothing: its setup file (re\scratch\task15\god_tc4.ini) is gone
 # Task W3: the browser area's fallback banner case drives the montreal mod; an install without it skips the case
 browser Full mode's fallback banner (montreal) | the montreal mod is not installed: no other track names a shader the install lacks
+# Task C5i-c: the csp area's rows whose first difference (past CSP's view fields) is a known gap; any
+# earlier step or other value stays DIFFERENT. One a line: <area> <case> | first <difference> | why
+csp row ks_ferrari_f2004 lap | first car 0 step 2 world_matrix[4] | CSP's Tyre::step for stock cars (front-left load 259.70 vs 259.30 at step 2), not ported: Task C5j removes this pin
+csp row ks_ferrari_f2004 wall | first car 0 step 154 world_matrix[3] | CSP's Tyre::step for stock cars, as the lap row: Task C5j removes this pin
+csp row rss_formula_rss_3_v6_2026 lap | first car 0 step 0 air_density[0] | the oracle's CSP has Vanilla's air: it skips CSP's car-load finisher (+0xf35b50, the per-car list the air hook reads); real CSP and the port use CSP's law (Task C5i-c part 3)

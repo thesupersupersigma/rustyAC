@@ -215,10 +215,16 @@ room() {
 # skip <case> <reason>: a case that did not run, listed with its reason and counted in the tally;
 # EXPECTED instead when tools/proofs/expected_skips.txt lists it (a case the game cannot run, on purpose)
 skip() {
-    why=$(awk -F' [|] ' -v k="$area $1" '$1 == k { print $2; exit }' "$(dirname "$0")/expected_skips.txt" 2> /dev/null)
+    why=$(awk -F' [|] ' -v k="$area $1" '$1 == k && $2 !~ /^first / { print $2; exit }' "$(dirname "$0")/expected_skips.txt" 2> /dev/null)
     if [ -n "$why" ]; then echo "EXPECTED $1 | $why" | tee -a "$log"
     else echo "SKIPPED $1 | $2" | tee -a "$log"; fi
     date +%s > "$out/last_case"
+}
+# pinned <case> <first difference>: the reason tools/proofs/expected_skips.txt gives when that is the
+# case's known first difference (a line "<area> <case> | first <difference> | why", the difference up
+# to its ':'); empty for any other (an earlier step or another value is still DIFFERENT)
+pinned() {
+    awk -F' [|] ' -v k="$area $1" -v f="first ${2%%:*}" '$1 == k && $2 == f { print $3; exit }' "$(dirname "$0")/expected_skips.txt" 2> /dev/null
 }
 
 # need <path> <what>: a recording the area cannot run without

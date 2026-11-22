@@ -333,36 +333,68 @@ done
 
 # row <car> <drive>: the whole car, step by step (Task C5i-b): CSP live drives the tape (csp_oracle,
 # every car state after every step, states.bin), rustyac --csp replays the same tape on the same machine
-# (--physics-states), csp_oracle --compare-states compares every value of the two. Also counted: CSP's
-# car collision callback +0x587cc0 (not ported). The first differing value printed skips the state
-# fields only CSP's getPhysicsState hook (+0x590220) or rustyAC's view fill (the view list below)
+# (--physics-states), csp_oracle --compare-states compares every value of the two. CSP's car collision
+# callback +0x587cc0 is checked in process at every call (Task C5i-c, CSP_ORACLE_BREAK kind f: the port's
+# csp_hit on the same inputs and car fields; a call that differs is DIFFERENT). The first differing value
+# printed skips the state fields only CSP's getPhysicsState hook (+0x590220) or rustyAC's view fill (the
+# view list below). A row whose first difference is the one expected_skips.txt pins is EXPECTED (Task
+# C5i-c). The two row (Task C5i-c): car 1 parked 5.5 m behind car 0 along the spawn's tail, on rustyAC's
+# parked controls (CSP_ORACLE_PARK=last; the tape's opponent and oracle_gap)
 view='tyre_surface_def|last_ff_final|body_work_volume|time_stamp|ride_height|setup_state|gear_rpm_window|tyre_thermal_states|lock_controls_time|anti_squat|caster|ground_plane|normalized_spline_position|acc_g|wheel_angular_speed'
-for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_ferrari_f2004 wall 6667"; do
+for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_ferrari_f2004 wall 6667" "ks_ferrari_f2004 two 1600"; do
     set -- $row; car=$1; kind=$2; steps=$3
     keep "row $car $kind" || continue
     tape=$lap; [ $kind = wall ] && tape=oracle/game/collide_spa_wall_high.ryin
     [ -f "$tape" ] || { skip "row $car $kind" "no $tape"; continue; }
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     r=$out/runs/row_${car}_$kind
-    CSP_ORACLE_BREAK=587cc0 oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --steps $steps
-    # the tape for rustyac: this car, CSP mode, cut after its first $steps steps (40 bytes a step)
-    perl -0777 -pe "s/^car=.*\$/car=$car/m; s/\nend\n/\ncsp=1\nend\n/" "$tape" > "$r.ryin.full"
+    cars=1; more=; [ $kind = two ] && { cars=2; more="\\nopponent=$car:parked\\noracle_gap=-5.5"; }
+    ( [ $kind = two ] && export CSP_ORACLE_PARK=last CSP_ORACLE_GAP=-5.5
+      CSP_ORACLE_BREAK=587cc0f oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --cars $cars --steps $steps )
+    # the tape for rustyac: this car (and the parked one), CSP mode, cut after its first $steps steps (40 bytes a step)
+    perl -0777 -pe "s/^car=.*\$/car=$car/m; s/\nend\n/$more\ncsp=1\nend\n/" "$tape" > "$r.ryin.full"
     head -c $((steps * 40 + $(perl -0777 -ne 'print index($_, "\nend\n") + 5' "$r.ryin.full"))) "$r.ryin.full" > "$r.ryin"
     rustyac target/release/rustyac.exe --replay "$r.ryin" --headless --no-shm --physics-threads 0 --state-hash --physics-states "$r.port.bin" > "$r.port.txt" 2>&1
     if [ -s "$r/car_root/states.bin" ] && [ -s "$r.port.bin" ]; then
-        "$CSP" --compare-states "$r/car_root/states.bin" "$r.port.bin" 1 > "$r.cmp.txt" 2>&1
+        "$CSP" --compare-states "$r/car_root/states.bin" "$r.port.bin" $cars > "$r.cmp.txt" 2>&1
     else
         echo "csp_oracle failed: $(why "$r.txt" 'error|panic|fault|exit') / rustyac: $(why "$r.port.txt" 'error|panic|rustyac:')" > "$r.cmp.txt"
     fi
-    cb=$(grep -c ' 0x587cc0 ' "$r/car_root/breaks.txt" 2> /dev/null)
-    eq=$(tr -d '\r' < "$r.cmp.txt" | grep -m1 '^car 0: ')
-    first=$(tr -d '\r' < "$r.cmp.txt" | grep '^  step ' | grep -vE "^  step [0-9]+ ($view)\[" | head -n 1 | sed 's/^  //')
-    if echo "$eq" | grep -qE '^car 0: ([0-9]+) of \1 values equal at every step'; then
-        verdict "row $car $kind" IDENTICAL "$steps steps: ${eq#car 0: }"
+    hit=$(tr -d '\r' < "$r.txt" | grep -m1 '^car collision callback' | sed 's/^car collision callback (+0x587cc0): //')
+    eq=$(tr -d '\r' < "$r.cmp.txt" | grep '^car [0-9]*: ' | sed 's/ values equal at every step//' | paste -sd ',')
+    # the earliest first difference of any car, past the view list: "car <n> step <s> <value>: ..."
+    first=$(tr -d '\r' < "$r.cmp.txt" | grep -vE "^  step [0-9]+ ($view)\[" | awk '/^car [0-9]+:/ { c = $2; sub(":", "", c) }
+        /^  step / && !(c in f) { f[c] = $2; l[c] = $0 }
+        END { b = ""; for (k in f) if (b == "" || f[k] + 0 < f[b] + 0 || (f[k] + 0 == f[b] + 0 && k + 0 < b + 0)) b = k
+              if (b != "") { s = l[b]; sub(/^  /, "", s); print "car " b " " s } }')
+    pin=$(pinned "row $car $kind" "$first")
+    if ! echo "$hit" | grep -q " 0 differ from the port's csp_hit, 0 mass scales differ"; then
+        verdict "row $car $kind" DIFFERENT "$steps steps: the callback: ${hit:-no line (the oracle did not finish?)}"
+    elif [ -z "$first" ] && [ "$(tr -d '\r' < "$r.cmp.txt" | grep -cE '^car [0-9]+: ([0-9]+) of \1 values')" = $cars ]; then
+        verdict "row $car $kind" IDENTICAL "$steps steps: $eq; callback $hit"
+    elif [ -n "$pin" ]; then
+        verdict "row $car $kind" EXPECTED "$steps steps: $eq; first (past the view list): $first; pinned: $pin; callback $hit"
     else
-        verdict "row $car $kind" DIFFERENT "$steps steps: ${eq:-$(head -n 1 "$r.cmp.txt")}; first (past the view list): $first; +0x587cc0 called ${cb:-0} times"
+        verdict "row $car $kind" DIFFERENT "$steps steps: ${eq:-$(head -n 1 "$r.cmp.txt")}; first (past the view list): $first; callback $hit"
     fi
 done
+
+# strut: a car CSP's core cannot build yet (Task C5i-c: abarth500, a strut suspension) drives the lap's
+# first 1000 steps in CSP mode on Vanilla's physics with CSP's data, and says so
+if keep "strut abarth500"; then
+    build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
+    r=$out/runs/strut; mkdir -p "$out/runs"
+    perl -0777 -pe "s/^car=.*\$/car=abarth500/m; s/\nend\n/\ncsp=1\nend\n/" "$lap" > "$r.ryin.full"
+    head -c $((1000 * 40 + $(perl -0777 -ne 'print index($_, "\nend\n") + 5' "$r.ryin.full"))) "$r.ryin.full" > "$r.ryin"
+    rustyac target/release/rustyac.exe --replay "$r.ryin" --headless --no-shm --physics-threads 0 --state-hash > "$r.txt" 2>&1
+    said=$(tr -d '\r' < "$r.txt" | grep -m1 "^CSP: CSP physics for this car isn't ready yet: it runs with Vanilla's physics and CSP's data")
+    ran=$(tr -d '\r' < "$r.txt" | grep -m1 '^state hash .* 1000 steps')
+    if [ -n "$said" ] && [ -n "$ran" ]; then
+        verdict "strut abarth500" IDENTICAL "the message and 1000 steps: ${ran%%:*}"
+    else
+        verdict "strut abarth500" DIFFERENT "message: ${said:-none}; drive: ${ran:-$(why "$r.txt" 'error|panic|rustyac:')}"
+    fi
+fi
 
 # smoke: rustyAC's own CSP mode (Task C5i-a part 2: its cars' physics in csp_core, the tyres on CSP's rays):
 # both proof cars driven 10 s at Spa (the F2004 by the autodriver, the RSS beside it on its own), then the
