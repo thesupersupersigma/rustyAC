@@ -346,6 +346,7 @@ for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_
     keep "row $car $kind" || continue
     tape=$lap; [ $kind = wall ] && tape=oracle/game/collide_spa_wall_high.ryin
     [ -f "$tape" ] || { skip "row $car $kind" "no $tape"; continue; }
+    tape=$(drive "$tape")  # on the farm: a copy naming its own AC folder
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     r=$out/runs/row_${car}_$kind
     cars=1; more=; [ $kind = two ] && { cars=2; more="\\nopponent=$car:parked\\noracle_gap=-5.5"; }
@@ -384,7 +385,7 @@ done
 if keep "strut abarth500"; then
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     r=$out/runs/strut; mkdir -p "$out/runs"
-    perl -0777 -pe "s/^car=.*\$/car=abarth500/m; s/\nend\n/\ncsp=1\nend\n/" "$lap" > "$r.ryin.full"
+    perl -0777 -pe "s/^car=.*\$/car=abarth500/m; s/\nend\n/\ncsp=1\nend\n/" "$(drive "$lap")" > "$r.ryin.full"
     head -c $((1000 * 40 + $(perl -0777 -ne 'print index($_, "\nend\n") + 5' "$r.ryin.full"))) "$r.ryin.full" > "$r.ryin"
     rustyac target/release/rustyac.exe --replay "$r.ryin" --headless --no-shm --physics-threads 0 --state-hash > "$r.txt" 2>&1
     said=$(tr -d '\r' < "$r.txt" | grep -m1 "^CSP: CSP physics for this car isn't ready yet: it runs with Vanilla's physics and CSP's data")

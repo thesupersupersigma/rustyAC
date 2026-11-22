@@ -62,9 +62,15 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5i-b 2. rows | done: three C5i-a wiring mistakes fixed (lone car, `no_finite`, fixed joint ERP); proof cases `csp/row …` DIFFERENT, first difference CSP's tyre step (b) |
 | C5i-b 3. CI's Embree, shortcut lists | done: one Embree build per CI cache miss (`RUSTYAC_EMBREE_LIB`); strut cars and loose-object tracks listed |
 | C5i part 3 | done, nothing to change: the `csp` area keeps no results (CSP and the port run live on one CPU), and the port's Embree has CSP's ISA set, so both take SSE2 on the farm VM (Xeon E5620: SSE2, SSE4.2; no AVX, AVX2, AVX-512, FMA3) and AVX2 on this PC (i9-9980HK: all but AVX-512) |
+| C5i-c 0. the C runtime | done: Windows builds link it statically (Embree `/MT`, `+crt-static`); no VC++ redist DLL imported ([below](#task-c5i-c-the-c-runtime-csp-modes-refusals-the-car-collision-callback-two-cars)) |
+| C5i-c 1. strut cars, loose objects | refused, not ported: such a session runs Vanilla's core with CSP's data and says so; case `csp/strut abarth500` |
+| C5i-c 2. callback `+0x587cc0` | done: `csp_hit`, equal to CSP's at every call of every row (break kind `f`) |
+| C5i-c 3. Spa's track config | answered: real CSP gives an extended car CSP's air (the port is right); the oracle skips CSP's car-load finisher, RSS 3 row pinned EXPECTED |
+| C5i-c 4. two cars | done: `oracle_gap`, row `csp/row ks_ferrari_f2004 two`; car 1 differs from step 1 (also in Vanilla), DIFFERENT |
 
-**Resume here:** C5i-c: CSP's tyre step for stock cars (the first difference of every row), the callback
-`+0x587cc0`, the two-car row on the port, then v1.1.5 ([C5i-b](#task-c5i-b-the-whole-car-against-csp)).
+**Resume here:** C5j: CSP's tyre step for stock cars (the first difference of the F2004 rows, pinned
+EXPECTED until then), the parked second car's step-1 difference (two row), then v1.1.5
+([C5i-c](#task-c5i-c-the-c-runtime-csp-modes-refusals-the-car-collision-callback-two-cars)).
 
 ## The core in one paragraph
 
@@ -1290,8 +1296,8 @@ first difference is a tyre force at physics step 2.
   and `ci.yml` points it at `$GITHUB_WORKSPACE/target/embree-3.13.4-mt`: the workspace builds it, and
   `csp_oracle` and `web_pack` find it there. A cache miss builds it once instead of three times. The
   release stays one uncached build.
-- **CSP mode's shortcuts on the installed content** (no drive; C5i-c decides port or refusal; today
-  both are silent or an assert, which must not reach players):
+- **CSP mode's shortcuts on the installed content** (no drive; C5i-c refused both: such a session runs
+  Vanilla's core with CSP's data and says so, [C5i-c part 1](#part-1-strut-cars-and-loose-track-objects-refused-not-ported)):
   - **Strut suspension asserts** (`PhysicsCore::create_slider_joint` / `create_ball_joint`, "CSP mode has
     no slider joint yet"): `acd_check --strut` lists 55 of the 207 installed cars: abarth500,
     abarth500_s1, alfa_romeo_giulietta_qv(_le), bmw_1m(_s3), bmw_m3_e30 (+ _drift, _dtm, _gra, _s1),
@@ -1321,3 +1327,166 @@ identical but the 3 rows and browser's flags.md check, which failed only because
 ## `); LF again, `usage_and_docs` passes.
 
 **Resume here (C5i-b):** see the table at the top.
+
+## Task C5i-c: the C runtime, CSP mode's refusals, the car collision callback, two cars
+
+### Part 0: one C runtime inside the exe (the release blocker)
+
+Since C5i-a linked Embree, `rustyac.exe` and `csp_oracle.exe` needed the Visual C++ redistributable
+(`MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and seven `api-ms-win-crt-*` sets), which the
+farm VM (like many players' PCs) doesn't have. Now every Windows MSVC build links the C runtime
+statically: `.cargo/config.toml` gives `x86_64-pc-windows-msvc` `-C target-feature=+crt-static` (so CI
+and the release get it too, and every tool under `tools/`), and `crates/rustyac-ode/build.rs` builds
+Embree with `/MT` into `<target>/embree-3.13.4-mt` (the release flags on the CMake line:
+`CMAKE_MSVC_RUNTIME_LIBRARY` left Embree on `/MD` under CMake 4.4). build.rs stops with a message when the
+build has no `+crt-static` (a `RUSTFLAGS` in the environment replaces the config file's), as a mixed
+link fails with 8 unresolved `__imp_*` CRT symbols.
+
+| exe | imports before | after |
+|---|---|---|
+| rustyac.exe | MSVCP140, VCRUNTIME140, VCRUNTIME140_1, api-ms-win-crt-{convert,heap,locale,math,runtime,stdio,string} + system DLLs | system DLLs only (ADVAPI32, KERNEL32, WS2_32, bcrypt, d3d11, d3dcompiler_47, dinput8, dwrite, gdi32, ole32, oleaut32, user32, winmm, xinput1_4, ...) |
+| csp_oracle.exe | the same runtime DLLs + ADVAPI32, KERNEL32, ntdll, ole32, bcryptprimitives | ADVAPI32, KERNEL32, ntdll, ole32, bcryptprimitives, synch |
+
+Why static and not shipping the redistributable's DLLs: nothing shares C runtime state with another
+module. Rust's allocator is `HeapAlloc` (no `malloc` handed across), the game-side maths that must match
+the game go through `msvcr120.dll` loaded at run time (`rustyac-math`), and FMOD, `python33.dll` and CSP's
+`dwrite.dll` keep their own runtimes. The maths rustyAC itself takes from the UCRT (`f32::sin`, `powf`, ...
+in code that isn't held against the game) now comes from the SDK's static `libucrt` instead of the
+machine's `ucrtbase.dll`: same source, and the proofs below (the areas that start `rustyac.exe`) say
+whether a bit moved.
+
+On the farm VM (no VC++ redistributable), `run_all.sh --quick --farm dumps launcher fresh sound replays
+gui csp` (the areas that failed there with the runtime DLLs missing), 1 h 23 min:
+
+| area | cases | identical | different | errors | before (missing DLLs) |
+|---|---|---|---|---|---|
+| dumps | 6 | 6 | 0 | 0 | every case ERROR |
+| launcher | 1 | 1 | 0 | 0 | every case ERROR |
+| fresh | 63 | 63 | 0 | 0 | DIFFERENTs |
+| sound | 4 | 4 | 0 | 0 | DIFFERENTs |
+| replays | 6 | 6 | 0 | 0 | DIFFERENTs |
+| gui | 28 | 28 | 0 | 0 | `hud_cars_simple` DIFFERENT |
+| csp | 69 | 61 | 8 | 0 | 47 ERRORs |
+
+- The quick fresh subset's t18 game-replay cases (`t18_magione__ks_ferrari_f2004` lap and kerb strike)
+  run and are identical on the VM; whether all 74 t18 cases are back needs a full run (not run here).
+  `hud_cars_simple` isn't in the quick gui subset, so whether its frame-0 difference had the same cause
+  is open for the next full run.
+- csp's 8 differences on the VM: the 4 rows and the strut case named the PC's AC folder (Spa from the
+  tape), which the VM doesn't have; csp.sh now passes them through lib.sh's `drive` (a copy naming the
+  VM's AC folder), not proven on the VM yet. The 3 `core <car> <n>` cases are a VM difference, not the
+  runtime: CSP itself runs to the end there, but its world hash differs from the PC's (`4509fe7bf7076e59`
+  against `f363a77722849402`) and the port's loader answered no set-up call ("answers set-up 0"); the
+  VM's CPU (Xeon E5620, no AVX) takes other paths in CSP (its Embree switch, ISA dispatch). The csp area
+  keeps no results and was only ever proven on the PC; running it on the farm is new.
+
+### Part 1: strut cars and loose track objects: refused, not ported
+
+Sizes: CSP's strut is its own `SuspensionStrut` hooks (constructor, extra links, `setDamage`, step with
+the damper marker and hash block, FIX_STRUT_FFB's steer basis: 9,210 bytes of pseudo-C,
+[physics_tyres_suspension.md](physics_tyres_suspension.md)) plus a double slider joint the f64 core lacks;
+loose objects are the `PhysicsObject` constructor hook (39,244 bytes: collider optimisation, a Barcelona
+special case), `setWorldMatrix`, the pose sync `+0x68b330` and `CUSTOM_POBJECTS_MOTION`
+([physics_car_core.md](physics_car_core.md)). Neither is small, so CSP mode refuses them:
+
+- `rustyac_physics::csp::choose_core` (called by `GameSim::build` before anything is built, with the
+  player's and the opponents' data folders and the track) keeps the session off CSP's core when a car has
+  a STRUT suspension (front or rear) or a collider box with a zero side (`CspCore::add_box_collider`
+  refuses it), or the track has loose objects (the desktop game builds them, `track_objects`), or the
+  track doesn't build in CSP's core. The session then runs as `--csp` did before C5i-a: Vanilla's core
+  with CSP's data (`csp::enabled()` still true; `csp::core()` false).
+- What the player sees: the game's message banner, title "Custom Shaders Patch", "CSP physics for this
+  car isn't ready yet: it runs with Vanilla's physics and CSP's data (<why>)" (`track` for a track), and
+  the same line in the log (stderr, `CSP: ...`). The web build has no banner (log only).
+- The asserts behind it stay (`create_slider_joint`, `create_ball_joint`, `create_track_object` in CSP
+  mode) but no car or track reaches them now.
+- The rest of CSP mode's panics, checked: the load-time ones (zero-side box, track core build) are
+  `choose_core`'s too. Left: mid-step `Unhandled` collisions in `csp_collision.rs` (a trimesh tree kind,
+  a pair other than box/trimesh, a reduction keeping no contact, container/space shapes), "a track geom
+  moved" (`csp_core.rs`) and Embree ray errors: none was ever hit by a row, a car or a track can't be
+  told from them before the drive, so they are in Not done.
+- Note: with `track_objects` on (the desktop game) Spa and 36 other layouts run Vanilla's core in CSP
+  mode; the rows and the oracle-made tapes have no loose objects.
+
+Proof: `csp/strut abarth500` (the lap's first 1000 steps, CSP mode, abarth500): the line is printed, the
+drive runs to the end (state hash 269aaa221602dd2d), no panic.
+
+### Part 2: CSP's car collision callback `+0x587cc0`, ported
+
+`chassis.rs` `csp_hit` (pure: inputs and the car fields it writes) and `RollingChassis::on_csp_collision`
+(what CSP then does with the answer) replace `Car::onCollisionCallBack` in CSP mode. The branch is
+general.ini `ALT_COLLISIONS_HANDLING=1` (this install's and CSP's default): CSP's own closing speed from
+the contact's point velocities (double, `csp_core` `point_vel`), the other body's mass over the car's
+(at most 1), damage zones from the car's box (front, back, +x, -x by the side the point is furthest out
+of), suspension damage at most once in 0.1 s, sleeping frames, last collision times, the engine blow-up.
+A ground shape (group 1 or 0x10) changes no damage. Shortcuts: only the ALT branch; online CSP's sleeping
+car rule (`[ONLINE] CUSTOM_MOTION`) is not there.
+
+Proof, in process: csp_oracle break kind `f` (`CSP_ORACLE_BREAK=587cc0f`) stops at every call of CSP's
+callback, reads its inputs and the car's fields, calls the port's `csp_hit` on the same, lets CSP run, and
+compares every field CSP wrote, as bits. Every row:
+
+| row | calls | ground | damaging | setDamage | differ |
+|---|---|---|---|---|---|
+| F2004 lap 4000 | 26 | 26 | 0 | 0 | 0 |
+| RSS 3 lap 4000 | 621 | 621 | 0 | 0 | 0 |
+| F2004 wall 6667 | 3977 | 3977 | 0 | 0 | 0 |
+| two F2004 1600 | 1917 | 443 | 1474 | 590 | 0 |
+
+The rows' first differences didn't move (the callback writes nothing the tyre step's first difference
+depends on): the wall row's is still step 154.
+
+### Part 3: does real CSP give Spa a track config? Yes; the port's air is right
+
+This install has `extension/config/tracks/loaded/spa.ini` (visual), and CSP's extended air doesn't hang
+on it anyway: CSP's air density hook (`+0x588850`) takes the car's CSP record from the per-car list at
+`dwrite+0x28213f0` (or the loading object's +0xe0 while a car loads), and only with a record whose
++0x228 is set uses CSP's law. The list is filled by CSP's car-load finisher (`+0xf35b50`), which runs
+in the game for every car and which the oracle never calls (it builds cars through the game's own
+constructor, not the loader). So in the game an extended car (RSS 3) at Spa gets CSP's law (1.1128 at
+Spa's start), the port's value; the oracle's CSP keeps Vanilla's 1.1856. Pushing the record into the
+list by hand crashed the oracle's step (the finisher's other set-up is missing), so the oracle side stays
+as it is: the RSS 3 row's first difference is pinned EXPECTED with that reason
+(`tools/proofs/expected_skips.txt`), and C5j or a later oracle task that runs the finisher removes it.
+
+### Part 4: two cars
+
+`--physics-states` now writes each car's GUID (the views come in GUID order). A tape can place the oracle
+cars: `oracle_gap=<m>` (the opponents at the spawn plus n×gap along the spawn's tail, as csp_oracle's
+`CSP_ORACLE_GAP`), and an oracle set-up's opponents are built into the engine (`TrackRun::build_in`;
+before, they weren't, and the engine's step asserted). csp_oracle `CSP_ORACLE_PARK=last` parks the last
+car on rustyAC's parked driver's controls (brake and clutch 1, the rest 0), so car 0 drives the tape as
+rustyAC's player does. Row `csp/row ks_ferrari_f2004 two 1600`: car 0 drives the lap tape, car 1 stands
+5.5 m ahead of it (`oracle_gap=-5.5` along the tail) and car 0 drives into it (1474 damaging callback
+calls).
+
+| row | steps | verdict | first difference past the view list (pinned) |
+|---|---|---|---|
+| F2004 lap | 4000 | EXPECTED (644 of 1106 equal) | car 0 step 2 world_matrix[4] 2.0008296e-5 vs 2.005232e-5: CSP's stock tyre step (C5j) |
+| RSS 3 lap | 4000 | EXPECTED (610 of 1106) | car 0 step 0 air_density 1.1855999 vs 1.1127756: the oracle's air (part 3) |
+| F2004 wall | 6667 | EXPECTED (621 of 1106) | car 0 step 154 world_matrix[3] -0.5623173 vs -0.56231904: CSP's stock tyre step (C5j) |
+| two F2004 | 1600 | DIFFERENT (car 0 687, car 1 698 of 1106) | car 1 step 1 world_matrix[3] -0.98705477 vs -0.98706245 (not pinned); car 0's is the lap row's, step 2 world_matrix[4] |
+| strut abarth500 | 1000 | IDENTICAL | the message, and the drive runs to its end |
+
+Car 1's first difference is at step 1 (world matrix; body velocity 0.608 vs 0.373 m/s, wheel speeds
+different, no tyre load different): the parked car is not the same from its first step. It is not CSP's: the same
+row with Vanilla on both sides (csp_oracle `--vanilla`, the tape without `csp=1`) has car 1's first
+difference at step 1 too, so it is the second car's set-up (its spawn drop, its controls or its aids
+against the oracle's), not found in this task (rule 32). Not pinned: it stays DIFFERENT.
+
+### Pinned first differences (EXPECTED)
+
+`lib.sh` `pinned`: a line `<area> <case> | first <difference> | why` in `expected_skips.txt` makes a row
+EXPECTED only while its first difference (past the view list: car, step and value) is that one; an
+earlier step or another value is DIFFERENT again. The F2004 lap and wall rows pin CSP's stock-car tyre
+step (C5j removes both), the RSS 3 row the oracle's air (above).
+
+### Vanilla
+
+Vanilla's code paths are unchanged (CSP mode only: `csp::core()` is false without `--csp`, the callback
+runs only on CSP's core's contacts, `oracle_gap` only in an oracle tape). On the PC, `run_all.sh --quick`:
+every area identical (physics 9, fresh 63, sound 4, render 18, gui 29, python 1, replays 6, net 16,
+browser 18, ai_page 10, shaders 4, launcher 1, dumps 6) but csp (66 identical, 3 EXPECTED rows, the two
+row DIFFERENT); `run_all.sh csp physics`: csp the same, physics 121 of 121.
+
+**Resume here (C5i-c):** see the table at the top.
