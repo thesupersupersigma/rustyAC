@@ -285,7 +285,7 @@ impl Track {
 impl RayTrackCollisionProvider for Track {
     fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult> {
         // CSP mode: the tyres' rays are CSP's own (its ray mesh j is the track's mesh j)
-        if crate::csp::enabled() {
+        if crate::csp::core() {
             let core = self.csp_core().unwrap_or_else(|e| panic!("CSP's track core: {e}"));
             let hit = core.tyre_ray([org.x, org.y, org.z], [dir.x, dir.y, dir.z], length)?;
             let (p, n) = (hit.point, hit.normal);

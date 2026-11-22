@@ -1402,6 +1402,11 @@ impl GameSim {
             add_remote_cars(session, engine, track.as_ref(), 1 + opponents.len())?;
             session.net.client.set_cars_in_session(1 + session.remote.len());
             session.start_results(track.as_ref().map_or(0, |t| t.sectors_normalized_positions.len()));
+        // Task C5i-c: CSP's core, or Vanilla's for a car or a track it cannot build yet
+        let opponent_data = setup.opponents.iter().map(|o| find_car_data(&o.car)).collect::<Result<Vec<_>, _>>()?;
+        let cars: Vec<&Path> = std::iter::once(data_path.as_path()).chain(opponent_data.iter().map(PathBuf::as_path)).collect();
+        let with_objects = setup.track_objects || setup.oracle.as_ref().and_then(|o| o.track.as_ref()).is_some_and(|t| t.objects);
+        rustyac_physics::csp::choose_core(&cars, track.as_deref(), with_objects);
             // the session has run for a while already: its start on this machine's clock
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;

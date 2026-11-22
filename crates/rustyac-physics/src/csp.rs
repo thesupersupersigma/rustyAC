@@ -28,6 +28,50 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+static CORE_REFUSED: AtomicBool = AtomicBool::new(false);
+static REFUSALS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Does this session's physics run in CSP's own core (CSP mode, and no car or track that
+/// [`choose_core`] turned away)?
+pub fn core() -> bool {
+    enabled() && !CORE_REFUSED.load(Ordering::Relaxed)
+}
+
+/// Task C5i-c: before anything is built, CSP's core for the session unless a car of `cars` (their
+/// data folders) has a strut suspension, or the track has loose objects (counted `with_objects`) or
+/// does not build in CSP's core: those are not ported (docs/csp/core.md C5i-c), and the session
+/// then runs on Vanilla's core with CSP's data, as `--csp` did before C5i-a, said once on the
+/// screen ([`take_refusals`]) and in the log.
+pub fn choose_core(cars: &[&Path], track: Option<&crate::track::Track>, with_objects: bool) {
+    let unported = |car: &Path| {
+        let strut = IniReader::load(&car.join("suspensions.ini")).is_ok_and(|ini| ["FRONT", "REAR"].iter().any(|s| ini.get_string(s, "TYPE") == "STRUT"));
+        // (CSP's core refuses a box with a zero side: `CspCore::add_box_collider`)
+        let flat = crate::car::colliders::load_boxes(car).is_ok_and(|boxes| boxes.iter().any(|b| b.size.x == 0.0 || b.size.z == 0.0));
+        (strut || flat).then(|| format!("{} has {}", car.display(), if strut { "a strut suspension" } else { "a collider box with a zero side" }))
+    };
+    let objects = track.filter(|_| with_objects).map_or(0, |t| t.objects.len());
+    let not_ready = |what: &str, why: String| Some(format!("CSP physics for this {what} isn't ready yet: it runs with Vanilla's physics and CSP's data ({why})"));
+    let refusal = if let Some(why) = cars.iter().find_map(|car| unported(car)) {
+        not_ready("car", why)
+    } else if objects > 0 {
+        not_ready("track", format!("the track has {objects} loose objects"))
+    } else if let Some(Err(e)) = track.filter(|_| enabled()).map(|t| t.csp_core()) {
+        not_ready("track", e)
+    } else {
+        None
+    };
+    CORE_REFUSED.store(refusal.is_some(), Ordering::Relaxed);
+    if let Some(message) = refusal.filter(|_| enabled()) {
+        eprintln!("CSP: {message}");
+        REFUSALS.lock().unwrap().push(message);
+    }
+}
+
+/// The [`choose_core`] refusals not shown yet, for the game's banner.
+pub fn take_refusals() -> Vec<String> {
+    std::mem::take(&mut *REFUSALS.lock().unwrap())
+}
+
 /// CSP's integer parser (`dwrite+0x15d58e0`): `0x` / `0X` hex (no digits = 0), else an optional `-`
 /// and decimal digits up to the first other character, wrapping; no digits = `default`.
 pub fn parse_int(text: &str, default: i64) -> i64 {

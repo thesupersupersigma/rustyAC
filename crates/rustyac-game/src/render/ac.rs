@@ -1927,6 +1927,10 @@ FILTER=default
             for msg in rustyac_render::yebis_cb::take_refusals() {
                 gui.add_message("Post-processing filter", msg.trim_start_matches("yebis: "));
             }
+            // Task C5i-c: a session CSP's core turned away (the log has it too)
+            for msg in rustyac_physics::csp::take_refusals() {
+                gui.add_message("Custom Shaders Patch", &msg);
+            }
         }
         if self.gui.as_mut().is_some_and(|gui| gui.pre_gui()) {
             // (F8's picture: the page reads none back, the browser takes screenshots)

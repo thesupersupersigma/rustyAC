@@ -362,8 +362,9 @@ impl PhysicsEngine {
     /// while it loads the track, before any car). Call it before the first car is built.
     pub fn set_track(&mut self, track: Arc<Track>, with_objects: bool) {
         assert!(self.parts.is_empty(), "the track comes before the cars");
-        if crate::csp::enabled() {
-            // CSP mode: the cars' physics in CSP's core, the track in it
+        if crate::csp::core() {
+            // CSP mode: the cars' physics in CSP's core, the track in it (`csp::choose_core`
+            // turned away a track with loose objects)
             self.core.use_csp(&track).unwrap_or_else(|e| panic!("CSP's core: {e}"));
         } else if with_objects {
             self.create_track_objects(&track.objects);

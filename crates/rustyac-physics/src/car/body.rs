@@ -624,7 +624,7 @@ impl PhysicsCore {
     /// along `axis` (world), which is normalised first (left as it is when its length is 0).
     #[allow(clippy::double_comparisons)]
     pub fn create_slider_joint(&mut self, body1: RigidBody, body2: RigidBody, axis: &Vec3f) -> JointId {
-        assert!(self.csp.is_none(), "CSP mode has no slider joint yet (a strut suspension)"); // shortcut: CSP's slider wrapper is not ported; port it with a strut car's rows
+        assert!(self.csp.is_none(), "CSP mode has no slider joint yet (a strut suspension)"); // shortcut: CSP's slider wrapper is not ported (csp::choose_core keeps a strut car off CSP's core); port it with a strut car's rows
         let id = self.world.joint_create_slider();
         self.world.joint_attach(id, Some(body1.id), Some(body2.id));
         let (mut x, mut y, mut z) = (axis.x, axis.y, axis.z);
@@ -1134,7 +1134,7 @@ impl PhysicsCore {
     /// order of the world's bodies decides the order of the solver's rows: call this before
     /// the car's bodies are made. Returns the object's number.
     pub fn create_track_object(&mut self, matrix: &Mat44f, vertices: Vec<[f32; 3]>, indices: Vec<u16>) -> usize {
-        assert!(self.csp.is_none(), "CSP mode has no loose track objects yet"); // shortcut: CSP's PhysicsObject not ported; port with a track that has them
+        assert!(self.csp.is_none(), "CSP mode has no loose track objects yet"); // shortcut: CSP's PhysicsObject not ported (csp::choose_core keeps such a track off CSP's core); port with a track that has them
         // createRigidBody, without a place in the car's own list
         let id = self.world.body_create();
         self.world.body_set_finite_rotation_mode(id, true);

@@ -988,7 +988,7 @@ impl RollingChassis {
         objects: &[crate::track::TrackObjectDef],
     ) -> Result<RollingChassis, String> {
         let mut core = PhysicsCore::new();
-        match ground.track().filter(|_| crate::csp::enabled()) {
+        match ground.track().filter(|_| crate::csp::core()) {
             // Task C5i-b: a car alone (no engine; the oracle runner's too) on CSP's core in CSP
             // mode, as `PhysicsEngine::set_track` does for several (no loose objects there either)
             Some(track) => core.use_csp(track)?,
