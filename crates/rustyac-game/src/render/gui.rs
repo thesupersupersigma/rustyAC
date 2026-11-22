@@ -659,6 +659,15 @@ impl GameGui {
         }
         // an online session's overlays; the countdown of a driver who was put out
         self.online = info.online.clone();
+        // the server names the drivers (CarAvatar::setDriverInfo): name tags and tables follow
+        for (_, index, name) in self.online.iter().flat_map(|online| &online.net_cars).filter(|car| !car.2.is_empty()) {
+            if let Some(car) = input.cars.get_mut(*index as usize) {
+                car.driver_name.clone_from(name);
+            }
+            if let Some(car) = self.race_static.get_mut(*index as usize) {
+                car.driver_name.clone_from(name);
+            }
+        }
         if self.online.as_ref().is_some_and(|online| online.disconnect.is_some()) {
             self.disconnect_time += dt;
         }
