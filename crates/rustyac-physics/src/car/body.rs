@@ -720,6 +720,18 @@ pub struct CollisionEvent {
     pub normal: Vec3f,
     pub pos: Vec3f,
     pub depth: f32,
+    /// CSP's core only: what its contact maker hands CSP's car callback beside the contact.
+    pub csp: Option<CspContact>,
+}
+
+/// What CSP's contact maker (dwrite+0x92c9f0) works out for its car callback (+0x587cc0): the
+/// closing speed `|(v1 - v2) . n|` of the two bodies at the point (m/s, `dBodyGetPointVel` in
+/// doubles) and the masses of the two bodies (0 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CspContact {
+    pub speed: f32,
+    pub mass_a: f32,
+    pub mass_b: f32,
 }
 
 /// One contact as `dCollide` returned it, with what `PhysicsCore::onCollision` did with it
@@ -1082,6 +1094,7 @@ impl PhysicsCore {
                 normal: Vec3f::new(c.normal[0], c.normal[1], c.normal[2]),
                 pos: Vec3f::new(c.pos[0], c.pos[1], c.pos[2]),
                 depth: c.depth,
+                csp: None,
             });
         }
     }

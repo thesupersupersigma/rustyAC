@@ -71,7 +71,7 @@ pub mod vanilla_car;
 pub use aero::{AeroBase, AeroModel, Drs, DynamicWingController, SlipStream, VanillaAero, Wing};
 pub use aids::{Abs, AidsBase, AidsModel, Edl, SpeedLimiter, StabilityControl, TractionControl, VanillaAids};
 pub use antiroll_bar::AntirollBar;
-pub use body::{CollisionEvent, ContactRecord, DistanceJoint, FixedJoint, ForceSource, PhysicsCore, RigidBody, Shape, TapeCall};
+pub use body::{CollisionEvent, ContactRecord, CspContact, DistanceJoint, FixedJoint, ForceSource, PhysicsCore, RigidBody, Shape, TapeCall};
 pub use colliders::{BoxColliderDef, CarBounds, CarColliders, ColliderMesh};
 pub use brakes::{BrakeBase, BrakeModel, VanillaBrakes};
 pub use chassis::{ChassisEnvironment, CockpitState, PenaltyManager, RollingChassis, SteeringSystem, StepTrace, ThermalObject};

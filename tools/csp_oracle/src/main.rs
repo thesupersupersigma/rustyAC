@@ -34,6 +34,7 @@ mod btl;
 mod collision;
 mod island;
 mod joints;
+mod hit;
 mod ode;
 mod reduce;
 mod solver;
@@ -971,7 +972,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1027,6 +1028,14 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
             wrappers::enter(context, at - DLL_BASE.load(Ordering::Relaxed), step, GetCurrentThreadId());
         } else {
             wrappers::leave(context, step, GetCurrentThreadId());
+        }
+    } else if dump == 'f' {
+        // Task C5i-c: the car collision callback against the port's csp_hit
+        if step != usize::MAX {
+            if let Some(ret) = hit::hit(at, DLL_BASE.load(Ordering::Relaxed), context) {
+                arm_return(ret, 'f');
+                hit::damage_fns().into_iter().for_each(|f| arm_return(f, 'f'));
+            }
         }
     } else if dump == 'n' {
         // Task C5h: rtcNewDevice's config, with CSP_ORACLE_ISA's max_isa=
@@ -1383,6 +1392,17 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
         *((dll + 0x282_0268) as *mut *mut u8) = track_avatar;
     }
     let cars: Vec<*mut u8> = (0..count).map(|guid| build_car(acs, engine, car_name, csp, guid as u32)).collect();
+    if let Some(dll) = csp {
+        // the car collision hook's damage zones read a box in CSP's car config (slot +0x440):
+        // the minimum at +0x90, the maximum at +0x9c, as Car::bounds (+0x3c80) has them
+        // shortcut: CSP fills the box in set-up code not found yet, so the oracle copies the car's
+        // own bounds and the port reads its own; upgrade when CSP's source of the box is found
+        let state = *((dll + 0x282_13d8) as *const *mut u8);
+        for (guid, &car) in cars.iter().enumerate() {
+            let config = read::<*mut u8>(read::<usize>(state as usize + 8 * guid) + 0x440);
+            std::ptr::copy_nonoverlapping(car.add(0x3c80), config.add(0x90), 24);
+        }
+    }
 
     // the loaded car's memory, word by word, for run-to-run and Vanilla-to-CSP compares; a word that
     // reads as a readable address is a pointer (heap addresses move between runs) and is written as "ptr"
@@ -1874,7 +1894,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     }
     BREAK_STEP.store(usize::MAX, Ordering::Relaxed);
     island::save();
-    let btl = btl::finish() + &btl::ttl_finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish() + &port::finish() + &rays::finish();
+    let btl = btl::finish() + &btl::ttl_finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish() + &port::finish() + &rays::finish() + &hit::finish();
     print!("{btl}");
     BREAK_LOG.lock().unwrap().push_str(&btl);
     if !BREAKS.lock().unwrap().is_empty() {

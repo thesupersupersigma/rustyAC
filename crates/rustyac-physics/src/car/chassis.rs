@@ -14,7 +14,7 @@ use std::sync::Arc;
 use super::aero::{AeroModel, SlipStream, VanillaAero};
 use super::aids::{AidsModel, VanillaAids};
 use super::antiroll_bar::AntirollBar;
-use super::body::{CollisionEvent, FixedJoint, ForceSource, PhysicsCore, RigidBody, Shape};
+use super::body::{CollisionEvent, CspContact, FixedJoint, ForceSource, PhysicsCore, RigidBody, Shape};
 use super::colliders::{CarBounds, CarColliders, ColliderMesh};
 use super::brakes::{BrakeModel, VanillaBrakes};
 use super::drivetrain::{DrivetrainModel, OnGearRequestEvent, VanillaDrivetrain};
@@ -3026,6 +3026,102 @@ pub struct OnCollisionEvent {
     pub collider_group: u32,
 }
 
+/// What CSP's car collision callback (dwrite+0x587cc0) reads, besides [`CspHitFields`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CspHitInput {
+    /// The contact maker's closing speed (m/s) and its mass scale: the other body's mass over
+    /// this car's, at most 1 (1 with no other body).
+    pub speed: f32,
+    pub scale: f32,
+    /// The other geom's group (0 for a box).
+    pub group: u32,
+    /// The other geom has a body.
+    pub with_car: bool,
+    /// The contact point in the car body's frame.
+    pub local: Vec3f,
+    /// `Car::physicsTime` (ms; the game's clock CSP reads at car +0x138, +0x20).
+    pub time: f64,
+    pub damage_rate: f32,
+    /// The car's box (CSP's car config +0x90 and +0x9c; `Car::bounds` here).
+    pub min: Vec3f,
+    pub max: Vec3f,
+}
+
+/// The car fields CSP's car collision callback writes itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CspHitFields {
+    /// `Car::sleepingFrames` (+0x3d94)
+    pub sleeping_frames: i32,
+    /// `Car::lastCollisionTime` (+0x3508)
+    pub last_collision_time: f64,
+    /// `Car::lastCollisionWithCarTime` (+0x3c30)
+    pub last_collision_with_car_time: f64,
+    /// `Car::damageZoneLevel` (+0x3de0)
+    pub damage_zone_level: [f32; 5],
+}
+
+/// What the car does after [`csp_hit`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CspHitOut {
+    /// The speed CSP's events carry.
+    pub kmh: f32,
+    /// A ground shape (group 1 or 0x10): no damage, no listeners.
+    pub ground: bool,
+    /// `engine.lifeLeft = -100`
+    pub blow_up: bool,
+    /// The `setDamage` calls, per suspension.
+    pub suspension_damage: [Option<f32>; 4],
+}
+
+/// CSP's car collision callback (dwrite+0x587cc0), the branch general.ini
+/// `ALT_COLLISIONS_HANDLING=1` (this install's setting) takes in place of the game's
+/// `Car::onCollisionCallBack`: CSP's own speed, its own damage zones from the car's box, and
+/// suspension damage at most once in 0.1 s. `None`: a zero speed, nothing happens.
+// shortcut: the ALT branch only (CSP's default and this install's), upgrade if a row turns it off
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn csp_hit(f: &mut CspHitFields, i: &CspHitInput) -> Option<CspHitOut> {
+    let speed = i.speed * i.scale;
+    if speed * 0.003 == 0.0 {
+        return None;
+    }
+    // shortcut: online CSP leaves a sleeping car asleep unless [ONLINE] CUSTOM_MOTION (byte
+    // 0x27f9495 is its online flag); the physics has no online flag, upgrade with an online CSP row
+    f.sleeping_frames = 0;
+    let window = i.time < f.last_collision_time || i.time > f.last_collision_time + 0.1;
+    f.last_collision_time = i.time;
+    let kmh = speed * 3.6;
+    let mut out = CspHitOut { kmh, ground: i.group == 1 || i.group == 0x10, blow_up: false, suspension_damage: [None; 4] };
+    if out.ground {
+        return Some(out);
+    }
+    if i.with_car {
+        f.last_collision_with_car_time = i.time;
+    }
+    let d = kmh * i.damage_rate;
+    out.blow_up = d > 150.0;
+    // the side of the car's box the point is furthest out of: front, back, +x, -x
+    let (l, min, max) = (i.local, i.min, i.max);
+    let (mut best, mut zone) = (l.z - max.z, 0);
+    for (k, v) in [(1, -l.z - -min.z), (2, l.x - max.x), (3, -l.x - -min.x)] {
+        if v > best {
+            (best, zone) = (v, k);
+        }
+    }
+    let dz = &mut f.damage_zone_level;
+    if best > -0.5 {
+        dz[zone] = d.max(dz[zone]);
+    }
+    dz[4] = dz[4].max(d);
+    if window {
+        for (s, (a, b)) in out.suspension_damage.iter_mut().zip([(0, 2), (0, 3), (1, 2), (1, 3)]) {
+            if dz[a] > 0.0 && dz[b] > 0.0 {
+                *s = Some((dz[a] + dz[b]) * 0.5);
+            }
+        }
+    }
+    Some(out)
+}
+
 /// `PhysicsEngine::onCollisionCallBack` @ 0x140264020, its first half: when the first body
 /// of a new contact is no car's body and the second one is, the pair is turned round (bodies
 /// and shapes; the normal stays). `car_bodies` are the bodies of the engine's cars.
@@ -3167,6 +3263,9 @@ impl RollingChassis {
         let Some(inputs) = inputs else {
             return;
         };
+        if let Some(csp) = event.csp {
+            return self.on_csp_collision(event, inputs.local, csp);
+        }
         let other = if body_a == Some(self.body) { body_b } else { body_a };
         let is_ground = |shape: Option<Shape>| shape.is_some_and(|s| s.group == 1 || s.group == 0x10);
         let ground_a = is_ground(shape_a);
@@ -3243,6 +3342,46 @@ impl RollingChassis {
         });
         if damaging {
             self.collision_events.push(OnCollisionEvent { body: other, rel_speed, world_pos: event.pos, rel_pos: local, collider_group: group });
+        }
+    }
+
+    /// CSP's car collision callback (dwrite+0x587cc0) in place of the game's
+    /// `Car::onCollisionCallBack`: [`csp_hit`] on this car's fields, then what CSP does with its
+    /// answer. `local` is the point in the car body's frame.
+    fn on_csp_collision(&mut self, event: &CollisionEvent, local: Vec3f, c: CspContact) {
+        let mine_a = event.body_a == Some(self.body);
+        let (other, shape, mine, theirs) = if mine_a { (event.body_b, event.shape_b, c.mass_a, c.mass_b) } else { (event.body_a, event.shape_a, c.mass_b, c.mass_a) };
+        let group = shape.map_or(0, |s| s.group);
+        let input = CspHitInput {
+            speed: c.speed,
+            scale: if other.is_some() { (theirs / mine).min(1.0) } else { 1.0 },
+            group,
+            with_car: other.is_some(),
+            local,
+            time: self.physics_time,
+            damage_rate: self.env.mechanical_damage_rate,
+            min: self.bounds.min,
+            max: self.bounds.max,
+        };
+        let mut fields = CspHitFields { sleeping_frames: self.sleeping_frames, last_collision_time: self.last_collision_time, last_collision_with_car_time: self.last_collision_with_car_time, damage_zone_level: self.damage_zone_level };
+        let Some(out) = csp_hit(&mut fields, &input) else { return };
+        CspHitFields { sleeping_frames: self.sleeping_frames, last_collision_time: self.last_collision_time, last_collision_with_car_time: self.last_collision_with_car_time, damage_zone_level: self.damage_zone_level } = fields;
+        // CSP's audio event (queued above 0.1 km/h) stands as the game's sound event
+        if out.kmh > 0.1 {
+            self.physics_events.push(PhysicsEvent { kind: 0, param1: self.physics_guid as f32, param2: event.depth, param3: -1.0, param4: out.kmh, v_param1: event.pos, v_param2: event.normal, ul_param0: group });
+        }
+        if out.blow_up {
+            if let Some(drivetrain) = &mut self.drivetrain {
+                drivetrain.engine_mut().blow_up();
+            }
+        }
+        for (suspension, damage) in self.suspensions.iter_mut().zip(out.suspension_damage) {
+            if let Some(damage) = damage {
+                suspension.set_damage(damage);
+            }
+        }
+        if !out.ground {
+            self.collision_events.push(OnCollisionEvent { body: other, rel_speed: out.kmh, world_pos: event.pos, rel_pos: local, collider_group: group });
         }
     }
 

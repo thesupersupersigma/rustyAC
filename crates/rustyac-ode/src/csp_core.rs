@@ -389,11 +389,15 @@ impl Core {
 
     /// `getPointVelocity` (+0x933e30, `dBodyGetPointVel` +0x91b740).
     pub fn point_velocity(&self, id: usize, p: [f32; 3]) -> [f32; 3] {
+        f32s(self.point_vel(id, p.map(f64::from)))
+    }
+
+    /// `dBodyGetPointVel` (+0x91b740) in doubles, as the contact maker calls it.
+    pub fn point_vel(&self, id: usize, p: [f64; 3]) -> [f64; 3] {
         let b = self.body(id);
-        let p = p.map(f64::from);
         let d = [p[0] - b.pos[0], p[1] - b.pos[1], p[2] - b.pos[2]];
         let (v, w) = (&b.lvel, &b.avel);
-        f32s([w[1] * d[2] - w[2] * d[1] + v[0], w[2] * d[0] - w[0] * d[2] + v[1], w[0] * d[1] - w[1] * d[0] + v[2]])
+        [w[1] * d[2] - w[2] * d[1] + v[0], w[2] * d[0] - w[0] * d[2] + v[1], w[0] * d[1] - w[1] * d[0] + v[2]]
     }
 
     /// `getLocalPointVelocity` (+0x936db0, `dBodyGetRelPointVel` +0x91b5e0).

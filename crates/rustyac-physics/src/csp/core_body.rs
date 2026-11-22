@@ -12,7 +12,7 @@ use rustyac_ode::csp_core::Core;
 use rustyac_ode::csp_step::JointKind;
 use rustyac_ode::{BodyId, GeomId, GeomRef, JointId};
 
-use crate::car::body::{CollisionEvent, RigidBody, Shape};
+use crate::car::body::{CollisionEvent, CspContact, RigidBody, Shape};
 use crate::vecmath::{Mat44f, Vec3f};
 
 /// What contacts name a car geom by: its index with this bit (the track's geoms are named
@@ -205,7 +205,13 @@ impl CspBody {
                 let (body_a, shape_a) = self.geom_of(c.g1);
                 let (body_b, shape_b) = self.geom_of(c.g2);
                 let f = |v: [f64; 3]| Vec3f::new(v[0] as f32, v[1] as f32, v[2] as f32);
-                CollisionEvent { body_a, shape_a, body_b, shape_b, normal: f(c.normal), pos: f(c.pos), depth: c.depth as f32 }
+                // +0x92c9f0's closing speed: the normal as the f32 it hands on, the velocities in doubles
+                let vel = |b: Option<RigidBody>| b.map_or([0.0; 3], |b| self.core.point_vel(id(b), c.pos));
+                let (v1, v2, n) = (vel(body_a), vel(body_b), c.normal.map(|x| x as f32 as f64));
+                let speed = ((((v1[1] - v2[1]) * n[1] + (v1[0] - v2[0]) * n[0]) + (v1[2] - v2[2]) * n[2]) as f32).abs();
+                let mass = |b: Option<RigidBody>| b.map_or(0.0, |b| self.mass(b));
+                let csp = Some(CspContact { speed, mass_a: mass(body_a), mass_b: mass(body_b) });
+                CollisionEvent { body_a, shape_a, body_b, shape_b, normal: f(c.normal), pos: f(c.pos), depth: c.depth as f32, csp }
             })
             .collect()
     }
