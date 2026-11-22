@@ -1063,7 +1063,11 @@ fn build_physics_car(
             let colliders = rustyac_physics::car::colliders::load(data_path, Some(&root), &name)?;
             run.collide.mesh = Some(colliders.mesh.ok_or(format!("no collider.kn5 for {name} in {}", root.display()))?);
         }
-        return VanillaCar::from_chassis(run.build(data_path)?, driver);
+        let chassis = match engine {
+            Some(engine) => engine.build_car(|core, guid| run.build_in(Some((core, guid)), data_path))?,
+            None => run.build(data_path)?,
+        };
+        return VanillaCar::from_chassis(chassis, driver);
     }
     // `Car::Car`, the spawn (the game's own, with its drop onto the wheels), the session start
     let ground: Box<dyn RayTrackCollisionProvider + Send> = match track {
@@ -1268,8 +1272,9 @@ fn build_world(
     if setup.opponents.is_empty() && rules.is_none() && !setup.ai_record {
         return Ok((build_car(setup, data_path, physics_time, driver, track, spawn, None, 0, None)?, Vec::new(), None));
     }
-    if setup.oracle.is_some() {
-        return Err("an oracle set-up has one car".to_string());
+    // (Task C5i-c: csp_oracle's cars along the spawn's tail are the one exception)
+    if setup.oracle.as_ref().is_some_and(|o| o.track.as_ref().is_none_or(|t| t.gap.is_none())) {
+        return Err("an oracle set-up has one car (or oracle_gap's cars)".to_string());
     }
     if ac_root().is_none() {
         eprintln!("WARNING: Assetto Corsa's folder was not found (set AC_ROOT): without their collider meshes the cars drive through each other");
@@ -1285,12 +1290,20 @@ fn build_world(
     }
     let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit), rules)?;
     let mut opponents = Vec::new();
+    let gap = setup.oracle.as_ref().and_then(|o| o.track.as_ref()).and_then(|t| t.gap);
     for (index, opponent) in setup.opponents.iter().enumerate() {
         let slot = index + 1;
         let opponent_data = find_car_data(&opponent.car)?;
         let pose = match (track, &opponent.place) {
             // a car of race.ini: the slot the game gives it
             (Some(track), Some(place)) => spawn_place(track, &setup.spawn, place, &opponent.car)?,
+            // csp_oracle's cars: along the spawn's tail, `gap` metres apart (its f32 sums, its order)
+            (Some(_), None) if gap.is_some() => {
+                let (t, at, gap) = (spawn.tail, spawn.position, gap.unwrap_or_default());
+                let n = (t.x * t.x + t.y * t.y + t.z * t.z).sqrt();
+                let along = |a: f32, b: f32| a + b / n * gap * slot as f32;
+                SpawnPose { position: Vec3f::new(along(at.x, t.x), along(at.y, t.y), along(at.z, t.z)), tail: t }
+            }
             (Some(track), None) => spawn_slot(track, &setup.spawn, slot)?,
             // the flat road: in a row behind the driver's car
             (None, _) => SpawnPose { position: Vec3f::new(0.0, 0.0, -8.0 * slot as f32), tail: SPAWN_TAIL },
@@ -1389,6 +1402,11 @@ impl GameSim {
             track = Some(Arc::new(loaded));
             track_folder = Some(folder);
         }
+        // Task C5i-c: CSP's core, or Vanilla's for a car or a track it cannot build yet
+        let opponent_data = setup.opponents.iter().map(|o| find_car_data(&o.car)).collect::<Result<Vec<_>, _>>()?;
+        let cars: Vec<&Path> = std::iter::once(data_path.as_path()).chain(opponent_data.iter().map(PathBuf::as_path)).collect();
+        let with_objects = setup.track_objects || setup.oracle.as_ref().and_then(|o| o.track.as_ref()).is_some_and(|t| t.objects);
+        rustyac_physics::csp::choose_core(&cars, track.as_deref(), with_objects);
         let mut driver = driver;
         if let Some(track) = &track {
             driver.source.set_track(track);
@@ -1402,11 +1420,6 @@ impl GameSim {
             add_remote_cars(session, engine, track.as_ref(), 1 + opponents.len())?;
             session.net.client.set_cars_in_session(1 + session.remote.len());
             session.start_results(track.as_ref().map_or(0, |t| t.sectors_normalized_positions.len()));
-        // Task C5i-c: CSP's core, or Vanilla's for a car or a track it cannot build yet
-        let opponent_data = setup.opponents.iter().map(|o| find_car_data(&o.car)).collect::<Result<Vec<_>, _>>()?;
-        let cars: Vec<&Path> = std::iter::once(data_path.as_path()).chain(opponent_data.iter().map(PathBuf::as_path)).collect();
-        let with_objects = setup.track_objects || setup.oracle.as_ref().and_then(|o| o.track.as_ref()).is_some_and(|t| t.objects);
-        rustyac_physics::csp::choose_core(&cars, track.as_deref(), with_objects);
             // the session has run for a while already: its start on this machine's clock
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;

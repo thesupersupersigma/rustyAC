@@ -1870,6 +1870,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
                     tail: [track.tail.x, track.tail.y, track.tail.z],
                     armed: track.armed,
                     allowed_tyres_out: track.allowed_tyres_out,
+                    gap: None,
                 }),
                 collide: run.collide.on.then(|| input_file::OracleCollide {
                     collider_mesh: run.collide.mesh.is_some(),

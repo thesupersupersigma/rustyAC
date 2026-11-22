@@ -135,8 +135,10 @@ pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, phy
         }
         if let Some(file) = &mut physics_states {
             use std::io::Write as _;
-            for view in view::CarView::capture_world(&sim, sim.sim_seconds()) {
-                file.write_all(&view.physics_state().to_game_bytes()).map_err(|e| format!("--physics-states: {e}"))?;
+            for (guid, view) in view::CarView::capture_world(&sim, sim.sim_seconds()).iter().enumerate() {
+                // (the view has no GUID: the cars come in GUID order, the player's first)
+                let state = rustyac_physics::car_physics_state::CarPhysicsState { physics_guid: guid as u8, ..view.physics_state() };
+                file.write_all(&state.to_game_bytes()).map_err(|e| format!("--physics-states: {e}"))?;
             }
         }
         if state_hash {

@@ -15,7 +15,7 @@ use std::path::Path;
 
 use rustyac_ode::{JointKind, Mass};
 
-use super::body::{kind, ForceSource, TapeCall};
+use super::body::{kind, ForceSource, PhysicsCore, TapeCall};
 use super::chassis::{ChassisEnvironment, RollingChassis, StepTrace};
 use super::feed::{CarControls, ChassisFeed, EngineFeed};
 use super::vanilla_car::{ScriptedDevice, VanillaCar};
@@ -1195,6 +1195,13 @@ impl RunSetup {
     /// Builds the F2004-style chassis of a recording the way the oracle built the game's car:
     /// `Car::Car`, the spawn at the origin facing +z, then the session start.
     pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
+        self.build_in(None, data_path)
+    }
+
+    /// As [`RunSetup::build`], with `world`: in an engine's world as car `guid` (the core
+    /// [`crate::engine::PhysicsEngine::build_car`] hands over, which holds the track's objects
+    /// already) — csp_oracle's cars along the spawn's tail (Task C5i-c).
+    pub fn build_in(&self, world: Option<(PhysicsCore, u32)>, data_path: &Path) -> Result<RollingChassis, String> {
         let ground: Box<dyn RayTrackCollisionProvider + Send> = match &self.track {
             Some(run) => Box::new(crate::track::TrackGround(std::sync::Arc::clone(&run.track))),
             None if self.pitlane => Box::new(PitLane(self.ground)),
@@ -1223,7 +1230,10 @@ impl RunSetup {
             Some(run) if run.objects => &run.track.objects,
             _ => &[],
         };
-        let mut chassis = RollingChassis::new_with_objects(data_path, env, ground, rand.0, self.clock_start_ms, objects)?;
+        let mut chassis = match world {
+            Some((core, guid)) => RollingChassis::new_in_core(core, guid, data_path, ChassisEnvironment { is_first_car: guid == 0, ..env }, ground, rand.0, self.clock_start_ms)?,
+            None => RollingChassis::new_with_objects(data_path, env, ground, rand.0, self.clock_start_ms, objects)?,
+        };
         chassis.dynamic_track = dynamic_track;
         if self.conditions.ballast_kg > 0.0 {
             chassis.ballast_kg = self.conditions.ballast_kg;

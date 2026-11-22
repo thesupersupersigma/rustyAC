@@ -66,7 +66,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 type Handle = *mut c_void;
@@ -1645,8 +1645,11 @@ extern "C" fn track_create_ray_caster(_this: *mut u8, _length: f32) -> *mut u8 {
 /// every car's controls device: with workers the cars poll on CSP's worker threads.
 static RECORD: Mutex<[u8; 40]> = Mutex::new([0; 40]);
 /// `CSP_ORACLE_PARK=1` (Task C5g, cars that touch): car 0's controls device; that car stands on
-/// its brakes while the others drive the tape.
+/// its brakes while the others drive the tape. `CSP_ORACLE_PARK=last` (Task C5i-c): the last car
+/// instead, with rustyAC's parked driver's controls (brake and clutch 1, the rest released), so
+/// that car 0 drives the tape as rustyAC's player does.
 static PARKED: AtomicUsize = AtomicUsize::new(0);
+static PARKED_AS_RUSTYAC: AtomicBool = AtomicBool::new(false);
 
 fn record_word(k: usize) -> u32 {
     record_bytes_word(&*RECORD.lock().unwrap(), k)
@@ -1660,7 +1663,17 @@ extern "C" fn device_destructor(_this: *mut u8, _flags: u32) -> *mut u8 {
 extern "C" fn device_acquire_controls(this: *mut u8, controls: *mut u8, _dt: f32, _input: *const f32) {
     if this as usize == PARKED.load(Ordering::Relaxed) {
         unsafe {
-            put(controls, 0x28, 1.0f32); // brake, nothing else
+            if PARKED_AS_RUSTYAC.load(Ordering::Relaxed) {
+                // crates/rustyac-game/src/sim.rs ParkedSource: CarControls { brake: 1, clutch: 1, ..default },
+                // the fields the tape's device writes
+                put(controls, 0, 0u16); // gearUp, gearDn
+                put(controls, 8, -1i32); // requestedGearIndex
+                put(controls, 0x10, 0.0f32); // handBrake
+                put(controls, 0x24, 0.0f32); // gas
+                put(controls, 0x2c, 0.0f32); // steer
+                put(controls, 0x30, 1.0f32); // clutch
+            }
+            put(controls, 0x28, 1.0f32); // brake
         }
         return;
     }
@@ -1753,7 +1766,11 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
         let device = acs.alloc(0x120);
         put(device, 0, table);
         put(car, 0x3d80, device); // controlsProvider
-        if i == 0 && std::env::var_os("CSP_ORACLE_PARK").is_some() {
+        let park = std::env::var("CSP_ORACLE_PARK").ok();
+        if park.as_deref() == Some("last") && i + 1 == cars.len() {
+            PARKED.store(device as usize, Ordering::Relaxed);
+            PARKED_AS_RUSTYAC.store(true, Ordering::Relaxed);
+        } else if park.is_some_and(|p| p != "last") && i == 0 {
             PARKED.store(device as usize, Ordering::Relaxed);
         }
         put(car, 0x3560, 0u8); // performanceMeter.isEnabled
