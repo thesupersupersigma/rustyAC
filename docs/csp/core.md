@@ -1173,7 +1173,7 @@ collider). With Embree (part 3): 0.043 ms.
   `cfg(all(windows, target_arch = "x86_64"))`: the release's `rustyac.exe` (and the launcher, which links
   rustyac-game). The browser (wasm) and the other `platforms.yml` targets keep ODE's rays: Windows on
   ARM cannot build Embree's x86 ISAs. Vanilla never calls it.
-- **Build.** `crates/rustyac-ode/build.rs` builds Embree once per target folder (`target/embree-3.13.4`,
+- **Build.** `crates/rustyac-ode/build.rs` builds Embree once per target folder (`target/embree-3.13.4-mt`,
   shared by the profiles, clippy and the tests; built in `OUT_DIR`, then moved). Source: `EMBREE_DIR`,
   else `ignored/embree` at tag v3.13.4. It stops with what is missing: no source (with the clone line),
   no Visual Studio with the C++ tools (vswhere), or CMake / Ninja failing.
@@ -1287,7 +1287,7 @@ first difference is a tyre force at physics step 2.
   `rustyac-game`, which turns `rustyac-ode`'s `embree` on for x64 Windows; `web_pack` itself only packs
   content and never casts a ray. Not cut (moving the feature out of `rustyac-game` would touch every
   desktop build). Instead `build.rs` reads `RUSTYAC_EMBREE_LIB` (the folder to build into and link from),
-  and `ci.yml` points it at `$GITHUB_WORKSPACE/target/embree-3.13.4`: the workspace builds it, and
+  and `ci.yml` points it at `$GITHUB_WORKSPACE/target/embree-3.13.4-mt`: the workspace builds it, and
   `csp_oracle` and `web_pack` find it there. A cache miss builds it once instead of three times. The
   release stays one uncached build.
 - **CSP mode's shortcuts on the installed content** (no drive; C5i-c decides port or refusal; today

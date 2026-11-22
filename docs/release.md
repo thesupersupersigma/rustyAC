@@ -69,7 +69,7 @@ tests that work from the recordings in the repo run in full. The Visual C++ 2013
 so the tests compute with `MSVCR120.dll`, the game's own maths. Then Embree 3.13.4's source is cloned
 (`EMBREE_DIR`): the x64 Windows `rustyac.exe` casts CSP mode's tyre rays on Embree (Task C5i-a), and
 `crates/rustyac-ode/build.rs` builds it as a static library with Visual Studio's C++ tools, CMake and
-Ninja, once per target folder (`target/embree-3.13.4`; uncached about 20 minutes). On your own PC,
+Ninja, once per target folder (`target/embree-3.13.4-mt`; uncached about 20 minutes). On your own PC,
 clone it into `ignored/embree` (`git clone --branch v3.13.4 https://github.com/embree/embree.git
 ignored/embree`) or set `EMBREE_DIR`. Without either, or without the C++ tools, the build stops and
 says what is missing.

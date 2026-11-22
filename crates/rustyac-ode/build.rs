@@ -3,7 +3,8 @@
 //! Feature `embree` (Task C5h): Embree 3.13.4 built as CSP built it, a static library. The
 //! source is `EMBREE_DIR`, else tag v3.13.4 of the clone in `ignored/embree`. Needs CMake,
 //! Ninja and MSVC (found with vswhere, set up with vcvars64). The library goes to
-//! `RUSTYAC_EMBREE_LIB` (a folder several target folders share, CI), else `<target>/embree-3.13.4`.
+//! `RUSTYAC_EMBREE_LIB` (a folder several target folders share, CI), else `<target>/embree-3.13.4-mt`.
+//! Built against the static C runtime (/MT), as `.cargo/config.toml` links Rust (+crt-static, C5i-c).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,10 +27,14 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_EMBREE").is_none() {
         return;
     }
+    // a /MT Embree in a dynamic-CRT exe links both runtimes; RUSTFLAGS replaces .cargo/config.toml's
+    if !std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default().split(',').any(|f| f == "crt-static") {
+        fail("the build has no +crt-static: RUSTFLAGS in the environment replaces .cargo/config.toml's; add `-C target-feature=+crt-static` to it");
+    }
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // one build for every profile and check of this target folder (OUT_DIR is
     // <target>/<profile>/build/<package>/out): clippy and the tests do not build it again
-    let lib = std::env::var_os("RUSTYAC_EMBREE_LIB").map(PathBuf::from).unwrap_or_else(|| out.ancestors().nth(4).unwrap_or(&out).join("embree-3.13.4"));
+    let lib = std::env::var_os("RUSTYAC_EMBREE_LIB").map(PathBuf::from).unwrap_or_else(|| out.ancestors().nth(4).unwrap_or(&out).join("embree-3.13.4-mt"));
     if !lib.join("embree3.lib").exists() {
         let build = out.join("embree-build");
         let src = match std::env::var_os("EMBREE_DIR") {
@@ -56,13 +61,15 @@ fn main() {
         }
         let jobs = std::env::var("NUM_JOBS").unwrap_or("4".into());
         // CSP's options (docs/csp/core.md "Embree"): ISAs SSE2 / AVX / AVX2, internal tasking,
-        // no filter functions, ray masks or back-face culling; CMake 4 needs the policy floor
+        // no filter functions, ray masks or back-face culling; CMake 4 needs the policy floor;
+        // /MT through the release flags: CMAKE_MSVC_RUNTIME_LIBRARY left Embree on /MD under CMake 4.4
         let bat = out.join("embree.bat");
         std::fs::write(
             &bat,
             format!(
                 "@call \"{vs}\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul || exit /b 1\r\n\
                  cmake -G Ninja -S \"{}\" -B \"{}\" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+                 -DCMAKE_C_FLAGS_RELEASE=\"/MT /O2 /Ob2 /DNDEBUG\" -DCMAKE_CXX_FLAGS_RELEASE=\"/MT /O2 /Ob2 /DNDEBUG\" \
                  -DEMBREE_STATIC_LIB=ON -DEMBREE_TASKING_SYSTEM=INTERNAL -DEMBREE_ISPC_SUPPORT=OFF -DEMBREE_TUTORIALS=OFF \
                  -DEMBREE_FILTER_FUNCTION=OFF -DEMBREE_ISA_SSE2=ON -DEMBREE_ISA_SSE42=OFF -DEMBREE_ISA_AVX=ON \
                  -DEMBREE_ISA_AVX2=ON -DEMBREE_ISA_AVX512=OFF || exit /b 1\r\n\

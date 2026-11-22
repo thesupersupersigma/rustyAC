@@ -478,7 +478,7 @@ rustyAC; `--controls` wins over it, and it wins over Assetto Corsa's controls.in
 | `RUSTYAC_DISPLAY_MODES` | The launcher's list of display sizes, fixed (`1920x1080,1280x720`). **checks** |
 | `RUSTYAC_ROW_DUMP`, `RUSTYAC_ALSO` | What a replay that differs from its recording prints. **checks** |
 | `CSP_CORE_TRACE` | A file: in CSP mode (`--csp`, and `csp_oracle`'s port) every force, torque, body, joint and world step of CSP's core as one line, to compare with CSP's own (Task C5i-b). **checks** |
-| `RUSTYAC_EMBREE_LIB` | Building: the folder Embree is built into and linked from, instead of `<target>/embree-3.13.4` (CI points every target folder at one). **checks** |
+| `RUSTYAC_EMBREE_LIB` | Building: the folder Embree is built into and linked from, instead of `<target>/embree-3.13.4-mt` (CI points every target folder at one). **checks** |
 | `RUSTYAC_FW1_GLYPHS` | A file to dump every drawn letter into. **checks** |
 | `RENDER_ORACLE_TEXTURE_DATA` | 1: the graphics log hashes a texture again after each upload. **checks** |
 | `RUSTYAC_DIAG_DRAW_ONE_CAR`, `RUSTYAC_DIAG_NO_CUBE_MIPS`, `RUSTYAC_DIAG_FINISH_SPIN` | 1: diagnosis switches of the renderer (only your car is drawn; no smaller copies of the reflections; wait for the frame without yielding). **not AC**, **checks** |

@@ -26,7 +26,7 @@ jobs:
     name: build and test
     runs-on: windows-latest
     # an uncached Embree build takes about 20 minutes, once: the workspace, csp_oracle and web_pack
-    # (which only reaches it through rustyac-web -> rustyac-game) share target/embree-3.13.4
+    # (which only reaches it through rustyac-web -> rustyac-game) share target/embree-3.13.4-mt
     timeout-minutes: 90
     defaults:
       run:
@@ -72,7 +72,7 @@ jobs:
         run: |
           git clone --depth 1 --branch v3.13.4 https://github.com/embree/embree.git "$RUNNER_TEMP/embree"
           echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
-          echo "RUSTYAC_EMBREE_LIB=$GITHUB_WORKSPACE/target/embree-3.13.4" >> "$GITHUB_ENV"
+          echo "RUSTYAC_EMBREE_LIB=$GITHUB_WORKSPACE/target/embree-3.13.4-mt" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --workspace --locked

@@ -1,0 +1,5 @@
+# Task C5i-c: the C runtime is linked into every Windows exe (no MSVCP140/VCRUNTIME140/api-ms-win-crt
+# DLLs to install; the farm VM and players without the VC++ redist). Embree is built /MT to match
+# (crates/rustyac-ode/build.rs). RUSTFLAGS in the environment replaces this: build.rs refuses then.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
