@@ -1367,6 +1367,7 @@ impl GameSim {
 
     fn build(setup: SimSetup, source: Box<dyn DriverSource>, online: Option<OnlineSession>) -> Result<GameSim, String> {
         rustyac_physics::csp::set_enabled(setup.csp);
+        rustyac_physics::csp::set_core_enabled(setup.csp_core);
         let rules = online.as_ref().map(|session| ServerRules::of(&session.net.client.accepted));
         let data_path = find_car_data(&setup.car)?;
         let driver = Driver::new(source, setup.ff_gain);

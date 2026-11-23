@@ -22,8 +22,8 @@
 #                  the world stepped on the port's own contacts (Task C5f)
 #   core <car> <n>  CSP's cphys:: wrappers built by rustyac-ode's csp_core from the car's own calls, nothing
 #                  copied: set-up, every answer and every world step; n=2 is two F2004 that touch (Task C5g)
-#   row <car> lap|wall  the whole car with CSP live against rustyac --csp, step by step on one tape (Task C5i-b)
-#   smoke          rustyAC's own CSP mode (Task C5i-a): both proof cars driven at Spa, the drive replayed twice
+#   row <car> lap|wall  the whole car with CSP live against rustyac --csp --csp-core, step by step on one tape (Task C5i-b)
+#   smoke          rustyAC's own CSP mode (Task C5i-a), on CSP's core (--csp-core): both proof cars driven at Spa, the drive replayed twice
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
 . "$(dirname "$0")/lib.sh"
@@ -71,7 +71,8 @@ for car in $extended $plain; do
     mkdir -p "$out/plain"; rm -rf "$out/plain/$car"; cp -r "cardata/$car" "$out/plain/$car"
     sed -i 's/^VERSION=extended\(V2\)\{0,1\}-/VERSION=/' "$out/plain/$car/car.ini"
     if oracle "${car}_van" --car "$car" --car-data "$out/plain/$car" --vanilla && oracle "${car}_csp" --car "$car"; then
-        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '' | grep -m1 '^PRESSURES ')
+        port=$(target/release/acd_check.exe --steps 1 --only "$car" --csp --pressures | tr -d '
+' | grep -m1 '^PRESSURES ')
         line=$(python tools/proofs/csp_words.py "$out/runs/${car}_van/car_root/car_words.txt" "$out/runs/${car}_csp/car_root/car_words.txt" "$port")
         verdict "words $car" "${line%% |*}" "${line#* | }"
     else
@@ -352,8 +353,8 @@ for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_
     cars=1; more=; [ $kind = two ] && { cars=2; more="\\nopponent=$car:parked\\noracle_gap=-5.5"; }
     ( [ $kind = two ] && export CSP_ORACLE_PARK=last CSP_ORACLE_GAP=-5.5
       CSP_ORACLE_BREAK=587cc0f oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --cars $cars --steps $steps )
-    # the tape for rustyac: this car (and the parked one), CSP mode, cut after its first $steps steps (40 bytes a step)
-    perl -0777 -pe "s/^car=.*\$/car=$car/m; s/\nend\n/$more\ncsp=1\nend\n/" "$tape" > "$r.ryin.full"
+    # the tape for rustyac: this car (and the parked one), CSP mode on CSP's core, cut after its first $steps steps (40 bytes a step)
+    perl -0777 -pe "s/^car=.*\$/car=$car/m; s/\nend\n/$more\ncsp=1\ncsp_core=1\nend\n/" "$tape" > "$r.ryin.full"
     head -c $((steps * 40 + $(perl -0777 -ne 'print index($_, "\nend\n") + 5' "$r.ryin.full"))) "$r.ryin.full" > "$r.ryin"
     rustyac target/release/rustyac.exe --replay "$r.ryin" --headless --no-shm --physics-threads 0 --state-hash --physics-states "$r.port.bin" > "$r.port.txt" 2>&1
     if [ -s "$r/car_root/states.bin" ] && [ -s "$r.port.bin" ]; then
@@ -385,7 +386,7 @@ done
 if keep "strut abarth500"; then
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     r=$out/runs/strut; mkdir -p "$out/runs"
-    perl -0777 -pe "s/^car=.*\$/car=abarth500/m; s/\nend\n/\ncsp=1\nend\n/" "$(drive "$lap")" > "$r.ryin.full"
+    perl -0777 -pe "s/^car=.*\$/car=abarth500/m; s/\nend\n/\ncsp=1\ncsp_core=1\nend\n/" "$(drive "$lap")" > "$r.ryin.full"
     head -c $((1000 * 40 + $(perl -0777 -ne 'print index($_, "\nend\n") + 5' "$r.ryin.full"))) "$r.ryin.full" > "$r.ryin"
     rustyac target/release/rustyac.exe --replay "$r.ryin" --headless --no-shm --physics-threads 0 --state-hash > "$r.txt" 2>&1
     said=$(tr -d '\r' < "$r.txt" | grep -m1 "^CSP: CSP physics for this car isn't ready yet: it runs with Vanilla's physics and CSP's data")
@@ -403,7 +404,7 @@ fi
 if keep "smoke"; then
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     s=$out/runs/smoke; rm -rf "$s"; mkdir -p "$s"
-    rustyac target/release/rustyac.exe --csp --headless --no-shm --no-audio --car ks_ferrari_f2004 --opponent rss_formula_rss_3_v6_2026:auto \
+    rustyac target/release/rustyac.exe --csp --csp-core --headless --no-shm --no-audio --car ks_ferrari_f2004 --opponent rss_formula_rss_3_v6_2026:auto \
         --track spa --no-race-ini --spawn start --autodrive --duration 10 --record "$s/drive.ryin" > "$s/drive.txt" 2>&1
     car=$(tr -d '\r' < "$s/drive.txt" | grep -m1 '^the car after ')
     for i in 1 2; do

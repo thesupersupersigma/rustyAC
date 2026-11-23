@@ -1853,6 +1853,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             session: Default::default(),
             ai_record: false,
             csp: false,
+            csp_core: false,
             oracle: Some(input_file::OracleSetup {
                 scenario: run.scenario.clone(),
                 ground: run.ground,

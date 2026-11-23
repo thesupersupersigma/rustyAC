@@ -28,13 +28,26 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+static CORE_SWITCH: AtomicBool = AtomicBool::new(false);
+
+/// Task R1: the developer switch (`--csp-core`, `[CSP] CORE=1`) for CSP's own core. Off, CSP mode
+/// is v1.1.4's: CSP's data on Vanilla's core (CSP's core matches CSP only up to the tyre step, C5j).
+pub fn set_core_enabled(on: bool) {
+    CORE_SWITCH.store(on, Ordering::Relaxed);
+}
+
+/// Is the CSP core switch on (with CSP mode)?
+pub fn core_enabled() -> bool {
+    enabled() && CORE_SWITCH.load(Ordering::Relaxed)
+}
+
 static CORE_REFUSED: AtomicBool = AtomicBool::new(false);
 static REFUSALS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-/// Does this session's physics run in CSP's own core (CSP mode, and no car or track that
-/// [`choose_core`] turned away)?
+/// Does this session's physics run in CSP's own core (CSP mode, the core switch, and no car or
+/// track that [`choose_core`] turned away)?
 pub fn core() -> bool {
-    enabled() && !CORE_REFUSED.load(Ordering::Relaxed)
+    core_enabled() && !CORE_REFUSED.load(Ordering::Relaxed)
 }
 
 /// Task C5i-c: before anything is built, CSP's core for the session unless a car of `cars` (their
@@ -55,13 +68,13 @@ pub fn choose_core(cars: &[&Path], track: Option<&crate::track::Track>, with_obj
         not_ready("car", why)
     } else if objects > 0 {
         not_ready("track", format!("the track has {objects} loose objects"))
-    } else if let Some(Err(e)) = track.filter(|_| enabled()).map(|t| t.csp_core()) {
+    } else if let Some(Err(e)) = track.filter(|_| core_enabled()).map(|t| t.csp_core()) {
         not_ready("track", e)
     } else {
         None
     };
     CORE_REFUSED.store(refusal.is_some(), Ordering::Relaxed);
-    if let Some(message) = refusal.filter(|_| enabled()) {
+    if let Some(message) = refusal.filter(|_| core_enabled()) {
         eprintln!("CSP: {message}");
         REFUSALS.lock().unwrap().push(message);
     }

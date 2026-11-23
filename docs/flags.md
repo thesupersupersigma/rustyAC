@@ -55,7 +55,8 @@ there is no such file. `rustyac.exe --help` prints the same list in short.
 | `--list-tracks` | | Prints every installed track and layout (and why some are refused), then stops. |
 | `--flat` | on | The endless flat road. |
 | `--spawn <hotlap\|pit\|start>` | where race.ini's session starts, else `hotlap` | Where the car starts on a track: just before the line, in the pits, or on the grid. |
-| `--csp` | off | Custom Shaders Patch mode: cars with `VERSION=extended-N` in car.ini and layouts with `WAV_PITCH=extended-N` load as CSP reads them (COSMIC suspensions and CSP-encrypted cars are still refused, with the reason). Off, every file is read as plain Assetto Corsa reads it. Also `[CSP] ENABLED=1` in `cfg\rustyac.ini`. |
+| `--csp` | off | Custom Shaders Patch mode: cars with `VERSION=extended-N` in car.ini and layouts with `WAV_PITCH=extended-N` load as CSP reads them (COSMIC suspensions and CSP-encrypted cars are still refused, with the reason). Off, every file is read as plain Assetto Corsa reads it. The physics is Vanilla's core with CSP's data (as v1.1.4). Also `[CSP] ENABLED=1` in `cfg\rustyac.ini`. |
+| `--csp-core` | off | **Experimental, a developer switch.** With `--csp`, the cars' physics in CSP's own core (rustyac-ode's `csp_core`, Task C5i). Not CSP-exact yet: against CSP live the rows are identical only up to the tyre step (docs/csp/core.md C5i-c, next C5j). A car or track the core can't take yet (strut suspension, a collider box with a zero side, loose track objects, a track that doesn't build) is refused and runs on Vanilla's core, said in the game's banner and the log. The tape keeps it (`csp_core=1`), so a replay runs on the same core. Also `[CSP] CORE=1` in `cfg\rustyac.ini`. |
 
 ### Session and conditions
 
@@ -458,6 +459,7 @@ You make it yourself; two keys are read.
 |---|---|---|
 | `[STEAM] ACHIEVEMENTS` | 0 | 1: the game's Steam achievements, stats and Friends Leaderboard scores are on. `--steam-achievements on` or `off` wins. |
 | `[CSP] ENABLED` | 0 | 1: Custom Shaders Patch mode, as `--csp`. |
+| `[CSP] CORE` | 0 | 1: with CSP mode, CSP's own physics core, as `--csp-core` (experimental). |
 
 Two more files of rustyAC's own sit beside the program and are not for editing by hand:
 `rustyac_net.ini` (your own player id, made once) and `rustyac_controls.ini` (bindings saved by
@@ -477,7 +479,7 @@ rustyAC; `--controls` wins over it, and it wins over Assetto Corsa's controls.in
 | `RUSTYAC_AUDIO_VERBOSE` | More lines from the sound engine. **checks** |
 | `RUSTYAC_DISPLAY_MODES` | The launcher's list of display sizes, fixed (`1920x1080,1280x720`). **checks** |
 | `RUSTYAC_ROW_DUMP`, `RUSTYAC_ALSO` | What a replay that differs from its recording prints. **checks** |
-| `CSP_CORE_TRACE` | A file: in CSP mode (`--csp`, and `csp_oracle`'s port) every force, torque, body, joint and world step of CSP's core as one line, to compare with CSP's own (Task C5i-b). **checks** |
+| `CSP_CORE_TRACE` | A file: on CSP's core (`--csp --csp-core`, and `csp_oracle`'s port) every force, torque, body, joint and world step of CSP's core as one line, to compare with CSP's own (Task C5i-b). **checks** |
 | `RUSTYAC_EMBREE_LIB` | Building: the folder Embree is built into and linked from, instead of `<target>/embree-3.13.4-mt` (CI points every target folder at one). **checks** |
 | `RUSTYAC_FW1_GLYPHS` | A file to dump every drawn letter into. **checks** |
 | `RENDER_ORACLE_TEXTURE_DATA` | 1: the graphics log hashes a texture again after each upload. **checks** |

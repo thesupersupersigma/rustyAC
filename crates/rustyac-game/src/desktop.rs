@@ -92,6 +92,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         drs_zones: true,
         ai_record: options.ai_record.is_some(),
         csp: rustyac_physics::csp::enabled(),
+        csp_core: rustyac_physics::csp::core_enabled(),
         ..SimSetup::default()
     };
     // normal play: the picture's rand() starts from the clock, as the game's does (Sim::Sim
@@ -970,8 +971,11 @@ fn steam_achievements(options: &Options) -> Option<rustyac_game::achievements::M
 }
 
 /// Task C3: Custom Shaders Patch mode, by `--csp` or `[CSP] ENABLED` in rustyAC's own `cfg\rustyac.ini`.
-fn csp_mode(options: &Options) -> bool {
-    options.csp || rustyac_physics::data::ini::IniReader::load(&rustyac_game::conditions::cfg_dir(options).join("rustyac.ini")).ok().and_then(|ini| ini.get_int("CSP", "ENABLED").ok()).is_some_and(|v| v != 0)
+/// Task R1: and the developer switch for CSP's own core, `--csp-core` or `[CSP] CORE`.
+fn csp_mode(options: &Options) -> (bool, bool) {
+    let ini = rustyac_physics::data::ini::IniReader::load(&rustyac_game::conditions::cfg_dir(options).join("rustyac.ini")).ok();
+    let key = |name: &str| ini.as_ref().and_then(|ini| ini.get_int("CSP", name).ok()).is_some_and(|v| v != 0);
+    (options.csp || key("ENABLED"), options.csp_core || key("CORE"))
 }
 
 /// Task 28: where the referee's files go: `--out-dir`, else `out` beside rustyac.exe (never
@@ -2938,7 +2942,9 @@ fn run_replay_audio(options: &Options, replay: &Path) -> Result<(), String> {
 }
 
 fn run(options: &Options) -> Result<(), String> {
-    rustyac_physics::csp::set_enabled(csp_mode(options));
+    let (csp, csp_core) = csp_mode(options);
+    rustyac_physics::csp::set_enabled(csp);
+    rustyac_physics::csp::set_core_enabled(csp_core);
     if options.list_tracks {
         print!("{}", list_tracks());
         return Ok(());
