@@ -33,7 +33,8 @@ pub use sctm::{calc_load_sens_mult, VanillaSctm};
 pub use status::{TyreExternalInputs, TyreInputs, TyreStatus};
 pub use thermal::{TyreThermalPatch, VanillaTyreThermalModel};
 pub use vanilla_tyre::{
-    ks_calc_camber_rad, ks_calc_contact_patch_length, ks_calc_slip_angle_rad, VanillaTyre,
+    angular_speed_tail, ks_calc_camber_rad, ks_calc_contact_patch_length, ks_calc_slip_angle_rad,
+    VanillaTyre,
 };
 
 /// `TyreModelInput` (0x30 bytes in AC). Field order and types match the original.

@@ -128,6 +128,21 @@ impl Default for VanillaTyre {
 }
 
 /// The three-way sign the original spells out with two branches: a NaN counts as negative.
+/// `Tyre::updateAngularSpeed` after `updateLockedState`: `[speed, old speed]` in, `(speed, old
+/// speed, locked)` out. With `csp`, CSP's tail (dwrite+0x69e818, run without a tyre extension
+/// too): 0 counts as +1 on both sides of the sign test (`new >= 0`, `!(0 > old)`), where
+/// Vanilla's sign(0) is 0. The csp_oracle checks it in process (break kinds U/V).
+pub fn angular_speed_tail(torque: f32, inertia: f32, dt: f32, [speed, old]: [f32; 2], locked: bool, csp: bool) -> (f32, f32, bool) {
+    let new = torque / inertia * dt + speed;
+    let sign_change = if csp { (new >= 0.0) != !(0.0 > old) } else { sign(old) != sign(new) };
+    let locked = locked || sign_change;
+    let mut speed = if locked { 0.0 } else { new };
+    if !(speed.abs() >= 1.0) {
+        speed *= 0.9;
+    }
+    (speed, new, locked)
+}
+
 fn sign(x: f32) -> f32 {
     if x > 0.0 {
         1.0
@@ -1336,19 +1351,15 @@ impl VanillaTyre {
     /// wheels) and locks the wheel when its speed changes sign.
     fn update_angular_speed(&mut self, dt: f32) {
         self.update_locked_state(dt);
-        let angular_velocity = self.status.feedback_torque / self.data.angular_inertia * dt
-            + self.status.angular_velocity;
-        self.status.angular_velocity = angular_velocity;
-        if sign(self.old_angular_velocity) != sign(angular_velocity) {
-            self.status.is_locked = true;
-        }
-        self.old_angular_velocity = angular_velocity;
-        if self.status.is_locked {
-            self.status.angular_velocity = 0.0;
-        }
-        if !(self.status.angular_velocity.abs() >= 1.0) {
-            self.status.angular_velocity *= 0.9;
-        }
+        let s = &mut self.status;
+        (s.angular_velocity, self.old_angular_velocity, s.is_locked) = angular_speed_tail(
+            s.feedback_torque,
+            self.data.angular_inertia,
+            dt,
+            [s.angular_velocity, self.old_angular_velocity],
+            s.is_locked,
+            crate::csp::enabled(),
+        );
     }
 
     /// `Tyre::stepRotationMatrix` @ 0x140284b80: spins `localWheelRotation` about its x axis.

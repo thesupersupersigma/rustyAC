@@ -965,6 +965,7 @@ static BREAK_LOG: Mutex<String> = Mutex::new(String::new());
 static BREAK_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) const SETUP: usize = usize::MAX - 1;
 thread_local!(static REARM: Cell<usize> = const { Cell::new(0) });
+thread_local!(static TAIL: Cell<[u32; 3]> = const { Cell::new([0; 3]) });
 
 unsafe fn arm_breaks(dll: usize) {
     let Ok(list) = std::env::var("CSP_ORACLE_BREAK") else { return };
@@ -972,7 +973,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v' | 'U' | 'V')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1133,6 +1134,20 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         }
         if dump == 'r' {
             crate::reduce::hit(rcx, rdx as i32, r9, at, original, DLL_BASE.load(Ordering::Relaxed), &mut line);
+        }
+        if dump == 'U' || dump == 'V' {
+            // Task C5j: CSP's updateAngularSpeed tail (U at +0x69e818, after updateLockedState; V at
+            // +0x69e8a4, its end) against the port's angular_speed_tail, as bits; rbx is the tyre
+            let tyre = read::<usize>(context + 0x90);
+            let state = [read::<u32>(tyre + 0x2fc), read::<u32>(tyre + 0x5b0), read::<u8>(tyre + 0x30c) as u32];
+            if dump == 'U' {
+                let (speed, old, locked) = rustyac_physics::tyre::angular_speed_tail(read(tyre + 0x334), read(tyre + 0x1c), read(context + 0x200), state.map(f32::from_bits)[..2].try_into().unwrap(), state[2] != 0, true);
+                TAIL.with(|cell| cell.set([speed.to_bits(), old.to_bits(), locked as u32]));
+                line.push_str(&format!(" | in {:x?} torque {:x} inertia {:x}", state, read::<u32>(tyre + 0x334), read::<u32>(tyre + 0x1c)));
+            } else {
+                let port = TAIL.with(Cell::get);
+                line.push_str(&format!(" | game {state:x?} port {port:x?} {}", if port == state { "same" } else { "DIFFERENT" }));
+            }
         }
         if dump == 'm' {
             // raw words of rcx's object, for reading struct layouts
