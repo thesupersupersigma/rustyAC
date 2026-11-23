@@ -66,8 +66,10 @@ farm_up() {
 # farm_queue: the queue's words: an area whose last run of this mode took more than $target s (the
 # sum of cases/<mode>/<area>.times, which every run rewrites: the order improves itself) in shards
 # of about that, the words longest first; an area with no times yet first, whole
+# shortcut: a case's time is the last machine's that ran it (the VM 2-4 × the PC's), so a shard is
+# $target on one clock or the other; scale the times per machine if a long VM shard ends a run late
 farm_queue() {
-    if [ "$mode" = quick ]; then target=480; else target=1800; fi
+    if [ "$mode" = quick ]; then target=480; else target=900; fi
     for a in $farm_areas; do
         t=$out/cases/$mode/$a.times; [ -f "$t" ] || t=$out/cases/full/$a.times
         s=$(awk '{ s += $1 } END { print int(s) }' "$t" 2> /dev/null)
