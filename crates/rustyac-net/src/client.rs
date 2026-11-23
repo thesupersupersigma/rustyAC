@@ -44,6 +44,8 @@ pub enum Event {
     ServerSilent,
     /// The connection is gone.
     ConnectionLost(String),
+    /// `--csp`: a CSP message (`0xAB`) that arrived or was answered, as a log line.
+    Csp(String),
 }
 
 /// How the join ended when it did not work.
@@ -115,6 +117,10 @@ pub struct Client<T: Transport> {
     pub datagrams_in: u64,
     pub datagrams_out: u64,
     pub messages_in: u64,
+    /// `--csp`: the key of CSP's handshake reply ([`crate::csp::handshake_key`]); `None`: Kunos' client.
+    pub csp: Option<u64>,
+    /// `--csp`: the datagram sub-ids already logged (each once).
+    csp_datagrams_seen: Vec<u8>,
 }
 
 /// How long the join waits for an answer, ms (the game waits for ever).
@@ -149,13 +155,15 @@ enum JoinPhase<T: Transport> {
 /// * the browser calls [`Join::poll`] once a frame until it says [`JoinStage::Done`].
 pub struct Join<T: Transport> {
     phase: JoinPhase<T>,
+    csp: Option<u64>,
 }
 
 impl<T: Transport> Join<T> {
     /// Sends the join request.
     pub fn start(mut transport: T, request: &JoinRequest) -> Result<Join<T>, JoinError> {
         transport.send_reliable(&request.encode()).map_err(JoinError::Transport)?;
-        Ok(Join { phase: JoinPhase::Handshake(transport) })
+        let csp = request.features.as_ref().map(|_| crate::csp::handshake_key(&request.guid));
+        Ok(Join { phase: JoinPhase::Handshake(transport), csp })
     }
 
     pub fn stage(&self) -> JoinStage {
@@ -194,6 +202,7 @@ impl<T: Transport> Join<T> {
                 // serverIP = IPAddress(SERVER_IP, the reply's UDP port)
                 transport.set_datagram_port(accepted.udp_port);
                 let mut client = Box::new(Client::new(transport, accepted));
+                client.csp = self.csp;
                 // getRemoteCarList: the first page
                 if let Err(why) = client.transport.send_reliable(&car_list_request(0)) {
                     client.shutdown();
@@ -336,6 +345,8 @@ impl<T: Transport> Client<T> {
             datagrams_in: 0,
             datagrams_out: 0,
             messages_in: 0,
+            csp: None,
+            csp_datagrams_seen: Vec::new(),
             accepted,
         }
     }
@@ -466,6 +477,15 @@ impl<T: Transport> Client<T> {
                         self.events.push(Event::RaceStart(start as f64));
                     }
                 }
+                // --csp: CSP's datagrams (weather, custom updates, client messages) are not
+                // read yet (NH-4, NH-7): the first of each kind is logged
+                Incoming::Unknown(crate::csp::EXTENDED) if self.csp.is_some() => {
+                    let sub = datagram.get(1).copied().unwrap_or(0);
+                    if !self.csp_datagrams_seen.contains(&sub) {
+                        self.csp_datagrams_seen.push(sub);
+                        self.events.push(Event::Csp(format!("csp: datagram AB {sub:02X} ({} bytes) not read yet, skipped (only the first of its kind is logged)", datagram.len())));
+                    }
+                }
                 Incoming::Unknown(_) | Incoming::Truncated(_) => {}
             }
         }
@@ -473,6 +493,10 @@ impl<T: Transport> Client<T> {
 
     fn on_reliable(&mut self, message: &[u8]) {
         self.messages_in += 1;
+        if self.csp.is_some() && message.first() == Some(&crate::csp::EXTENDED) {
+            self.on_csp(message);
+            return;
+        }
         let cars = self.cars_in_session;
         for decoded in messages::decode(message, cars) {
             if let Message::NewSession(info) = &decoded {
@@ -486,6 +510,24 @@ impl<T: Transport> Client<T> {
             }
             self.events.push(Event::Message(decoded));
         }
+    }
+
+    /// `--csp`: a CSP message of the reliable channel. The handshake is answered; the rest
+    /// is logged for the tasks that read it (NH-3: visibility, client messages).
+    fn on_csp(&mut self, message: &[u8]) {
+        use crate::csp::CspMessage;
+        let line = match crate::csp::decode_tcp(message) {
+            CspMessage::HandshakeIn { min_version, weatherfx } => {
+                let reply = crate::csp::handshake_out(self.csp.unwrap_or(0));
+                self.send(&reply);
+                format!("csp: the server's CSP handshake (minimum build {min_version}, WeatherFX {}), answered as CSP {}", if weatherfx { "required" } else { "optional" }, crate::csp::BUILD)
+            }
+            CspMessage::Visibility { slot, hidden } => format!("csp: slot {slot} {} (not applied yet)", if hidden { "hidden" } else { "visible" }),
+            CspMessage::KickReason(reason) => format!("csp: kick reason: {reason}"),
+            CspMessage::ClientMessage { from, kind, size } => format!("csp: client message type {kind} from {from} ({size} bytes) not read yet, skipped"),
+            CspMessage::Other { sub, size } => format!("csp: message AB {sub:02X} ({size} bytes) not read yet, skipped"),
+        };
+        self.events.push(Event::Csp(line));
     }
 
     fn lose(&mut self, message: String) {

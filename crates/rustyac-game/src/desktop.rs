@@ -1013,7 +1013,7 @@ fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::onlin
     if options.join.is_none() {
         println!("race.ini has [REMOTE] ACTIVE=1 and the command line names no car and no track: joining that server (--offline: drive alone)");
     }
-    let joined = rustyac_game::join::join(options, &target)?;
+    let joined = rustyac_game::join::join(options, &target, csp_mode(options).0)?;
     for note in &joined.notes {
         println!("{note}");
     }

@@ -88,8 +88,19 @@ pub fn car_md5(root: &Path, model: &str) -> [u8; 16] {
 /// digested, and the session is made. From the handshake on the server holds a slot for
 /// this player: a failure says goodbye (`0x43`).
 pub fn finish_join(mut client: Client<BoxedTransport>, cars: Vec<CarEntry>, root: Option<&Path>) -> Result<OnlineSession, String> {
+    // --csp: a `csp/<build>/../<track>` name is CSP's: the track is `<track>`, and the files
+    // to hash keep the server's path for the checksum list but are read from the real folder
+    let csp_track = client.csp.and_then(|_| rustyac_net::csp::split_track(&client.accepted.track).map(|t| (t.build, t.track.to_string(), client.accepted.track.clone())));
+    if let Some((_, track, _)) = &csp_track {
+        client.accepted.track = track.clone();
+    }
     let accepted = client.accepted.clone();
     let rest = (|| -> Result<(), String> {
+        if let Some((build, _, _)) = &csp_track {
+            if *build > rustyac_net::csp::BUILD {
+                return Err(format!("the server wants CSP build {build} or newer: rustyAC's --csp is build {}", rustyac_net::csp::BUILD));
+            }
+        }
         // what becomes a folder's name is a plain name
         let named = [("track", &accepted.track), ("car", &accepted.model)].into_iter().chain(cars.iter().map(|car| ("car", &car.model)));
         for (what, name) in named {
@@ -110,7 +121,14 @@ pub fn finish_join(mut client: Client<BoxedTransport>, cars: Vec<CarEntry>, root
         let root = root.ok_or("the server asks for checksums of the game's files: Assetto Corsa's folder was not found (set AC_ROOT)")?;
         let mut digests = Vec::new();
         for file in &accepted.checksum_files {
-            let bytes = read_game_file(root, file).ok_or(format!("PROBLEMS DURING CHECKSUM: {file} is not in {}", root.display()))?;
+            let real = match &csp_track {
+                Some((_, track, raw)) => file.replacen(&format!("content/tracks/{raw}/"), &format!("content/tracks/{track}/"), 1),
+                None => file.clone(),
+            };
+            let mut bytes = read_game_file(root, &real).ok_or(format!("PROBLEMS DURING CHECKSUM: {file} is not in {}", root.display()))?;
+            if csp_track.is_some() && rustyac_net::csp::is_track_surfaces(&real) {
+                bytes = rustyac_net::csp::surfaces_fix(bytes);
+            }
             digests.push(rustyac_net::md5::digest(&bytes));
         }
         client.set_checksums(digests, car_md5(root, &accepted.model));
@@ -275,6 +293,8 @@ pub struct OnlineSession {
     pub pending: Vec<Event>,
     /// `ACClient::welcomeMessage`, `ACClient::dcCountdown.message` (once it is signaled)
     pub welcome: String,
+    /// `--csp`: the server's CSP settings from the welcome text (`$CSP0:`), sections merged.
+    pub csp_settings: Vec<rustyac_net::csp::IniSection>,
     pub disconnect: Option<String>,
     /// The cars that become remote cars when the world is built (then empty).
     pub remote_entries: Vec<CarEntry>,
@@ -413,7 +433,7 @@ impl OnlineSession {
         // Sim::getCar order: the player's car, then the others
         let player = |car: &CarEntry| rustyac_physics::race::output::Player { name: car.driver_name.clone(), car: car.model.clone(), skin: car.skin.clone() };
         let players = cars.iter().filter(|car| car.session_id == me).map(player).chain(remote_entries.iter().map(player)).collect();
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0, ignore_result_teleport: ignore_result_teleport(crate::sim::ac_root()), laps: rustyac_net::laps::SessionLaps::default(), json: None, compounds: Vec::new(), players, local_lap_count: 0, local_best_lap: 0 }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), csp_settings: Vec::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0, ignore_result_teleport: ignore_result_teleport(crate::sim::ac_root()), laps: rustyac_net::laps::SessionLaps::default(), json: None, compounds: Vec::new(), players, local_lap_count: 0, local_best_lap: 0 }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -702,9 +722,20 @@ impl OnlineSession {
                     }
                 }
                 Event::Message(Message::WelcomeMessage(text)) => {
-                    self.welcome = text.clone();
-                    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                    // --csp: the server's CSP settings ride at the end, after tabs; CSP shows the rest
+                    let csp = self.net.client.csp.and_then(|_| rustyac_net::csp::split_welcome(text));
+                    self.welcome = csp.as_ref().map_or(text.clone(), |(shown, _)| shown.clone());
+                    for line in self.welcome.lines().filter(|line| !line.trim().is_empty()) {
                         self.console.push(format!("server: {line}"));
+                    }
+                    if let Some((_, ini)) = csp {
+                        self.csp_settings = rustyac_net::csp::parse_ini(&ini);
+                        // shortcut: stored and listed only: rustyAC's --csp reads none of them yet (NH-3/6/7 do)
+                        for (section, keys) in &self.csp_settings {
+                            for (key, value) in keys {
+                                self.console.push(format!("csp: server setting [{section}] {key} = {} (stored, not used yet)", value.replace(['\r', '\n'], " ")));
+                            }
+                        }
                     }
                 }
                 // the player is put out himself: no notice, the countdown's red screen
@@ -782,6 +813,7 @@ impl OnlineSession {
                         self.console.push(line);
                     }
                 }
+                Event::Csp(line) => self.console.push(line.clone()),
                 Event::Associated => self.console.push("online: the server answers on UDP, car updates flow".to_string()),
                 Event::ServerSilent => self.message("Connection Issue".to_string(), "The server seems to be unavailable.".to_string(), 0),
                 Event::ConnectionLost(message) => self.say(format!("Connection lost: {message}")),

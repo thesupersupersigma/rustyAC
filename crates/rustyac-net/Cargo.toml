@@ -10,6 +10,8 @@ license = "GPL-3.0-or-later"
 [dependencies]
 rustyac-math = { path = "../rustyac-math" }
 rustyac-physics = { path = "../rustyac-physics" }
+# the zlib of CSP's server settings (`--csp`); already in the tree (flate2's), pure Rust, builds for wasm
+miniz_oxide = "0.8"
 
 # the WebSocket client of the desktop's transport through a gateway (plain std, no
 # dependencies of its own); a browser brings its own WebSocket

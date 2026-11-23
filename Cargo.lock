@@ -872,6 +872,7 @@ dependencies = [
 name = "rustyac-net"
 version = "1.1.5"
 dependencies = [
+ "miniz_oxide 0.8.9",
  "rustyac-content",
  "rustyac-gateway",
  "rustyac-math",

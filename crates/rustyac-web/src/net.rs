@@ -179,7 +179,7 @@ impl NetJoin {
             return Err(JsValue::from_str("the player id is not letters and digits"));
         }
         let name: String = name.trim().chars().filter(|c| !c.is_control()).take(32).collect();
-        let request = JoinRequest { guid: guid.to_string(), name: if name.is_empty() { "rustyAC driver".to_string() } else { name }, team: String::new(), nation_code: String::new(), car: car.to_string(), password: password.to_string() };
+        let request = JoinRequest { guid: guid.to_string(), name: if name.is_empty() { "rustyAC driver".to_string() } else { name }, team: String::new(), nation_code: String::new(), car: car.to_string(), password: password.to_string(), features: None };
         let transport: BoxedTransport = Box::new(WsTransport::new(JsPipe(link.link.clone())));
         let join = Join::start(transport, &request).map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(NetJoin { join: Some(join), link: link.link.clone(), error: None, started: now_ms() })

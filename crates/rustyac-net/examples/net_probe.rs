@@ -26,6 +26,7 @@ fn main() {
         nation_code: String::new(),
         car: value("--car").unwrap_or_default(),
         password: value("--password").unwrap_or_default(),
+        features: None,
     };
     let mut transport = NativeTransport::connect(host, port.parse().expect("port"), 5000).unwrap_or_else(|e| {
         eprintln!("{e}");
