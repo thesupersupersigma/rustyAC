@@ -228,6 +228,9 @@ pub struct OracleTrack {
     /// Task C5i-c: the other cars stand this many metres apart along the spawn's tail (csp_oracle's
     /// `CSP_ORACLE_GAP`) instead of in the track's spawn slots.
     pub gap: Option<f32>,
+    /// Task C5j: and each this many metres higher per slot (csp_oracle's `CSP_ORACLE_LIFT`): the road
+    /// climbs along the tail, a car at the spawn's height would start sunk into it.
+    pub lift: f32,
 }
 
 fn hex3(values: &[f32; 3]) -> String {
@@ -898,6 +901,9 @@ impl SimSetup {
                 if let Some(gap) = track.gap {
                     put("oracle_gap", gap.to_string());
                 }
+                if track.lift != 0.0 {
+                    put("oracle_lift", track.lift.to_string());
+                }
             }
             if let Some(c) = &o.collide {
                 put("oracle_collide", "1".to_string());
@@ -949,7 +955,7 @@ impl SimSetup {
                 collide: None,
             };
             let blank_collide = || OracleCollide { collider_mesh: false, mesh_bounce_vel: 0, no_collision_steps: 0, floor: false };
-            let blank_track = || OracleTrack { folder: String::new(), layout: String::new(), objects: false, position: [0.0; 3], tail: [0.0, 0.0, -1.0], armed: false, allowed_tyres_out: -1, gap: None };
+            let blank_track = || OracleTrack { folder: String::new(), layout: String::new(), objects: false, position: [0.0; 3], tail: [0.0, 0.0, -1.0], armed: false, allowed_tyres_out: -1, gap: None, lift: 0.0 };
             match key {
                 "car" => setup.car = value.to_string(),
                 "dt" => {
@@ -1102,6 +1108,7 @@ impl SimSetup {
                 "oracle_spawn_position" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).position = parse_hex3(value)?,
                 "oracle_spawn_tail" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).tail = parse_hex3(value)?,
                 "oracle_armed" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).armed = flag(),
+                "oracle_lift" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).lift = value.parse().map_err(|e| format!("oracle_lift: {e}"))?,
                 "oracle_gap" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).gap = Some(value.parse().map_err(|e| format!("oracle_gap: {e}"))?),
                 "oracle_allowed_tyres_out" => {
                     oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).allowed_tyres_out =

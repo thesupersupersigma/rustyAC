@@ -1291,6 +1291,7 @@ fn build_world(
     let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit), rules)?;
     let mut opponents = Vec::new();
     let gap = setup.oracle.as_ref().and_then(|o| o.track.as_ref()).and_then(|t| t.gap);
+    let lift = setup.oracle.as_ref().and_then(|o| o.track.as_ref()).map_or(0.0, |t| t.lift);
     for (index, opponent) in setup.opponents.iter().enumerate() {
         let slot = index + 1;
         let opponent_data = find_car_data(&opponent.car)?;
@@ -1302,7 +1303,7 @@ fn build_world(
                 let (t, at, gap) = (spawn.tail, spawn.position, gap.unwrap_or_default());
                 let n = (t.x * t.x + t.y * t.y + t.z * t.z).sqrt();
                 let along = |a: f32, b: f32| a + b / n * gap * slot as f32;
-                SpawnPose { position: Vec3f::new(along(at.x, t.x), along(at.y, t.y), along(at.z, t.z)), tail: t }
+                SpawnPose { position: Vec3f::new(along(at.x, t.x), along(at.y, t.y) + lift * slot as f32, along(at.z, t.z)), tail: t }
             }
             (Some(track), None) => spawn_slot(track, &setup.spawn, slot)?,
             // the flat road: in a row behind the driver's car

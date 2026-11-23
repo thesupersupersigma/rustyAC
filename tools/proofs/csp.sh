@@ -338,8 +338,9 @@ done
 # csp_hit on the same inputs and car fields; a call that differs is DIFFERENT). The first differing value
 # printed skips the state fields only CSP's getPhysicsState hook (+0x590220) or rustyAC's view fill (the
 # view list below). A row whose first difference is the one expected_skips.txt pins is EXPECTED (Task
-# C5i-c). The two row (Task C5i-c): car 1 parked 5.5 m behind car 0 along the spawn's tail, on rustyAC's
-# parked controls (CSP_ORACLE_PARK=last; the tape's opponent and oracle_gap)
+# C5i-c). The two row (Task C5i-c): car 1 parked 5.5 m ahead of car 0 along the spawn's tail, on rustyAC's
+# parked controls (CSP_ORACLE_PARK=last; the tape's opponent and oracle_gap), 0.2 m higher than the spawn
+# (Task C5j: the road climbs ~19 cm there, at the spawn's height it started sunk; oracle_lift)
 view='tyre_surface_def|last_ff_final|body_work_volume|time_stamp|ride_height|setup_state|gear_rpm_window|tyre_thermal_states|lock_controls_time|anti_squat|caster|ground_plane|normalized_spline_position|acc_g|wheel_angular_speed'
 for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_ferrari_f2004 wall 6667" "ks_ferrari_f2004 two 1600"; do
     set -- $row; car=$1; kind=$2; steps=$3
@@ -349,8 +350,8 @@ for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_
     tape=$(drive "$tape")  # on the farm: a copy naming its own AC folder
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     r=$out/runs/row_${car}_$kind
-    cars=1; more=; [ $kind = two ] && { cars=2; more="\\nopponent=$car:parked\\noracle_gap=-5.5"; }
-    ( [ $kind = two ] && export CSP_ORACLE_PARK=last CSP_ORACLE_GAP=-5.5
+    cars=1; more=; [ $kind = two ] && { cars=2; more="\\nopponent=$car:parked\\noracle_gap=-5.5\\noracle_lift=0.2"; }
+    ( [ $kind = two ] && export CSP_ORACLE_PARK=last CSP_ORACLE_GAP=-5.5 CSP_ORACLE_LIFT=0.2
       CSP_ORACLE_BREAK=587cc0f oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --cars $cars --steps $steps )
     # the tape for rustyac: this car (and the parked one), CSP mode on CSP's core, cut after its first $steps steps (40 bytes a step)
     perl -0777 -pe "s/^car=.*\$/car=$car/m; s/\nend\n/$more\ncsp=1\ncsp_core=1\nend\n/" "$tape" > "$r.ryin.full"

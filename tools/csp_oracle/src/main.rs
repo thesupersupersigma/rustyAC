@@ -1793,7 +1793,11 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             let (tail, at) = (vector("oracle_spawn_tail"), vector("oracle_spawn_position"));
             let n = (tail[0] * tail[0] + tail[1] * tail[1] + tail[2] * tail[2]).sqrt();
             force_rotation(car, &tail);
-            force_position(car, &std::array::from_fn(|k| at[k] + tail[k] / n * gap * i as f32), 1);
+            // (Task C5j) CSP_ORACLE_LIFT m higher per car: the road climbs along the tail
+            let lift = std::env::var("CSP_ORACLE_LIFT").ok().map_or(0.0, |l| l.parse::<f32>().expect("CSP_ORACLE_LIFT is metres"));
+            let mut p: [f32; 3] = std::array::from_fn(|k| at[k] + tail[k] / n * gap * i as f32);
+            p[1] += lift * i as f32;
+            force_position(car, &p, 1);
         } else {
             // side by side 4 m apart, nose towards +z
             force_rotation(car, &[0.0, 0.0, -1.0]);
