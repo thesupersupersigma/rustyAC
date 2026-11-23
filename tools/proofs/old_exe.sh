@@ -14,6 +14,9 @@ if [ ! -f "$old/rustyac.exe" ]; then
     src=$work/src
     rm -rf "$work"; git worktree prune
     git worktree add --detach "$src" "$tag" >&2 || { echo "no worktree of $tag" >&2; exit 2; }
+    # a tag with the embree feature (v1.1.5 on) finds no ignored/embree in that worktree: this
+    # checkout's built Embree (same 3.13.4), when there is one, so the build needs no source
+    [ ! -f "$repo/target/embree-3.13.4-mt/embree3.lib" ] || export RUSTYAC_EMBREE_LIB="$repo/target/embree-3.13.4-mt"
     (cd "$src" && CARGO_TARGET_DIR=$work/tgt cargo build --release --locked --quiet -p rustyac-game --bin rustyac) || exit 2
     mkdir -p "$old.part" && cp "$work"/tgt/release/*.exe "$work"/tgt/release/*.dll "$old.part"/ 2>/dev/null
     mv "$old.part" "$old"
