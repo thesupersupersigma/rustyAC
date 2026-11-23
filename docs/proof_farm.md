@@ -29,10 +29,12 @@ has both. Task F1 is a spike: it measures and judges, but it builds no scheduler
   once when the farm isn't set up or doesn't answer.
 - **F3 done**: the full run's 4 non-identical cases explained, fixed and IDENTICAL again; the copy
   leaves out the PC's kept game results; `--quick --farm` 288/288 IDENTICAL, all farm areas on the VM.
-- **Resume here: the first real `--full --farm`**, only with Super's go, with F3's first-run
-  `FARM_LANES` (about 3h50m-6h on the VM plus about 50 min of results back); compare its verdicts and
-  time with the PC's full run of 2026-11-19, then retune `farm_lanes_full` from its area times.
-  Optional: browser and ai_page in two PC lanes (part 5; not tried in F3: 16 GB free).
+- The first real `--full --farm` (2026-11-23, main folder): every area identical, but 9h14m: the
+  PC's lanes were done after about 1.5 h, then it waited about 8 h on the VM's fixed lanes.
+- **F4** (below): one shared queue of shards that the PC's free lanes and the VM's eight lanes both
+  take from; csp runs on the PC only; `farm_lanes_full` / `FARM_LANES` are gone.
+- **Resume here: F4 is done.** Next: Super's next `--full --farm` (estimate in F4: likely about 4h with
+  the server as busy as on 2026-11-23, about 3h with it idle). Optional: browser and ai_page in two PC lanes.
 
 ## Part 1: what the processor changes (from the code)
 
@@ -955,3 +957,165 @@ in the checkout any more: every farm area ran on the VM, **288 of 288 IDENTICAL,
 The copy 29 s, the VM's run 42m37s, the results back 2m50s (one new kept folder). The long pole is
 now the VM (part 5: the PC's browser + ai_page lane). Step 3.3 (browser and ai_page in two PC lanes)
 was not tried: two headless Chromes need about 8 GB more and the PC had 16 GB free.
+
+## F4: one shared queue, csp on the PC only
+
+The second real full run (2026-11-23, main folder, `--full --farm`) had every area identical but
+took **9h14m**, longer than the PC alone used to (about 6.5-7 h). The PC's lanes (browser 56 min,
+ai_page 26, shaders 5) were done after about 1.5 h; then the PC sat idle for about 8 h while the VM
+worked through F3's fixed lane plan (VM run 31,001 s, results back 2,149 s). That night the VM ran
+3,410 min of case time (the sum of each area's `times.tsv`: fresh 900, yebis_sweep 673, render 576,
+physics 328, replays 271, gui 267, dumps 262, net 98, csp 80, launcher 21, sound 13), about **3.9 ×**
+the PC's time for the same areas: F3's ratios were about 1.8, but the server ran another heavy job
+that night and eight lanes share 12 virtual CPUs.
+
+### The queue
+
+- **Words.** `farm_up` (after its checks and `prebuild.sh`) writes the queue: every farm area in
+  shards (the existing `<area>.<i>` words) of about 15 min (`--full`) or 8 min (`--quick`) of
+  measured case time, longest first. The times are the sum of `target/proofs/cases/<mode>/<area>.times`,
+  which every run already rewrites, so the order improves itself; an area with no times yet goes
+  first, whole. net stays whole (`net.sh` checks its goldens in one `check.sh` run, no `keep()`).
+  The list is `run\queue\list` on the share and `target/proofs/farm/queue` here.
+- **Taking.** Every PC lane, once its own areas are done, and one more PC lane from the start, take
+  the next word nobody took; the VM runs eight lanes that do only that (`PROOF_QUEUE`, `PROOF_PULL`
+  from `farm_run.sh`). GPU-heavy areas (browser, ai_page, shaders) and csp stay in the PC's own
+  lanes as before; the queue fills the PC's free lanes after them.
+- **Claimed exactly once.** A claim is `mkdir run\queue\claim\<word>`: the VM makes it on its own
+  disk, the PC over SMB, and both end in one NTFS create on the VM, which succeeds for exactly one
+  of them (no rename, no cached listing, no coordinator). The claim fails with "File exists" when
+  taken; any other failure (the share gone) ends that lane's taking. Checked
+  (`re/scratch/taskF4/claim_test.sh`): 4 PC lanes over SMB and 8 VM lanes raced for 400 words:
+  400 of 400 taken, none twice, none missing (PC 4 × 25, VM 8 × 37-38).
+- **No preemption.** A word started on one machine finishes there. Its results come back word by
+  word (`farm_go`: folder, log, row of each word the VM finished); the PC merges the shards once
+  both sides are done (`run_all.sh`'s `merge`, as for lanes before).
+- **If the VM dies** (or stalls, or its share stops answering): the PC's lanes keep taking what is
+  left while the share answers; when the farm half gives up (`FARM_STALL`, 10 min without the share,
+  the task not starting) every word with no row here (the VM's unfinished ones and any never taken)
+  runs on the PC from a local queue of only those, 4 lanes, with the same shard counts, its "where"
+  `PC (VM: <reason>)`, and the table's last line says the farm stopped and why. Checked
+  (`re/scratch/taskF4/vm_dies.sh`): every bash on the VM killed 90 s into its run, `FARM_STALL=2`:
+  the VM's finished words (sound, python) came back, its unfinished `replays.2` ran on the PC, all
+  IDENTICAL.
+- **Copy failed / VM off / `--farm-fallback`.** A failure before the queue exists (no settings, no
+  ssh, no share, an earlier farm run still running, `prebuild.sh`) stops or falls back area by area
+  as in F3 (unchanged). A failure after it (the copy, the run folder, the task) only records why:
+  the PC's lanes take the whole queue. Checked: `FARM_SYNC=bogus --quick --farm sound python
+  launcher`: one PC lane took all three, 6/6 IDENTICAL, the last line "the farm stopped: the copy to
+  the VM failed (no part bogus), the PC took the rest".
+- **The table's "where"** says per area which machine ran which shards (`VM 1,2,5; PC 3,4`), and
+  `PC (VM: <reason>)` for a word the PC ran because the VM could not; physics' note appears when any
+  physics shard ran on the VM.
+- **proof_tui**: a lane that takes from the queue is `lane @<k>` in `run.status`, its words so far in
+  `lanes/<k>.lane` (the VM's mirrored too); proof_tui shows those words. Its time left counts only
+  the words taken so far (shortcut, in the code).
+- **Found on the way**: replays' `rustyac.exe replay at 0, 1, 8 workers` ran outside `keep()`, so each
+  replays shard ran it and `merge` counted it twice (an ERROR the run-again pass turned back into
+  IDENTICAL: the full run's replays row said 33 cases for 32). It now goes through `keep()` (one shard
+  runs it) and is in `quick/replays.txt`.
+
+### Per area: what a shard on the PC needs
+
+Every case compares the game and the port on the machine it runs on, so a verdict never depends on
+where it ran; what differs is what it proves and what it may have to record.
+
+| area | on the PC | notes |
+|---|---|---|
+| physics | nothing | the PC proves MSVCR120.dll's maths, the VM `pure.rs`'s (F2); the note names it when any shard ran on the VM |
+| fresh | the PC's kept recordings (FMA3 keys) | `archive_kept.sh` (dry run, 2026-11-23): the PC holds **26 of today's 217** keys, so a PC fresh shard mostly records the game again (about 1.7 × its time from kept results) and keeps what it recorded; priced in below, and it fills the PC's keys for later runs |
+| dumps | the PC's kept dumps (FMA3 keys) | same as fresh, much smaller |
+| net | nothing | off FMA3 the native ways take `pure.rs` (as physics) |
+| render, gui, yebis_sweep, replays, sound, python, launcher | nothing | game and port live on the same machine |
+| csp | PC only | Part 2 |
+
+### csp on the PC only
+
+The lead chat's decision (2026-11-22): CSP itself behaves differently on the VM's processor without
+AVX, and the port's loader-based core cases don't run there yet. csp is off `areas.map`'s `@farm`
+line, so it runs in the PC's own lanes; `farm_sync.sh` no longer has the `csp` part (CSP's build and
+`tools/csp`), the repo part no longer sends `csp_oracle`'s `main.rs`, and `prebuild.sh` no longer
+builds `csp_oracle`.
+
+### `run_all.sh --quick --farm` (part 3)
+
+Two farm runs from the worktree (`re/scratch/taskF4/quick_farm*.txt`) and a PC-only quick run
+between them (`quick_pc.txt`, plus `quick_pc_dumps.txt`: dumps alone, after the `old_exe.sh` fix
+below). **Every case has the same verdict in all three** (`verdicts_compare.txt`, case by case, all
+14 areas); csp's one DIFFERENT is its known two-car row (docs/csp/core.md, C5i-c: car 1 differs from
+step 1, also in Vanilla), on the PC in both runs.
+
+| area | where (farm run 2) | cases | farm run 2 | PC alone |
+|---|---|---|---|---|
+| physics | PC | 9 | 0m48s | 1m01s |
+| fresh | PC 1; VM 2,3,4 | 63 | 27m36s | 28m16s |
+| csp | PC | 67 | 18m16s | 14m13s |
+| sound | PC | 4 | 0m25s | 0m24s |
+| render | VM 1; PC 2 | 18 | 22m30s | 8m55s |
+| gui | VM 1,2,3 | 29 | 36m03s | 18m18s |
+| python | PC | 1 | 0m13s | 0m12s |
+| replays | VM | 6 | 22m51s | 5m10s |
+| net | PC | 16 | 5m22s | 7m06s |
+| browser | PC | 18 | 13m34s | 14m22s |
+| ai_page | PC | 10 | 26m13s | 26m52s |
+| shaders | PC | 4 | 1m01s | 1m51s |
+| launcher | PC | 1 | 0m53s | 0m49s |
+| dumps | PC | 6 | 1m58s | 2m12s |
+| **wall clock** | | **253** | **0h41m** (42m08s with `prebuild.sh`) | **0h50m** (0h48m + dumps) |
+
+(Times of a sharded area are its longest shard's.) Before F4 the last quick farm run took 0h45m (F3).
+**The quick run's long pole is the PC's browser + ai_page lane** (40 min, as in F2 part 5); the
+queue can't shorten that lane, so a quick run gains little more until browser and ai_page get two
+lanes. The VM's run took 2,285 s (38 min), the copy 111 s (517 MB of `ac`), the results back 110 s
+(75 new kept files of the VM).
+
+- **Farm run 1** (the first after the master merge) took 1h40m, all verdicts the same: the PC's csp
+  and browser lanes rebuilt `csp_oracle` and the wasm crates from cold (done 50 and 59 min into the
+  run). The queue did its job around them: the VM took 25 of the 31 words (fresh 6 of 8, render 6 of
+  7, gui 8 of 9), the PC's free lanes 6.
+- **The shard sizes come from whichever machine ran a case last.** Run 1's times were the VM's (F3's
+  run), so it made 31 words of about 8 VM-min; run 2's were the PC-only run's, so it made 12 words of
+  about 8 PC-min, and a gui shard took 36 min on the VM. For a full run that would leave a long VM
+  shard at the end, so the full target is 15 min (900 s), not 30; a `shortcut:` comment in `farm.sh`
+  says to scale the times per machine if a VM shard still ends a run late.
+- **A start cost on the VM, once per run**: in run 2 the first case of every VM shard took 12-18 min
+  (all 8 lanes starting at once, after the copy put 517 MB into the VM's `ac`); in run 1 a shard
+  started later spent 30-90 s before its first case. So a shard costs about a minute to start, and
+  227 words (the next full run's queue) about 15 min of wall clock in all.
+
+### The next full run (estimate)
+
+From the 2026-11-23 run's case times (VM) and the PC's own area times (F3's list, the 2026-11-19 PC
+full run; csp about 35 PC-min now, from its VM time and part 5's ratio): the farm areas are about
+870 PC-min of work, plus about 100 min more for the share of fresh the PC records again (it holds
+few keys); the PC's own lanes (browser 56, ai_page 26, shaders 5, csp about 35) about 120 PC-min.
+The PC gives 4 lanes; the VM's eight lanes are worth 8 / 3.9 ≈ 2 PC lanes on a night like
+2026-11-23, 8 / 1.8 ≈ 4.4 with the server idle (F3's ratios). On top: the start (`prebuild.sh`,
+the copy, the VM's start cost: 10-25 min), the shards' own starts (about 15 min), the last shard
+(up to one VM shard, 15-60 min), the results back (5-35 min: 2,149 s on 2026-11-23, nearly all the
+VM's new kept recordings).
+
+| | work (PC-min) | lanes (PC equivalents) | lanes busy | + the rest | **wall clock** |
+|---|---|---|---|---|---|
+| server busy (as 2026-11-23) | about 1,090 | 4 + 2.0 | about 3h00m | 45 min-2h15m | **about 3h45m-5h15m, likely about 4h** |
+| server idle | about 1,060 | 4 + 4.4 | about 2h05m | 45 min-1h45m | **about 2h50m-3h50m, likely about 3h** |
+
+Against 9h14m on 2026-11-23 and about 6.5-7 h for the PC alone. Runs after it get shorter again:
+the fresh shards the PC records are kept, so later PC fresh shards run from kept results, and the
+order and sizes come from the run before. The model assumes the PC keeps 4 lanes busy with heavy
+areas next to Chrome (room() waits for 6 GB free before a heavy case; with 16-19 GB free that may
+slow it).
+
+### Also found
+
+- **`old_exe.sh` could not build v1.1.5** (the dumps area's old release, also built by `prebuild.sh`
+  for every `--farm` run): from v1.1.5 on rustyac.exe has the `embree` feature, and the tag's git
+  worktree has no `ignored/embree`, so dumps "did not run" on the PC and the next `--farm` would have
+  stopped at `prebuild.sh`. It now hands the build this checkout's built Embree
+  (`RUSTYAC_EMBREE_LIB=target/embree-3.13.4-mt`, the same 3.13.4); v1.1.5's exe built in 2 min and
+  dumps is 6/6 IDENTICAL.
+- **Open: `archive_kept.sh --move` counts the VM's kept recordings as old.** Its dry run here lists
+  186 old folders, 14.1 GB: it asks fresh.sh for today's keys on this PC's maths path (FMA3), so the
+  VM's SSE2 recordings that `farm_go` brings back (930 files after 2026-11-23) look unused and
+  would be archived. Harmless for the proofs (the VM keeps its own copy and the PC never reads
+  them), but the PC then holds them for nothing until the next `--move`. Not changed here.
