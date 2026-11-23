@@ -162,7 +162,15 @@ fn status(dir: &Path) -> Status {
             Some(("mode", m)) => mode = m.trim().to_string(),
             Some(("start", s)) => start = s.trim().parse::<f64>().ok(),
             Some(("end", s)) => end = s.trim().parse::<f64>().ok(),
-            Some(("lane", a)) => lanes.push(a.split_whitespace().map(str::to_string).collect::<Vec<_>>()),
+            // "lane @<k>": a lane that takes from the shared queue (Task F4), its words so far in lanes/<k>.lane
+            // shortcut: the time left counts only the words taken so far, not the queue's rest
+            Some(("lane", a)) => {
+                let a = match a.trim().strip_prefix('@') {
+                    Some(k) => read(&dir.join("lanes").join(format!("{k}.lane"))),
+                    None => a.to_string(),
+                };
+                lanes.push(a.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            }
             _ => {}
         }
     }

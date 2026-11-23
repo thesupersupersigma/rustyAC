@@ -8,10 +8,10 @@
 # and repo\target\prebuilt, and every source is named below, so nothing under a served folder
 # (web/, target/web*) goes.
 #   FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [part ...]
-# parts (default: programs physics ac repo csp): programs (target/prebuilt's manifest, the proof scripts,
+# parts (default: programs physics ac repo): programs (target/prebuilt's manifest, the proof scripts,
 # cardata/), physics (what the physics area reads), ac (the rest of the install, ~64 GB), repo (oracle/,
-# re/gold), csp (CSP's frozen build). Each part prints "sync <part>: <bytes> in <s> s (<MB/s>)"; robocopy's logs are in
-# target/farm_sync/.
+# re/gold). The csp area runs on the PC only (Task F4), so CSP is not sent. Each part prints
+# "sync <part>: <bytes> in <s> s (<MB/s>)"; robocopy's logs are in target/farm_sync/.
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd); cd "$repo" || exit 2
 # the share as //<vm>/rustyac-farm or \\<vm>\rustyac-farm; anything else (a lost backslash makes
@@ -72,7 +72,7 @@ part_physics() {
 # then every kept result and recording but re/gold/web (the browser's, which stays on the PC) and the
 # PC's kept game results (fresh/rec, dumps: their keys hold the maths path, so the VM never reads the
 # PC's; F3: a full run that recorded again sent 16 GB for nothing), and the repo files areas read
-# besides the programs (python's test apps, csp's race.ini, render's poses)
+# besides the programs (python's test apps, render's poses)
 part_ac() {
     rc "$ac" ac /E /XD "$(cygpath -w "$ac/sdk")"
 }
@@ -80,18 +80,10 @@ part_repo() {
     rc oracle repo/oracle /E
     rc re/gold repo/re/gold /E /XD "$(cygpath -aw re/gold/web)" "$(cygpath -aw re/gold/fresh/rec)" "$(cygpath -aw re/gold/dumps)"
     rc tools/render_oracle/py_apps repo/tools/render_oracle/py_apps /E
-    rc tools/csp_oracle/src repo/tools/csp_oracle/src main.rs
     rc crates/rustyac-render/tests/data repo/crates/rustyac-render/tests/data /E  # render's --pose files
 }
 
-# CSP's frozen build and the script that makes csp.sh's AC root with it (re/csp/fakeac); on the VM,
-# once, in its repo folder: AC_ROOT=<its ac folder> powershell -File tools/csp/fakeac_csp.ps1
-part_csp() {
-    rc ignored/CSP/lights-patch-v0.3.2-preview2 repo/ignored/CSP/lights-patch-v0.3.2-preview2 /E
-    rc tools/csp repo/tools/csp /E
-}
-
-for part in ${*:-programs physics ac repo csp}; do
+for part in ${*:-programs physics ac repo}; do
     [ "$(type -t "part_$part")" = function ] || { echo "no part $part" >&2; exit 2; }
     : > "$logs/$part.txt"; bytes=0; s=$(date +%s)
     "part_$part"

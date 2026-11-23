@@ -18,7 +18,7 @@ R="--release --locked --quiet"
 p=target/prebuilt; rm -rf $p; mkdir -p $p/src $p/tests
 files=
 
-for t in car_oracle chassis_compare render_oracle audio_oracle csp_oracle; do
+for t in car_oracle chassis_compare render_oracle audio_oracle; do
     cargo build $R --manifest-path tools/$t/Cargo.toml
     files="$files tools/$t/target/release/$t.exe"
 done
