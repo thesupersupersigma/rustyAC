@@ -7,3 +7,5 @@ multi ai_solo spa - --ghost
 multi ai_solo spa - --telemetry
 multi ai_solo spa - --ai-record
 replay-file AC_181026-153245_R_rss_formula_hybrid_2020_ks_nurburgring_layout_gp_a
+# rustyac.exe replaying its own drive at 0, 1 and 8 workers (one case, so one shard runs it)
+rustyac\.exe replay at 0, 1, 8 workers

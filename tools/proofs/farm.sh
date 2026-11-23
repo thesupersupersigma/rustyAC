@@ -120,7 +120,7 @@ farm_go() {
         elif [ $(( $(date +%s) - last )) -gt $(( ${FARM_STALL:-60} * 60 )) ]; then why="no new verdict on the VM for ${FARM_STALL:-60} min"; break; fi
     done
     t2=$(date +%s)
-    [ -z "$why" ] || { farm_why "stopped: $why"; farm_ssh schtasks /end /tn rustyac_farm > /dev/null 2>&1; }
+    [ -z "$why" ] || { farm_why "$why"; farm_ssh schtasks /end /tn rustyac_farm > /dev/null 2>&1; }
     back run "$fo" out.txt task.txt
     # every word the VM finished, as if it had run here (a word with no row there is the PC's, or one
     # the VM never finished: run_all.sh runs it here)

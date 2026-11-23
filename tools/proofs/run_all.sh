@@ -318,7 +318,7 @@ else
         s=$(shards "$1") || { echo PC; return; }
         for w in $s; do echo "$(cat "$out/rows/$w.where" 2> /dev/null || echo PC)|${w##*.}"; done |
             awk -F'|' '{ if ($1 in m) m[$1] = m[$1] "," $2; else { o[++n] = $1; m[$1] = $2 } }
-                END { for (i = 1; i <= n; i++) printf "%s%s %s", i > 1 ? "; " : "", o[i], m[o[i]]; print "" }'
+                END { for (i = 1; i <= n; i++) printf "%s%s %s", (i > 1 ? "; " : ""), o[i], m[o[i]]; print "" }'
     }
     note=
     case "$(where_of physics)" in VM*|*"; VM "*) note="; physics on the VM proves pure.rs's maths, not MSVCR120.dll's" ;; esac

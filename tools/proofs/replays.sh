@@ -31,12 +31,15 @@ for f in "$docs_gold/replay/temp/"*.acreplay; do
     esac
 done
 
-build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
-exe=target/release/rustyac.exe
-rustyac $exe --car ks_ferrari_f2004 --track spa --no-race-ini --spawn start --autodrive --headless --duration 60 --no-audio --record "$out/spa.ryin" > "$out/record.txt" 2>&1
-hashes=$(for w in 0 1 8; do rustyac $exe --replay "$out/spa.ryin" --headless --state-hash --physics-threads $w 2>&1 | grep -oE "state hash [0-9a-f]+"; done | sort -u)
-[ "$(echo "$hashes" | wc -l)" = 1 ] && [ -n "$hashes" ] && verdict "rustyac.exe replay at 0, 1, 8 workers" IDENTICAL "$hashes" || verdict "rustyac.exe replay at 0, 1, 8 workers" DIFFERENT "$hashes"
-rm -f "$out/spa.ryin"
+# through keep(): with the area in shards (run_all.sh), one shard runs it, not each
+if keep "rustyac.exe replay at 0, 1, 8 workers"; then
+    build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
+    exe=target/release/rustyac.exe
+    rustyac $exe --car ks_ferrari_f2004 --track spa --no-race-ini --spawn start --autodrive --headless --duration 60 --no-audio --record "$out/spa.ryin" > "$out/record.txt" 2>&1
+    hashes=$(for w in 0 1 8; do rustyac $exe --replay "$out/spa.ryin" --headless --state-hash --physics-threads $w 2>&1 | grep -oE "state hash [0-9a-f]+"; done | sort -u)
+    [ "$(echo "$hashes" | wc -l)" = 1 ] && [ -n "$hashes" ] && verdict "rustyac.exe replay at 0, 1, 8 workers" IDENTICAL "$hashes" || verdict "rustyac.exe replay at 0, 1, 8 workers" DIFFERENT "$hashes"
+    rm -f "$out/spa.ryin"
+fi
 
 rm -rf "$root"
 summary
