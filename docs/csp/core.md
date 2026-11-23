@@ -68,9 +68,13 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5i-c 3. Spa's track config | answered: real CSP gives an extended car CSP's air (the port is right); the oracle skips CSP's car-load finisher, RSS 3 row pinned EXPECTED |
 | C5i-c 4. two cars | done: `oracle_gap`, row `csp/row ks_ferrari_f2004 two`; car 1 differs from step 1 (also in Vanilla), DIFFERENT |
 
-**Resume here:** C5j: CSP's tyre step for stock cars (the first difference of the F2004 rows, pinned
-EXPECTED until then), the parked second car's step-1 difference (two row), then v1.1.5
-([C5i-c](#task-c5i-c-the-c-runtime-csp-modes-refusals-the-car-collision-callback-two-cars)).
+| C5j 0. two cars' second car | done: it stood 19 cm into the climbing road; `oracle_lift` lifts it 0.2 m, car 1 matches to step 171 ([below](#task-c5j-csps-tyre-step-for-stock-cars)) |
+| C5j 1. survey | done: CSP's tyre step runs Vanilla's for stock cars (no tyre extension) but for `updateAngularSpeed`'s tail |
+| C5j 2. port | started: that tail ported (`angular_speed_tail`), bit-equal in process (kinds `U`/`V`); F2004 lap row's first difference step 2 → 63 |
+
+**Resume here:** C5j part 2: the F2004 rows' step-63 (lap) / 154 (wall) / 165 (two) body difference with
+equal tyre outputs: break CSP's hooks of the car step past the tyres (suspension, drivetrain, aero, the
+car step itself) at step 62-63 ([C5j](#task-c5j-csps-tyre-step-for-stock-cars)), then v1.1.5.
 
 ## The core in one paragraph
 
@@ -1478,8 +1482,9 @@ against the oracle's), not found in this task (rule 32). Not pinned: it stays DI
 
 `lib.sh` `pinned`: a line `<area> <case> | first <difference> | why` in `expected_skips.txt` makes a row
 EXPECTED only while its first difference (past the view list: car, step and value) is that one; an
-earlier step or another value is DIFFERENT again. The F2004 lap and wall rows pin CSP's stock-car tyre
-step (C5j removes both), the RSS 3 row the oracle's air (above).
+earlier step or another value is DIFFERENT again. The F2004 lap and wall rows pinned CSP's stock-car tyre
+step (since C5j, the later body difference: [C5j](#task-c5j-csps-tyre-step-for-stock-cars)), the RSS 3
+row the oracle's air (above).
 
 ### Vanilla
 
@@ -1490,3 +1495,82 @@ browser 18, ai_page 10, shaders 4, launcher 1, dumps 6) but csp (66 identical, 3
 row DIFFERENT); `run_all.sh csp physics`: csp the same, physics 121 of 121.
 
 **Resume here (C5i-c):** see the table at the top.
+
+## Task C5j: CSP's tyre step for stock cars
+
+### Part 0: the two-car row's second car
+
+`oracle_gap` put car 1 5.5 m ahead of car 0 at car 0's spawn height, but Spa's road climbs about 19 cm
+there: car 1 started sunk (step-0 tyre loads 38370, 24778, 32791, 26678 N against car 0's 767, 0, 0, 0),
+and the port and CSP push a sunk car out differently. Not its parked controls. Tape key
+`oracle_lift=<m>` (csp_oracle `CSP_ORACLE_LIFT`) lifts each opponent by n×lift; 0.18 m still sinks it at
+step 2, 0.2 m lands it at step 22. Row `two` uses 0.2: car 1 now matches to step 171 (859 of 1106
+equal; before, step 1, 698). Open question: a sunk lone car differs at steps 1-3 too (the port's and the
+game's push out of a deep start), not looked at.
+
+### Part 1: the survey
+
+Every function of CSP's tyre region (`+0x69d320`..`+0x6acff0`) as a plain break (`re/scratch/taskC5j/survey.sh`),
+F2004 and RSS 3, steps 0-2: both cars take the same path, every tyre every step. CSP's `Tyre::step`
+(`+0x6a0570`, called from the car step `+0x58bccc`) finds no tyre extension for a stock car (`+0xf2f660`
+gives null) and calls the original `Tyre::step` (`0x140283800`, slot `0x1827f9780`); in there each hooked
+call finds no extension either and calls the original through its slot. The doc's claim (build 4184,
+`physics_tyres_suspension.md`) that stock cars get CSP's extended tyre is wrong for 4305 in the oracle.
+
+| hook (call site in acs) | address | size | reached (F2004, RSS 3) | differs from Vanilla's | what it changes | estimate |
+|---|---|---|---|---|---|---|
+| Tyre::step (`+0x58bccc`) | `+0x6a0570` | 0x56d8 | both, every tyre | no: calls the original; the after-call (`+0xf4cd50`) has no scope object, `+0x6a5808` only copies `tyre+0x2f4` out | nothing | - |
+| addGroundContact (`acs+0x283f54`) | `+0x6a70c0` (body `+0x6a7190`) | 0x11f0 | both | no: original | - | 1 session (extended cars) |
+| addTyreForcesV10 (`acs+0x283f99`) | `+0x6a8410` (body `+0x6a84a0`) | 0x2738 | both | no: original | - | 2 sessions (extended cars) |
+| acos helper (`acs+0x27f07c`) | `+0x6a8380` | 0x8a | both | no: TLS `+0x188` null, the original | - | - |
+| getCorrectedD (`acs+0x27f2b8`) | `+0x69ee20` | | both, steps ≥ 1 | no: original | - | - |
+| stepDirtyLevel (`acs+0x27f3b2`) | `+0x6a65e0` | | both | no: original, then nothing | - | - |
+| updateAngularSpeed (`acs+0x28426a`, non-driven fronts) | `+0x69e640`, tail `+0x69e80d` | 0x28d | both, 2 tyres | **yes**: CSP's own tail | sign test counts 0 as +1, so a wheel starting from 0 doesn't lock | ported |
+| updateLockedState (from the tail; driven rears `acs+0x28427d`) | `+0x6a0290` | | both | no: original | - | - |
+| stepThermalModel (`acs+0x284331`) | `+0x6a6940` (body `+0x6a69a0`) | 0x63d | both | no: original | - | 1 session (extended cars) |
+| blankets (`acs+0x284ef5`) | `+0x6a6fe0` | | both | no: original | - | - |
+
+Breaks on rvas ending in a-f trap: `arm_breaks` reads a last letter that is a kind as the kind, so
+`…a`/`…b`/`…d`/`…e`/`…f` are not plain breaks (use the next instruction's address). Every lowercase
+letter is now a kind; C5j's are uppercase.
+
+**The difference.** CSP's tail (no extension): `w = torque/inertia·dt + w`; lock when
+`(w_new >= 0) != !(0 > w_old)`; `w_old = w_new`; locked → 0; `|w| < 1` (or NaN) → ×0.9. Vanilla's
+`sign()` gives 0 for 0, so at step 1 (`w_old` 0, `w_new` 0.0194) Vanilla locks the front-left and CSP
+doesn't: the row's step-1 `wheel_angular_speed[1]` (0.0175 vs 0) and step-2 world matrix.
+
+### Part 2: the port
+
+`rustyac_physics::tyre::angular_speed_tail` is the tail after `updateLockedState`, with `csp` the CSP
+sign test (`crate::csp::enabled()` in the step). In process: csp_oracle break kinds `U` (`+0x69e818`,
+after `updateLockedState`: runs the port on the tyre's inputs) and `V` (`+0x69e8a4`, the end: speed, old
+speed and lock as bits against the port's), `CSP_ORACLE_BREAK=69e818U,69e8a4V`: F2004 300 steps, 600 of
+600 tails same.
+
+| row | steps | before | now |
+|---|---|---|---|
+| F2004 lap | 4000 | step 2 world_matrix[4] | step 63 world_matrix[3] -0.98427385 vs -0.98427343 (644 of 1106) |
+| F2004 wall | 6667 | step 154 world_matrix[3] | the same |
+| two F2004 | 1600 | car 0 step 2 | car 0 step 165 world_matrix[3] (car 1 step 171) |
+| RSS 3 lap | 4000 | step 0 air_density (the oracle's air) | the same |
+
+At the lap row's step 63 the body (velocity, angular velocity, suspension and world matrices, cg height)
+differs first; tyre loads, slips and forces only from step 64. So the next difference is not in a tyre's
+outputs: the car step's other CSP hooks or the core. The three F2004 rows are pinned at these steps.
+
+### Plan (sessions)
+
+1. C5j part 2 continued (1 session): break the car step's other CSP hooks at steps 62-63 (suspension,
+   drivetrain, aero, `+0x58b790`'s own components) the same way, port the first that differs.
+2. Extended tyres (CSP's `addTyreForcesV10`, `addGroundContact`, thermal bodies): only for cars with a
+   tyre extension, none of the proof cars; 3-4 sessions when one is chosen.
+
+### Vanilla
+
+`update_angular_speed` keeps Vanilla's sign test without `--csp`. On the PC: `run_all.sh --full physics`
+121 of 121 identical; `--full csp` 66 identical, 4 EXPECTED (the rows above); `--quick` every other area
+identical (fresh 63, render 18, gui 29, net 16, dumps 6, shaders 4, replays 6, sound 4, python 1,
+launcher 1) but browser 17 of 18 (render scale 100 % to 50 %: an edge along the middle column, 17
+against 4); browser again alone, 18 of 18.
+
+**Resume here (C5j):** see the table at the top.
