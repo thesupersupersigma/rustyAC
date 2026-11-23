@@ -9,8 +9,9 @@
 #                                                  (tools/proofs/areas.map), every case of each
 #   ... [--rerecord] [--dry-run] [area ...]        record the game's recordings again / only say which
 #                                                  areas would run / only these areas
-#   ... --farm                                     the areas of areas.map's @farm line on the proof farm's
-#                                                  VM (tools/proofs/farm.sh, docs/proof_farm.md), the rest here;
+#   ... --farm                                     the areas of areas.map's @farm line in shards on one queue that
+#                                                  the proof farm's VM and this PC's free lanes both take from
+#                                                  (tools/proofs/farm.sh, docs/proof_farm.md), the rest here;
 #                                                  stops at once if the farm isn't set up or doesn't answer
 #   ... --farm-fallback                            the same, but then (only then) its areas run here
 # Needs: this repository, the ignored oracle/ and re/gold/ folders, the AC install (read only).
@@ -25,9 +26,10 @@ repo=$(cd "$here/../.." && pwd)
 all="physics fresh csp sound render gui python replays net browser ai_page shaders launcher dumps yebis_sweep"
 # the lanes, each one area after another, all lanes at once: two lanes load the game's code (the
 # render oracle's and the car oracle's), never two areas of one lane; the others never load it
-# (a render or GUI compare keeps about 1.5 of the 16 threads busy, Task P1). PROOF_LANES: other lanes
-# (the proof farm's); a word <area>.<i> runs shard i of n of the area's cases (lib.sh's PROOF_SHARD,
-# i from 1 to n, n the number of such words), merged into one row once every lane is done
+# (a render or GUI compare keeps about 1.5 of the 16 threads busy, Task P1). PROOF_LANES: other lanes;
+# a word <area>.<i> runs shard i of n of the area's cases (lib.sh's PROOF_SHARD, i from 1 to n, n the
+# number of such words in the lanes and the queue, PROOF_QUEUE below), merged into one row once every
+# lane is done
 lanes=${PROOF_LANES:-"render gui python yebis_sweep|fresh csp sound replays launcher|physics dumps shaders|net browser ai_page"}
 mode=full; tag=; want=; dry=; farm=; farm_fallback=
 while [ $# -gt 0 ]; do
@@ -94,8 +96,15 @@ $a"; done
 if [ -n "$farm_areas" ]; then
     . "$here/farm.sh"
     farm_up
+    [ -z "$farm_areas" ] || PROOF_QUEUE=$fs/run/queue
 fi
-pc_areas=$(for a in $areas; do case " $farm_areas " in *" $a "*) ;; *) printf '%s ' "$a" ;; esac; done)
+# PROOF_QUEUE=<dir> (the proof farm, Task F4): <dir>/list, words shared with another machine; every
+# lane, once its own words are done, takes the next one nobody took (claim), PROOF_PULL (1) more lanes
+# do nothing else; the areas of the list run only so
+qwords=$( [ -z "$PROOF_QUEUE" ] || tr -d '\r' < "$PROOF_QUEUE/list")
+queued=$(for w in $qwords; do echo "${w%.[0-9]*}"; done | sort -u | tr '\n' ' ')
+pullers=0; [ -z "$qwords" ] || pullers=${PROOF_PULL:-1}
+pc_areas=$(for a in $areas; do case " $farm_areas $queued " in *" $a "*) ;; *) printf '%s ' "$a" ;; esac; done)
 picked_lanes=$(pick_lanes "$pc_areas")
 # RUSTYAC_PREBUILT=1: the programs of tools/proofs/prebuild.sh (the builds below do nothing)
 . "$here/prebuilt/env.sh"
@@ -142,11 +151,13 @@ if [ "${free_kb:-0}" -lt 12582912 ] && [ "$(echo "$picked_lanes" | grep -c .)" -
     echo "$((free_kb / 1048576)) GB free: fewer lanes"
     picked_lanes=$(echo "$picked_lanes" | paste -d' ' - -)
 fi
-n=$(echo "$picked_lanes" | grep -c .)
+n=$(( $(echo "$picked_lanes" | grep -c .) + pullers ))
 [ "$n" -gt 0 ] || n=1
 export CARGO_BUILD_JOBS=$(( jobs / n > 0 ? jobs / n : 1 ))
-# run.status: what tools/proof_tui watches (the mode, the start, each lane; "end" when done)
-{ echo "mode $mode"; echo "start $start_all"; echo "$picked_lanes" | sed 's/^/lane /'; } > "$out/run.status"
+# run.status: what tools/proof_tui watches (the mode, the start, each lane; "end" when done); a lane
+# that takes from the queue is "lane @<k>", its words in lanes/<k>.lane as it takes them
+{ echo "mode $mode"; echo "start $start_all"; } > "$out/run.status"
+rm -rf "$out/lanes"; mkdir -p "$out/lanes"; lane_k=0
 
 # row <area> <PROOF line> <seconds>: the area's row of the table
 row() {
@@ -160,8 +171,8 @@ row() {
 }
 run_area() {
     a=$1; shard=
-    # <area>.<i>: shard i of n, n the number of the area's words in the lanes
-    case $a in *.[0-9]*) shard=${a##*.}/$(echo $picked_lanes | tr ' ' '\n' | grep -c "^${a%.*}\.[0-9]*$") ;; esac
+    # <area>.<i>: shard i of n, n the number of the area's words in the lanes and the queue
+    case $a in *.[0-9]*) shard=${a##*.}/$(shards "${a%.*}" | grep -c .) ;; esac
     start=$(date +%s)
     PROOF_SHARD=$shard bash "$here/${a%.[0-9]*}.sh" > "$out/$a.log" 2>&1
     code=$?
@@ -173,9 +184,10 @@ run_area() {
 # merge <area>: its shards' cases, logs and times as one area (the time: the longest shard's)
 merge() {
     m=$1; d=$out/$m
-    sh=$(echo $picked_lanes | tr ' ' '\n' | grep "^$m\.[0-9]*$") || return 0
+    sh=$(shards "$m") || return 0
     rm -rf "$d" && mkdir -p "$d"; : > "$out/$m.log"; ms=0; ran=1
     for s in $sh; do
+        rm -f "$out/rows/$s.bad"  # the merged row says it (an ERROR run again alone clears only the area's)
         cat "$out/$s/cases.log" >> "$d/cases.log" 2> /dev/null; cat "$out/$s/times.tsv" >> "$d/times.tsv" 2> /dev/null
         grep -q '^PROOF ' "$out/$s.log" || ran=
         { echo "== shard $s"; cat "$out/$s.log"; } >> "$out/$m.log"
@@ -191,38 +203,80 @@ merge() {
     else row "$m" "" "$ms"; fi
     [ -n "$ran" ] && [ $((f + e)) = 0 ] || : > "$out/rows/$m.bad"
 }
-# run_lanes <areas>: every lane of $picked_lanes at once, then the sharded areas merged
+# shards <area>: its words <area>.<i> in the lanes and the queue
+shards() { echo $picked_lanes $qwords | tr ' ' '\n' | grep "^$1\.[0-9]*$"; }
+# claim: the next word of the queue nobody took (none: fails); a claim is a mkdir in <queue>/claim,
+# which NTFS makes for exactly one machine (the VM on its own disk, the PC over SMB); a share that
+# fails otherwise (gone) ends this lane's taking, and what is left runs after (fallback)
+claim() {
+    [ -d "$PROOF_QUEUE/claim" ] || return 1
+    for w in $qwords; do
+        e=$(mkdir "$PROOF_QUEUE/claim/$w" 2>&1) && { echo "$w"; return 0; }
+        case $e in *'File exists'*) ;; *) return 1 ;; esac
+    done
+    return 1
+}
+# lane <words...>: one lane, its words one after another, then (with a queue) every word it takes
+lane() {
+    for a in "$@"; do run_area "$a"; done
+    [ -n "$qwords" ] || return 0
+    while w=$(claim); do echo "$w" >> "$out/lanes/$lane_k.lane"; run_area "$w"; done
+}
+# run_lanes <areas> [n]: every lane of $picked_lanes and n lanes that only take from the queue, all at
+# once, then the sharded areas merged
 run_lanes() {
     pids=
-    while read -r lane; do
-        ( for a in $lane; do run_area "$a"; done ) &
+    while read -r l; do
+        [ -n "$l" ] || continue
+        [ "$l" != @ ] || l=  # a lane that only takes
+        lane_k=$((lane_k + 1))
+        if [ -n "$qwords" ]; then echo $l > "$out/lanes/$lane_k.lane"; echo "lane @$lane_k"; else echo "lane $l"; fi >> "$out/run.status"
+        # shellcheck disable=SC2086
+        lane $l &
         pids="$pids $!"
     done <<LANES
 $picked_lanes
+$(seq "${2:-0}" | sed 's/.*/@/')
 LANES
     # shellcheck disable=SC2086
-    wait $pids
+    [ -z "$pids" ] || wait $pids  # a bare wait would wait for the farm half too
     for a in $1; do merge "$a"; done
 }
 rm -f "$out"/rows/*.bad
 # the farm half beside the PC's lanes (farm.sh)
 farm_pid=
 if [ -n "$farm_areas" ]; then farm_go > "$out/farm/go.txt" 2>&1 & farm_pid=$!; fi
-[ -z "$picked_lanes" ] || run_lanes "$pc_areas"
+run_lanes "$pc_areas" "$pullers"
 if [ -n "$farm_pid" ]; then
     echo "waiting for the farm (target/proofs/farm/farm.txt)"
     wait "$farm_pid"
     cat "$out/farm/farm.txt"
 fi
-# the farm areas that could not run there (a farm reason: the VM off, the copy, ssh, the session; never
+if [ -n "$qwords" ] && [ -n "$farm" ]; then
+    # every word of the queue with no row here: the VM did not finish it (stopped, died, its results
+    # did not come back, or it never took it); here now, from a queue of only those (the shard counts
+    # stay the list's), why in the table's "where"; then the queue's areas merged
+    again=$out/farm/again; rm -rf "$again"; mkdir -p "$again/claim"
+    left=
+    for w in $qwords; do
+        if [ -f "$out/rows/$w.row" ]; then mkdir "$again/claim/$w"; continue; fi
+        r=$(awk -v w="$w" '$1 == w { sub(/^[^ ]+ /, ""); print; exit }' "$out/farm/fallback" 2> /dev/null)
+        echo "PC (VM: ${r:-$(cat "$out/farm/why" 2> /dev/null || echo 'it did not take it')})" > "$out/rows/$w.where"
+        left="$left $w"
+    done
+    if [ -n "$left" ]; then
+        echo "running here what the farm did not finish:$left"
+        PROOF_QUEUE=$again picked_lanes= run_lanes "" 4
+    fi
+    for a in $queued; do merge "$a"; done
+# the farm areas that could not run there (a farm reason: the VM off, ssh, the share, prebuild; never
 # a DIFFERENT, which is a result) run here now; why, in the table's "where"
-if [ -f "$out/farm/fallback" ]; then
+elif [ -f "$out/farm/fallback" ]; then
     while read -r a why; do echo "PC (VM: $why)" > "$out/rows/$a.where"; done < "$out/farm/fallback"
     late=$(for a in $(cut -d' ' -f1 "$out/farm/fallback"); do case " $pc_areas " in *" $a "*) ;; *) printf '%s ' "$a" ;; esac; done)
     if [ -n "$late" ]; then
         echo "running here what the farm could not: $late"
         picked_lanes=$(pick_lanes "$late")
-        echo "$picked_lanes" | sed 's/^/lane /' >> "$out/run.status"
         run_lanes "$late"
     fi
 fi
@@ -258,13 +312,22 @@ if [ -z "$farm" ]; then
 else
     # --farm: where each area ran; physics on the VM proves the pure maths path (pure.rs, the browser's),
     # the PC's runs the DLL's (docs/proof_farm.md)
+    # where_of <area>: its where, or per machine its shards ("VM 1,3; PC 2")
+    where_of() {
+        cat "$out/rows/$1.where" 2> /dev/null && return
+        s=$(shards "$1") || { echo PC; return; }
+        for w in $s; do echo "$(cat "$out/rows/$w.where" 2> /dev/null || echo PC)|${w##*.}"; done |
+            awk -F'|' '{ if ($1 in m) m[$1] = m[$1] "," $2; else { o[++n] = $1; m[$1] = $2 } }
+                END { for (i = 1; i <= n; i++) printf "%s%s %s", (i > 1 ? "; " : ""), o[i], m[o[i]]; print "" }'
+    }
     note=
-    [ "$(cat "$out/rows/physics.where" 2> /dev/null)" != VM ] || note="; physics on the VM proves pure.rs's maths, not MSVCR120.dll's"
+    case "$(where_of physics)" in VM*|*"; VM "*) note="; physics on the VM proves pure.rs's maths, not MSVCR120.dll's" ;; esac
+    [ ! -f "$out/farm/why" ] || note="$note; the farm stopped: $(cat "$out/farm/why"), the PC took the rest"
     {
         echo "| area | where | cases | identical | different | errors | skipped | expected skips | time |"
         echo "|---|---|---|---|---|---|---|---|---|"
         for a in $areas; do
-            w=$(cat "$out/rows/$a.where" 2> /dev/null || echo PC)
+            w=$(where_of "$a")
             awk -v a="$a" -v w="$w" '{ sub("^[|] " a " [|]", "| " a " | " w " |"); print }' "$out/rows/$a.row"
         done
         printf '| all (%s --farm, wall clock%s) | | | | | | | | %dh%02dm |\n' "$mode" "$note" $((secs / 3600)) $((secs % 3600 / 60))

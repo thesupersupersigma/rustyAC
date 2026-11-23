@@ -7,9 +7,7 @@
 #   FARM_HOST   ssh's user@host (key login); the user is also the scheduled task's
 #   FARM_SHARE  //<vm>/<share>, the VM's farm folder (repo\, ac\, home\, run\) over SMB
 #   FARM_DIR    that folder on the VM (default C:\rustyac-farm)
-#   FARM_LANES  the VM's lanes in run_all.sh's form ("a b|c.1|c.2": <area>.<i> runs shard i of the
-#               area's cases, i from 1 to the number of shards); defaults below for --quick and --full
-#   FARM_SYNC   farm_sync.sh's parts sent before each run (default: programs repo csp ac; about
+#   FARM_SYNC   farm_sync.sh's parts sent before each run (default: programs repo ac; about
 #               2 min with nothing changed, ac alone 15 s)
 #   FARM_STALL  minutes with no new verdict on the VM before the farm counts as stalled (default 60)
 # Everything the farm half says is in target/proofs/farm/ (its log farm.txt; the VM's status files,
@@ -23,13 +21,11 @@ fs=$(echo "$FARM_SHARE" | tr '\\' /)   # //vm/share, for bash
 fw=$(echo "$fs" | tr / '\\')           # \\vm\share, for robocopy
 fo=$out/farm
 fp=$fs/repo/target/proofs              # the VM's target/proofs
-# the VM's lanes (12 virtual CPUs, 32 GB; WARP 1.5-2.2 x the PC's time there, F2 part 3): eight,
-# the long areas split into shards; --full packed longest-first from the PC's full-run area times
-# x part 5's VM ratios (F3: about 197 min each lane with fresh's kept results; a first run, when
-# fresh records every case again, wants FARM_LANES from docs/proof_farm.md's F3 part)
-farm_lanes_quick="fresh.1|fresh.2|gui.1 sound|gui.2 python launcher|render.1 replays|render.2 dumps|csp|physics net"
-farm_lanes_full="yebis_sweep.1 gui.1|yebis_sweep.2 gui.2|physics.1 replays.2 csp|physics.2 net|render.1 dumps.3 launcher|render.2 replays.1 sound python|fresh.1 dumps.1|fresh.2 dumps.2"
-
+# the shared queue (Task F4): every farm area's words in one list on the share (run\queue\list),
+# longest first; the PC's lanes (after their own areas) and the VM's eight lanes all take the next
+# word nobody took (run_all.sh's claim: a mkdir in run\queue\claim, which NTFS lets exactly one of
+# them make, the VM on its own disk, the PC over SMB); a word started on one machine finishes there
+farm_vm_lanes=8
 farm_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$FARM_HOST" "$@" < /dev/null; }
 # farm_off <reason>: every farm area left runs on this PC instead
 farm_off() {
@@ -63,27 +59,50 @@ farm_up() {
     fi
     # every program the VM runs, the dumps area's old release for the newest tag included
     echo "building the farm's programs (prebuild.sh)"
-    bash "$here/prebuild.sh" > "$fo/prebuild.txt" 2>&1 || farm_stop "can't start: prebuild.sh failed ($fo/prebuild.txt)"
+    bash "$here/prebuild.sh" > "$fo/prebuild.txt" 2>&1 || { farm_stop "can't start: prebuild.sh failed ($fo/prebuild.txt)"; return; }
+    farm_queue
 }
 
+# farm_queue: the queue's words: an area whose last run of this mode took more than $target s (the
+# sum of cases/<mode>/<area>.times, which every run rewrites: the order improves itself) in shards
+# of about that, the words longest first; an area with no times yet first, whole
+# shortcut: a case's time is the last machine's that ran it (the VM 2-4 × the PC's), so a shard is
+# $target on one clock or the other; scale the times per machine if a long VM shard ends a run late
+farm_queue() {
+    if [ "$mode" = quick ]; then target=480; else target=900; fi
+    for a in $farm_areas; do
+        t=$out/cases/$mode/$a.times; [ -f "$t" ] || t=$out/cases/full/$a.times
+        s=$(awk '{ s += $1 } END { print int(s) }' "$t" 2> /dev/null)
+        [ "${s:-0}" -gt 0 ] || s=999999
+        n=$(( (s + target - 1) / target ))
+        # net.sh checks its goldens in one check.sh run (no keep()), so it can't be split
+        [ "$a" != net ] && [ "$s" != 999999 ] || n=1
+        if [ "$n" = 1 ]; then echo "$s $a"; else for i in $(seq "$n"); do echo "$((s / n)) $a.$i"; done; fi
+    done | sort -s -k1,1nr | cut -d' ' -f2 > "$fo/queue"
+    rm -rf "$fs/run/queue" && mkdir -p "$fs/run/queue/claim" && cp "$fo/queue" "$fs/run/queue/list" ||
+        farm_stop "can't start: the queue on the share (run\queue) is not writable"
+}
+
+# farm_why <reason>: the farm stopped during the run; what the VM did not finish runs here after the
+# PC's lanes, which meanwhile go on taking from the queue (run_all.sh)
+farm_why() { echo "$1" > "$fo/why"; echo "farm off: $1" >> "$fo/farm.txt"; }
 # farm_go: the farm half, beside the PC's lanes (in the background): the copy, the VM's run, the
-# results back; what could not run there goes into $fo/fallback
+# results back of every word the VM finished; "<word> <reason>" in $fo/fallback for one it could not
 farm_go() {
     t0=$(date +%s)
     # shellcheck disable=SC2086
-    FARM_SHARE=$fs bash "$here/farm_sync.sh" ${FARM_SYNC:-programs repo csp ac} > "$fo/sync.txt" 2>&1 ||
-        { farm_off "the copy to the VM failed ($(tail -n 1 "$fo/sync.txt"))"; return; }
+    FARM_SHARE=$fs bash "$here/farm_sync.sh" ${FARM_SYNC:-programs repo ac} > "$fo/sync.txt" 2>&1 ||
+        { farm_why "the copy to the VM failed ($(tail -n 1 "$fo/sync.txt"))"; return; }
     t1=$(date +%s); echo "copy: $((t1 - t0)) s; $(grep '^sync ' "$fo/sync.txt" | paste -sd ';' -)" >> "$fo/farm.txt"
     # nothing of an earlier VM run may count for this one
     mkdir -p "$fs/run" "$fp/rows" && rm -f "$fs/run/exit" "$fs/run/started" "$fs/run/new_kept.txt" "$fp"/rows/* ||
-        { farm_off "the VM's run folder is not writable"; return; }
+        { farm_why "the VM's run folder is not writable"; return; }
     { if [ "$mode" = quick ]; then echo --quick; else echo --full; fi
       [ -z "$PROOF_RERECORD" ] || echo --rerecord
       printf '%s\n' $farm_areas; } > "$fs/run/args"
-    if [ "$mode" = quick ]; then def=$farm_lanes_quick; else def=$farm_lanes_full; fi
-    echo "${FARM_LANES:-$def}" > "$fs/run/lanes"
+    echo "$farm_vm_lanes" > "$fs/run/pull"
     farm_ssh "schtasks /create /tn rustyac_farm /tr \"$farm_dir\\repo\\tools\\proofs\\farm_task.cmd\" /sc once /st 23:59 /it /ru ${FARM_HOST%@*} /f && schtasks /run /tn rustyac_farm" > "$fo/task.txt" 2>&1 ||
-        { farm_off "the scheduled task did not start ($(tr -d '\r' < "$fo/task.txt" | grep . | tail -n 1))"; return; }
+        { farm_why "the scheduled task did not start ($(tr -d '\r' < "$fo/task.txt" | grep . | tail -n 1))"; return; }
     # wait, mirroring the VM's status files for proof_tui; bounded: the start, the share, the verdicts
     why= started= sig= last=$(date +%s) gone=0
     until [ -f "$fs/run/exit" ]; do
@@ -93,7 +112,7 @@ farm_go() {
             why="the VM's share stopped answering"; break
         fi
         gone=0
-        back repo/target/proofs "$fo" run.status cases.log times.tsv now last_case quick.re '*.row' '*.secs' /S /LEV:2
+        back repo/target/proofs "$fo" run.status cases.log times.tsv now last_case quick.re '*.row' '*.secs' '*.lane' /S /LEV:2
         if [ -z "$started" ]; then
             if [ -f "$fs/run/started" ]; then started=1
             elif [ $(( $(date +%s) - t1 )) -gt 300 ]; then why="the VM's scheduled task did not start the run in 5 min (is its user logged in?)"; break; fi
@@ -103,18 +122,18 @@ farm_go() {
         elif [ $(( $(date +%s) - last )) -gt $(( ${FARM_STALL:-60} * 60 )) ]; then why="no new verdict on the VM for ${FARM_STALL:-60} min"; break; fi
     done
     t2=$(date +%s)
-    [ -z "$why" ] || { echo "stopped: $why" >> "$fo/farm.txt"; farm_ssh schtasks /end /tn rustyac_farm > /dev/null 2>&1; }
+    [ -z "$why" ] || { farm_why "$why"; farm_ssh schtasks /end /tn rustyac_farm > /dev/null 2>&1; }
     back run "$fo" out.txt task.txt
-    # every area the VM finished, as if it had run here; the rest runs here
-    for a in $farm_areas; do
+    # every word the VM finished, as if it had run here (a word with no row there is the PC's, or one
+    # the VM never finished: run_all.sh runs it here)
+    for a in $qwords; do
         r=$fp/rows/$a.row
-        if [ -f "$r" ] && ! grep -q 'did not run' "$r"; then
-            back "repo/target/proofs/$a" "$out/$a" /MIR /XD own root rec frames drives &&
-                back repo/target/proofs "$out" "$a.log" && back repo/target/proofs/rows "$out/rows" "$a.row" "$a.secs" "$a.bad" ||
-                { echo "$a its results did not come back from the VM" >> "$fo/fallback"; continue; }
-            echo VM > "$out/rows/$a.where"
-        elif [ -n "$why" ]; then echo "$a $why" >> "$fo/fallback"
-        else echo "$a it did not run there ($(tail -n 1 "$fp/$a.log" 2> /dev/null | tr -d '\r'))" >> "$fo/fallback"; fi
+        [ -f "$r" ] || continue
+        grep -q 'did not run' "$r" && { echo "$a it did not run there ($(tail -n 1 "$fp/$a.log" 2> /dev/null | tr -d '\r'))" >> "$fo/fallback"; continue; }
+        back "repo/target/proofs/$a" "$out/$a" /MIR /XD own root rec frames drives &&
+            back repo/target/proofs "$out" "$a.log" && back repo/target/proofs/rows "$out/rows" "$a.row" "$a.secs" "$a.bad" ||
+            { rm -f "$out/rows/$a.row"; echo "$a its results did not come back from the VM" >> "$fo/fallback"; continue; }
+        echo VM > "$out/rows/$a.where"
     done
     # the kept results the VM made in this run (its own keys: SSE2), so the PC holds every kept file;
     # only those (a whole-tree copy would bring back what archive_kept.sh moved off the PC), and each

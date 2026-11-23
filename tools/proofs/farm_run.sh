@@ -7,8 +7,9 @@
 #   <farm>/repo  this copy (RUSTYAC_REPO), the prebuilt programs of prebuild.sh (RUSTYAC_PREBUILT)
 #   <farm>/ac    the AC files the areas read (AC_ROOT)
 #   <farm>/home  the run's own home (and so its own proof lock)
-#   <farm>/run   args (run_all.sh's arguments, one a line) and lanes (PROOF_LANES), both from the
-#                PC; started (written first) and exit (run_all.sh's exit code, written last)
+#   <farm>/run   args (run_all.sh's arguments, one a line), pull (how many lanes take from the queue,
+#                PROOF_PULL) and queue/ (the queue shared with the PC, PROOF_QUEUE), all from the PC;
+#                started (written first) and exit (run_all.sh's exit code, written last)
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 farm=$(dirname "$repo")
 run=$farm/run
@@ -22,8 +23,8 @@ mkdir -p "$HOME/AppData/Roaming"
 # AC's python33.dll is loaded with LOAD_WITH_ALTERED_SEARCH_PATH (no exe folder in the search): its
 # MSVCR100.dll (farm_sync.sh puts it beside each exe) is found through PATH
 export PATH="$repo/tools/render_oracle/target/release:$PATH"
-PROOF_LANES=$(cat "$run/lanes")
-export PROOF_LANES
+PROOF_PULL=$(tr -d '\r' < "$run/pull")
+export PROOF_PULL PROOF_QUEUE=$run/queue
 mapfile -t args < <(tr -d '\r' < "$run/args")
 cd "$repo" || exit 2
 date +%s > "$run/started"

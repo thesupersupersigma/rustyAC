@@ -3,8 +3,9 @@
 # a glob (`*` matches across folders too) and the areas, or `none`. The first rule that matches
 # a file wins; a file no rule matches runs every area.
 
-# run_all.sh --farm: the areas that run on the proof farm (docs/proof_farm.md); the rest stay on the PC
-@farm physics fresh csp sound render gui python replays net launcher dumps yebis_sweep
+# run_all.sh --farm: the areas the proof farm shares with the PC (docs/proof_farm.md); the rest stay on
+# the PC (csp too: CSP behaves differently on the VM's processor without AVX, Task F4)
+@farm physics fresh sound render gui python replays net launcher dumps yebis_sweep
 
 # what changes nothing the proofs look at
 docs/flags.md                 browser

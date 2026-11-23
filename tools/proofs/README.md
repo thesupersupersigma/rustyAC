@@ -7,7 +7,7 @@ Every proof the reports claim reruns from here, one area at a time or all at onc
     bash tools/proofs/run_all.sh [--full]           # every area, every case, against the game's kept results (milestones), ≈ 4.5 h
     bash tools/proofs/run_all.sh --rerecord         # the same, and the game's results made again and held against the kept ones
     bash tools/proofs/run_all.sh gui net            # only these areas (with any of the above)
-    bash tools/proofs/run_all.sh --quick --farm     # the @farm areas of areas.map on the proof farm's VM, the rest here
+    bash tools/proofs/run_all.sh --quick --farm     # the @farm areas shared with the proof farm's VM, the rest here
     bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different= errors= skipped= expected=)
 
 Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
@@ -117,7 +117,9 @@ file is not the manifest's. Not prebuilt: browser (`web_pack`'s unit test, the w
 ai_page (they stay on the PC); the dumps area's old release is built once per tag (`old_exe.sh`).
 `FARM_SHARE=//<vm>/rustyac-farm bash tools/proofs/farm_sync.sh [part ...]` sends a part's files to
 the farm with robocopy, only what changed. `run_all.sh --farm` (with `--quick` or `--full`) does
-both itself, then runs the farm's areas there (`farm.sh`, `farm_run.sh`) while the others run here;
+both itself, then splits the farm's areas into shards on one queue (longest first, from the last
+run's case times) that the VM's eight lanes and the PC's free lanes both take from (`farm.sh`,
+`farm_run.sh`, Task F4), while the PC-only areas (browser, ai_page, shaders, csp) run here;
 it needs `%USERPROFILE%\.rustyac\farm.env` (`FARM_HOST`, `FARM_SHARE`) and stops at once
 when the farm isn't set up or doesn't answer (`--farm-fallback`: its areas run here instead). `PROOF_LANES` sets other lanes; a lane word
 `<area>.<i>` runs shard i of the area's cases (`PROOF_SHARD`). docs/proof_farm.md has the rest.
