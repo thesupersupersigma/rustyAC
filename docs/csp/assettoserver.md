@@ -900,9 +900,8 @@ and CSP 4305's `dwrite.dll`.
   client uses it **only with `--csp`** (`client.rs` `on_datagram`); without `--csp` a server never
   sends `AB 03` (it needs `CUSTOM_UPDATE` in the handshake), and the Kunos path is untouched.
   `--net-arrivals` counts `AB 03` states too (`join.rs`).
-  * **Shortcut (marked in the code):** the record layout is AssettoServer's format, hard-wired. The
-    `[EXTRA_DATA] CUSTOM_UPDATE_FORMAT` line is already stored (NH-2) but not parsed. Parse it if
-    another server sends a different format.
+  * ~~Shortcut: the record layout is AssettoServer's format, hard-wired.~~ Since NH-5.3 the reader is
+    built from the server's `[EXTRA_DATA] CUSTOM_UPDATE_FORMAT` (`custom_update.rs`).
 * **Out:** no change. CSP 4305 sends its own car as Kunos' `0x46`, and so does rustyAC (§NH-7.1).
 * **Proof** (2026-11-23, `taskNH7`: `CAP=proof srv.sh 420`, then `join.sh nh7 330 --csp`, the
   worktree's build):
@@ -989,6 +988,15 @@ scripted "new modes" API (`new_modes_bgphys`, `configure`), and a stream reader 
 Always on with CSP: the drop test, the snap of a disconnected car, the interval measure. The version gate
 is raised to at least 3782 only by the scripted modes' `configure` call, which no online join makes.
 
+**No `$CSP0:` options at all** (resume session). The reader still runs. CSP hooks it after
+`ACClient::onWelcomeMessageReceived` (the hook list entry is built by @ 0x180219060, and the hook @
+0x18055d960 calls @ 0x180558c50 and then @ 0x1805596e0). @ 0x180558c50 looks for `$CSP0:`. Without it, it
+decodes nothing and hands back CSP's settings INI (`qword_1827FAE30`) as it was, which is empty on a first
+join. So on any welcome, `RESET` = build ≥ 3266 (the build comes from the track's `csp/<build>/../`, not
+from `$CSP0:`) and the raw interval is off. A server that sends no welcome message never runs the reader:
+`RESET` stays 0. rustyAC now does the same (`online.rs`): with `--csp`, every welcome runs `read_settings` on
+the stored settings (empty unless a `$CSP0:` came), and the `AB 03` reader is built in the same place.
+
 **The port.** `crates/rustyac-net/src/csp_motion.rs`: `CspMotion::new(build)` at the join (RESET off
 until the settings arrive, as CSP's byte is 0 until its reader runs), `read_settings` on the welcome's
 `$CSP0:` options (`online.rs`), `add` in place of the game's add in `NetSession` (`session.rs`), only
@@ -999,9 +1007,16 @@ with `--csp`. Without `--csp` the session calls the game's add as before.
   (`CSP_ORACLE_MATHS=sincos`, at the game thread's MXCSR) ran them over all 2^32 inputs: **0 differ**
   from `f32::sin` / `f32::cos` (the static UCRT's), **0 differ** from MSVCR120's. So the port uses
   `rustyac_math::sinf` / `cosf`, which the browser has too.
-* **rustyAC's own guard stays.** rustyAC's client drops a state with any value that isn't finite
-  before any add (`Client::on_datagram`). CSP would pass a NaN heading or `-inf` into the game's add.
-  Kept: a server never sends them, and passing them on would put infinite bodies into the physics.
+* **rustyAC's own guard stays** (checked again in the resume session). rustyAC's client drops a state
+  with any value that isn't finite before any add (`Client::on_datagram`), with `--csp` and without.
+  The game (and CSP, which lets a NaN heading and `-inf` through) passes them into the game's add.
+  Rule 16 would copy that if a test could show rustyAC can't crash on it, and no unit test can. A
+  remote car's state goes on past the session into the physics body and its collider, the track's
+  ray cast for the car's height, the renderer, the track-map app and the sound. A test of the session
+  and physics leaves the rest unchecked, and nothing has measured what the game itself does with such
+  a car. It is reachable: AssettoServer forwards a client's `0x46` bytes unchecked. Kept until a
+  capture shows the game's outcome and a whole-game run shows rustyAC survives it. (The game's own
+  sound code already refuses non-finite 3D positions; `rustyac-audio` ports that check.)
 
 **Proof** (`csp_oracle --net-hook <file>`, `tools/csp_oracle/src/nethook.rs`). In the oracle process,
 CSP's hook (with the game's add behind it: CSP had detoured the mapped `acs.exe`'s add, `e9` at its first
@@ -1059,19 +1074,70 @@ arrived in:
   the oracle counted 116 jumps of 50 m, 110 snapped with `RESET` and 0 without. The oracle runs no step,
   so its "50 m" is from the last snap: the stepped counts above are the ones to quote.
 
-### NH-5.3 The format text (part 3): not done
+### NH-5.3 The format text (part 3)
 
-Not started beyond a map of the parser. CSP's `CUSTOM_UPDATE_FORMAT` parser @ 0x180d77360 (0x153c bytes)
-and its field parser @ 0x180d75820 (0xa54) use these words: `packet`, `group`, `single` / multiple,
-`padding` ("Incorrect padding", "Padding: parameter"), `skip` ("Incorrect skip value"); the fields
-`sessionID`, `pakSequenceID`, `timestamp`, `ping`, `pos`, `rotation`, `velocity`, `tyreAngularSpeed`
-(FL FR RL RR), `steerAngle`, `wheelAngle`, `engineRPM`, `gear`, `statusBytes`, `gas`, `performanceDelta`,
-`brake`, `clutch` ("Field ... is already set"); the types `float`, `half`, `int`, `uint`, `short`,
-`ushort`, `byte`, `char`, `pbyteNM` ("Incorrect pbyte"); errors "Unknown type for", "Unknown modifier",
-"Unexpected line", "No valid definition". The record reader is @ 0x180d76dd0. Next: decompile the two
-parsers for the implicit types of untyped fields (`sessionID`, `pakSequenceID`, `timestamp`,
-`statusBytes`), the packet selector and `single`; build the reader from the parsed text; prove it on
-NH-7's 21,222 states (`taskNH7/cmp.sh`) plus a unit test with a made-up layout.
+`crates/rustyac-net/src/custom_update.rs` replaces NH-7's hard-wired layout (the shortcut in `datagram.rs` is
+gone). `Format::parse` follows CSP's parser, and `Reader::decode` follows its reader. With `--csp`, the welcome's
+`[EXTRA_DATA] CUSTOM_UPDATE_FORMAT` builds the client's reader (`online.rs`). Without the key there is no reader
+and `AB 03` is not read, as in CSP: its handler is registered only after a parse.
+
+**The parser** (@ 0x180d77360, called by @ 0x180d78cf0 from @ 0x180d78a20):
+
+* The text is split on `\n`, and each line is trimmed (space, tab, CR) and dropped when empty. Everything from
+  `#` on is cut, and the rest is split on `:` (empty parts kept, each trimmed).
+* `packet:` starts a packet. `group:` (a count byte, then that many records) and `single:` (one record) start
+  an entry of the newest packet. `skip: n` **ends** the entry and adds n bytes before the next one. A field
+  line before any entry is an error.
+* Fields: `sessionID` and `pakSequenceID` take one byte, `timestamp` and `statusBytes` four (@ 0x180d754c0 /
+  0x180d75620). Only `-` or that one type (`byte` / `uint`) may be named. `pos`, `rotation` and `velocity`
+  (@ 0x180d764d0) default to `float3`; the others are `half3` and `ushort3` / `short3` (6 bytes) and
+  `char3` / `byte3` (3). Every other number (@ 0x180d75820) defaults to `byte`; its types are `float`, `half`,
+  `int`, `uint`, `short`, `ushort`, `byte`, `char` and `pbyteNM`. `padding: n` leaves n bytes. **A name CSP
+  doesn't know is passed over and takes no bytes.**
+* Modifiers (comma items after the type): `*k` / `/k` multiply / divide both the scale and the offset, and
+  `+k` / `-k` move the offset. `tyreAngularSpeed` (numbers only) turns on AC's wheel-speed curve. k is read
+  by CSP's own number reader (@ 0x1815d5b90). It isn't correctly rounded: the digits build a double as
+  `whole × 10 + d` and `fraction += d × 0.1ⁿ`, then `× sign`, then `× 10^e` by squaring (@ 0x1815d58a0).
+  Then it goes to float. An empty k is 1 (`*`, `/`) or 0 (`+`, `-`).
+* `skip` / `padding` numbers: `0x` hex or decimal (no digits: -1); a negative one is an error.
+* **The `pbyte` quirk:** CSP accepts `pbyteNM` only when the spec has exactly **seven** comma items (it tests
+  the item count where it means the word's length). N is 1, 2 or 4, and M < 8 / N. `pbyteN0` takes a new
+  byte, and `pbyteNM` with M > 0 reads the byte before. The value is `(b >> N·M) & (2ᴺ − 1)`. Ported as it is.
+* After the text: no packet is "No valid definitions found", and an entry without `sessionID`,
+  `pakSequenceID` or `timestamp` is an error. **Any error** is caught by @ 0x180d78a20 (its catch @
+  0x181e70050 logs "Failed to initialize: …"). The old reader was already cleared, so no `AB 03` is read.
+  rustyAC puts the same line in the console (`csp: Failed to initialize: …`). Every error text is CSP's.
+
+**The reader** (@ 0x180d77280 → 0x180d788a0 → records @ 0x180d76dd0):
+
+* With more than one packet, the datagram's first byte after `AB 03` picks it. CSP doesn't check the
+  index (it reads past its list), so rustyAC drops such a datagram (marked shortcut, a game fault). Each
+  entry: skip, then the count byte (`group`), then the records. A short datagram stops with "Unexpected end",
+  and the records before it stay read.
+* A record starts from **the slot's last stored state**, so a field the format leaves out keeps its last
+  value. Each named field is `(float)raw × scale + offset` (`mulss`, `addss`), then the wheel-speed curve.
+  Ping, gear and rpm go through `cvttss2si` (rpm then clamped to 0..65535). The time stamp is read as a signed
+  `int`, and the status bits are copied raw. The stored copy is replaced only when the time stamp is
+  newer (it starts at 0).
+* `half` uses CSP's tables. They give IEEE binary16 for all 65,536 halves (`taskNH5/half_check.py`), so the
+  port converts directly.
+* `brake` / `clutch` go into the car object (+2380 / +2384), not the state. They are parsed (so the layout
+  is right) but not applied (marked shortcut: no known server sends them). CSP also sets a byte at +396
+  of the car before each add; nothing in rustyAC reads it.
+* Not ported: CSP fills a slot's car pointer once, at parse time, and skips records for slots without a
+  car. rustyAC keeps a state for any slot and lets the session ignore unknown slots.
+
+**Proof:**
+
+| Check | States | Result |
+|---|---|---|
+| Fresh `--csp` join on the CSP-default AssettoServer (`taskNH7` kit, `CAP=proof3`, 330 s), the reader built from the welcome's own text: relay bytes decoded by `ab03.py` vs rustyAC's `--net-arrivals` (`cmp.sh`) | 23,110 = 23,110 | **IDENTICAL**, no parse error |
+| NH-7's proof tape (`join/nh7.nettape`, NH-7's 21,222 states) through `csp_jumps --csp` with the parsed AssettoServer text, 3 modes | 21,222 | output **byte-identical** to NH-5.2's (`jumps_nh7.txt`: 126 jumps, every count) |
+| Unit tests (`custom_update`): AssettoServer's layout (offsets, scale / offset bits, the first `AB 03` of Super's capture field by field), a **made-up layout** (two packets with the selector, `skip: 0x2`, a `single`, padding, `half3` / `short3` / `half` / `char` / `float` / `int`, an unknown name, a left-out field keeping its value, a short datagram, an unknown packet), CSP's error texts, the number reader, halves, `pbyte` | | 6 tests (NH-7's `custom_update_record` moved here) pass; `rustyac-net` lib 29 / 29 |
+
+The arrivals recorder (`join.rs`) reads the format from the welcome the same way. `csp_oracle --net-hook` and
+the `csp_jumps` example use the AssettoServer text (`custom_update::ASSETTO_SERVER`, kept for tools and tests),
+because their inputs come from that server.
 
 ### NH-5.4 Checks
 
@@ -1084,6 +1150,22 @@ NH-7's 21,222 states (`taskNH7/cmp.sh`) plus a unit test with a made-up layout.
 * **Wasm:** not checked. This PC's toolchain has no wasm std (NH-7). `csp_motion` is plain Rust, and its
   maths is `rustyac_math`'s, which the browser build already uses.
 
+**Part 3 and the resume items** (resume session):
+
+* `cargo test -p rustyac-net --lib`: **29 / 29** pass (6 in `custom_update`). Clippy `-D warnings --all-targets`
+  clean on `rustyac-net` + `rustyac-game`, on `rustyac-web` (native), and on `tools/csp_oracle`.
+* `run_all.sh --quick net`: **20 / 20 IDENTICAL** (`as_spa` included, 9 min 26 s with the main folder's
+  oracle running). Without `--csp` nothing changed: no reader is built and `datagram::decode` is as before.
+* The live join (§NH-5.3) ran on the exe from before the last `online.rs` change, which moves `read_settings`
+  and the reader's build out of the `$CSP0:` branch. AssettoServer always sends `$CSP0:`, so that run took
+  the same path. Not rerun.
+* Skipped: the other areas (only `rustyac-net`'s `AB 03` read, the online join's `--csp` welcome and the
+  arrivals recorder changed); `csp_oracle --net-hook` (its decode is now the parsed reader, whose output on
+  the capture's server text equals the old layout's: the 21,222-state replay above; and the main folder's
+  C5k oracle was running).
+* **Wasm:** not checked (no wasm std on this PC, no `rustup`). `rustyac-web` changed one argument, and
+  `custom_update` is plain Rust; its clippy passes natively.
+
 ### NH-5.5 For NH-3 / NH-4 / NH-6 / NH-8
 
 * **NH-6 (Lua):** nothing new. The server's `[EXTRA_TWEAKS]` / `[CUSTOM_PHYSICS]` keys are listed above
@@ -1095,8 +1177,6 @@ NH-7's 21,222 states (`taskNH7/cmp.sh`) plus a unit test with a made-up layout.
 
 ## Resume here
 
-NH-5 parts 1-2 are done and committed on `web` (§NH-5.1-5.2, net quick 20 / 20 IDENTICAL). Resume at
-**part 3**, the format text (§NH-5.3, ~0.5 session): decompile CSP's parsers @ 0x180d77360 / 0x180d75820,
-replace the hard-wired `decode_custom_update` layout (marked shortcut in `datagram.rs`) with a reader
-built from `[EXTRA_DATA] CUSTOM_UPDATE_FORMAT`, prove it on NH-7's 21,222 states and a made-up layout,
-then `run_all.sh --quick net` again.
+**NH-5 is done** (parts 1-3 and the resume items, §NH-5.1-5.4, committed on `web`). Nothing to resume. For
+later: `SMOOTH` (§NH-5.5), `brake` / `clutch` of a custom format (§NH-5.3), and the non-finite guard
+(§NH-5.1).
