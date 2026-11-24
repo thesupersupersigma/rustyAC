@@ -8,7 +8,7 @@
 #                  CSP mode builds them (acd_check --csp --pressures), the first lap armed as it arms it
 #   car <car>      the same car, the game's Car::Car (car_oracle) against the port (chassis_compare)
 #   refused off|csp  every installed car through acd_check: which are refused, with which reason
-#   layouts        track_survey without and with --csp: exactly the six *_fa_2026 layouts load with it
+#   layouts        track_survey without and with --csp: the six *_fa_2026 layouts load with it (those installed; a new CSP-only layout passes, named)
 #   wav <track> <layout>  their WAV_PITCH=extended-N read by the port and by CSP's getFloat
 #   air <track>|still  CSP's air density (Task C4a, docs/csp/port_c4.md): the game's car driven 60 s with
 #                  CSP live, CSP's own density law, near-ground temperature, ground plane and altitude
@@ -97,7 +97,11 @@ for car in $extended $plain; do
 done
 
 # refused off|csp: acd_check over the install; off refuses every extended car for its VERSION (as
-# acs.exe does), --csp only the COSMIC and CSP-encrypted ones, each with its reason
+# acs.exe does), --csp only the COSMIC and CSP-encrypted ones, each with its reason. The lists follow the
+# install (Task C5j): a listed car no longer installed is left out, a refused car not in the lists passes
+# when its reason is the expected one and the verdict names it (add it to the lists above)
+installed() { for c; do [ -d "$ac/content/cars/$c" ] && echo "$c"; done | sort | tr '\n' ' '; }
+minus() { comm -23 <(tr ' ' '\n' <<< "$1" | grep . | sort) <(tr ' ' '\n' <<< "$2" | grep . | sort) | tr '\n' ' '; }
 for mode in off csp; do
     keep "refused $mode" || continue
     flag=; [ $mode = csp ] && flag=--csp
@@ -105,33 +109,41 @@ for mode in off csp; do
     got=$(grep '^  REFUSED ' "$out/acd_$mode.txt" | tr -d '\r')
     names=$(echo "$got" | awk '{sub(":", "", $2); print $2}' | sort | tr '\n' ' ')
     if [ $mode = off ]; then
-        want=$(echo $extended $still_refused | tr ' ' '\n' | sort | tr '\n' ' ')
+        want=$(installed $extended $still_refused)
         bad=$(echo "$got" | grep -vc 'VERSION=extended')
     else
-        want=$(echo $still_refused | tr ' ' '\n' | sort | tr '\n' ' ')
+        want=$(installed $still_refused)
         bad=$(echo "$got" | grep -v 'urd_darche_992_23.*encrypted for Custom Shaders Patch by its maker' | grep -vc 'COSMIC suspension: a later rustyAC version')
     fi
+    new=$(minus "$names" "$want"); gone=$(minus "$want" "$names")
     changed=$(grep -o '^FAILED [^:]*: files differ' "$out/acd_$mode.txt" | awk '{sub(":", "", $2); print $2}' | sort -u | tr '\n' ' ')
     if [ -n "$changed" ]; then
         skip "refused $mode" "content changed: ${changed% }, refresh cardata/"
-    elif [ "$names" = "$want" ] && [ "$bad" = 0 ] && grep -q '^RESULT' "$out/acd_$mode.txt"; then
-        verdict "refused $mode" IDENTICAL "$(echo "$names" | wc -w) refused, each with the expected reason"
+    elif [ -z "$gone" ] && [ "$bad" = 0 ] && grep -q '^RESULT' "$out/acd_$mode.txt"; then
+        verdict "refused $mode" IDENTICAL "$(echo "$names" | wc -w) refused, each with the expected reason${new:+; new (add to the lists in csp.sh): ${new% }}"
     else
-        verdict "refused $mode" DIFFERENT "refused: $names(want $want), $bad with another reason"
+        verdict "refused $mode" DIFFERENT "refused: $names(want $want), ${gone:+not refused now: ${gone% }; }$bad with another reason"
     fi
 done
 
 if keep layouts; then
     target/release/track_survey.exe > "$out/survey_off.md" 2>&1
     target/release/track_survey.exe --csp > "$out/survey_csp.md" 2>&1
-    # rows that changed: each one of the six, refused before and loaded now
+    # rows that changed: each one of the six (those installed), refused before and loaded now; a layout not
+    # in the list passes when it is refused as CSP-only without --csp and loads with it, named (Task C5j)
     changed=$(diff "$out/survey_off.md" "$out/survey_csp.md" | grep '^> ' | sed 's/^> | `\([^`]*\)`.*/\1/' | tr -d ' ' | sort | tr '\n' ' ')
-    want=$(echo $layouts | tr ' ' '\n' | sort | tr '\n' ' ')
+    want=$(for l in $layouts; do [ -d "$ac/content/tracks/$l" ] && echo "$l"; done | sort | tr '\n' ' ')
+    new=$(minus "$changed" "$want"); gone=$(minus "$want" "$changed"); odd=; tick='`'
+    for l in $new; do
+        row="| $tick${l/\// / }$tick "
+        grep -F "$row" "$out/survey_off.md" | grep -q 'made for Custom Shaders Patch only' &&
+            ! grep -F "$row" "$out/survey_csp.md" | grep -qE '\*\*refused|\*\*does not load' || odd="$odd$l "
+    done
     refused_now=$(grep -cE 'fa_2026.*(\*\*refused|\*\*does not load)' "$out/survey_csp.md")
-    if [ "$changed" = "$want" ] && [ "$refused_now" = 0 ] && [ "$(wc -l < "$out/survey_off.md")" = "$(wc -l < "$out/survey_csp.md")" ]; then
-        verdict layouts IDENTICAL "the six *_fa_2026 layouts load with --csp, nothing else changes"
+    if [ -z "$gone$odd" ] && [ "$refused_now" = 0 ] && [ "$(wc -l < "$out/survey_off.md")" = "$(wc -l < "$out/survey_csp.md")" ]; then
+        verdict layouts IDENTICAL "the $(echo $want | wc -w) *_fa_2026 layouts load with --csp, nothing else changes${new:+; new CSP-only layouts (add to the list in csp.sh): ${new% }}"
     else
-        verdict layouts DIFFERENT "changed: $changed(want $want), $refused_now still refused"
+        verdict layouts DIFFERENT "changed: $changed(want $want), ${odd:+changed but not a CSP-only layout: ${odd% }; }$refused_now still refused"
     fi
 fi
 
@@ -353,8 +365,10 @@ for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_
     # the lap tape has no collide keys, so rustyac would replay with collisions off; the game always collides
     cars=1; more=; [ $kind = wall ] || more="\\noracle_collide=1\\noracle_collider_mesh=1\\noracle_mesh_bounce_vel=0000028b\\noracle_no_collision_steps=0\\noracle_floor=0"
     [ $kind = two ] && { cars=2; more="$more\\nopponent=$car:parked\\noracle_gap=-5.5\\noracle_lift=0.2"; }
+    # CSP_ORACLE_LOADER: the cars' own collider.kn5 as the port has, not the oracle's stand-in 0.6 m box
+    # (Task C5j: with the box, the two row's cars met differently from step 620)
     ( [ $kind = two ] && export CSP_ORACLE_PARK=last CSP_ORACLE_GAP=-5.5 CSP_ORACLE_LIFT=0.2
-      CSP_ORACLE_BREAK=587cc0f oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --cars $cars --steps $steps )
+      CSP_ORACLE_LOADER=use CSP_ORACLE_BREAK=587cc0f oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --cars $cars --steps $steps )
     # the tape for rustyac: this car (and the parked one), CSP mode on CSP's core, cut after its first $steps steps (40 bytes a step)
     perl -0777 -pe "s/^car=.*\$/car=$car/m; s/\nend\n/$more\ncsp=1\ncsp_core=1\nend\n/" "$tape" > "$r.ryin.full"
     head -c $((steps * 40 + $(perl -0777 -ne 'print index($_, "\nend\n") + 5' "$r.ryin.full"))) "$r.ryin.full" > "$r.ryin"
@@ -374,8 +388,9 @@ for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_
     pin=$(pinned "row $car $kind" "$first")
     if ! echo "$hit" | grep -q " 0 differ from the port's csp_hit, 0 mass scales differ"; then
         verdict "row $car $kind" DIFFERENT "$steps steps: the callback: ${hit:-no line (the oracle did not finish?)}"
-    elif [ -z "$first" ] && [ "$(tr -d '\r' < "$r.cmp.txt" | grep -cE '^car [0-9]+: ([0-9]+) of \1 values')" = $cars ]; then
-        verdict "row $car $kind" IDENTICAL "$steps steps: $eq; callback $hit"
+    elif [ -z "$first" ] && [ "$(tr -d '\r' < "$r.cmp.txt" | grep -cE '^car [0-9]+: [0-9]+ of [0-9]+ values')" = $cars ]; then
+        # every value past the view list equal at every step (the view list's fields only one side fills)
+        verdict "row $car $kind" IDENTICAL "$steps steps, every value past the view list equal: $eq; callback $hit"
     elif [ -n "$pin" ]; then
         verdict "row $car $kind" EXPECTED "$steps steps: $eq; first (past the view list): $first; pinned: $pin; callback $hit"
     else
