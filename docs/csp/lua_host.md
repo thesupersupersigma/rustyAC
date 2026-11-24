@@ -4,8 +4,44 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a part 1 is done (below). Part 2 (INIpp: `$" expr "`, functions, includes, mixins, templates,
-conditions, the file order, against CSP's own flatten) starts next.
+C6a part 1 is done (below). Part 2 stopped after its oracle: CSP's INIpp is about 100 KB of machine
+code plus a Lua chunk, much bigger than the 1.5 sessions it was given. It is split into C6a-2a/2b/2c
+(section "C6a part 2" below, 5-6 sessions). Next: **C6a-2a**, INIpp without Lua, proven against CSP's
+flatten with Lua off on all 261 files.
+
+## C6a part 2: CSP's INIpp, found and measured
+
+**The oracle** (`csp_oracle --inipp <list>`, tools/csp_oracle/src/inipp.rs). In process, CSP builds a
+`utils::ini_file` the way its own config loaders do: ctor dll+0x1588210 (mode 0, path as a UTF-8
+std::string, 4th argument 1, no extra search folders, no pre/post files), which loads, resolves
+includes from the file's own folders and evaluates; then dll+0x149ceb0 writes the flattened text, the
+same text `[__DEBUG] DUMP_FLATTEN_INI` writes next to a file (sections sorted, values quoted where
+needed when the first option word is 1). The ctor's 4th argument turns Lua on: with 0, `$" "` values
+come out empty (54 of the 261 files change). All 261 files take 2 s.
+
+**The corpus**: every `.ini` under `extension/config` and under the installed cars' and tracks'
+`extension` folders: 30 folders, 261 files, 4,340 sections and 35,949 keys after flattening; 750
+`$" "` expressions in 51 files (the plan's 725 in 43 was an older content set), 32 `[FUNCTION]`s,
+352 `[INCLUDE]` sections, 187 templates, 185 mixins, 59 `@GENERATOR`s. 25 files flatten to nothing on
+their own (libraries of templates and mixins, e.g. `cars/common/materials_carpaint.ini`). 207 files
+flatten the same with Lua off.
+
+**Where it is in dwrite.dll** (for the port): parser object 272 B, ctor +0x1490f80; parse text
++0x1499ce0; load a file +0x149a770; `[INCLUDE]` handler +0x1495400; resolve (templates, mixins,
+expressions) +0x149b1c0; flatten +0x149ceb0; JSON form +0x149d260 (what Lua's `parseINIppFile` returns,
++0x13cd970 on text). The functions between +0x147f000 and +0x14a0000 hold about 33,600 instructions.
+Lua side: the preprocessor state (+0x13e5ba0) opens base/package/table/string/math/debug/bit, no
+io/os/jit, and runs the embedded chunk `ac_common_base` (`?__initbase__`). Loaders: the track one
+(+0x141a1a0, `tracks\generic\generic.ini`, `extension\ext_config.ini`, `skins\...\cm_skins`, `loaded`)
+calls the per-file loader +0x1416320; the car one is not located yet.
+
+**Split** (replaces "part 2", about 1.5 sessions, with about 5-6):
+
+| Step | What | Proof | Size |
+|---|---|---|---|
+| C6a-2a | INIpp without Lua: reading and quoting values, sections and `...` numbering, `[INCLUDE]` / `INCLUDE=` with variables, `$variables`, templates / `EXTENDS` / `[A : B]`, `ACTIVE`, the flatten writer; in `rustyac-physics::csp` | all 261 files, ours vs CSP's flatten with the ctor's 4th argument 0, key by key | 2-3 sessions |
+| C6a-2b | the Lua part on rustyAC's LuaJIT: `$" "`, `[FUNCTION]`, mixins and `CONDITION`, `@GENERATOR`, `read()` / `get()` / `has()`, `ac_common_base` | all 261 files with Lua on, new proof case `csp inipp` | 2 sessions |
+| C6a-2c | file order for a car and a track (generic / common / loaded / own `ext_config.ini`), into `CspFeatures` | each installed car and track: CSP's loader result vs ours | 1 session |
 
 ## C6a part 1: which LuaJIT
 

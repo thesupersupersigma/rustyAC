@@ -35,6 +35,7 @@ mod collision;
 mod island;
 mod joints;
 mod hit;
+mod inipp;
 mod lua;
 mod nethook;
 mod ode;
@@ -2493,6 +2494,11 @@ fn main() {
         arguments.remove(i);
         full_path(&arguments.remove(i))
     });
+    // --inipp <list.txt>: CSP's own INIpp flatten of each ini of the list (Task C6a part 2)
+    let inipp_list = arguments.iter().position(|a| a == "--inipp").map(|i| {
+        arguments.remove(i);
+        full_path(&arguments.remove(i))
+    });
     // --net-hook <nettape|udp.log>: CSP's hook on the remote-state add against rustyac_net::csp_motion (Task NH-5)
     let net_hook = arguments.iter().position(|a| a == "--net-hook").map(|i| {
         arguments.remove(i);
@@ -2702,6 +2708,10 @@ fn main() {
         }
         if let Some(file) = &lua_file {
             lua::run(dll as usize, file);
+            stop(0, "end of the run");
+        }
+        if let Some(file) = &inipp_list {
+            inipp::run(dll as usize, file);
             stop(0, "end of the run");
         }
         if let Some(file) = &net_hook {
