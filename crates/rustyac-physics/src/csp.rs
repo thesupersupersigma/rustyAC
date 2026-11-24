@@ -12,6 +12,8 @@ pub mod core_body;
 pub mod core_car;
 pub mod core_track;
 pub mod inipp;
+#[cfg(feature = "lua")]
+pub mod inipp_lua;
 
 use crate::data::ini::IniReader;
 use std::path::Path;

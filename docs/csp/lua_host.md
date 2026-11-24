@@ -4,16 +4,68 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a part 1 and C6a-2a are done (below): rustyAC's INIpp without Lua (`rustyac_physics::csp::inipp`)
-flattens all 261 files as CSP does with Lua off (proof case `csp inipp`). Next: **C6a-2b**, the Lua part
-(`$" "`, `[FUNCTION]`, `@GENERATOR`, `CONDITION`) on rustyac-lua, proven on the same 261 files with Lua on.
+C6a part 1, C6a-2a and C6a-2b are done (below): rustyAC's INIpp (`rustyac_physics::csp::inipp`) flattens
+all 261 files as CSP does, with Lua on (`flatten_lua`, rustyac-lua's LuaJIT, feature `lua`) and off
+(proof case `csp inipp` runs Lua on). Next: **C6a-2c**: the car/track config order (which files, in which
+order, with `read`/`has`/`get`/`set` answering from the car and the config being loaded), `@GENERATOR`,
+`CspFeatures` from the flattened text, and rustyac.exe linking LuaJIT.
+
+## C6a-2b: INIpp with Lua
+
+**The proof**: case `inipp` now runs `csp_oracle --inipp` with Lua on (CSP's normal mode) against
+`inipp_flat <list> <dwrite.dll>` (built `--features lua`): 261/261 the same; with Lua off (no dll
+argument) still 261/261. Hand probes of each rule below: re/scratch/taskC6a/q (`LUA=1 probe.sh`).
+
+**The Lua state** (sub_181489730, one per parser): `lua_newstate`, then only base (+coroutine), math and
+string; then CSP's `ini_std` chunk as `@std`; then `read`, `has`, `get`, `set`. No `ac_common_base`: that
+belongs to the other (script preprocessor) state at dll+0x13e5ba0, not to INIpp. `ini_std` (`def`,
+`vec2..4`, `discard`, `clamp`, `__conv_result`, ...) is LuaJIT 2.1 bytecode in a zip inside dwrite.dll
+(deflated, 17,249 bytes, "from a different INIpp project" says CSP's readme); it is upstream bytecode
+with only the 4-byte magic changed. rustyAC reads it from the installed CSP's dwrite.dll at run time
+(`csp::inipp_lua::ini_std`), puts back `1B 4C 4A 02` and loads it: no CSP bytes in the repo.
+
+**What CSP does** (each probed):
+- `$"expr"` as an item's whole tail is marked by the splitter (open `5B 01 02 04 01`, close ending
+  `01 02 04 5D`); text after the closing quote leaves `$"..."` as written. At the end of expansion
+  (sub_18148BB50) the last marked expression runs as `return __conv_result(expr)`, on a syntax error again
+  as `return __conv_result((function() expr end)())`; each value gets the text before/after it. Values:
+  table entries in `lua_next` order, nil nothing, booleans `1`/`0`, numbers `%.14g`.
+- Errors: a syntax error or `discard()` (`__discardError__`) drops the key; any other runtime error is
+  logged and the key keeps only the text around the expression (empty if none).
+- A variable inside `$" "` becomes a Lua literal (sub_18148C1C0): nothing -> `nil` (a missing `$X` too),
+  one value: raw if it is a number by CSP's test (sub_18148DA30: decimal, one `.`, `e±n`, `0x` with decimal
+  digits only, blanks around; empty counts), else a quoted Lua string; `:exists` -> `true`/`false`, `:str`
+  quoted; 2-4 numbers -> `vecN(...)`, else `{...}` with strings quoted.
+- `ACTIVE` false: with Lua, every section other than `[FUNCTION]`/`[USE]`/`[INCLUDE]` keeps only
+  `ACTIVE=0` (a plain `ACTIVE = 0` too); those three vanish. `[INCLUDE]` keys are not expanded, so its
+  `ACTIVE` runs at the section end.
+- `[FUNCTION: NAME]` runs `function NAME(ARGUMENTS)
+CODE
+end` and vanishes; `[USE: f.lua]` runs the file
+  (found as `[INCLUDE]` finds files) once per state and vanishes.
+- `read(path, default)`: CSP's reader answers `csp/version` (4305) and gives the default otherwise in
+  csp_oracle's set-up; number defaults go through a float. `has` is false and `get` the default there.
+
+**The port**: crates/rustyac-physics/src/csp/inipp.rs (`flatten_lua`, `run_lua`, `literal`,
+`csp_number`, `quote`, section end) and crates/rustyac-physics/src/csp/inipp_lua.rs (`ini_std`, `Lua`:
+the state, `eval`, `function`, `use_file`, `read`/`has`/`get`/`set`). Feature `lua` of rustyac-physics
+pulls rustyac-lua with `luajit` and miniz_oxide; off by default, so rustyac.exe and the browser build do
+not link LuaJIT.
+
+Not done (shortcuts in the code; none reached by the 261 files): `@GENERATOR` (sub_181493780, a template
+instantiated per number, Lua or not: only in templates the corpus never instantiates), `read`/`has`/
+`get`/`set` answering from a real car and config (C6a-2c), mixin arguments without `=` (CSP sets them to
+`1`). Known difference outside the corpus: CSP's LuaJIT fork numbers its builtins differently
+(`tostring(print)` is `builtin#0` there, `#30` in upstream), so `pairs` over `_G`/`math`/`string` and
+`tostring` of a builtin differ.
 
 ## C6a-2a: INIpp without Lua
 
 **The proof** (`tools/proofs/csp.sh` case `inipp`): every `.ini` under `extension/config` and the
 installed cars' and tracks' `extension` folders (261) through `csp_oracle --inipp` with
 `CSP_ORACLE_INIPP_LUA=0` (the ctor's 4th argument 0) and through `inipp_flat` (crates/rustyac-physics
-bin), file by file (tools/proofs/csp_inipp.py): 261/261 the same, 2 s each side.
+bin), file by file (tools/proofs/csp_inipp.py): 261/261 the same, 2 s each side. (Since C6a-2b the
+case runs Lua on; Lua off is checked by hand the same way.)
 
 **The port**, crates/rustyac-physics/src/csp/inipp.rs, `flatten(path) -> Option<String>`; each function
 names the dwrite.dll function it ports (imagebase 0x180000000): scanner sub_181499CE0, value splitter

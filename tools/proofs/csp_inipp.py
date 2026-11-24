@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # csp_inipp.py <csp_oracle --inipp output> <inipp_flat output>: file by file, CSP's INIpp flatten
-# against rustyAC's (Task C6a-2a). Prints "IDENTICAL | n/n files" or "DIFFERENT | k of n files differ, first: ..."
+# against rustyAC's (Task C6a-2a, Lua on since C6a-2b). Prints "IDENTICAL | n/n files" or "DIFFERENT | k of n files differ, first: ..."
 import re, sys
 
 def load(path):
     text = open(path, encoding='utf-8', errors='replace', newline='').read().replace('\r\n', '\n')
+    # the oracle's own log lines (a [USE] file starting CSP threads) can land inside a file's text
+    text = re.sub(r'^T\d+ CreateThread: [^=\n]*\n', '', text, flags=re.M)
     parts = re.split(r'^== (.*)$', text, flags=re.M)
     # [1:] drops the newline after the path; the oracle's run ends with its T0 STOP line
     return {k.strip(): re.split(r'\n*T0 STOP', v[1:])[0].rstrip('\n') for k, v in zip(parts[1::2], parts[2::2])}

@@ -13,3 +13,9 @@ rustyac-math = { path = "../rustyac-math" }
 rustyac-ode = { path = "../rustyac-ode" }
 # kn5 models: a track's physics meshes and helper nodes
 rustyac-content = { path = "../rustyac-content" }
+# feature `lua` (Task C6a-2b): INIpp's `$"..."` values on LuaJIT; x64 Windows CSP mode and tools only
+rustyac-lua = { path = "../rustyac-lua", optional = true }
+miniz_oxide = { version = "0.8", optional = true }
+
+[features]
+lua = ["dep:rustyac-lua", "rustyac-lua/luajit", "dep:miniz_oxide"]

@@ -16,14 +16,43 @@ pub mod sys {
 
     pub enum lua_State {}
     pub type lua_Reader = unsafe extern "C" fn(*mut lua_State, *mut c_void, *mut usize) -> *const c_char;
+    /// "C-unwind": a Lua error raised in one unwinds through it.
+    pub type lua_CFunction = unsafe extern "C-unwind" fn(*mut lua_State) -> c_int;
 
-    extern "C" {
+    pub const LUA_GLOBALSINDEX: c_int = -10002;
+    pub const LUA_ERRSYNTAX: c_int = 3;
+    pub const LUA_TNIL: c_int = 0;
+    pub const LUA_TBOOLEAN: c_int = 1;
+    pub const LUA_TNUMBER: c_int = 3;
+    pub const LUA_TSTRING: c_int = 4;
+    pub const LUA_TTABLE: c_int = 5;
+
+    extern "C-unwind" {
         pub fn luaL_newstate() -> *mut lua_State;
         pub fn luaL_openlibs(l: *mut lua_State);
+        pub fn luaopen_base(l: *mut lua_State) -> c_int;
+        pub fn luaopen_math(l: *mut lua_State) -> c_int;
+        pub fn luaopen_string(l: *mut lua_State) -> c_int;
         pub fn lua_loadx(l: *mut lua_State, reader: lua_Reader, data: *mut c_void, name: *const c_char, mode: *const c_char) -> c_int;
         pub fn luaL_loadbufferx(l: *mut lua_State, buf: *const c_char, size: usize, name: *const c_char, mode: *const c_char) -> c_int;
+        pub fn luaL_loadfilex(l: *mut lua_State, name: *const c_char, mode: *const c_char) -> c_int;
+        pub fn luaL_error(l: *mut lua_State, fmt: *const c_char, ...) -> c_int;
         pub fn lua_pcall(l: *mut lua_State, nargs: c_int, nresults: c_int, errfunc: c_int) -> c_int;
+        pub fn lua_call(l: *mut lua_State, nargs: c_int, nresults: c_int);
+        pub fn lua_gettop(l: *mut lua_State) -> c_int;
         pub fn lua_settop(l: *mut lua_State, idx: c_int);
+        pub fn lua_pushvalue(l: *mut lua_State, idx: c_int);
+        pub fn lua_type(l: *mut lua_State, idx: c_int) -> c_int;
+        pub fn lua_toboolean(l: *mut lua_State, idx: c_int) -> c_int;
+        pub fn lua_tonumber(l: *mut lua_State, idx: c_int) -> f64;
+        pub fn lua_tolstring(l: *mut lua_State, idx: c_int, len: *mut usize) -> *const c_char;
+        pub fn lua_next(l: *mut lua_State, idx: c_int) -> c_int;
+        pub fn lua_pushnil(l: *mut lua_State);
+        pub fn lua_pushnumber(l: *mut lua_State, n: f64);
+        pub fn lua_pushboolean(l: *mut lua_State, b: c_int);
+        pub fn lua_pushstring(l: *mut lua_State, s: *const c_char);
+        pub fn lua_pushcclosure(l: *mut lua_State, f: lua_CFunction, n: c_int);
+        pub fn lua_setfield(l: *mut lua_State, idx: c_int, k: *const c_char);
         pub fn lua_close(l: *mut lua_State);
     }
 }

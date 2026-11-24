@@ -14,6 +14,26 @@ type Vars = Vec<(B, Vec<B>)>;
 
 /// `$"..."` (a Lua expression) as the splitter marks it (unk_182373B3C).
 const LUA_MARK: &[u8] = &[0x5b, 0x01, 0x02, 0x04, 0x01];
+/// Its end (qword_1826C2488, set at run time; CSP's ends in these bytes, only uniqueness matters).
+const LUA_END: &[u8] = &[0x01, 0x02, 0x04, 0x5d];
+
+#[cfg(feature = "lua")]
+use super::inipp_lua::Lua;
+/// Without feature `lua` there is no Lua: CSP with Lua off.
+#[cfg(not(feature = "lua"))]
+enum Lua {}
+#[cfg(not(feature = "lua"))]
+impl Lua {
+    fn eval(&self, _: &[u8], _: &[u8], _: &[u8], _: &mut Vec<B>) -> bool {
+        match *self {}
+    }
+    fn function(&self, _: &[u8], _: &[B], _: &[u8]) {
+        match *self {}
+    }
+    fn use_file(&self, _: &Path) {
+        match *self {}
+    }
+}
 /// Our stand-in for CSP's runtime `_...` key marker (qword_1826C2428): only its being constant matters.
 const KEY_MARK: &[u8] = &[0x01];
 
@@ -86,12 +106,24 @@ struct Parser {
     dirs: Vec<PathBuf>,
     /// (file, variables) pairs already read (sub_18149A620)
     seen: Vec<(PathBuf, Vars)>,
+    /// the parser's Lua state (parser +192..+248 flags, sub_181489730); `None`: Lua off
+    lua: Option<Lua>,
 }
 
 /// CSP's flattened text of the ini at `path` with Lua off, or `None` if it can't be read.
 pub fn flatten(path: &Path) -> Option<String> {
+    flatten_with(path, None)
+}
+
+/// The same with Lua on, CSP's normal mode; `std` is [`super::inipp_lua::ini_std`].
+#[cfg(feature = "lua")]
+pub fn flatten_lua(path: &Path, std: &[u8]) -> Option<String> {
+    flatten_with(path, Some(Lua::new(std)?))
+}
+
+fn flatten_with(path: &Path, lua: Option<Lua>) -> Option<String> {
     let text = std::fs::read(path).ok()?;
-    let mut p = Parser { file: path.to_path_buf(), ..Default::default() };
+    let mut p = Parser { file: path.to_path_buf(), lua, ..Default::default() };
     p.seen.push((path.to_path_buf(), Vec::new()));
     p.scan(strip_bom(&text), &mut vec![Vec::new()]);
     let sections = p.resolve();
@@ -384,7 +416,7 @@ impl Parser {
                 continue;
             }
             if k.starts_with(b"@GENERATOR") {
-                // Lua generators: nothing with Lua off
+                // shortcut: `@GENERATOR` template instances (sub_181493780, Lua or not) are not ported, none in the 261-file corpus outside templates; port in C6a-2c with the car/track config order
                 continue;
             }
             if k == b"@" || k.starts_with(b"@MIXIN") {
@@ -497,7 +529,7 @@ impl Parser {
             return;
         }
         if key.starts_with(b"@GENERATOR") {
-            // Lua generators: nothing with Lua off
+            // shortcut: `@GENERATOR` not ported, see `apply`
             return;
         }
         if key == b"@ERASE_REFERENCED" && sec.name == b"@INIPP" {
@@ -551,10 +583,35 @@ impl Parser {
             }
             sec.remove(b"@DISCARD");
         }
-        // inactive FUNCTION/USE/INCLUDE vanish (a `$"..."` ACTIVE is false with Lua off); others keep ACTIVE
+        // inactive FUNCTION/USE/INCLUDE vanish (a `$"..."` ACTIVE is false with Lua off); others
+        // keep their keys with Lua off, only `ACTIVE=0` with Lua on
         let special = matches!(&sec.name[..], b"FUNCTION" | b"USE" | b"INCLUDE");
-        if special && sec.get(b"ACTIVE").is_some_and(|v| !truthy(v.first())) {
-            return;
+        // a still marked ACTIVE (unexpanded `[INCLUDE]` keys) is run here
+        let active = match sec.get(b"ACTIVE").cloned() {
+            Some(v) if v.iter().any(|i| find(i, LUA_MARK).is_some()) => Some(self.expand(b"ACTIVE", v, vars).unwrap_or_default()),
+            v => v,
+        };
+        if active.is_some_and(|v| !truthy(v.first())) {
+            if special {
+                return;
+            }
+            if self.lua.is_some() {
+                sec.keys = vec![(b"ACTIVE".to_vec(), vec![b"0".to_vec()])];
+            }
+        }
+        let first = |k: &[u8]| sec.get(k).and_then(|v| v.first()).cloned().unwrap_or_default();
+        match (&self.lua, &sec.name[..]) {
+            (Some(lua), b"FUNCTION") => {
+                lua.function(&first(b"NAME"), sec.get(b"ARGUMENTS").map_or(&[][..], |v| v), &first(b"CODE"));
+                return;
+            }
+            (Some(_), b"USE") => {
+                if let Some(path) = self.resolve_file(&first(b"FILE")) {
+                    self.lua.as_ref().expect("Lua on").use_file(&path);
+                }
+                return;
+            }
+            _ => {}
         }
         if sec.name.starts_with(b"INCLUDE") {
             if let Some(files) = sec.get(b"INCLUDE").cloned() {
@@ -637,43 +694,69 @@ impl Parser {
             out.push(s.to_vec());
             return;
         }
-        if s.starts_with(LUA_MARK) {
-            // a `$"..."` Lua expression: no item at all with Lua off
+        // a `$"..."` Lua expression: no item at all with Lua off; with Lua, references in it
+        // become Lua literals (sub_18148E3A0's Lua flag) and it is run at the end
+        let lua = s.starts_with(LUA_MARK);
+        if lua && self.lua.is_none() {
             return;
         }
         if let Some(r) = whole_ref(s) {
-            for v in self.lookup(&r, s, vars, ok) {
+            for v in self.lookup(&r, s, vars, ok, false) {
                 self.expand_item(&v, depth + 1, vars, out, ok);
             }
             return;
         }
+        let mut refs = |r: Ref, a: usize, b: usize| {
+            let vals = self.lookup(&r, &s[a..b], vars, ok, lua);
+            let vals = if lua { vec![literal(r.modi, &vals)] } else { vals };
+            for v in vals {
+                self.expand_item(&[&s[..a], &v[..], &s[b..]].concat(), depth + 1, vars, out, ok);
+            }
+        };
         if let Some(p) = find(s, b"${") {
             if let Some(q) = s[p..].iter().position(|&c| c == b'}').map(|q| q + p) {
                 if let Some(r) = whole_ref(&s[p..=q]) {
-                    for v in self.lookup(&r, &s[p..=q], vars, ok) {
-                        let combo = [&s[..p], &v[..], &s[q + 1..]].concat();
-                        self.expand_item(&combo, depth + 1, vars, out, ok);
-                    }
-                    return;
+                    return refs(r, p, q + 1);
                 }
             }
         }
         if let Some(d) = s.iter().skip(1).position(|&c| c == b'$').map(|d| d + 1) {
             let e = d + 1 + s[d + 1..].iter().take_while(|&&c| is_word(c)).count();
             if e > d + 1 {
-                let r = whole_ref(&s[d..e]).expect("a $name reference");
-                for v in self.lookup(&r, &s[d..e], vars, ok) {
-                    let combo = [&s[..d], &v[..], &s[e..]].concat();
-                    self.expand_item(&combo, depth + 1, vars, out, ok);
-                }
-                return;
+                return refs(whole_ref(&s[d..e]).expect("a $name reference"), d, e);
             }
         }
-        out.push(s.to_vec());
+        if lua {
+            self.run_lua(s, out, ok);
+        } else {
+            out.push(s.to_vec());
+        }
     }
 
-    /// A reference's values (sub_18148D630 + sub_18148C380); `text`: the reference as written.
-    fn lookup(&self, r: &Ref, text: &[u8], vars: &[Vars], ok: &mut bool) -> Vec<B> {
+    /// A Lua item's values (sub_18148BF40/sub_18148BB50): the last expression in it is run,
+    /// the text around it kept on each value; again while the text has one.
+    fn run_lua(&self, s: &[u8], out: &mut Vec<B>, ok: &mut bool) {
+        let lua = self.lua.as_ref().expect("Lua on");
+        let open = s.windows(LUA_MARK.len()).rposition(|w| w == LUA_MARK);
+        let Some((o, c)) = open.and_then(|o| Some((o, find(&s[o..], LUA_END)? + o))) else {
+            out.push(s.to_vec());
+            return;
+        };
+        let (prefix, expr, suffix) = (&s[..o], &s[o + LUA_MARK.len()..c], &s[c + LUA_END.len()..]);
+        if find(prefix, LUA_MARK).is_none() {
+            *ok &= lua.eval(expr, prefix, suffix, out);
+            return;
+        }
+        let mut vals = Vec::new();
+        *ok &= lua.eval(expr, prefix, suffix, &mut vals);
+        for v in vals {
+            self.run_lua(&v, out, ok);
+        }
+    }
+
+    /// A reference's values (sub_18148D630 + sub_18148C380); `text`: the reference as written,
+    /// what a missing `$name` gives unless it's in a Lua expression (`lua`).
+    fn lookup(&self, r: &Ref, text: &[u8], vars: &[Vars], ok: &mut bool, lua: bool) -> Vec<B> {
         let found = vars.iter().rev().find_map(|sc| sc.iter().find(|(n, _)| *n == r.name).map(|(_, v)| v));
         let zeros = |n: usize| vec![b"0".to_vec(); n];
         let Some(items) = found else {
@@ -691,7 +774,7 @@ impl Parser {
                 12 => vec![b"false".to_vec()],
                 13 => vec![Vec::new()],
                 // missing: `$name` stays as written, `${name}` gives nothing
-                _ if r.simple => vec![text.to_vec()],
+                _ if r.simple && !lua => vec![text.to_vec()],
                 _ => Vec::new(),
             };
         };
@@ -853,6 +936,61 @@ fn url_before(t: &[u8], i: usize) -> bool {
 
 fn is_number(v: &[u8]) -> bool {
     std::str::from_utf8(trim(v)).ok().and_then(|s| s.parse::<f64>().ok()).is_some()
+}
+
+/// A reference's values as Lua source inside `$"..."` (sub_18148E3A0 Lua path, sub_18148C1C0).
+fn literal(modi: u8, vals: &[B]) -> B {
+    match vals {
+        [] => b"nil".to_vec(),
+        [v] => match modi {
+            0 | 7..=10 if !csp_number(v) => quote(v),
+            3 => (if truthy(Some(v)) { &b"true"[..] } else { b"false" }).to_vec(),
+            13 => quote(v),
+            _ => v.clone(),
+        },
+        _ if vals.len() <= 4 && vals.iter().all(|v| csp_number(v)) => [format!("vec{}(", vals.len()).as_bytes(), &vals.join(&b','), b")"].concat(),
+        _ => {
+            let items: Vec<B> = vals.iter().map(|v| if csp_number(v) { v.clone() } else { quote(v) }).collect();
+            [&b"{"[..], &items.join(&b','), b"}"].concat()
+        }
+    }
+}
+
+/// A Lua string literal (sub_18148DB70).
+fn quote(v: &[u8]) -> B {
+    let mut o = vec![b'"'];
+    for &c in v {
+        match c {
+            8 => o.extend_from_slice(b"\\b"),
+            b'\t' => o.extend_from_slice(b"\\t"),
+            b'\n' => o.extend_from_slice(b"\\n"),
+            b'\r' => o.extend_from_slice(b"\\r"),
+            b'"' | b'\\' => o.extend_from_slice(&[b'\\', c]),
+            _ => o.push(c),
+        }
+    }
+    o.push(b'"');
+    o
+}
+
+/// Can the text go into Lua as a number as it is (sub_18148DA30)? Empty counts as one.
+fn csp_number(v: &[u8]) -> bool {
+    let blank = |c: u8| matches!(c, b' ' | b'\t' | b'\r');
+    let a = v.iter().position(|&c| !blank(c)).unwrap_or(v.len());
+    let b = v.iter().rposition(|&c| !blank(c)).map_or(a, |i| i + 1);
+    let s = &v[a..b];
+    let hex = s.len() >= 2 && s[0] == b'0' && s[1] == b'x';
+    let (mut dot, mut exp, mut exp_digits) = (false, false, false);
+    for (i, &c) in s.iter().enumerate().skip(if hex { 2 } else { 0 }) {
+        match c {
+            b'0'..=b'9' => exp_digits |= exp,
+            b'+' | b'-' if i == 0 || (exp && matches!(s[i - 1], b'e' | b'E')) => {}
+            b'e' | b'E' if !hex && !exp && i > 0 => exp = true,
+            b'.' if !hex && !dot && !exp => dot = true,
+            _ => return false,
+        }
+    }
+    !exp || exp_digits
 }
 
 /// `$name` or `${name:...}` as a whole (sub_18148FCD0), `None` if it isn't one.
@@ -1028,7 +1166,7 @@ fn split(t: &[u8], at: bool) -> Vec<B> {
                     nb.push(c);
                     buf = nb;
                 } else if dollar {
-                    buf = [LUA_MARK, &buf].concat();
+                    buf = [LUA_MARK, &buf, LUA_END].concat();
                 }
                 q = 0;
                 (s, e) = (i + 1, i);
@@ -1211,5 +1349,22 @@ mod tests {
         assert!(natural(b"A", b"B") < 0);
         assert!(natural(b"A", b"A_0") < 0);
         assert_eq!(natural(b"X1", b"X1"), 0);
+    }
+
+    #[test]
+    fn lua_literals_like_csp() {
+        // sub_18148DA30 / sub_18148C1C0, checked against CSP with q/l1.ini (C6a-2b)
+        for (v, n) in [(&b""[..], true), (b" 1.5\t", true), (b"0x12", true), (b"0x1F", false), (b"1e+5", true), (b"1e", false), (b"1.2.3", false), (b"a", false), (b"1 2", false), (b"1\n", false)] {
+            assert_eq!(csp_number(v), n, "{}", String::from_utf8_lossy(v));
+        }
+        let v = |s: &[&[u8]]| s.iter().map(|x| x.to_vec()).collect::<Vec<B>>();
+        assert_eq!(literal(0, &[]), b"nil");
+        assert_eq!(literal(0, &v(&[b"abc"])), br#""abc""#);
+        assert_eq!(literal(0, &v(&[b"5"])), b"5");
+        assert_eq!(literal(3, &v(&[b"1"])), b"true");
+        assert_eq!(literal(13, &v(&[b"1"])), br#""1""#);
+        assert_eq!(literal(0, &v(&[b"1", b"2", b"3"])), b"vec3(1,2,3)");
+        assert_eq!(literal(0, &v(&[b"a", b"2"])), br#"{"a",2}"#);
+        assert_eq!(quote(b"a\"b\\n"), br#""a\"b\\n""#);
     }
 }
