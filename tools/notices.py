@@ -58,6 +58,16 @@ def main():
     apache = open(os.path.join(ROOT, 'LICENSE-APACHE'), encoding='utf-8').read().replace('\r\n', '\n').strip()
     lines += ['=' * 100, 'Apache-2.0, used by: Embree 3.13.4 (C++ library, the Custom Shaders Patch mode\'s ray casts)', '=' * 100, '',
               'Copyright 2009-2021 Intel Corporation', '', apache, '']
+    # not a crate: crates/rustyac-lua's feature `luajit` builds it from source; its COPYRIGHT: MIT for
+    # LuaJIT and the Lua 5.1/5.2 code in it (the same permission text as LICENSE-MIT), dlmalloc public domain
+    mit = open(os.path.join(ROOT, 'LICENSE-MIT'), encoding='utf-8').read().replace('\r\n', '\n').strip()
+    mit = mit[mit.index('Permission is hereby'):]
+    lines += ['=' * 100, 'MIT, used by: LuaJIT 2.1 (C library, the Custom Shaders Patch mode\'s Lua)', '=' * 100, '',
+              'Copyright (C) 2005-2026 Mike Pall. All rights reserved.', '',
+              'LuaJIT includes code from Lua 5.1/5.2: Copyright (C) 1994-2012 Lua.org, PUC-Rio.', '', mit, '',
+              'LuaJIT includes code from dlmalloc, which has this license statement:', '',
+              'This is a version (aka dlmalloc) of malloc/free/realloc written by', 'Doug Lea and released to the public domain, as explained at',
+              'https://creativecommons.org/licenses/publicdomain', '']
     with open(os.path.join(ROOT, 'THIRD_PARTY_NOTICES.txt'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines))
     print(f'THIRD_PARTY_NOTICES.txt: {len(crates)} crates, {len(texts)} license texts, from {len(manifests)} lock files')

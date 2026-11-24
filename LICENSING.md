@@ -17,7 +17,7 @@ Copyright (c) 2026 thesupersupersigma.
 | Notes and reports | `docs/` (but its screenshots) | `GPL-3.0-or-later` |
 | The screenshots in `docs/` | the `.png` / `.jpg` files under `docs/` | Not rustyAC's: pictures of Assetto Corsa's content (Kunos Simulazioni's cars, tracks and interface, as the game or rustyAC draws them), shown only to document the port. They are under none of the licenses here. |
 | The project's own logos and artwork | `things/` | Copyright (c) 2026 thesupersupersigma, all rights reserved: under none of the licenses here. Ask before using them. |
-| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`crates/rustyac-dxbc/` (reads compiled shaders and writes WGSL; it contains no shader)<br>`tools/sctm_oracle/`, `tools/math_proof/`, `tools/proof_tui/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the website media scripts `tools/site_media/`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`, and the server panel `server/panel/`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`crates/rustyac-lua/` (builds and declares LuaJIT; it contains no LuaJIT file)<br>`crates/rustyac-dxbc/` (reads compiled shaders and writes WGSL; it contains no shader)<br>`tools/sctm_oracle/`, `tools/math_proof/`, `tools/proof_tui/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the website media scripts `tools/site_media/`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`, and the server panel `server/panel/`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
 
 **What the licenses mean in short:**
@@ -47,6 +47,13 @@ everything that links the car physics is GPL.
   calls it. The browser preview never links it. Only Embree's own Intel files go into the library:
   the Kitware files are CMake scripts, and `sse2neon.h` (MIT) is for ARM only.
   No Embree file is in this repository; its listing is in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+- **LuaJIT 2.1**, copyright (C) 2005-2026 Mike Pall, under `MIT` (with Lua 5.1/5.2 code, copyright
+  (C) 1994-2012 Lua.org, PUC-Rio, also MIT, and dlmalloc, public domain). Custom Shaders Patch runs
+  its Lua with it, so the CSP mode will too: `crates/rustyac-lua`'s feature `luajit` builds it from
+  its source at commit c6ffc141 (2026-09-08, branch v2.1) into a static library
+  (`crates/rustyac-lua/build.rs`). Only `tools/csp_oracle` turns the feature on so far (Task C6a);
+  the Vanilla mode and the browser preview never link it. No LuaJIT file is in this repository;
+  its listing is in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 - **MSVCR120.dll**, Microsoft's Visual C++ 2013 runtime. rustyAC loads it at run time from the
   user's system, when it is installed, to get the same maths results as the game. It is never
   shipped with rustyAC. Where a DLL cannot be loaded (the browser preview),

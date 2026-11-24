@@ -862,6 +862,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyac-lua"
+version = "1.1.5"
+
+[[package]]
 name = "rustyac-math"
 version = "1.1.5"
 dependencies = [

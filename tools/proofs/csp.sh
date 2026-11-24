@@ -23,6 +23,8 @@
 #   core <car> <n>  CSP's cphys:: wrappers built by rustyac-ode's csp_core from the car's own calls, nothing
 #                  copied: set-up, every answer and every world step; n=2 is two F2004 that touch (Task C5g)
 #   row <car> lap|wall  the whole car with CSP live against rustyac --csp --csp-core, step by step on one tape (Task C5i-b)
+#   lua            CSP's own LuaJIT (a fresh state from its lua_newstate, its libraries) against rustyac-lua's
+#                  on tools/csp_oracle/lua_snippets.txt, each result's bits, at two MXCSR values (Task C6a)
 #   smoke          rustyAC's own CSP mode (Task C5i-a), on CSP's core (--csp-core): both proof cars driven at Spa, the drive replayed twice
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
@@ -193,6 +195,23 @@ for c in spa:spa:14:20:3 ks_black_cat_county:ks_black_cat_county:26:38:0 ks_zand
         verdict "air $name" DIFFERENT "csp_oracle failed: $(why "$out/runs/air_$name.txt" 'error|panic|fault|exit')"
     fi
 done
+
+# lua: Lua chunks (arithmetic, math.*, string <-> number, hot loops run as traces, build-option probes)
+# run by CSP's LuaJIT in the oracle and by rustyac-lua's built from source, results as bits (Task C6a)
+if keep "lua"; then
+    if oracle lua --lua tools/csp_oracle/lua_snippets.txt; then
+        run=$out/runs/lua.txt
+        l1=$(tr -d '\r' < "$run" | grep -m1 '^lua MXCSR 0x1f80: ')
+        l2=$(tr -d '\r' < "$run" | grep -m1 '^lua MXCSR 0x9fc0: ')
+        if echo "$l1" | grep -qE ': [0-9]{3,} snippets, 0 differ$' && echo "$l2" | grep -qE ': [0-9]{3,} snippets, 0 differ$'; then
+            verdict "lua" IDENTICAL "${l1#lua MXCSR 0x1f80: } under both MXCSR"
+        else
+            verdict "lua" DIFFERENT "$l1 / $l2 $(why "$run" '^lua 0x|error|panic|fault')"
+        fi
+    else
+        verdict "lua" DIFFERENT "csp_oracle failed: $(why "$out/runs/lua.txt" 'error|panic|fault|exit')"
+    fi
+fi
 
 # ode <car>: CSP's double ODE (Task C5c, docs/csp/core.md): a 600-step Spa drive logs the inputs of its
 # rotation functions and dxStepBody (breakpoint dumps), then rustyac-ode's f64 functions against CSP's own on those,

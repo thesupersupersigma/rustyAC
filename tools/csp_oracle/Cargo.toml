@@ -14,6 +14,8 @@ rustyac-physics = { path = "../../crates/rustyac-physics" }
 rustyac-ode = { path = "../../crates/rustyac-ode", features = ["embree"] }
 # Task NH-5: CSP's hook on the remote-state add held against rustyac-net's csp_motion
 rustyac-net = { path = "../../crates/rustyac-net" }
+# Task C6a: CSP's LuaJIT held against rustyAC's (built from source, feature `luajit`)
+rustyac-lua = { path = "../../crates/rustyac-lua", features = ["luajit"] }
 
 [profile.release]
 opt-level = 3

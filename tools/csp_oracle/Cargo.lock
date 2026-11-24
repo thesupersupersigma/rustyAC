@@ -12,6 +12,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "csp_oracle"
 version = "0.1.0"
 dependencies = [
+ "rustyac-lua",
  "rustyac-math",
  "rustyac-net",
  "rustyac-ode",
@@ -39,6 +40,10 @@ version = "1.1.5"
 
 [[package]]
 name = "rustyac-gateway"
+version = "1.1.5"
+
+[[package]]
+name = "rustyac-lua"
 version = "1.1.5"
 
 [[package]]

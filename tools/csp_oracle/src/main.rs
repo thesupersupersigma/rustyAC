@@ -35,6 +35,7 @@ mod collision;
 mod island;
 mod joints;
 mod hit;
+mod lua;
 mod nethook;
 mod ode;
 mod reduce;
@@ -2487,6 +2488,11 @@ fn main() {
     }
     // --maths: CSP's C runtime functions of the air density against rustyac_math (Task C4a)
     let maths_check = arguments.iter().position(|a| a == "--maths").map(|i| arguments.remove(i)).is_some();
+    // --lua <snippets.txt>: Lua chunks run by CSP's LuaJIT and by rustyac-lua's, results as bits (Task C6a)
+    let lua_file = arguments.iter().position(|a| a == "--lua").map(|i| {
+        arguments.remove(i);
+        full_path(&arguments.remove(i))
+    });
     // --net-hook <nettape|udp.log>: CSP's hook on the remote-state add against rustyac_net::csp_motion (Task NH-5)
     let net_hook = arguments.iter().position(|a| a == "--net-hook").map(|i| {
         arguments.remove(i);
@@ -2692,6 +2698,10 @@ fn main() {
         checkpoint("called", &before, &functions);
         if maths_check {
             maths(dll as usize);
+            stop(0, "end of the run");
+        }
+        if let Some(file) = &lua_file {
+            lua::run(dll as usize, file);
             stop(0, "end of the run");
         }
         if let Some(file) = &net_hook {

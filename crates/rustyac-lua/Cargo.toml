@@ -1,0 +1,12 @@
+[package]
+name = "rustyac-lua"
+description = "rustyAC: LuaJIT built as Custom Shaders Patch has it (feature `luajit`), for CSP mode's Lua"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
+
+[features]
+# LuaJIT 2.1 from source (build.rs): native x64 Windows, CSP mode and csp_oracle only
+luajit = []

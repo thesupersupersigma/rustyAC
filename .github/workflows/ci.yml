@@ -74,6 +74,14 @@ jobs:
           echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
           echo "RUSTYAC_EMBREE_LIB=$GITHUB_WORKSPACE/target/embree-3.13.4-mt" >> "$GITHUB_ENV"
 
+      # csp_oracle turns on rustyac-lua's feature `luajit`: its build.rs builds LuaJIT commit
+      # c6ffc141 from this clone (git archive, so a full clone) into RUSTYAC_LUAJIT_LIB
+      - name: LuaJIT source
+        run: |
+          git clone --branch v2.1 https://github.com/LuaJIT/LuaJIT.git "$RUNNER_TEMP/luajit"
+          echo "LUAJIT_DIR=$RUNNER_TEMP/luajit" >> "$GITHUB_ENV"
+          echo "RUSTYAC_LUAJIT_LIB=$GITHUB_WORKSPACE/target/luajit-c6ffc141-mt" >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release --workspace --locked
 
