@@ -966,9 +966,17 @@ static BREAK_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) const SETUP: usize = usize::MAX - 1;
 thread_local!(static REARM: Cell<usize> = const { Cell::new(0) });
 thread_local!(static TAIL: Cell<[u32; 3]> = const { Cell::new([0; 3]) });
+// Task C5k: CSP_ORACLE_WATCH=rva, a hardware read/write watch on the 8 bytes at dll+rva (main
+// and physics threads), each instruction that touches them logged once ("watch" lines in breaks.txt)
+static WATCH: AtomicUsize = AtomicUsize::new(0);
+static WATCHED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 unsafe fn arm_breaks(dll: usize) {
-    let Ok(list) = std::env::var("CSP_ORACLE_BREAK") else { return };
+    let watch = std::env::var("CSP_ORACLE_WATCH").ok().map(|rva| usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_WATCH takes a hex offset"));
+    let list = std::env::var("CSP_ORACLE_BREAK").unwrap_or_default();
+    if list.is_empty() && watch.is_none() {
+        return;
+    }
     let mut breaks = BREAKS.lock().unwrap();
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
@@ -986,6 +994,12 @@ unsafe fn arm_breaks(dll: usize) {
     let add_handler: extern "system" fn(u32, usize) -> *mut c_void = std::mem::transmute(GetProcAddress(GetModuleHandleA(c"kernel32.dll".as_ptr().cast()), c"AddVectoredExceptionHandler".as_ptr().cast()));
     add_handler(1, break_hit as *const () as usize);
     println!("{} breakpoints armed", breaks.len());
+    if let Some(rva) = watch {
+        drop(breaks);
+        WATCH.store(dll + rva, Ordering::Relaxed);
+        std::arch::asm!("int3"); // the handler sets the debug registers in this thread's context
+        println!("watch armed on CSP's +{rva:#x}");
+    }
 }
 
 /// A break of `kind` at `ret` (a return site), once.
@@ -1009,10 +1023,30 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
     let context = *pointers.add(1) as usize;
     let (code, at) = (read::<u32>(record), read::<usize>(record + 0x10));
     let flags = (context + 0x44) as *mut u32; // EFlags; Rip at 0xf8, Rsp at 0x98
+    let watch = WATCH.load(Ordering::Relaxed);
+    if code == 0x8000_0003 && watch != 0 && read::<u64>(context + 0x70) == 0 && !BREAKS.lock().unwrap().iter().any(|(address, ..)| *address == at) {
+        *((context + 0x48) as *mut usize) = watch; // Dr0
+        *((context + 0x70) as *mut u64) = 0xb0001; // Dr7: L0, read/write, 8 bytes
+        *((context + 0x30) as *mut u32) |= 0x0010_0010; // CONTEXT_DEBUG_REGISTERS
+        *((context + 0xf8) as *mut usize) = at + 1;
+        return -1;
+    }
+    let watched = code == 0x8000_0004 && read::<u64>(context + 0x68) & 1 != 0;
+    if watched {
+        *((context + 0x68) as *mut u64) = 0;
+        let rva = read::<usize>(context + 0xf8) - DLL_BASE.load(Ordering::Relaxed);
+        // never read the watched bytes in here: the nested trap would deadlock on these locks
+        let mut seen = WATCHED.lock().unwrap();
+        if !seen.contains(&rva) {
+            seen.push(rva);
+            let step = BREAK_STEP.load(Ordering::Relaxed);
+            BREAK_LOG.lock().unwrap().push_str(&format!("watch step {} thread {} after +{rva:#x}\n", step as isize, GetCurrentThreadId()));
+        }
+    }
     if code == 0x8000_0004 {
         let rearm = REARM.with(|cell| cell.replace(0));
         if rearm == 0 {
-            return 0;
+            return if watched { -1 } else { 0 };
         }
         set_byte(rearm, 0xcc);
         *flags &= !0x100;
@@ -2076,7 +2110,7 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
     let btl = btl::finish() + &btl::ttl_finish() + &space::finish() + &reduce::finish() + &joints::finish() + &collision::finish() + &port::finish() + &rays::finish() + &hit::finish();
     print!("{btl}");
     BREAK_LOG.lock().unwrap().push_str(&btl);
-    if !BREAKS.lock().unwrap().is_empty() {
+    if !BREAKS.lock().unwrap().is_empty() || WATCH.load(Ordering::Relaxed) != 0 {
         std::fs::write("breaks.txt", &*BREAK_LOG.lock().unwrap()).expect("breaks.txt can be written");
     }
     for (i, &car) in cars.iter().enumerate() {
@@ -2674,6 +2708,9 @@ fn main() {
                 let csr = mxcsr() | 0x8040;
                 std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
                 *((dll + 0x281_4e50) as *mut u32) = GetCurrentThreadId();
+                if WATCH.load(Ordering::Relaxed) != 0 {
+                    std::arch::asm!("int3"); // the watch also on the drive's thread
+                }
                 let first_job: extern "C" fn() = std::mem::transmute(dll + 0x67_d8a0);
                 first_job();
                 say(&format!("physics thread set up, MXCSR {:#06x}", mxcsr()));

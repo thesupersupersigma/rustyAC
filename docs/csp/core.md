@@ -79,8 +79,9 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 
 | C5k s1 part 1. finisher | done: csp_oracle runs CSP's car-load finisher (record, trails array, stand-ins); RSS 3's air is CSP's (1.1128, the port's); the air pin goes |
 | C5k s1 part 2. survey | the first record-woken difference is CSP's Lua car script (`data/script.lua`), held in the oracle; pin moved to it |
+| C5k s2 1. frame count | no physics reader; past 10 the script path faults on the game window (+0x2820640): RSS 3 pinned "Lua car script: needs the Lua host (phase 2)" |
 
-**Resume here:** C5k part 2: make the oracle's CSP run RSS 3's car script (frame count), then decide the port's car scripts
+**Resume here:** C5k session 2 part 2: dirt/grip on a car with a record and no car script
 ([C5k](#c5k-cars-csp-record)).
 
 ## The core in one paragraph
@@ -1734,5 +1735,20 @@ now reads a run that drove with no line as 0 calls, none differing.
 
 **Not done:** part 3 (which installed cars get a record: needs where CSP sets `context+0xe0`);
 the dirt/grip survey past the script; the record on by default (the four cases above).
+
+### Session 2
+
+**Part 1: the frame count.** New watch `CSP_ORACLE_WATCH=<rva>` (a hardware read/write watch on the
+8 bytes at `dwrite+rva`, on the main thread and the drive's physics thread; each instruction that
+touches them is logged once as a `watch` line in `breaks.txt`). On `dwrite+0x2820e90`, RSS 3 at
+Spa: the only writer is CSP's frame update +0x1223740 (`inc`, frames 1..10 also call the Lua
+states update +0x10ad540, at 10 a one-shot job queue `dwrite+0x2805a20`), which the oracle never
+calls; the readers at set-up are `cmp` tests (+0x5cc878, +0x124f232, +0xfaab5e, +0x921f39,
++0x577bd4, +0xb24e0e, +0xb2494a) and the one in the drive is the script runner +0x84c165. No
+physics reader. Setting the count to 11 before the drive (tried, removed) makes the runner take the
+script path, which faults at step 0 (+0x10b23e7, reading address 0x14): the script's sim state
+(+0x10b23c0 from +0x10b2730) reads the game window object `dwrite+0x2820640`, which the oracle has
+not got. So the script needs the Lua host's state, not one write: the RSS 3 row stays pinned at
+step 0, now with the reason "Lua car script: needs the Lua host (phase 2)".
 
 **Resume here (C5k):** see the table at the top.
