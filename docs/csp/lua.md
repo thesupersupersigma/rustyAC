@@ -234,8 +234,9 @@ exposes `car` and `sim` globals, `ac_apps`/`ac_new_modes`/`ac_tools` do not.
 
 ### 3.6 Runtime, FFI and the precompiled bundle `[dll]`
 
-* **VM**: LuaJIT, version string "LuaJIT 2.1.1769366199" (RVA 0x20886d8; build date 2026-01-25) next to "Lua 5.1"
-  (0x2087728); the library bundle was compiled with "LuaJIT 2.1.1711381957" (2024-03-25) per the archive's
+* **VM**: LuaJIT, version string "LuaJIT 2.1.1791809196" in build 4305's dwrite.dll (RVA 0x2384068, commit time
+  2026-10-12 12:46:36 UTC) next to "Lua 5.1" (0x2383cc8); an older dll read here showed "LuaJIT 2.1.1769366199"
+  (RVA 0x20886d8), it is not in build 4305 (C6a). The library bundle was compiled with "LuaJIT 2.1.1711381957" (2024-03-25) per the archive's
   `readme.txt`, so the runtime accepts older bytecode. Standard `luaL_openlibs` default path `.\?.lua;!\lua\?.lua;
   !\lua\?\init.lua;` and `LUA_PATH` / `LUA_CPATH` lookups are present. `jit.profile`, `jit.util`, `jit.opt` are linked
   (the Lua Debug profiler reports "JIT-compiled / Interpreted / CSP API / Garbage collector / Time spent compiling").
