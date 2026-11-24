@@ -74,8 +74,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5j s2 1. body difference | done: the lap tape had no collide keys (row set-up); CSP's car step sets the sleep limit to 250 frames (ported); F2004 lap/wall rows differ only in `tyre_grain` from step 1417/1414, the two-car row at the cars' contact (step 620) |
 | C5j s2 3. RSS 3 air | more than small: the finisher's record wakes record-dependent CSP code (air, dirt, splines) that needs session objects the oracle lacks; pin stays |
 
-**Resume here:** C5j: the F2004 rows' `tyre_grain` start (step 1417 lap, 1414 wall) and the two-car row's
-car-vs-car contact (step 620) ([C5j session 2](#session-2-the-body-difference)).
+| C5j s3 1. `tyre_grain` | done: the port's step was right; its `--physics-states` record left grain/blister 0 (`view.rs`); F2004 lap/wall rows IDENTICAL past the view list |
+| C5j s3 2. two-car contact | done: the row ran the game's car on csp_oracle's stand-in box collider; `CSP_ORACLE_LOADER=use` on the rows, two-car row IDENTICAL past the view list |
+
+**Resume here:** C5j: RSS 3 air and dirt (plan step 3, 2-3 sessions)
+([C5j session 3](#session-3-neither-difference-was-in-the-physics)).
 
 ## The core in one paragraph
 
@@ -1633,5 +1636,33 @@ proof car has one). The sunk lone car's push-out difference at steps 1-3.
 2. The two-car contact at step 620 (1 session): `CSP_CORE_TRACE` both cars around it.
 3. RSS 3 air and dirt (2-3 sessions): the oracle builds CSP's session objects (spline, dirt arrays,
    RaceEngineer) so the finisher can run; then port CSP's dirt code.
+
+### Session 3: neither difference was in the physics
+
+**`tyre_grain`: the record, not the step.** csp_oracle break kind `G` (`CSP_ORACLE_BREAK=6a0570G`, at
+CSP's `Tyre::step` hook: wheel, `GRAIN_THRESHOLD`, gamma, `GRAIN_GAIN`, load, ndSlip, core temperature,
+hub velocity, grain, surface gripMod, consumption rate) gave CSP's inputs; the port's
+`step_grain_blister` computes the same grain from them (4.083846691933005e-11 at step 1417, wheel 0).
+The port's `--physics-states` never wrote it: `CarView::physics_state` left `tyre_grain` and
+`tyre_blister` at 0. `RenderState` now carries `grain`/`blister` per wheel (`view.rs`). The lap and wall
+rows: nothing past the view list differs in 4000 / 6667 steps; their pins are gone.
+
+**The two-car contact: the oracle's collider.** Without `CSP_ORACLE_LOADER`, csp_oracle gives the game's
+car an 8-vertex stand-in box (0.6 × 0.2 × 1 m) as its collider mesh (main.rs `build_car`, C5i-a); the
+port has the car's `collider.kn5`. The two row never set it, so from step 620, when car 0 reaches car
+1, the two worlds met different shapes (1315 callbacks, 491 `setDamage` with the box; 2043, 0 with the
+real mesh). With `CSP_ORACLE_LOADER=use` (every row now), nothing past the view list differs in 1600
+steps, both cars; its pin is gone. The callback check could not see it: it compares CSP's answer with
+the port's on CSP's own inputs.
+
+**Rows verdict.** A row whose values past the view list are all equal is IDENTICAL (the check had
+wanted every one of the 1106 equal, the view list's too, which no row can be).
+
+**Cases follow the installed content.** "refused off/csp" want the listed cars that are installed;
+a refused car not in a list passes (named: "new (add to the lists in csp.sh)"), a listed one no longer
+refused fails. "layouts" wants the listed `*_fa_2026` layouts that are installed; a layout not in the
+list passes when the survey without `--csp` refuses it as "made for Custom Shaders Patch only" and
+loads it with `--csp` (named), any other changed row fails. With Super's `pxw_sl_v4` and
+`acu_mexico_2021`: all three IDENTICAL, naming them.
 
 **Resume here (C5j):** see the table at the top.
