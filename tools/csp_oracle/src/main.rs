@@ -973,7 +973,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v' | 'U' | 'V' | 'G')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v' | 'U' | 'V' | 'G' | 'R')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1074,6 +1074,15 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
             line.push_str(&format!(" w{}", read::<u32>(rcx + 0x628)));
             [0x2c, 0x34, 0x3c, 0x2ec, 0x314, 0x45c, 0x614].iter().for_each(|&o| line.push_str(&format!(" {:?}", read::<f32>(rcx + o))));
             line.push_str(&format!(" {:?} {:?} {rate:?}", read::<f64>(rcx + 0x368), if surface == 0 { f32::NAN } else { read::<f32>(surface + 0x90) }));
+        }
+        if dump == 'R' {
+            // Task C5k: the Car's words at a hook entry (rcx = Car) into snap_<n>.txt, to find the first
+            // hook where a CSP_ORACLE_RECORD run and one without part
+            static SNAPS: AtomicUsize = AtomicUsize::new(0);
+            let n = SNAPS.fetch_add(1, Ordering::Relaxed);
+            let (words, _) = words_of(rcx as *const u8, 16032, &mut HashMap::new());
+            std::fs::write(format!("snap_{n}.txt"), words).expect("snap can be written");
+            line.push_str(&format!(" snap_{n} frame {}", read::<u64>(DLL_BASE.load(Ordering::Relaxed) + 0x282_0e90)));
         }
         if dump == 'i' {
             crate::island::enter(rcx, step);
@@ -1411,9 +1420,28 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
     // (RVA 0x2820268) is read in the car step for the track's ray cast (+0xf8 vtable +8) and timeLines (+0x120)
     // after the Sim stand-in: CSP's AI-line detour (dwrite+0x5f1d60, reached from AISpline::loadFast)
     // reads the Sim global's +0x128 (the track's scene: none here, so it reverses nothing)
-    let track_avatar = if let Some(folder) = track_folder { real_track(acs, engine, folder) } else { flat_track(acs, engine) };
+    let track_avatar = match track_folder {
+        Some(folder) => {
+            let (avatar, pit_y) = real_track(acs, engine, folder);
+            if let Some(dll) = csp {
+                csp_altitude(acs, dll, folder, pit_y);
+            }
+            avatar
+        }
+        None => flat_track(acs, engine),
+    };
     if let Some(dll) = csp {
         *((dll + 0x282_0268) as *mut *mut u8) = track_avatar;
+        // CSP's per-car tyre-trail array (dwrite+0x28177c0, 1376 B a car) that the dirt hook (+0x6a65e0 ->
+        // +0x8cc4c0) reads for a car with a record; real CSP sizes it from the car list at session start
+        // (+0x676560), the oracle never runs that, so build it for the cars with CSP's own constructor
+        let alloc: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(dll + 0x2b_ace0);
+        let make: extern "C" fn(*mut u8, usize) -> *mut u8 = std::mem::transmute(dll + 0xb4_48a0);
+        let trails = alloc(1376 * count);
+        let trails_end = make(trails, count);
+        *((dll + 0x281_77c0) as *mut *mut u8) = trails;
+        *((dll + 0x281_77c8) as *mut *mut u8) = trails_end;
+        *((dll + 0x281_77d0) as *mut *mut u8) = trails_end;
     }
     let cars: Vec<*mut u8> = (0..count).map(|guid| build_car(acs, engine, car_name, csp, guid as u32)).collect();
     if let Some(dll) = csp {
@@ -1469,7 +1497,7 @@ unsafe fn flat_track(acs: &Acs, engine: *mut u8) -> *mut u8 {
 /// own Track::createRayCaster / rayCast.
 /// shortcut: the TrackAvatar's other members are zero (no AI, no timing, no track objects), upgrade if a
 /// physics seam reads them
-unsafe fn real_track(acs: &Acs, engine: *mut u8, folder: &std::path::Path) -> *mut u8 {
+unsafe fn real_track(acs: &Acs, engine: *mut u8, folder: &std::path::Path) -> (*mut u8, Option<f32>) {
     let plan = track::BuildPlan { in_avatar: true, clean_surfaces: true, ..Default::default() };
     let built = track::GameTrack::build_with(acs, engine, folder, "", true, &plan).unwrap_or_else(|e| stop(2, &format!("the track: {e}")));
     if !built.surface_mismatches.is_empty() {
@@ -1499,8 +1527,35 @@ unsafe fn real_track(acs: &Acs, engine: *mut u8, folder: &std::path::Path) -> *m
     put(engine, 0xd0, 2i32); // allowedTyresOut
     println!("Track built: {} ({} meshes, {lines} time lines, ghost)", folder.display(), built.objects.len());
     let avatar = built.track.sub(track::TA_PHYSICS_TRACK); // the track sits inside the avatar (BuildPlan::in_avatar)
+    let pit_y = built.rust.helper_nodes.iter().find(|node| node.name == "AC_PIT_0").map(|node| node.world.m[3][1]);
     Box::leak(Box::new(built));
-    avatar
+    (avatar, pit_y)
+}
+
+/// CSP's TrackAvatar::initPhysics detour (+0x118ed80) sets the altitude of world Y 0 that the air law
+/// reads (dwrite+0x27fa4e0, +0x27fa488) through +0x118e6c0(avatar, surfaces.ini); the oracle builds no
+/// acs TrackAvatar, so that function runs on a stand-in: the track id (+0x80) and layout (+0xa0)
+/// wstrings, no scene (+0xf0: "AC_PIT_0 missing", Y 0) and an empty INI; the node's kn5 world Y is then
+/// taken off both globals (CSP's one subtraction `altitude - y`, exact with its y 0)
+/// shortcut: a track whose surfaces.ini has [_EXTENSION] PIT_ALTITUDE or [ALTITUDE] BASE stops the run,
+/// upgrade by giving the function CSP's parsed INI
+unsafe fn csp_altitude(acs: &Acs, dll: usize, folder: &std::path::Path, pit_y: Option<f32>) {
+    if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&folder.join("data").join("surfaces.ini")) {
+        if ini.has_key("_EXTENSION", "PIT_ALTITUDE") || ini.has_key("ALTITUDE", "BASE") {
+            stop(2, "csp altitude: the track's surfaces.ini sets the altitude, the oracle gives CSP no INI");
+        }
+    }
+    let stand_in = acs.alloc(0x100);
+    let name = folder.file_name().expect("the track folder has a name").to_string_lossy();
+    std::ptr::copy_nonoverlapping(wstring(acs, &name), stand_in.add(0x80), 32);
+    std::ptr::copy_nonoverlapping(wstring(acs, ""), stand_in.add(0xa0), 32);
+    let empty_ini = acs.alloc(0x40);
+    let altitude: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(dll + 0x118_e6c0);
+    altitude(stand_in, empty_ini);
+    for global in [0x27f_a4e0, 0x27f_a488] {
+        *((dll + global) as *mut f32) -= pit_y.unwrap_or(0.0);
+    }
+    println!("CSP altitude of world Y 0: {} m (AC_PIT_0 Y {pit_y:?})", read::<f32>(dll + 0x27f_a4e0));
 }
 
 /// One `Car::Car` on `engine` (physics GUID `guid`) with CSP's per-car set-up around it.
@@ -1601,8 +1656,87 @@ unsafe fn build_car(acs: &Acs, engine: *mut u8, car_name: &str, csp: Option<usiz
     println!("collider mesh set");
     if let Some(dll) = csp {
         *((dll + 0x26b_ad10) as *mut u8) = 0;
+        finish_car(dll, car, guid as usize);
     }
     car
+}
+
+/// Task C5j: the physics part of CSP's car-load finisher (`dwrite+0xf35b50`, run for every car by
+/// the "CSP car extensions" step `+0xf36950` once cars are loaded): the car's flags and list index,
+/// the record's car pointers and its post-load set-up (`+0x7ef3a0`), and the record (0 for a car
+/// without one) pushed onto the per-car list `dwrite+0x28213f0` that the car step and the air hook read.
+/// shortcut: the finisher's visual half (lights, scene nodes) is left out, upgrade if a physics seam reads it
+unsafe fn finish_car(dll: usize, car: *mut u8, guid: usize) {
+    let context = read::<usize>(dll + 0x281_7d90);
+    // the finisher's car-extension object: the oracle's slot stand-in for this car (load_car); its
+    // first word is the CarAvatar, whose +0x1168 is the Car
+    let slot = read::<*mut u8>(read::<usize>(dll + 0x282_13d8) + 8 * guid);
+    let avatar = read::<*mut u8>(slot as usize);
+    put(avatar, 0x1168, car);
+    put(slot, 0xe0, guid as u32); // the list index
+    let mode = read::<usize>(dll + 0x282_1078);
+    if read::<u32>(context) == 1 && read::<usize>(context + 0x10) != 0 && (mode == 0 || read::<u8>(mode + 27) != 9) {
+        put(context as *mut u8, 0x10, 0usize);
+    }
+    // Task C5k: CSP_ORACLE_RECORD=1 keeps the car's CSP record (the rows); without it the oracle's CSP runs
+    // the car as one without (every other case): the record wakes CSP code the port lacks (the Lua car script)
+    let record = if std::env::var_os("CSP_ORACLE_RECORD").is_some() { read::<usize>(context + 0xe0) } else { 0 };
+    let alloc: extern "C" fn(usize) -> *mut usize = std::mem::transmute(dll + 0x2b_ace0);
+    if read::<usize>(avatar as usize + 0xf80) == 0 {
+        // shortcut: a zeroed RaceEngineer stand-in whose +8 is the Car, all the air hook's ground
+        // height reads (+0x1150ae0); upgrade if a physics seam reads more of it
+        let engineer = alloc(0x100) as *mut u8;
+        std::ptr::write_bytes(engineer, 0, 0x100);
+        put(engineer, 8, car);
+        put(avatar, 0xf80, engineer);
+    }
+    let shown = read::<usize>(context + 0x10) != 0 && read::<u8>(dll + 0x280_31f6) == 0;
+    put(car, 0x3db4, (record != 0) as u32 | (shown as u32) << 2);
+    put(car, 0x3e9c, guid as u32);
+    put(slot, 0x31c, read::<u32>(car as usize + 0x1170));
+    // acs Sim::getCar reads the cars vector Sim+0x208/+0x210 (0 past the end); the Sim stand-in is
+    // zeroed, so give it this car's avatar at index guid (cars load in guid order; old block leaked)
+    let sim = read::<usize>(dll + 0x282_0e60);
+    let cars = alloc(8 * (guid + 1));
+    let (old, old_end) = (read::<usize>(sim + 0x208), read::<usize>(sim + 0x210));
+    if old_end > old {
+        std::ptr::copy_nonoverlapping(old as *const usize, cars, ((old_end - old) / 8).min(guid));
+    }
+    *cars.add(guid) = avatar as usize;
+    put(sim as *mut u8, 0x208, cars);
+    put(sim as *mut u8, 0x210, cars.add(guid + 1));
+    put(sim as *mut u8, 0x218, cars.add(guid + 1));
+    // CSP's SetupInformation::SetupInformation detour (+0x6924f0) keeps `this` at dwrite+0x2815000 and
+    // its car debug readout (+0x692530, from the record step +0x5897d0) reads its Sim at +0x178; the
+    // oracle runs no GUI, so a zeroed stand-in carrying only that Sim
+    if read::<usize>(dll + 0x281_5000) == 0 {
+        let info = alloc(0x180) as *mut u8;
+        std::ptr::write_bytes(info, 0, 0x180);
+        put(info, 0x178, sim);
+        *((dll + 0x281_5000) as *mut *mut u8) = info;
+    }
+    if record != 0 {
+        let r = record as *mut u8;
+        put(r, 0x320, avatar);
+        put(r, 0x318, car);
+        put(r, 0x330, avatar.add(0xe40));
+        put(r, 0x328, avatar.add(0x268));
+        let setup: extern "C" fn(*mut u8) = std::mem::transmute(dll + 0x7e_f3a0);
+        setup(r);
+        put(r, 0x6ec, 994_352_038u32);
+    }
+    // std::vector<void*> push_back with CSP's own operator new (+0x2bace0); the old block is leaked
+    let (begin, end) = (read::<usize>(dll + 0x282_13f0), read::<usize>(dll + 0x282_13f8));
+    let n = (end - begin) / 8;
+    let list = alloc(8 * (n + 1));
+    if n > 0 {
+        std::ptr::copy_nonoverlapping(begin as *const usize, list, n);
+    }
+    *list.add(n) = record;
+    *((dll + 0x282_13f0) as *mut *mut usize) = list;
+    *((dll + 0x282_13f8) as *mut *mut usize) = list.add(n + 1);
+    *((dll + 0x282_1400) as *mut *mut usize) = list.add(n + 1);
+    println!("CSP car-load finisher (physics part): car {guid}, record {}", if record != 0 { "set" } else { "none" });
 }
 
 /// `size` bytes at `base` as "offset value" lines; a word that reads as a readable address is a

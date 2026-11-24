@@ -24,4 +24,4 @@ dumps oracle/game/conditions_spa_setup_launch.ryin | the old exe dumps nothing: 
 browser Full mode's fallback banner (montreal) | the montreal mod is not installed: no other track names a shader the install lacks
 # Task C5i-c: the csp area's rows whose first difference (past CSP's view fields) is a known gap; any
 # earlier step or other value stays DIFFERENT. One a line: <area> <case> | first <difference> | why
-csp row rss_formula_rss_3_v6_2026 lap | first car 0 step 0 air_density[0] | the oracle's CSP has Vanilla's air: it skips CSP's car-load finisher (+0xf35b50, the per-car list the air hook reads); real CSP and the port use CSP's law (Task C5i-c part 3)
+csp row rss_formula_rss_3_v6_2026 lap | first car 0 step 0 world_matrix[3] | the car's CSP record carries its Lua physics script (data/script.lua): the oracle's CSP holds the car (handbrake 1, pedals 0, sleeping 3; +0x84c110 while the frame count dwrite+0x2820e90 < 10, and the oracle draws no frames) where real CSP runs the script; the port has no car scripts (Task C5k)
