@@ -33,7 +33,14 @@ pub struct Flat {
 }
 
 impl Flat {
+    /// None off Windows: no Steam there (`docs/platforms.md` section 2).
+    #[cfg(not(windows))]
+    pub fn loaded() -> Option<Flat> {
+        None
+    }
+
     /// The functions of the `steam_api64.dll` [`crate::steam::start`] loaded.
+    #[cfg(windows)]
     #[allow(clippy::missing_transmute_annotations)] // each field's type is the annotation
     pub fn loaded() -> Option<Flat> {
         #[link(name = "kernel32")]

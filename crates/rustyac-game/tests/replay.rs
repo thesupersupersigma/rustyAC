@@ -472,6 +472,7 @@ fn the_session_travels_in_the_file() {
 /// The static shared-memory page holds the car as it was built (`CarAvatar::initPhysics`): the
 /// SF15-T's turbo has a controller that gives no boost at a standing engine, and from the
 /// first step on the turbo's own number is that controller's.
+#[cfg(windows)] // shm is Windows until step L5
 #[test]
 fn the_static_page_holds_the_hybrid_as_built() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata");

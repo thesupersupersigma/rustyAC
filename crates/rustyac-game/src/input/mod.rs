@@ -26,18 +26,22 @@
 pub mod bindings;
 #[cfg(windows)]
 pub mod dinput;
+// (Linux: no controllers yet, step L4)
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
+#[path = "dinput_none.rs"]
+pub mod dinput;
 pub mod ini;
 pub mod keyboard;
 // the devices themselves (`GetAsyncKeyState`, XInput, DirectInput) and the source that reads
 // them every step: Windows only
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 mod live;
 pub mod pad;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub mod wheel;
 
 pub use crate::sim::CarProbe;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub use live::*;
 
 /// The buttons of AC's `CarControls` that the physics car itself does not read: the game's

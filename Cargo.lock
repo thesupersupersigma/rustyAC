@@ -120,6 +120,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -749,6 +758,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpkg-config"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a2d2f3481209a6b42eec2fbb49063fb4e8d35b57023401495d4fe0f85c817f0"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -831,7 +846,9 @@ dependencies = [
  "rustyac-physics",
  "rustyac-python",
  "rustyac-render",
+ "sdl3",
  "webpki-roots",
+ "wgpu",
  "windows",
 ]
 
@@ -953,6 +970,102 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdl3"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68fa206a2da1250b294edc95defee46fa6e61a04aaff0ca69c0352e23c351166"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
+ "objc2",
+ "raw-window-handle",
+ "sdl3-image-sys",
+ "sdl3-mixer-sys",
+ "sdl3-sys",
+ "sdl3-ttf-sys",
+]
+
+[[package]]
+name = "sdl3-image-src"
+version = "3.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f77980b408defef1b774b067b8f19d8dd0f2e19f39e0859b13a16211b38f046a"
+
+[[package]]
+name = "sdl3-image-sys"
+version = "0.7.1+SDL-image-3.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eeed3ac9786736021364dae342070ac3e9e0074b420b130d70a37ed4b879cdd"
+dependencies = [
+ "cmake",
+ "pkg-config",
+ "rpkg-config",
+ "sdl3-image-src",
+ "sdl3-sys",
+ "vcpkg",
+]
+
+[[package]]
+name = "sdl3-mixer-src"
+version = "3.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cd815ae87084588c7dbd027c1667b0a5e21a6b5ae7b22ecb230bc21c7063eca"
+
+[[package]]
+name = "sdl3-mixer-sys"
+version = "0.7.0+SDL-mixer-3.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6150136321198ec95cccfb6168d838f114273a7615d21b513e5277c86f7d3aa1"
+dependencies = [
+ "cmake",
+ "pkg-config",
+ "rpkg-config",
+ "sdl3-mixer-src",
+ "sdl3-sys",
+ "vcpkg",
+]
+
+[[package]]
+name = "sdl3-src"
+version = "3.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc5181b85760f18170dbc15b27b00d5aaaa003058bb14333ec7dd280665ef3a4"
+
+[[package]]
+name = "sdl3-sys"
+version = "0.7.3+SDL-3.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e68da4d2bcf29a81a1ea71ec27b93bb27151d649c2b186eb5988ad4dcb17d11"
+dependencies = [
+ "cc",
+ "cmake",
+ "pkg-config",
+ "rpkg-config",
+ "sdl3-src",
+ "vcpkg",
+]
+
+[[package]]
+name = "sdl3-ttf-src"
+version = "3.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f28923d2ce72ff317d8eb7cec97ddfb8f351c330d7bcbf8c76e91332122c93b3"
+
+[[package]]
+name = "sdl3-ttf-sys"
+version = "0.7.1+SDL-ttf-3.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d254e537d2d96b3e2d6e8a3dd4850a1361b8689c3d95c6c1dfdc02b091307eef"
+dependencies = [
+ "cmake",
+ "pkg-config",
+ "rpkg-config",
+ "sdl3-sys",
+ "sdl3-ttf-src",
+ "vcpkg",
+]
 
 [[package]]
 name = "serde"
@@ -1115,6 +1228,12 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"
@@ -1304,11 +1423,21 @@ dependencies = [
  "rustc-hash",
  "smallvec",
  "thiserror",
+ "wgpu-core-deps-emscripten",
  "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
  "wgpu-types",
+]
+
+[[package]]
+name = "wgpu-core-deps-emscripten"
+version = "30.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55ccf093bd215ae9dc4f96df293e675513ac1f2569f8293a2911cc34ca3505d1"
+dependencies = [
+ "wgpu-hal",
 ]
 
 [[package]]

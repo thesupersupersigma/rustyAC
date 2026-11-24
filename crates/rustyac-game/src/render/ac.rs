@@ -1361,6 +1361,31 @@ FILTER=default
         self.graphics.kgl.swap_buffers();
     }
 
+    /// Linux's window (Task P3a): the surface `Window::create` made on kgl's device.
+    #[cfg(all(target_os = "linux", feature = "wgpu"))]
+    pub fn swap_chain(&self, _window: crate::window::Handle) -> Result<crate::window::Chain, String> {
+        crate::window::take_chain()
+    }
+
+    /// The window changed its size: the surface and the picture follow (as the page's canvas).
+    #[cfg(all(target_os = "linux", feature = "wgpu"))]
+    pub fn resize_swap_chain(&mut self, chain: &crate::window::Chain, width: u32, height: u32) -> Result<(), String> {
+        chain.resize(width, height);
+        self.resize(width, height)
+    }
+
+    /// Shows the last picture in the window. `Ok(false)`: no frame was shown.
+    #[cfg(all(target_os = "linux", feature = "wgpu"))]
+    pub fn present(&mut self, chain: &crate::window::Chain, vsync: bool) -> Result<bool, String> {
+        chain.present(vsync, |target, format| self.present_to(target, format))
+    }
+
+    /// Waits until the card has drawn what was asked for.
+    #[cfg(all(target_os = "linux", feature = "wgpu"))]
+    pub fn finish(&self) {
+        let _ = self.graphics.kgl.device.poll(rustyac_render::wgpu::PollType::wait_indefinitely());
+    }
+
     /// The canvas has a new size.
     #[cfg(any(not(windows), feature = "wgpu"))]
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {

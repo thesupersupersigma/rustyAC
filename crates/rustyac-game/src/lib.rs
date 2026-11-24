@@ -12,43 +12,44 @@
 //! The physics is `rustyac-physics` and nothing else: this crate feeds it the driver's controls
 //! and the session's values and reads its state.
 
-// The window, Direct3D, the devices, the physics thread and the shared memory are Windows.
+// The window, Direct3D, the devices, the physics thread and the shared memory are Windows;
+// Linux with `wgpu` has the window (SDL3), the physics thread and AC's renderer on wgpu too.
 // What is left on another target (wasm: the browser build `rustyac-web`, and the replay check
 // under WASI) is the simulation, the replay files, AC's keyboard and pad classes and the scene
 // maths, and in the browser the sound (FMOD's HTML5 build, see `rustyac-audio`'s `fmod::web`).
-#[cfg(any(windows, all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "unknown"))]
 pub mod audio;
 pub mod ac_replay;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub mod ai_record;
 pub mod ghost;
 pub mod telemetry;
 pub mod trackir;
 pub mod autodrive;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod achievements;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod conditions;
 pub mod crt;
 pub mod dump;
 pub mod focus;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gateway;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod identity;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod steam;
 pub mod input;
 pub mod input_file;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod join;
 pub mod online;
 pub mod race_cars;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub mod mouse_hider;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub mod physics_thread;
 pub mod referee;
 #[cfg(all(windows, not(feature = "wgpu")))]
@@ -72,16 +73,27 @@ pub mod render {
     #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
     pub mod hud;
     pub mod onboard_free;
+    #[cfg(all(target_os = "linux", feature = "wgpu"))]
+    pub mod picture;
+    #[cfg(all(target_os = "linux", feature = "wgpu"))]
+    pub use picture::{box_downscale, write_png, Picture};
     pub mod scene;
     pub mod track_camera;
 }
 #[cfg(windows)]
 pub mod shm;
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
+#[path = "shm_none.rs"]
+pub mod shm;
 pub mod sim;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
+#[cfg_attr(not(windows), path = "timer_unix.rs")]
 pub mod timer;
 pub mod view;
 #[cfg(windows)]
+pub mod window;
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
+#[path = "window_sdl.rs"]
 pub mod window;
 
 use std::path::Path;

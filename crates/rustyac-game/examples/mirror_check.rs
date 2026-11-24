@@ -4,6 +4,7 @@
 //! (`rustyac_render::mirror::f11`, desktop.rs: a key press once, no headset) on the keys of the
 //! game's run (`car_oracle mirror-micro`, tools/car_oracle/src/game/mirror.rs), line by line.
 
+#[cfg(any(windows, feature = "wgpu"))] // rustyac-render is there
 /// The same keys as the game's run (tools/car_oracle/src/game/mirror.rs `keys`).
 fn keys(case: u32, seed: u32) -> Vec<bool> {
     let mut x = seed.wrapping_mul(0x9e37_79b9) ^ case.wrapping_mul(0x85eb_ca6b);
@@ -17,6 +18,7 @@ fn keys(case: u32, seed: u32) -> Vec<bool> {
         .collect()
 }
 
+#[cfg(any(windows, feature = "wgpu"))] // rustyac-render is there
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
@@ -55,4 +57,9 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(not(any(windows, feature = "wgpu")))]
+fn main() {
+    eprintln!("mirror_check needs rustyac-render: build with --features wgpu off Windows");
 }

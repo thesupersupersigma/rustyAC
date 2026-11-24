@@ -65,17 +65,19 @@ features = [
 # Windows only, like the `windows` crate above: on another target (the browser build, the
 # replay check under WASI) the crate is the simulation, the input classes and the scene maths.
 [target.'cfg(windows)'.dependencies]
-# AC's sound: its own FMOD banks through the player's own FMOD DLLs
-rustyac-audio = { path = "../rustyac-audio" }
 # AC's Python apps: the `ac` module on the player's own python33.dll
 rustyac-python = { path = "../rustyac-python" }
 # AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
 rustyac-render = { path = "../rustyac-render" }
+
 # `--join wss://...`: TLS to a gateway behind an HTTPS address (a Cloudflare Tunnel). rustls
 # with the ring provider and Mozilla's root certificates compiled in; nothing of the
-# system's TLS is used.
+# system's TLS is used. Native only (the browser has its own).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+# AC's sound: its own FMOD banks through the player's own FMOD DLLs (off Windows: none yet, L6)
+rustyac-audio = { path = "../rustyac-audio" }
 
 # x64 Windows (the release's rustyac.exe): CSP mode's tyre rays on Embree 3.13.4 as CSP casts them
 # (Task C5i-a; built by rustyac-ode's build.rs, which needs Visual Studio's C++ tools, CMake and
@@ -86,6 +88,13 @@ rustyac-ode = { path = "../rustyac-ode", features = ["embree"] }
 # Off Windows and the browser: AC's renderer only with the `wgpu` feature (native Full mode)
 [target.'cfg(not(any(windows, all(target_arch = "wasm32", target_os = "unknown"))))'.dependencies]
 rustyac-render = { path = "../rustyac-render", optional = true }
+
+# Linux (Task P3a): the game's window, keyboard and mouse on SDL3, built from its source and
+# linked statically (many distros have no SDL3 package; CMake and a C compiler build it), and
+# wgpu's GL backend beside Vulkan (WSLg's GPU is reached only through GL)
+[target.'cfg(target_os = "linux")'.dependencies]
+sdl3 = { version = "0.22", features = ["build-from-source-static", "raw-window-handle"], optional = true }
+wgpu = { version = "=30.0.1", default-features = false, features = ["gles", "vulkan", "wgsl"], optional = true }
 
 # The page's Full mode: AC's renderer on kgl's wgpu backend (WebGPU is turned on by rustyac-web,
 # which gives kgl the page's device).
@@ -99,5 +108,5 @@ js-sys = "0.3"
 # AC's renderer (`render::ac`) on kgl's wgpu backend on Windows too, as in the page: only for
 # the native proofs of Full mode (rustyac-web's full_frame example). It leaves out the window,
 # the debug view, the GUI, the sound and the command line, so rustyac.exe is the replay-only
-# build with it.
-wgpu = ["dep:rustyac-render", "rustyac-render/backend-wgpu"]
+# build with it. On Linux it is the game (Task P3a): the window on SDL3 and this renderer.
+wgpu = ["dep:rustyac-render", "rustyac-render/backend-wgpu", "dep:sdl3", "dep:wgpu"]

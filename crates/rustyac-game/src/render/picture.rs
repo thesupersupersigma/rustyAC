@@ -3,14 +3,59 @@
 //! The picture of the game: AC's own renderer (the port in `rustyac-render`), or the old debug
 //! view (`--debug-view`), behind one set of calls.
 
+#[cfg(windows)]
 use windows::Win32::Foundation::HWND;
+#[cfg(windows)]
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain1;
 
 use super::ac::AcRenderer;
 use super::hud::HudInfo;
 use super::scene::{CameraFrame, CarShape, DrivingCamera};
+#[cfg(windows)]
 use super::DebugRenderer;
 use crate::view::CarView;
+
+// Linux (Task P3a): the window is SDL's, the swap chain its wgpu surface
+#[cfg(not(windows))]
+use crate::window::{Chain as IDXGISwapChain1, Handle as HWND};
+
+/// Linux has no debug view (`--debug-view` is the Direct3D 11 one): a renderer that cannot be
+/// made, so the arms below stay as they are.
+#[cfg(not(windows))]
+pub struct DebugRenderer {
+    pub adapter: String,
+    pub software: bool,
+    never: std::convert::Infallible,
+}
+
+#[cfg(not(windows))]
+#[allow(unused_variables)]
+impl DebugRenderer {
+    pub fn samples(&self) -> u32 {
+        match self.never {}
+    }
+    pub fn size(&self) -> (u32, u32) {
+        match self.never {}
+    }
+    pub fn draw(&mut self, view: &CarView, shape: &CarShape, frame: &CameraFrame, info: &HudInfo) {
+        match self.never {}
+    }
+    pub fn read_pixels(&mut self) -> Result<Vec<u8>, String> {
+        match self.never {}
+    }
+    pub fn finish(&self) {
+        match self.never {}
+    }
+    pub fn swap_chain(&self, window: HWND) -> Result<IDXGISwapChain1, String> {
+        match self.never {}
+    }
+    pub fn resize_swap_chain(&mut self, chain: &IDXGISwapChain1, width: u32, height: u32) -> Result<(), String> {
+        match self.never {}
+    }
+    pub fn present(&mut self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
+        match self.never {}
+    }
+}
 
 pub enum Picture {
     Debug(Box<DebugRenderer>),
@@ -277,4 +322,43 @@ impl Picture {
             Picture::Ac(r) => Some(format!("{} draw calls, {} triangles in the last frame", r.draw_calls, r.triangles)),
         }
     }
+}
+
+/// `--supersample <n>`: a picture drawn `n` times wider and higher, averaged down (every pixel
+/// is the rounded mean of its `n` x `n` block, channel by channel). `width` and `height` are
+/// the size of the result.
+pub fn box_downscale(rgba: &[u8], width: u32, height: u32, n: u32) -> Vec<u8> {
+    let (w, h, n) = (width as usize, height as usize, n as usize);
+    assert_eq!(rgba.len(), w * n * h * n * 4, "the picture is not {n} times {width} x {height}");
+    let stride = w * n * 4;
+    let area = (n * n) as u32;
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u32; 4];
+            for row in 0..n {
+                let at = (y * n + row) * stride + x * n * 4;
+                for pixel in rgba[at..at + n * 4].chunks_exact(4) {
+                    for (total, value) in sum.iter_mut().zip(pixel) {
+                        *total += *value as u32;
+                    }
+                }
+            }
+            out.extend(sum.map(|total| ((total + area / 2) / area) as u8));
+        }
+    }
+    out
+}
+
+/// Writes RGBA pixels as a PNG.
+pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    let file = rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Best);
+    let mut writer = encoder.write_header().map_err(|e| format!("{}: {e}", path.display()))?;
+    writer.write_image_data(rgba).map_err(|e| format!("{}: {e}", path.display()))?;
+    // the end of the file is written here, not when the writer is dropped (which could not say that it failed)
+    writer.finish().map_err(|e| format!("{}: {e}", path.display()))
 }

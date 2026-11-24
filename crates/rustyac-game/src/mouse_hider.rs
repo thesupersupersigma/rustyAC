@@ -14,8 +14,57 @@
 
 use rustyac_gui::gui::Gui;
 use rustyac_physics::data::ini::IniReader;
+#[cfg(windows)]
 use windows::Win32::Foundation::{HWND, POINT, RECT};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, GetCursorPos, GetWindowRect, ShowCursor, CURSORINFO, CURSOR_SHOWING};
+#[cfg(not(windows))]
+use sdl_cursor::*;
+
+/// Linux (Task P3a): the few Win32 calls of the port, on SDL's cursor and `window_sdl.rs`.
+#[cfg(not(windows))]
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
+mod sdl_cursor {
+    pub use crate::window::Handle as HWND;
+
+    #[derive(Default)]
+    pub struct POINT {
+        pub x: i32,
+        pub y: i32,
+    }
+
+    #[derive(Default)]
+    pub struct RECT {
+        pub left: i32,
+        pub top: i32,
+        pub right: i32,
+        pub bottom: i32,
+    }
+
+    /// # Safety
+    /// None needed: the name and the `unsafe` keep the port's text as it is on Windows.
+    pub unsafe fn GetCursorPos(point: &mut POINT) -> Result<(), ()> {
+        (point.x, point.y) = crate::window::cursor_pos();
+        Ok(())
+    }
+
+    /// # Safety
+    /// As above.
+    pub unsafe fn GetWindowRect(window: HWND, rect: &mut RECT) -> Result<(), ()> {
+        [rect.left, rect.top, rect.right, rect.bottom] = crate::window::window_rect(window.0 as isize);
+        Ok(())
+    }
+
+    /// # Safety
+    /// As above.
+    pub unsafe fn ShowCursor(show: bool) -> i32 {
+        crate::window::show_cursor(show)
+    }
+
+    pub fn cursor_showing() -> Option<bool> {
+        Some(crate::window::cursor_shown())
+    }
+}
 
 pub struct MouseHider {
     /// `keyboardControls` is there: the player's car is driven with the keyboard
@@ -35,6 +84,7 @@ pub struct MouseHider {
 }
 
 /// `GetCursorInfo`: the cursor shows (`None`: the call failed).
+#[cfg(windows)]
 fn cursor_showing() -> Option<bool> {
     let mut info = CURSORINFO { cbSize: std::mem::size_of::<CURSORINFO>() as u32, ..Default::default() };
     // SAFETY: a plain call with a structure of the size it is told.

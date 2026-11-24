@@ -13,6 +13,8 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   (nothing reads it), and `rustyac-audio` and `rustyac-game --features wgpu` build off Windows.
 - Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
   the native game from section 8's L1, starting with the list in 10.4.
+- **P3 (Task P3a, branch `web`): done (section 11).** L1 (11.2), L2 + L3 (11.3, 11.4), the frame
+  check against the page's Full mode, the physics dumps and quitting (11.5). Next: L4 (11.6).
 
 ## 1. Plain-English summary
 
@@ -283,7 +285,7 @@ ARM: ship nothing new until the emulated row is green.
 | M1 | macOS Apple Silicon: Metal limits, app bundle, Gatekeeper ("unsigned: right-click, Open"; signing needs a paid Apple account), the NaN replay check | 2 |
 | X1 | Linux ARM + macOS Intel (universal binary) | 0.5 |
 | W1 | Windows on ARM: read the emulated row; if `rcpps` differs, the table under emulation | 0.5 |
-| Later | YEBIS on wgpu (also brings post-processing to the browser) 2–3; CPython 3.3 builds 2; triple screens on wgpu 0.3; VR via OpenXR (not sized) | 4.5+ |
+| Later | YEBIS on wgpu (also brings post-processing to the browser) 2–3; CPython 3.3 builds 2; triple screens on wgpu 0.3; VR via OpenXR (not sized); kgl on wgpu's GL backend 0.5 (non-filtering samplers for float textures without `FLOAT32_FILTERABLE`, one sampler per texture in a shader: only for WSLg's GPU and cards without Vulkan, section 11.3) | 5+ |
 
 **Per platform:**
 
@@ -465,3 +467,209 @@ plain one. No code change: nothing reachable needs canonicalising.
   audio and game changes are `cfg` gates for other targets, and the Windows dependency graph and
   lock file are unchanged), so it can't break what the quick lane proves. Wasm clippy also skipped:
   the wasm side compiles the same code as before (the gates include `wasm32`).
+
+## 11. Task P3: the native Linux game (L1 to L3)
+
+### 11.1 Where it runs
+
+WSL's distro `Ubuntu` on this PC is **Ubuntu 26.04.1** (P2 upgraded it; the prompt says 24.04).
+Packages go inside the distro; sources, `target/` and logs stay in the repo through `/mnt/c`.
+`re/scratch/taskP3/wsl.sh <log> <cmd...>` runs a command there with P2's toolchain (1.97.0) and
+P2's target folder (`re/scratch/taskP2/target-linux`, reused so nothing builds twice). P3 added
+the two wasm targets to WSL's 1.97.0 (this PC's Windows Rust has none, so wasm clippy runs there).
+
+What WSLg offers a window (checked, nothing installed for it yet): Wayland and X11 (`wayland-0`,
+`:0`); SDL3 is in the archive (`libsdl3-dev` 3.4.2); Mesa 26.0.8's Vulkan drivers have **no
+`dzn`** (Vulkan on D3D12), so Vulkan is only lavapipe (the CPU); the GPU is reached through
+Mesa's d3d12 driver for **OpenGL** (WSLg's `/usr/lib/wsl/lib/libd3d12.so`). So wgpu gets GL (EGL)
+on the GPU, or Vulkan on the CPU. Which one works for kgl's shaders is L3's first check.
+
+### 11.2 L1: the portable modules (done)
+
+- **Ungated off Windows:** `cli`, `conditions`, `identity`, `join`, `gateway`, `steam`,
+  `achievements` (native targets only: both wasm builds keep the modules they had), and `audio`
+  (now every native target too).
+  `ai_record` stays Windows: it is a physics-thread sink (L5).
+- **TLS:** `rustls` and `webpki-roots` are declared for every native target (they were Windows
+  only); `rustyac-audio` too (sound off Windows comes with L6). The lock file is unchanged.
+- **Steam off Windows:** `steam::load` and `achievements::Flat::loaded` answer "no Steam", so the
+  rest of both modules (the achievement rules, the stand-in Steam of `steam_check`) builds and
+  runs everywhere. `identity::default_name` reads `USER` off Windows (`USERNAME` on Windows).
+- **FMOD off Windows:** `rustyac-audio`'s `raw::load` says "no FMOD on this platform yet (step
+  L6)"; the drive goes on without sound, as when the DLLs are missing on Windows.
+- **Paths** (`rustyac-content::install`): the game's folder inside a library is joined one part at
+  a time (a backslash is no separator off Windows; on Windows the string is the same). Off
+  Windows Steam's folders are `~/.local/share/Steam`, `~/.steam/steam` and Flatpak's
+  `~/.var/app/com.valvesoftware.Steam/.local/share/Steam`, each read through the existing
+  `libraryfolders.vdf` parser (a test now holds a Linux file too). `Documents\Assetto Corsa` off
+  Windows is the one in **Proton's prefix** beside the library AC is in
+  (`steamapps/compatdata/244210/pfx/drive_c/users/steamuser/Documents/Assetto Corsa`), else
+  `~/Documents/Assetto Corsa`. The write guard (`guard.rs`) uses the same function.
+- **A guard hole found on Linux and closed:** `std::path::absolute` keeps `..` off Windows (it
+  folds it on Windows), so `resolved` met a last part with no file name and let the path through.
+  It now keeps the `..` and folds it itself (`documents_refused_elsewhere_allowed` caught it on
+  Linux). On Windows the path never ends in `..` there, so nothing changes.
+- **Tests and examples:** `the_static_page_holds_the_hybrid_as_built` is Windows until `shm` (L5);
+  `mirror_check` needs `--features wgpu` off Windows; `tls_front` runs on any native target.
+- Without `wgpu`, `conditions` and `audio` skip `render::gui_apps` off Windows (the replay
+  runner build has no renderer).
+
+Proofs (logs in `re/scratch/taskP3/`):
+
+| Check | Result |
+|---|---|
+| Linux x64: `cargo build --locked --workspace --all-targets --exclude rustyac-web --exclude rustyac-render` (the two by-design rows of 10.4) | ok (`l1_ws6.log`) |
+| Linux x64: clippy `-D warnings --all-targets`, `rustyac-game` (with and without `wgpu`), `rustyac-content`, `rustyac-audio` | clean |
+| Linux x64: `cargo test --release` of those three (with `wgpu`, the real AC files read through `/mnt/c`) | all pass (`l1_test2.log`) |
+| wasm32-unknown-unknown: clippy `-D warnings --all-targets -p rustyac-web` | clean |
+| wasm32-wasip1: clippy `-D warnings` lib and bins of `rustyac-game`, `rustyac-content` | clean (`--all-targets` fails as before P3: `write_guard.rs` imports `cli`) |
+| Windows: clippy `-D warnings --all-targets`, the three crates, with and without `wgpu` | clean |
+| Windows: `run_all.sh --quick`, every area, 2 lanes (10.3 GB free RAM) | **258 cases IDENTICAL** in 14 areas, 0 different, 0 errors, csp's 1 expected skip; 1h05m (`quick_l1.log`) |
+
+### 11.3 L2 + L3 steps 1 to 3: the game on Linux (built, committed as one piece)
+
+The plan was three commits; they came as one, because the loop, the timer and the surface only
+run together (the window needs the surface to draw the first frame, the drive needs the timer).
+
+- **`desktop.rs` builds for `any(all(windows, not(wgpu)), all(linux, wgpu))`.** On Windows its
+  code paths are as they were: the cfg picks a file, and the few Win32 calls the loop made itself
+  (`GetAsyncKeyState`, `GetCursorPos`, `SetCursorPos`, `GetWindowRect`, the screen's size) are
+  now `window::key_async` and friends, which make the same calls in `window.rs`.
+- **The platform layer, Linux** (`#[path]` picks the file, the Windows file is untouched):
+  `window_sdl.rs` (the same `Event`s, the virtual-key codes `controls.ini` binds made from SDL's
+  scancodes, keys and the cursor in atomics for the physics thread, `WM_CHAR`'s control
+  characters, Win32's `ShowCursor` counter for `mouse_hider.rs`), `timer_unix.rs` (sleep, then a
+  250 us spin; no raised priority without `CAP_SYS_NICE`), `input/dinput_none.rs` and a
+  non-Windows `XInput` (no pads or wheels: L4), `shm_none.rs` (no pages: L5). TrackIR, Python,
+  VR, the power request and the debug view (`--debug-view`, D3D11)
+  are Windows only; SDL keeps the screen saver off by itself. (Ctrl+C: 11.5.)
+- **Opened to Linux** (their code unchanged): `physics_thread`, `live`, `wheel`, `mouse_hider`,
+  `ai_record`, `audio::AudioSink`, `Bindings::load`. `render::picture` (`box_downscale` and
+  `write_png` moved there from `render/mod.rs`, which re-exports them) has a debug view that
+  cannot be made on Linux, so its arms stay as they are.
+- **The surface** (`Window::create`): a wgpu instance with SDL's display handle (GL needs it),
+  a surface from SDL's raw handles, an adapter compatible with it, the device given to kgl
+  (`AcRenderer::give_device`) before the renderer is made; `AcRenderer::swap_chain` /
+  `resize_swap_chain` / `present` on Linux take that surface (`present_to`, as the page does).
+  `WGPU_BACKEND` (`vulkan`, `gl`) is read by rustyAC (wgpu's own reading needs its `std`
+  feature, which is off).
+- **SDL3: built from source and linked statically** (`sdl3` 0.22 with `build-from-source-static`,
+  SDL 3.4.20): the player needs no SDL package. The build needs CMake, a C compiler and the X11 /
+  Wayland headers (in WSL: `cmake ninja-build pkg-config libx11-dev libxext-dev libxrandr-dev
+  libxcursor-dev libxi-dev libxss-dev libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev
+  wayland-protocols libegl-dev libgl-dev libdecor-0-dev libdrm-dev libgbm-dev libudev-dev
+  libdbus-1-dev libasound2-dev libpulse-dev`); SDL loads X11 / Wayland at run time. What a player
+  needs: an X11 or Wayland desktop, Vulkan drivers (Mesa's or the GPU maker's), and for L7's
+  launcher `libwebkit2gtk-4.1`. Licences: `LICENSING.md` (SDL's row, 13 new crates in the list)
+  and `tools/notices.py` (SDL's Zlib text with its copyright).
+
+**What wgpu gets in WSLg** (Ubuntu 26.04.1, Mesa 26.0.8, SDL picks X11 there):
+
+| Backend | Adapter | Result |
+|---|---|---|
+| Vulkan (the default pick) | llvmpipe (lavapipe, the CPU) | **right**: 0 wgpu errors; 1.9 FPS at 1280 x 720 (Spa, the F2004, autodrive) |
+| GL (`WGPU_BACKEND=gl`) | llvmpipe through EGL (no DRI3 on WSLg's X server) | 461 validation errors in 30 s, 7.2 FPS |
+| GL with `GALLIUM_DRIVER=d3d12` | **D3D12 (AMD Radeon Pro 5500M)**, GL 4.6: the GPU | the same validation errors, 7.2 FPS |
+
+kgl on wgpu's GL backend breaks two GL limits: AC's float targets are sampled with filtering
+samplers (GL adapters have no `FLOAT32_FILTERABLE`: "Sampler binding N expects filtering =
+false"), and one texture is read with two samplers in one shader (GLSL's combined samplers
+cannot: "A image was used with multiple samplers"). Real Linux has Vulkan on the GPU, so this
+only matters for WSLg; as the lead chat allowed, L3 is proved on lavapipe and a GPU run waits
+for L8's live USB. A kgl fix for GL is in "Not done". (Wayland, `SDL_VIDEO_DRIVER=wayland`:
+the GL run crashed on exit, exit code 139: found and fixed in 11.5. X11 is SDL's pick on WSLg.)
+
+### 11.4 Proofs of 11.3
+
+| Check | Result |
+|---|---|
+| Windows: `run_all.sh --quick render gui fresh` (one lane, 10.5 GB free RAM) | **110 cases IDENTICAL** (render 18, gui 29, fresh 63), 0 different, 0 errors; 33 min (`re/scratch/taskP3/quick_l2.log`) |
+| Windows: clippy `-D warnings --all-targets -p rustyac-game`, with and without `wgpu` | clean |
+| Linux: clippy `-D warnings --all-targets -p rustyac-game`, with and without `wgpu` | clean |
+| Linux: `cargo test -p rustyac-game --features wgpu --lib window` (scancodes to virtual keys, Ctrl's sides) | pass |
+| Linux, WSLg: `--autodrive` at Spa, 90 s (`run/gl60`) | physics 30,060 steps at 333.33 Hz; 169 frames, 1.9 FPS on lavapipe; clean end |
+| Linux, WSLg: real X11 keys from `xdotool` (`keys.sh keys2`): Up held 8 s, F8, Esc | the car drove about 190 m on the Up key; F8 wrote the game's own picture (right colours); Esc opened AC's pause menu (Resume, Back to pits, Restart Session, Replay, Exit); the end at `--duration`: exit 0, the usual report |
+| Linux, WSLg: the same with a click on the menu's Exit (`keys.sh keys6`) | the program ended at once, exit 0, the usual report |
+| wasm32-unknown-unknown clippy `-p rustyac-web --all-targets`; wasm32-wasip1 clippy lib + bins `rustyac-game`, `rustyac-content` | clean |
+
+Pictures: `re/scratch/taskP3/run/keys6/2_esc.png` (the pause menu over Spa, grabbed with
+ImageMagick's `import`), `run/keys2/screenshots/` (the game's own F8 picture). The grabs in
+`run/keys2/*.png` have wrong colours: `xwdtopnm` reads WSLg's 32-bit visual as (G, R, alpha).
+Focus: WSLg's window manager has no `_NET_ACTIVE_WINDOW`; `xdotool windowfocus` gives the window
+the keyboard, but only while nobody is using the desktop (runs keys3 to keys5 got none: the
+physics stayed paused, as the game does without focus). One drive by hand ended with its report
+and then sat until the 300 s watchdog of `run.sh` killed it (exit 124, `run/super_drive`); it
+was not seen again (keys2 at `--duration`, keys6 at Exit: exit 0).
+
+### 11.5 P3a's end: the frame check, the physics dumps, quitting (done)
+
+**L3's frames against the browser's Full mode.** The `browser` area compares physics only, so the
+check is Task 38i's (`docs/port/web_renderer.md`, "Step 4"): the page's fixed frame (`full.rs`, a
+drive as it starts, 3 frames of 1/60 s, 1280 x 720, HUD hidden, kgl's call log from the
+renderer's making to the last frame), run by the `full_frame` example. 38i showed that the page's
+log equals native wgpu's and native Direct3D 11's (Spa: 17,409 lines). `full_frame` now builds on
+Linux (`rustyac-web --features wgpu`: `full` and `rustyac-render` open to it, as `rustyac-game`
+takes the renderer there; the lock file is unchanged), so the Linux log is compared with Windows'
+Direct3D 11 one, which stands for the page through 38i's chain. The game's own frames after a
+drive (`--screenshot`) are compared as pictures: in the game `--gpu-log` is Direct3D 11's own
+log (`gpulog`, below kgl), so it has no kgl log to set beside Linux's.
+
+| Frame (1280 x 720) | kgl log, Linux (wgpu, lavapipe) vs Windows (Direct3D 11) | pixels vs Windows on the GPU (Radeon Pro 5500M) |
+|---|---|---|
+| fixed frame, ks_ferrari_f2004 at Spa from the pit | **IDENTICAL** (17,409 lines, the page's count in 38i) | 39.75 dB, 0.48 % off by more than 8 |
+| fixed frame, bmw_m3_e30 at Laguna Seca from the pit | **IDENTICAL** (17,898 lines) | 35.84 dB, 1.70 % |
+| the game, `--replay spa_autodrive_300s.ryin --at 20 --screenshot` (269.1 km/h on both) | (none, above) | 28.60 dB, 11.7 % (the road's and grass's texture detail at speed) |
+| the game, `--track ks_laguna_seca --car bmw_m3_e30 --autodrive --at 8 --screenshot` | (none) | 30.61 dB, 4.1 % |
+
+The picture differences are the two rasterizers' (lavapipe against AMD's driver; 38i measured
+31–35 dB between the page and WARP). Side by side pictures (Windows left, Linux right):
+`re/scratch/taskP3/run/ff/*_win_linux.png`, `run/shots/*_win_linux.png`; the window with AC's
+pause menu: `run/keys6/2_esc.png`.
+
+**Frame time (release build, lavapipe, 1280 x 720, Spa, the F2004):** 2.1 FPS in the window
+(42 frames in 20.1 s, slowest 518 ms; `run/rel_wm`); the fixed frame's 3 frames with loading,
+26 s (Windows on the GPU: 8 s). A GPU's numbers come with L8 (Vulkan on real Linux).
+
+**The physics from the Linux game build.** The dumps area's quick drives, `rustyac --replay
+<drive> --headless --dump-states -` by the Linux release game build (`--features wgpu`, on copies
+of the drives whose AC folder is `/mnt/c/...`, as `drive()` rewrites them for the farm) and by
+Windows' `rustyac.exe`: **6 of 6 byte-identical** dumps (sha256; car_random,
+conditions_spa_cold_green_wind, t17 kerb strike, t22b crash, t18 Laguna Seca pit, the 300 s Spa
+autodrive). Both x86, so no NaN-blind compare was needed.
+
+**Quitting** (`re/scratch/taskP3/close.sh <name> wm|int|term`, `close.py` sends the close
+button's `WM_DELETE_WINDOW`; `head_int.sh` for a headless run):
+
+| How | Result |
+|---|---|
+| the window's close button (debug twice, release once) | the end report, exit 0 |
+| Ctrl+C (SIGINT) in a window drive | the end report, exit 0 (before the fix too: SDL turned it into its quit event) |
+| Ctrl+C in a headless drive | **the end report, exit 0** (before: the process died at once) |
+| the GL run under Wayland | **exit 0** (before: SIGSEGV after the end report) |
+
+- **Ctrl+C:** a SIGINT / SIGTERM handler (`desktop.rs`, `cfg(unix)`) sets the `STOP` flag that
+  Windows' console handler sets, so every loop ends the same tidy way. A second Ctrl+C ends the
+  process at once (the handler puts the default back). Set before SDL starts, so SDL leaves the
+  two signals alone.
+- **The Wayland crash, found:** gdb's stack (`run/wl_gl1/out.txt`): `eglTerminate` in wgpu's GL
+  instance's drop, inside `libwayland-client`, after `Window`'s drop had shut SDL down and closed
+  its Wayland display. wgpu's instance holds that display and goes last (the renderer's buffers,
+  kgl's given device). `window_sdl.rs` now never shuts SDL's video down (the window itself is
+  still destroyed), so the display stays open until the process ends: exit 0 under gdb.
+- **The hand drive that sat after its report (11.4), narrowed:** it hung after the last line
+  `run_window` prints, so in the teardown after it (the renderer's and kgl's wgpu objects, then
+  the process's end), the same place as the Wayland crash. On X11 with Vulkan, lavapipe's
+  surface code also talks to SDL's display. Not seen in this session's 8 ends (the close button 3 times,
+  Ctrl+C in a window twice and headless once, `--duration` twice under Wayland GL). If it comes back, `close.sh` prints the
+  command for every thread's stack (`wsl -u root gdb -p <pid>`, as ptrace_scope is 1).
+
+### 11.6 Resume here (P3a)
+
+- P3a is done: L1 (11.2), L2 + L3 (11.3, 11.4), the frame check, the physics dumps and quitting
+  (11.5). Next: L4 (pads, wheels with FFB on SDL3).
+- Tools: `re/scratch/taskP3/run.sh <name> <args>` (a windowed run with its own cfg and Documents),
+  `keys.sh` (real keys), `close.sh` (quit tests), `ff.sh` / `shots.sh` + `frames.py` (the frame
+  check), `dumps.sh` (the physics dumps), `wsl.sh` (builds). Builds:
+  `re/scratch/taskP2/target-linux/{debug,release}/rustyac`, `release/examples/full_frame`.
+- Not done, for later: kgl on wgpu's GL backend (section 8's "Later"); the window grabs' colours
+  (a tool's fault, 11.4); the dumps of all 228 drives (only the quick six ran).

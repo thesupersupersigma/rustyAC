@@ -18,7 +18,7 @@
 //! Only for tests on one machine: one thread per connection that looks at both sides in
 //! turn.
 
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use std::io::{ErrorKind, Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -114,7 +114,7 @@ fn main() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_arch = "wasm32")]
 fn main() {
-    eprintln!("tls_front is a Windows-side test helper (rustyac-game's TLS is only built there)");
+    eprintln!("tls_front is a native test helper (rustyac-game's TLS is only built there)");
 }

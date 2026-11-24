@@ -14,8 +14,6 @@ use std::path::{Path, PathBuf};
 
 use crate::vfs::PathExt;
 
-/// The game's folder name inside a Steam library.
-const GAME_FOLDER: &str = r"steamapps\common\assettocorsa";
 const USUAL_PLACE: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa";
 
 /// Is this Assetto Corsa's folder? (It has `content` and `system`.)
@@ -47,7 +45,20 @@ pub fn documents() -> Option<PathBuf> {
     if let Some(folder) = GIVEN_DOCUMENTS.read().unwrap().clone() {
         return Some(folder);
     }
-    Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join("Documents").join("Assetto Corsa"))
+    user_documents()
+}
+
+/// The user's own `Documents\Assetto Corsa`, whatever [`set_documents`] says. Off Windows: the
+/// one in Proton's prefix beside the Steam library AC is in, else `~/Documents/Assetto Corsa`.
+pub fn user_documents() -> Option<PathBuf> {
+    #[cfg(windows)]
+    return Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join("Documents").join("Assetto Corsa"));
+    #[cfg(not(windows))]
+    {
+        // ac_root is <library>/steamapps/common/assettocorsa; 244210 is AC's Steam app id
+        let proton = ac_root().and_then(|root| Some(root.parent()?.parent()?.join("compatdata/244210/pfx/drive_c/users/steamuser/Documents/Assetto Corsa")));
+        proton.filter(|folder| folder.is_dir()).or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join("Documents/Assetto Corsa")))
+    }
 }
 
 /// Assetto Corsa's own folder, or `None` when it is not found. Read only.
@@ -65,7 +76,8 @@ pub fn ac_root() -> Option<PathBuf> {
     }
     for steam in steam_folders() {
         for library in std::iter::once(steam.clone()).chain(libraries_of(&steam)) {
-            let root = library.join(GAME_FOLDER);
+            // one part at a time: a backslash is no separator off Windows
+            let root = library.join("steamapps").join("common").join("assettocorsa");
             if is_ac_root(&root) {
                 return Some(root);
             }
@@ -197,8 +209,10 @@ mod registry {
 
 #[cfg(not(windows))]
 mod registry {
+    /// No registry: Steam's usual folders (native, the old `~/.steam` link, Flatpak).
     pub fn steam_paths() -> Vec<std::path::PathBuf> {
-        Vec::new()
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else { return Vec::new() };
+        [".local/share/Steam", ".steam/steam", ".var/app/com.valvesoftware.Steam/.local/share/Steam"].iter().map(|path| home.join(path)).collect()
     }
 }
 
@@ -212,6 +226,8 @@ mod tests {
         assert_eq!(library_paths(new), [PathBuf::from(r"C:\Program Files (x86)\Steam"), PathBuf::from(r"D:\Steam Library")]);
         let old = "\"LibraryFolders\"\n{\n\t\"TimeNextStatsReport\"\t\t\"1600000000\"\n\t\"ContentStatsID\"\t\t\"-123\"\n\t\"1\"\t\t\"E:\\\\Games\"\n}\n";
         assert_eq!(library_paths(old), [PathBuf::from(r"E:\Games")]);
+        let linux = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"/home/me/.local/share/Steam\"\n\t}\n}\n";
+        assert_eq!(library_paths(linux), [PathBuf::from("/home/me/.local/share/Steam")]);
     }
 
     #[test]

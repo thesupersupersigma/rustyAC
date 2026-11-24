@@ -163,7 +163,11 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
                 game_mode.time_attack_mult = gameplay.get_float("TIME_ATTACK", "BASE_TIME_MULT")?;
             }
             // Sim::Sim: Speed::useMPH (rustyAC's own cfg folder first, as its HUD reads it)
-            game_mode.use_mph = crate::render::gui_apps::use_mph(&cfg_dir(options), documents_folder().map(|folder| folder.join("cfg")).as_ref());
+            #[cfg(any(windows, target_os = "unknown", feature = "wgpu"))] // render::gui_apps is there
+            let use_mph = crate::render::gui_apps::use_mph(&cfg_dir(options), documents_folder().map(|folder| folder.join("cfg")).as_ref());
+            #[cfg(not(any(windows, target_os = "unknown", feature = "wgpu")))]
+            let use_mph = false;
+            game_mode.use_mph = use_mph;
             let ini = official.unwrap_or(documents);
             if !ini.ready {
                 return Err(format!("{}: cannot be read", path.display()));

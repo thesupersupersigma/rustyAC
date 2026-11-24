@@ -148,6 +148,13 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
     keep(fns, extra, folder, output)
 }
 
+/// No FMOD off Windows and the browser yet: the drive goes on without sound.
+// shortcut: no native FMOD 2.03 loader, upgrade in docs/platforms.md step L6
+#[cfg(not(any(windows, target_arch = "wasm32")))]
+pub fn load(_folder: &Path, _output: Output) -> Result<&'static Api, String> {
+    Err("no FMOD on this platform yet (step L6)".to_string())
+}
+
 /// The browser's FMOD (see [`super::web`]): `web/sound.js` must have loaded it. `folder` is the
 /// game's folder as the page mounts it. Once per page, as [`load`] on Windows.
 #[cfg(target_arch = "wasm32")]

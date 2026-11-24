@@ -18,3 +18,12 @@ accepted = [
 # rustyAC's own crates (publish = false) are not third-party
 [private]
 ignore = true
+
+# SDL 3 (the Linux build's window): its sources each carry SDL's Zlib notice, which cargo-about
+# would list 255 times; the one in SDL's own LICENSE.txt stands for them
+[sdl3-src.clarify]
+license = "Zlib"
+[[sdl3-src.clarify.files]]
+path = "SDL/LICENSE.txt"
+license = "Zlib"
+checksum = "1c040b8271b37e5076359f8fd54240e371114112924d2df81ef87c7d6a1dfdfd"

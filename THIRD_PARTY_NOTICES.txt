@@ -1,12 +1,12 @@
 Third-party notices for rustyAC
 
-rustyAC builds on these 201 crates (Rust libraries) from the lock files of its
+rustyAC builds on these 208 crates (Rust libraries) from the lock files of its
 repository; not every one is in every program. Below, each license text comes after the
 list of crates it covers, as the crate itself ships it (with its copyright lines). Made
 by tools/notices.py with cargo-about. See LICENSING.md for rustyAC's own licenses.
 
-The lock files also name 7 optional dependencies that no rustyAC build turns on, so
-they are never compiled or shipped: dispatch2 0.3.1, serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, termcolor 1.4.1, winapi-util 0.1.11, zlib-rs 0.6.8.
+The lock files also name 13 optional dependencies that no rustyAC build turns on, so
+they are never compiled or shipped: dispatch2 0.3.1, sdl3-image-src 3.4.8, sdl3-image-sys 0.7.1+SDL-image-3.4.8, sdl3-mixer-src 3.2.4, sdl3-mixer-sys 0.7.0+SDL-mixer-3.2.4, sdl3-ttf-src 3.2.3, sdl3-ttf-sys 0.7.1+SDL-ttf-3.2.2, serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, termcolor 1.4.1, winapi-util 0.1.11, zlib-rs 0.6.8.
 
 ====================================================================================================
 Apache-2.0, used by: codespan-reporting 0.13.1
@@ -2107,7 +2107,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ====================================================================================================
-MIT, used by: cc 1.8.0, cfg-if 1.0.5, find-msvc-tools 0.1.14, js-sys 0.3.106, pkg-config 0.3.34, wasm-bindgen 0.2.129, wasm-bindgen-futures 0.4.79, wasm-bindgen-macro 0.2.129, wasm-bindgen-macro-support 0.2.129, wasm-bindgen-shared 0.2.129, web-sys 0.3.106
+MIT, used by: cc 1.8.0, cfg-if 1.0.5, cmake 0.1.58, find-msvc-tools 0.1.14, js-sys 0.3.106, pkg-config 0.3.34, wasm-bindgen 0.2.129, wasm-bindgen-futures 0.4.79, wasm-bindgen-macro 0.2.129, wasm-bindgen-macro-support 0.2.129, wasm-bindgen-shared 0.2.129, web-sys 0.3.106
 ====================================================================================================
 
 Copyright (c) 2014 Alex Crichton
@@ -3027,7 +3027,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ====================================================================================================
-MIT, used by: naga 30.0.1, naga-types 30.0.1, wgpu 30.0.1, wgpu-core 30.0.1, wgpu-core-deps-wasm 30.0.1, wgpu-core-deps-windows-linux-android 30.0.1, wgpu-hal 30.0.1, wgpu-naga-bridge 30.0.1, wgpu-types 30.0.1
+MIT, used by: naga 30.0.1, naga-types 30.0.1, wgpu 30.0.1, wgpu-core 30.0.1, wgpu-core-deps-emscripten 30.0.2, wgpu-core-deps-wasm 30.0.1, wgpu-core-deps-windows-linux-android 30.0.1, wgpu-hal 30.0.1, wgpu-naga-bridge 30.0.1, wgpu-types 30.0.1
 ====================================================================================================
 
 MIT License
@@ -3301,6 +3301,32 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ====================================================================================================
+MIT, used by: rpkg-config 0.1.2
+====================================================================================================
+
+MIT License
+
+Copyright (c) 2024 Maia S. R.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+====================================================================================================
 MIT, used by: rustls 0.23.45
 ====================================================================================================
 
@@ -3389,6 +3415,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+====================================================================================================
+MIT, used by: sdl3 0.22.1
+====================================================================================================
+
+The MIT License (MIT)
+
+Copyright (c) 2013 Mozilla Foundation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ====================================================================================================
 MIT, used by: shlex 2.0.1
@@ -3669,6 +3720,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ====================================================================================================
+MIT, used by: vcpkg 0.2.15
+====================================================================================================
+
+Copyright (c) 2017 Jim McGrath
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+====================================================================================================
 MIT, used by: version_check 0.9.5
 ====================================================================================================
 
@@ -3892,6 +3973,52 @@ the following restrictions:
 2. Altered source versions must be plainly marked as such, and must not be
     misrepresented as being the original software.
 
+3. This notice may not be removed or altered from any source distribution.
+
+====================================================================================================
+Zlib, used by: sdl3-src 3.4.20
+====================================================================================================
+
+Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+
+====================================================================================================
+Zlib, used by: sdl3-sys 0.7.3+SDL-3.4.20
+====================================================================================================
+
+zlib License
+
+(C) 2024-2025 Maia S Ravn <maia.noreply@runbox.com>
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
 ====================================================================================================

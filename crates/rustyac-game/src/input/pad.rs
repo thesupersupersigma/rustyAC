@@ -256,6 +256,30 @@ impl XInput {
     }
 }
 
+/// Off Windows no pad yet (step L4 reads pads through SDL3): never one connected.
+#[cfg(not(windows))]
+#[derive(Default)]
+pub struct XInput {
+    pub index: Option<u32>,
+}
+
+#[cfg(not(windows))]
+impl XInput {
+    pub fn new() -> XInput {
+        XInput::default()
+    }
+
+    pub fn scan(&mut self) -> Vec<u32> {
+        Vec::new()
+    }
+
+    pub fn poll(&mut self) -> Option<PadState> {
+        None
+    }
+
+    pub fn rumble(&mut self, _left: f32, _right: f32) {}
+}
+
 #[cfg(windows)]
 impl Default for XInput {
     fn default() -> XInput {
