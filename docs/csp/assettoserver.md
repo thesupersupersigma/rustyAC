@@ -794,9 +794,149 @@ car position as UDP `AB 03` (§NH-2.2). NH-7 reads that format and sends rustyAC
   and 91 `AB 01` from the server, and rustyAC's `0x4E`, `0x4F` and `0x46`. rustyAC itself still got 0
   remote-car states (expected until part 2). After each run no relay or server port stayed open.
 
+### NH-7.1 The formats (part 1)
+
+From Super's capture (`re/scratch/taskNH7/cap/`: real AC + CSP 4305 through the relay, 482 s near the
+four traffic Miatas), decoded by `taskNH7/ab03.py` (independent of rustyAC), AssettoServer pre49's source
+and CSP 4305's `dwrite.dll`.
+
+**What went over UDP** (482 s, one client):
+
+| Way | Id | Count | Rate | Size |
+|---|---|---|---|---|
+| C>S | `0x46` own car | 8,940 | 18.5/s | 62 |
+| C>S | `0x4E` association, `0x4F` session check, `0xF8` pong | 1, 238, 462 | | 2, 2, 9 |
+| S>C | `AB 03` custom update | 8,770 | 18.2/s | 3 + 60 × n (n = 1..4; 7,448 with all four cars) |
+| S>C | `AB 01` weather, `0x57` race start, `0xF9` ping, `0x4E` | 484, 444, 462, 1 | about 1/s | 34, 11, 7, 1 |
+
+* **No `0x48` at all**: every car came as `AB 03` (§NH-2.2's finding, confirmed).
+* **CSP 4305 sends its own car as Kunos' `0x46`, unchanged** (62 bytes, the same layout and rate as
+  AC's, `ACClient::sendCarPosition`). `CUSTOM_UPDATE` changes only what the server sends. rustyAC
+  `--csp` already sends the same kinds and sizes (the kit's run: `0x46` 62 bytes at 19.3/s, `0x4E`,
+  `0x4F`, `0xF8`), so **nothing changes on the way out**.
+
+**The server's `AB 03`** (`CSPPositionUpdate` + `PositionUpdateOut.ToWriterCustom`):
+`AB 03`, `u8` n, then n records of 60 bytes, little-endian:
+
+| Bytes | Field | Format line | What it is |
+|---|---|---|---|
+| 1 | session id | `sessionID` | the car's slot |
+| 1 | sequence | `pakSequenceID` | the sender's `0x46` counter; for AI a **per-viewer** counter (`AiPakSequenceIds[viewer]++`) |
+| 4 | time stamp | `timestamp` | the state's time on the sender's clock minus the **viewer's** `TimeOffset`: already in the viewer's clock, per car |
+| 2 | ping | `ping: ushort` | the sender's ping (0 for AI) |
+| 12 × 3 | position, rotation, velocity | `float3` × 3 | as sent in `0x46` (AI: the server's own state) |
+| 4 | wheel speeds FL FR RL RR | `byte, -100, tyreAngularSpeed` | AC's byte: `±(10^(\|b-100\|/20) - 1)` rad/s |
+| 1 | steer | `byte, -127` | degrees |
+| 1 | wheel angle | `byte, -127, /2` | degrees |
+| 2 | engine rpm | `ushort` | |
+| 1 | gear | `byte` | |
+| 4 | status bits | `statusBytes` | AC's status, plus `LightsOn` when the server forces lights |
+| 1 | gas | `byte, /255` | |
+| 2 | performance delta | `short` | the `0x46` value, ms |
+
+* **It is the `'H'` record (57 bytes) plus gas and performance delta**, in the opposite order from
+  `0x46` (`0x46`: delta then gas). **No quantisation is added**: every byte is what the car's `0x46`
+  carried (the format line only says how to read it). The batch has no shared time stamp or ping
+  (`'H'` has one of each that AC doesn't read); each record has its own.
+* **Batching and rate:** one server tick (`RefreshRateHz`, 18 here: time stamps 54-56 ms apart) puts every
+  car due for this viewer into one list, sent as datagrams of up to 20 records. **Near / far:** a car
+  more than `NetworkBubbleDistance` (500 m) from the viewer (or any car while the viewer spectates) is
+  sent at most every `1000 / OutsideNetworkBubbleRefreshRateHz` ms (4 Hz → 250 ms). The same rule
+  applies to `'H'`. In the capture slots 2-4 arrived about 18/s each, and slot 5 a little less
+  (7,755).
+* **When:** `SupportsCSPCustomUpdate = EnableCustomUpdate (default true) && features contains
+  "CUSTOM_UPDATE"`. The server says how to read it in the welcome's
+  `[EXTRA_DATA] CUSTOM_UPDATE_FORMAT` (the format above as text, `debug_csp_extra_options.<slot>.ini`).
+  `CUSTOM_UPDATE_V2` is not used anywhere in pre49.
+* **NH's inferred points:** "`AB 03` per car, the DSL from `[EXTRA_DATA]`" (§2, NH-7's row) is
+  **confirmed**. **Corrected:** there is no new quantisation and no client-side counterpart: the server
+  re-sends the client's `0x46` bytes with gas / delta appended, and only the server's direction changes.
+
+**How CSP 4305 reads it** (`dwrite.dll`):
+
+* The format parser (@ 0x180d77360) builds one descriptor per field. A number field (@ 0x180d75820)
+  has a reader (`float`, `half`, `int`, `uint`, `short`, `ushort`, `byte`, `char`, `pbyteNM`), a
+  **scale** (1) and an **offset** (0). The modifiers act in order: `*k` and `/k` scale both the scale
+  and the offset, `+k` / `-k` move the offset, `tyreAngularSpeed` sets a flag. So `byte, -127, /2`
+  is scale 0.5, offset -63.5. Any other modifier throws "Unknown modifier".
+* The UDP handler for `AB 03` (registered @ 0x180d78cf0, then 0x180d77280 / 0x180d788a0) reads the
+  group's `u8` count, then each record (@ 0x180d76dd0) into a copy of the slot's last state:
+  * a number is `(float)raw * scale + offset` (separate `mulss` / `addss`, @ 0x180d75780: so `-0.0`
+    comes out `+0.0`). `tyreAngularSpeed` then gives `(powf(10, |v| * 0.05) - 1) * (v < 0 ? -1 : 1)`;
+  * the time stamp is read as a **signed** `int` into the double (AC's `0x48`: unsigned);
+  * rpm is clamped to 0..65535, ping and gear go through `int`, the status bits are copied raw;
+  * gas is `raw * (1/255)`, which is AC's constant `0x3B808081`: the same bits, without AC's clamp
+    (not needed, since a byte stays in 0..1);
+  * **performance delta has no scale**, so CSP stores the server's milliseconds where AC's `0x46` reader
+    stores seconds (`× 0.001`). It is CSP's behaviour, kept;
+  * `brake` and `clutch` fields (not in pre49's format) would go straight into the car (+2380 / +2384);
+  * the state then goes to AC's `NetCarStateProvider` add (through CSP's hook, below). The slot's
+    stored copy is replaced only when its time stamp is newer.
+  * Steer, wheel angle and wheel speed give **the same bits as AC's `0x48` reader** for every byte.
+    The `powf` is the same too: ucrtbase's and msvcr120's `powf(10, b × 0.05)` agree for all 156
+    magnitudes (checked on this PC).
+* **CSP's hook on the state add** (@ 0x18061ec60, wrapping AC's): it applies to **every** remote
+  state, whether it came from `'H'`, `0x46` or `AB 03`. So it is a general CSP remote-car change, not
+  part of the custom update:
+  * a state with a position, rotation or velocity component ≥ `FLT_MAX` is dropped (rustyAC already
+    drops non-finite ones; a NaN passes CSP's test);
+  * a **teleport** (status bit `0x20000000`, or a move of 50 m or more when a CSP setting is on, or a
+    per-car flag) refills the three history states with this one at -30, -60 and -90 ms, so the car
+    snaps instead of being interpolated across the jump;
+  * it measures the send interval per car (time-stamp step / sequence step, smoothed by 0.1, reset
+    after a gap of more than 10 states or 1 s) and, unless a setting says otherwise, swaps it into the
+    sim's interval while AC's add runs.
+
+  **Not ported here** (size below): it needs the two settings' sources (`byte_1827F9388`,
+  `byte_1827F9495` / `word_182803260`) and an oracle row. rustyAC `--csp` uses AC's add as it is,
+  which is NH-1's teleport rule (snap at 3 m or more).
+
+### NH-7.2 rustyAC reads them (part 2)
+
+* **In:** `datagram::decode_custom_update` (`crates/rustyac-net/src/datagram.rs`) reads `AB 03` the
+  way CSP's record handler does (§NH-7.1), into the same `Incoming::CarState` that `0x48` feeds. So
+  slot, sequence, time stamp, ping, position / rotation / velocity, wheel speeds, steer, wheel angle,
+  rpm, gear, status bits, gas and performance delta all reach the same `NetCarStateProvider` path. The
+  client uses it **only with `--csp`** (`client.rs` `on_datagram`); without `--csp` a server never
+  sends `AB 03` (it needs `CUSTOM_UPDATE` in the handshake), and the Kunos path is untouched.
+  `--net-arrivals` counts `AB 03` states too (`join.rs`).
+  * **Shortcut (marked in the code):** the record layout is AssettoServer's format, hard-wired. The
+    `[EXTRA_DATA] CUSTOM_UPDATE_FORMAT` line is already stored (NH-2) but not parsed. Parse it if
+    another server sends a different format.
+* **Out:** no change. CSP 4305 sends its own car as Kunos' `0x46`, and so does rustyAC (§NH-7.1).
+* **Proof** (2026-11-23, `taskNH7`: `CAP=proof srv.sh 420`, then `join.sh nh7 330 --csp`, the
+  worktree's build):
+  * joined the CSP-default server, **330 s, no kick** ("has connected" 22:40:33, "has disconnected"
+    22:46:05 at the end of `--duration`), with 22 collisions logged (the line follower drives into the
+    traffic: the remote cars are solid);
+  * **21,222 remote-car states received** from 5,992 `AB 03` datagrams (18.2/s), and **taken**:
+    slots 2-5 got 4,988 / 5,237 / 5,457 / 5,536 in order plus 1 out of order each (the first), all
+    "there at the end". **Moving:** 7.10 / 7.19 / 7.10 / 6.56 km each in 330 s (steps under 30 m;
+    NH-1 measured about 7 km with `'H'`). Before NH-7: 0;
+  * **values equal:** `cmp.sh proof join/nh7.arrivals.csv` compares the relay's bytes decoded by
+    `ab03.py` with rustyAC's own decode (slot, sequence and position bits): **21,222 = 21,222,
+    IDENTICAL**. The unit test `custom_update_record` checks every field of the first `AB 03` of
+    Super's capture against the Python decode, and checks steer / wheel / wheel speed against AC's
+    reader.
+* **The first run used the wrong exe:** `re/` is a junction into the main folder, so
+  `cp ../../../target/...` copied the main folder's build. Copy by absolute path (now in the kit's
+  memory note).
+
+### NH-7.3 Left over
+
+* **CSP's state-add hook** (§NH-7.1: teleport refill at -30/-60/-90 ms, ≥ FLT_MAX drop, per-car send
+  interval swapped in). It applies to all remote cars under CSP, with or without `CUSTOM_UPDATE`.
+  Size: **~1 session** (find where the two settings come from, port, one oracle row: CSP `--csp`
+  vs rustyAC on a slot jump). Best with NH-5 (slot switches), which tests the same jumps.
+* Parsing `CUSTOM_UPDATE_FORMAT` (the DSL: types, `*` `/` `+` `-`, `tyreAngularSpeed`, `pbyteNM`,
+  `padding`, `skip`, `single`, several `packet`s with a selector byte): **~0.5 session**, needed only for
+  a server that sends a different format.
+* `CUSTOM_UPDATE_V2`: not used by pre49; nothing to do until a server uses it.
+* For NH-3 / NH-4 / NH-6 / NH-8: nothing new. `AB 01` (weather, NH-4) and `AB 02` (NH-3) are still
+  only logged. The capture's `AB 01` (484 of them, 34 bytes, about 1/s) is in `cap/udp.log` for NH-4.
+
 ## Resume here
 
-NH-7 part 0 is done (§NH-7.0): waiting for Super's capture with real AC + CSP 4305 through
-`re/scratch/taskNH7/srv.sh` (it leaves `cap/`). Next: part 1. Read `cap/udp.log` (`AB 03` from the
-server; what CSP sends for its own car), `cap/tcp.log`, `cap/out.txt` and AssettoServer's
-custom-update writer. Then part 2.
+NH-7 is done (§NH-7.1-7.3), waiting for Super's merge of `web`. With it, NH-2's `--csp` join shows
+traffic again, so the "no release ships `--csp`" hold can go. Next: whichever NH task the lead chat picks
+(§NH-7.3 lists the CSP state-add hook, ~1 session, best with NH-5).
