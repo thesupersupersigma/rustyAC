@@ -37,8 +37,10 @@ pub unsafe fn csp_flatten(dll: usize, path: &str) -> String {
     let mut lists = [0usize; 7];
     let ini = new(160);
     std::ptr::write_bytes(ini, 0, 160);
-    // 4th argument 1 = Lua on ($" "/[FUNCTION]), as the track loader passes; 0 leaves expressions empty
-    let ini = ctor(ini, 0, &mut p, 1, &mut dirs, &mut lists);
+    // 4th argument 1 = Lua on ($" "/[FUNCTION]), as the track loader passes; 0 (CSP_ORACLE_INIPP_LUA=0,
+    // the C6a-2a gold) leaves expressions empty
+    let lua = u8::from(std::env::var("CSP_ORACLE_INIPP_LUA").as_deref() != Ok("0"));
+    let ini = ctor(ini, 0, &mut p, lua, &mut dirs, &mut lists);
     if *ini.add(73) != 0 {
         return "(not loaded)".into();
     }

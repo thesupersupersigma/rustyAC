@@ -11,6 +11,7 @@ pub mod air;
 pub mod core_body;
 pub mod core_car;
 pub mod core_track;
+pub mod inipp;
 
 use crate::data::ini::IniReader;
 use std::path::Path;

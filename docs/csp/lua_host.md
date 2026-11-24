@@ -4,10 +4,47 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a part 1 is done (below). Part 2 stopped after its oracle: CSP's INIpp is about 100 KB of machine
-code plus a Lua chunk, much bigger than the 1.5 sessions it was given. It is split into C6a-2a/2b/2c
-(section "C6a part 2" below, 5-6 sessions). Next: **C6a-2a**, INIpp without Lua, proven against CSP's
-flatten with Lua off on all 261 files.
+C6a part 1 and C6a-2a are done (below): rustyAC's INIpp without Lua (`rustyac_physics::csp::inipp`)
+flattens all 261 files as CSP does with Lua off (proof case `csp inipp`). Next: **C6a-2b**, the Lua part
+(`$" "`, `[FUNCTION]`, `@GENERATOR`, `CONDITION`) on rustyac-lua, proven on the same 261 files with Lua on.
+
+## C6a-2a: INIpp without Lua
+
+**The proof** (`tools/proofs/csp.sh` case `inipp`): every `.ini` under `extension/config` and the
+installed cars' and tracks' `extension` folders (261) through `csp_oracle --inipp` with
+`CSP_ORACLE_INIPP_LUA=0` (the ctor's 4th argument 0) and through `inipp_flat` (crates/rustyac-physics
+bin), file by file (tools/proofs/csp_inipp.py): 261/261 the same, 2 s each side.
+
+**The port**, crates/rustyac-physics/src/csp/inipp.rs, `flatten(path) -> Option<String>`; each function
+names the dwrite.dll function it ports (imagebase 0x180000000): scanner sub_181499CE0, value splitter
+sub_1814965D0, key commit sub_1814973D0, section header sub_181498920, section end sub_181495400,
+templates sub_181494190 / sub_181490D20, mixins sub_1814952E0 / sub_181495130, variables
+sub_18148FEB0 / sub_18148D630, `_...` keys sub_181498310 / sub_18149A860, `_...` sections and merging
+sub_18149B1C0, writer sub_18149CEB0 (natural sort sub_181433790).
+
+**What CSP does that is easy to get wrong** (each one probed in CSP's own parser):
+- Writer: sections and keys in natural order (digit runs as numbers), the unnamed section first without a
+  header, items joined by `,`, an item quoted `'...'` (with `\'`) when it holds anything but
+  `[A-Za-z0-9_.-]`.
+- A `$" "` item is no item at all with Lua off (`X = $"..", 10` is `X=10`); an `ACTIVE = $" "` drops a
+  `[FUNCTION]` / `[USE]` / `[INCLUDE...]` section, other sections keep `ACTIVE=` as written.
+- `[INCLUDE...]` is a prefix match (`[INCLUDE_...]` with an `INCLUDE=` key includes); a missing file is
+  skipped silently; the included file sees the section's other keys as variables, the includer does not
+  see the included file's `[DEFAULTS]`.
+- Header `[P: A, B]`: templates are looked up last to first, each with its parents depth first; any
+  template that is not `earlyresolve` makes ONE section named `P` (`[A]` alone: the unnamed section), else
+  one section per name. Template keys never overwrite the section's own (unless the same template wrote
+  them), `@OUTPUT` names an unnamed section, `@ACTIVE` / `@DISCARD` skip the template.
+- Mixins (`@ = M, ARG = value`): applied at that line, overwrite the section's keys; arguments come before
+  every other variable; a mixin's `EXTENDS` parents are not applied; repeated `@` and `PREFIX_...` lines
+  in a template or mixin all stay (each application numbers its `PREFIX_...` keys anew).
+- Variables: `${L:2}`, `${L:2:2}`, `${L:-1}`, `${L:1::2}`, `:count`, `:length`, `:exists`, `:or=`, `:vec3`,
+  `:bool`, `:num`; a missing `${X}` is nothing, a missing `$X` stays `'$X'`, `${X:?}` drops the key;
+  `p${L}s` and `${L}-${L}` multiply out.
+
+Shortcuts left (marked `shortcut:` in the code, none reached by the 261 files): a template's captured
+variables are a copy (CSP keeps the live scope), finished sections are not finalized a second time at
+the end, mixin arguments without `=` are skipped.
 
 ## C6a part 2: CSP's INIpp, found and measured
 
@@ -40,7 +77,7 @@ calls the per-file loader +0x1416320; the car one is not located yet.
 | Step | What | Proof | Size |
 |---|---|---|---|
 | C6a-2a | INIpp without Lua: reading and quoting values, sections and `...` numbering, `[INCLUDE]` / `INCLUDE=` with variables, `$variables`, templates / `EXTENDS` / `[A : B]`, `ACTIVE`, the flatten writer; in `rustyac-physics::csp` | all 261 files, ours vs CSP's flatten with the ctor's 4th argument 0, key by key | 2-3 sessions |
-| C6a-2b | the Lua part on rustyAC's LuaJIT: `$" "`, `[FUNCTION]`, mixins and `CONDITION`, `@GENERATOR`, `read()` / `get()` / `has()`, `ac_common_base` | all 261 files with Lua on, new proof case `csp inipp` | 2 sessions |
+| C6a-2b | the Lua part on rustyAC's LuaJIT: `$" "`, `[FUNCTION]`, `CONDITION`, `@GENERATOR`, `read()` / `get()` / `has()`, `ac_common_base` | all 261 files with Lua on, proof case `csp inipp` turned to Lua on | 2 sessions |
 | C6a-2c | file order for a car and a track (generic / common / loaded / own `ext_config.ini`), into `CspFeatures` | each installed car and track: CSP's loader result vs ours | 1 session |
 
 ## C6a part 1: which LuaJIT

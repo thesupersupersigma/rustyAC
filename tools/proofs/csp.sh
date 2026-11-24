@@ -25,6 +25,9 @@
 #   row <car> lap|wall  the whole car with CSP live against rustyac --csp --csp-core, step by step on one tape (Task C5i-b)
 #   lua            CSP's own LuaJIT (a fresh state from its lua_newstate, its libraries) against rustyac-lua's
 #                  on tools/csp_oracle/lua_snippets.txt, each result's bits, at two MXCSR values (Task C6a)
+#   inipp          every .ini under extension/config and the installed cars' and tracks' extension folders,
+#                  flattened by CSP's INIpp with Lua off (csp_oracle --inipp, CSP_ORACLE_INIPP_LUA=0) against
+#                  rustyac-physics' csp::inipp (inipp_flat), file by file (Task C6a-2a, csp_inipp.py)
 #   smoke          rustyAC's own CSP mode (Task C5i-a), on CSP's core (--csp-core): both proof cars driven at Spa, the drive replayed twice
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
@@ -34,6 +37,7 @@ tool chassis_compare
 tool csp_oracle
 build acd_check cargo build --release --locked --quiet -p rustyac-physics --bin acd_check
 build track_survey cargo build --release --locked --quiet -p rustyac-physics --bin track_survey
+build inipp_flat cargo build --release --locked --quiet -p rustyac-physics --bin inipp_flat
 CSP=tools/csp_oracle/target/release/csp_oracle.exe
 need re/csp/fakeac/dwrite.dll "the AC folder with CSP, a junction made by Task C1 (re/csp/fakeac)"
 
@@ -210,6 +214,19 @@ if keep "lua"; then
         fi
     else
         verdict "lua" DIFFERENT "csp_oracle failed: $(why "$out/runs/lua.txt" 'error|panic|fault|exit')"
+    fi
+fi
+
+# inipp: CSP's INIpp without Lua ($" " expressions empty, [FUNCTION] off) against the port (Task C6a-2a)
+if keep "inipp"; then
+    list=$out/inipp_list.txt
+    find "$ac/extension/config" "$ac"/content/cars/*/extension "$ac"/content/tracks/*/extension -iname '*.ini' 2> /dev/null | sort > "$list"
+    if CSP_ORACLE_INIPP_LUA=0 oracle inipp --inipp "$list"; then
+        target/release/inipp_flat.exe "$list" > "$out/runs/inipp_ours.txt" 2>&1
+        line=$(python tools/proofs/csp_inipp.py "$out/runs/inipp.txt" "$out/runs/inipp_ours.txt" 2>&1)
+        verdict "inipp" "${line%% |*}" "${line#* | }"
+    else
+        verdict "inipp" DIFFERENT "csp_oracle failed: $(why "$out/runs/inipp.txt" 'error|panic|fault|exit')"
     fi
 fi
 
