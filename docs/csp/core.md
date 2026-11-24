@@ -84,9 +84,12 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5k s2 3. installed cars | record ⇔ car.ini `VERSION=extended-N`: 19 of 210 cars; 9 of them carry a car script |
 | C5k s2 4. record by default | on for every csp case but RSS 3's (its record holds the car on the script); `words` passes with +0x3d10 on CSP's own list |
 | C5k s2 5. phase 2 sizing | Lua host + the scripts' ~35 `ac.*` calls: about 7-10 sessions, needs LuaJIT (a new dependency) |
+| C5l s1 part 1. survey | record on: 60 functions per step vs 22; CSP's own ray grid, contact and forces (11 rows); all ten BDC cars the same path; about 10-14 sessions, stopped before a port |
 
-**Resume here:** C5k done. Next (lead chat's choice): CSP's extended tyre contact (+0x6a0570's record
-branch, the BDC S14 pin) or phase 2's Lua host ([C5k](#c5k-the-cars-csp-record)).
+**Resume here:** C5l part 1 (survey) done; part 2 not started: the record path is about 10-14
+sessions, not 2-4 (lead chat's choice: go on with rows 1-2 of [C5l](#c5l-csps-extended-tyre-contact),
+the load object and per-step stiffness, or re-plan). Phase 2's Lua host is still open
+([C5k](#c5k-the-cars-csp-record)).
 
 ## The core in one paragraph
 
@@ -1807,3 +1810,50 @@ running CSP's real script path (its sim state, the window object) 1-2: about 7-1
 needs LuaJIT as a dependency (Super's decision). Obfuscated or encrypted scripts stay out of reach.
 
 **Resume here (C5k):** see the table at the top.
+
+## C5l: CSP's extended tyre contact
+
+Task C5l: port the record's tyre path (BDC S14, the `bdc_streetspec_s14_v4 lap` pin). Session 1
+did part 1 (the survey) and stopped there: the path is far bigger than the task's 2-4 sessions.
+
+**Method.** As C5j, in process: every function reachable from the tyre step +0x6a0570 and the
+record step +0x5897d0 (static callee closure, re/scratch/taskC5l) is a plain break, BDC S14 on
+Spa, 3 steps, record off (`CSP_ORACLE_RECORD=0`) and on; the step-1 sets are compared. Two oracle
+traps found on the way: the vectored handler was installed after the int3s were armed (CSP's own
+threads could hit one first: crash 0x80000003; now installed first, `arm_breaks` in
+`tools/csp_oracle/src/main.rs`), and a break on `__security_check_cookie` +0x181a620 kills the
+process (never break it).
+
+**Result.** Record off: 22 functions per step (the C5j stock-car set: acs's Tyre::step runs, CSP's
+hooks +0x6a70c0 / +0x6a8410 forward to acs). Record on: 60. `car.ini [HEADER] VERSION=extended-2`
+makes +0xf2f660 return the car's extension; the tyre step then reads its "extended physics" object
+(extension+0x210, made at load by +0x8bc070 from `tyres.ini` and `suspensions.ini` FRONT/REAR; the
+BDC cars have no extension sections in `tyres.ini`, so CSP's defaults drive it) and runs its own
+branch (0x56d8 bytes of the step). All ten `bdc_streetspec_*_v4` cars take the same path (same 59-60
+functions, same per-ray counts; only generic helpers' counts differ). The 9 extended cars with a car
+script were not surveyed (their record holds the car on the script: phase 2).
+
+The record path in call order (step 1, counts for 4 wheels; "new" = not run without the record):
+
+| # | function | rva | size | what | reached | estimate |
+|---|---|---|---|---|---|---|
+| 1 | load: extended physics object | +0x8bc070 | 0x4dcc | reads `tyres.ini`/`suspensions.ini` extension keys (grid size +0x74c.., LUTs, smoothing) | once at load (only caller +0x7ebe60) | 1-2 sessions (with 2) |
+| 2 | stiffness / LUT block | +0x8c8ff0, +0x8c9150, +0x14a2120, +0x14a3780, +0x72d200 | 0x160, 0x6d, 0xc2, 0x61, 0x12d | per-step radial stiffness Tyre+0x14 (data.k) and Tyre+0x250/+0x560/+0x7c from LUTs (front if wheel<2), smoothed; +0x72d200 runs 66× | every wheel, every step (new) | (with 1) |
+| 3 | hub frame, field resets | +0x8ccf90 (in code; not a break hit) | | hub matrix via the hub's vtable +8, zeroes Tyre+0x334.., NaN guard on angular speed | every wheel | 0.5 |
+| 4 | ray grid | +0x6ab050, +0x6aca80, +0x6abef0 | 0x8f, 0x168, 0x1ce | (2·n+1)·(2·m+1) rays per wheel, rotated by a step angle (vec3×mat3 800×, mat3×mat3 796×) | every wheel (new) | 1 |
+| 5 | raycasts ("Car #1/Tyre/Raycasts", "Post RC") | +0x6a5c50 → +0x91aac0 → +0x922c00 → +0x18d41e0 | 0x96b, 0x26, 0x2106, 0x74 | batched ray query on CSP's scene; +0x18d41e0 per ray (88×), sibling of C5h's +0x18d4260 | 7 batches per step (new) | 2 |
+| 6 | surface / ray processing | +0x6aabf0, +0x6aad30, +0x922390, +0x9229f0 | | surface lookup per hit (twice as many calls as without the record) | every wheel | (with 5) |
+| 7 | addGroundContact, CSP's own body | +0x6a7190 (+0x8cdb60, +0x8cd9f0, +0x8cae80) | 0x11f0 | contact point/normal from the ray grid | every wheel (new; without the record +0x6a70c0 forwards to acs) | 1-2 |
+| 8 | addTyreForcesV10, CSP's own body | +0x6a84a0 (+0x68fd60) | 0x2738 (0x20e) | tyre forces | every wheel (new) | 2-3 |
+| 9 | forces on the body | +0x118a580 (+0x118b250 → +0x494720) | | add force at local position ×4, torque | every wheel | (ported: C5g) |
+| 10 | tail | +0x8c9760 → +0x8c97a0 → +0x83f5a0, +0x6adcc0 (from acs+0x284ef5), +0xb102a0, +0xf32f00 | 0x31, 0x10c, 0x91, 0x11e, 0x166, 0x81 | post-step state, called back from acs's tyre code | every wheel (new) | 1 |
+| 11 | record step | +0x5897d0 (from +0x58b5f9) → +0x588cd0 → +0x142b2a0 → +0x15d0810; +0x692530 ×8, +0x763070, +0x576770/+0x5767e0 | 0x1015, 0xafc, 0x130, 0x1b5 | body forces (body_add_force at +0x5898cd, +0x5899c9), readouts | once per step (new) | 1-2 |
+
+Rays (row 5): the same Embree scene as C5h's tyre rays as far as the callee tells (+0x18d41e0 next to
+C5h's +0x18d4260); the batch query +0x922c00 is new code; whether it needs a new ray kind is not
+settled.
+
+**Estimate.** About 10-14 sessions for the whole path (rows 1-11), against 2-4 in the task. The
+first proven piece would be rows 1-2 (the load object and the per-step stiffness), 1-2 sessions.
+
+**Resume here (C5l):** see the table at the top.
