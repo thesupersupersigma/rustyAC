@@ -18,6 +18,7 @@ use rustyac_game::input_file::{event, InputFile, InputWriter, SimSetup, StepInpu
 use rustyac_game::audio::{AudioSink, Feed, GameAudio};
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
+#[cfg(windows)]
 use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::onboard_free::{self, HelicopterCamera, OrbitInput, ShotCamera};
 use rustyac_game::render::scene::{free_camera, CameraFrame, CameraMode, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
@@ -26,12 +27,14 @@ use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
 use rustyac_game::ghost::{GhostOptions, GhostRig};
 use rustyac_game::telemetry::TelemetryRig;
 use rustyac_physics::replay::ReplayEvent;
-use rustyac_game::render::{box_downscale, write_png, DebugRenderer, Picture};
+use rustyac_game::render::{box_downscale, write_png, Picture};
+#[cfg(windows)]
+use rustyac_game::render::DebugRenderer;
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
 use rustyac_game::focus::{Focus, FocusCommand};
 use rustyac_game::view::CarView;
-use rustyac_game::window::{Event, MouseAction, Window};
+use rustyac_game::window::{cursor_pos, key_async, screen_size, set_cursor_pos, Event, MouseAction, Window};
 
 /// rustyAC's own keys for its own displays, on keys the game does not use: F10 its panels and
 /// numbers, F12 its frame-rate counter (the game's key handler has an empty case for F12).
@@ -39,7 +42,9 @@ const KEY_DEBUG_HUD: i32 = 0x79;
 const KEY_FPS_COUNTER: i32 = 0x7b;
 /// The game's fixed keys: F8 the screenshot, and with Ctrl the command "Mouse Force Hide".
 const KEY_SCREENSHOT: i32 = 0x77;
+#[cfg(windows)]
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
+#[cfg(windows)]
 use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED};
 
 /// Ctrl+C was pressed or the console is being closed: every loop ends, so that the force
@@ -49,6 +54,7 @@ static STOP: AtomicBool = AtomicBool::new(false);
 /// Windows end the process).
 static DONE: AtomicBool = AtomicBool::new(false);
 
+#[cfg(windows)]
 unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
     STOP.store(true, Ordering::Relaxed);
     // when the console is closed the process dies as soon as this returns: give the loops
@@ -235,6 +241,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
 /// Puts the track's and the car's 3D models on the graphics card, where there are any. A
 /// model that cannot be loaded is a line on the console, not an end: the grid and the boxes
 /// are still there.
+#[cfg(windows)]
 fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_game::sim::CarInfo) {
     let model_options = ModelOptions { texture_size: options.texture_size, flat: options.no_textures, ..ModelOptions::default() };
     let megabytes = |bytes: u64| bytes as f64 / 1_048_576.0;
@@ -493,6 +500,13 @@ fn start_camera_editor(renderer: &mut Picture, options: &Options, unix: &str, da
     }
 }
 
+/// Linux (Task P3a): AC's renderer on the window's wgpu device; there is no debug view.
+#[cfg(not(windows))]
+fn make_picture(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Result<Picture, String> {
+    make_ac(options, width, height, info, others).map(|renderer| Picture::Ac(Box::new(renderer)))
+}
+
+#[cfg(windows)]
 fn make_picture(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Result<Picture, String> {
     if !options.debug_view {
         match make_ac(options, width, height, info, others) {
@@ -853,13 +867,54 @@ fn leave_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
 /// (`system/cfg/assetto_corsa.ini [SCREENSHOT] FORMAT=JPG`); rustyAC writes PNG.
 fn screenshot_name(car: &str, track: Option<&str>) -> String {
     // SAFETY: a plain call.
+    #[cfg(windows)]
     let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    #[cfg(not(windows))]
+    let t = local_time();
     let mut name = format!("Screenshot_{car}_");
     if let Some(track) = track {
         name.push_str(track);
         name.push('_');
     }
     format!("{name}{}-{}-{}-{}-{}-{}.png", t.wDay, t.wMonth, t.wYear as i32 - 1900, t.wHour, t.wMinute, t.wSecond)
+}
+
+/// `GetLocalTime`'s fields off Windows, from the C library's `localtime_r`.
+#[cfg(not(windows))]
+#[allow(non_snake_case)]
+struct LocalTime {
+    wYear: u16,
+    wMonth: u16,
+    wDay: u16,
+    wHour: u16,
+    wMinute: u16,
+    wSecond: u16,
+}
+
+#[cfg(not(windows))]
+fn local_time() -> LocalTime {
+    #[repr(C)]
+    struct Tm {
+        sec: i32,
+        min: i32,
+        hour: i32,
+        mday: i32,
+        mon: i32,
+        year: i32,
+        wday: i32,
+        yday: i32,
+        isdst: i32,
+        gmtoff: i64,
+        zone: *const std::ffi::c_char,
+    }
+    unsafe extern "C" {
+        fn localtime_r(time: *const i64, out: *mut Tm) -> *mut Tm;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let mut tm = Tm { sec: 0, min: 0, hour: 0, mday: 1, mon: 0, year: 70, wday: 0, yday: 0, isdst: 0, gmtoff: 0, zone: std::ptr::null() };
+    // SAFETY: valid pointers to a time and to a `struct tm` of glibc's layout.
+    unsafe { localtime_r(&now, &mut tm) };
+    LocalTime { wYear: (tm.year + 1900) as u16, wMonth: (tm.mon + 1) as u16, wDay: tm.mday as u16, wHour: tm.hour as u16, wMinute: tm.min as u16, wSecond: tm.sec as u16 }
 }
 
 /// `ReplayManager::startReplayMode`: the replay of the session so far, from its first frame.
@@ -922,23 +977,14 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
 /// What the on-board free, the cinematic and the helicopter cameras read this frame: every
 /// key (none when the window is not in front), the cursor and the desktop's size.
 fn orbit_input(focused: bool) -> OrbitInput {
-    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetDesktopWindow, GetSystemMetrics, GetWindowRect, SM_CYVIRTUALSCREEN};
     let mut input = OrbitInput::default();
-    // SAFETY: plain calls.
-    unsafe {
-        if focused {
-            for (vk, held) in input.keys.iter_mut().enumerate() {
-                *held = GetAsyncKeyState(vk as i32) != 0;
-            }
+    if focused {
+        for (vk, held) in input.keys.iter_mut().enumerate() {
+            *held = key_async(vk as i32);
         }
-        let mut cursor = windows::Win32::Foundation::POINT::default();
-        let _ = GetCursorPos(&mut cursor);
-        let mut rect = windows::Win32::Foundation::RECT::default();
-        let _ = GetWindowRect(GetDesktopWindow(), &mut rect);
-        input.cursor = (cursor.x, cursor.y);
-        input.screen = (rect.right, GetSystemMetrics(SM_CYVIRTUALSCREEN));
     }
+    input.cursor = cursor_pos();
+    input.screen = screen_size();
     input
 }
 
@@ -1226,7 +1272,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let view = world[focus];
             let dt = (now - last).as_secs_f32();
             let frame = camera.update(&view, shape, view.acc_g, dt);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), online: shared.online_gui.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, #[cfg(windows)] timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), online: shared.online_gui.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, dt);
             renderer.finish();
             bench_stats = renderer.frame_stats();
@@ -1244,7 +1290,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let focus = options.focus.min(world.len() - 1);
             let view = world[focus];
             let frame = camera.update(&view, shape, view.acc_g, 1.0 / 60.0);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), online: shared.online_gui.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, #[cfg(windows)] timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), online: shared.online_gui.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, 1.0 / 60.0);
             let pixels = renderer.read_pixels()?;
             let (width, height) = renderer.size();
@@ -1387,7 +1433,9 @@ fn run_window(options: &Options) -> Result<(), String> {
     let window = Window::create("rustyAC", options.width, options.height, options.windowed, options.no_focus)?;
     let window_handle = window.handle.0 as isize;
     // a pad does not count as "somebody is at the PC": keep the display on while the window is open
+    // (SDL keeps the screen saver off while its window is open)
     // SAFETY: a plain request to the power manager, taken back at the end of this function.
+    #[cfg(windows)]
     unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED) };
     // a Ctrl key that is itself a driving key (AC's files put gear-down on Left Ctrl) does not
     // make a Ctrl+letter command: the other Ctrl key does, and Alt (`[RUSTYAC] COMMAND_MODIFIER`)
@@ -1928,13 +1976,11 @@ fn run_window(options: &Options) -> Result<(), String> {
         if let Some(gui) = renderer.gui() {
             // Sim::renderHUD: the table of TAB goes when the key is let go (--gui-do tab holds
             // it for pictures)
-            // SAFETY: a plain call.
-            let tab_held = options.gui_do.as_deref().is_some_and(|script| script.split(';').any(|c| c.trim() == "tab")) || (shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x09) } != 0);
+            let tab_held = options.gui_do.as_deref().is_some_and(|script| script.split(';').any(|c| c.trim() == "tab")) || (shared.focused.load(Ordering::Relaxed) && key_async(0x09));
             gui.tab_poll(tab_held);
             // OverlayLeaderboard::update: F9 (the game asks the key itself, whichever window
             // has the keyboard; here only rustyAC's own)
-            // SAFETY: a plain call.
-            gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
+            gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && key_async(0x78));
             // Task 47d: SteamInterface's messages (an achievement unlocked)
             for (title, text) in steam_messages.as_ref().map(|m| std::mem::take(&mut *m.lock().unwrap())).unwrap_or_default() {
                 gui.add_message(&title, &text);
@@ -1945,8 +1991,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             if is_online {
                 let heard = std::mem::take(&mut *shared.online_events.lock().unwrap());
                 gui.online_heard(heard);
-                // SAFETY: plain calls.
-                let (y, n) = unsafe { (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x59) != 0, windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x4e) != 0) };
+                let (y, n) = (key_async(0x59), key_async(0x4e));
                 gui.voting_update(y, n, last.elapsed().as_secs_f32());
             }
             // MouseHider::update, once a frame
@@ -2001,6 +2046,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             // Task 42c: the Python apps' cameras (ac_setCameraMode 0x14012d7d0 is
             // `setMode(mode, false, false)`, ac_setCameraCar 0x14012d680, the free camera's calls
             // move the mouse-control camera)
+            #[cfg(windows)]
             for asked in std::mem::take(&mut gui.python_cameras) {
                 use rustyac_python::Action;
                 let count = shapes[focus.index].car_cameras.len();
@@ -2347,10 +2393,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             photo_sun = p.custom_sun;
             photo_edit = Some((((p.dof_factor, p.dof_focus) != (photo_seen.dof_factor, photo_seen.dof_focus)).then_some([p.dof_factor, p.dof_focus]), p.exposure_multiplier));
             gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
-            // SAFETY: a plain call.
-            gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
-            // SAFETY: plain calls.
-            gui.apps.suspension_keys = [0x08, 0x11, 0x61, 0x62, 0x63, 0x64].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
+            gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && key_async(0x11);
+            gui.apps.suspension_keys = [0x08, 0x11, 0x61, 0x62, 0x63, 0x64].map(|vk| shared.focused.load(Ordering::Relaxed) && key_async(vk));
         }
         if let (Some((dof, exposure)), Some((scene_dof, multiplier))) = (photo_edit, renderer.dof_and_exposure()) {
             *scene_dof = dof.unwrap_or(*scene_dof);
@@ -2370,14 +2414,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             start.update(&world[0], shapes[0].eye_model[0], dt.as_secs_f32())
         } else if let Some(free) = mouse_camera.as_mut() {
             if shared.focused.load(Ordering::Relaxed) {
-                // SAFETY: plain calls.
-                let input = unsafe {
-                    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-                    let mut cursor = windows::Win32::Foundation::POINT::default();
-                    let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor);
-                    let held = |vk: i32| GetAsyncKeyState(vk) != 0;
-                    MouseCameraInput { shift: held(0x10), ctrl: held(0x11), up: held(0x26), down: held(0x28), left: held(0x25), right: held(0x27), look: held(0x02), cursor: (cursor.x, cursor.y) }
-                };
+                let held = key_async;
+                let input = MouseCameraInput { shift: held(0x10), ctrl: held(0x11), up: held(0x26), down: held(0x28), left: held(0x25), right: held(0x27), look: held(0x02), cursor: cursor_pos() };
                 free.update(&input, dt.as_secs_f32())
             } else {
                 free.frame()
@@ -2418,8 +2456,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 _ => onboard_free.update(shot, &body, options.ac_replay.is_some() || replay.is_some(), in_replay, [0.0; 2], &input, dt.as_secs_f32()),
             };
             if let Some((x, y)) = cursor {
-                // SAFETY: a plain call.
-                let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) };
+                set_cursor_pos(x, y);
             }
             if let Some((dof, _)) = renderer.dof_and_exposure() {
                 *dof = [shot.dof[0], shot.dof[1]];
@@ -2452,8 +2489,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
         renderer.set_track_look(track_look.take().as_ref());
-        // SAFETY: a plain call.
-        let end_key = (shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x23) } != 0) || renderer.gui().is_some_and(|g| g.end_held);
+        let end_key = (shared.focused.load(Ordering::Relaxed) && key_async(0x23)) || renderer.gui().is_some_and(|g| g.end_held);
         let end_pick = end_key.then(|| renderer.pick_centre(frame.fov, &rustyac_physics::vecmath::Mat44f { m: frame.matrix }));
         let scene_dof = renderer.dof_and_exposure().map(|(dof, _)| *dof);
         if let Some(gui) = renderer.gui() {
@@ -2465,8 +2501,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             p.end_pick = end_pick;
             p.camera_mode = if mouse_camera.is_some() { 6 } else { camera.manager_mode() };
             p.in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some();
-            // SAFETY: plain calls.
-            [p.right_button, p.middle_button] = [0x02, 0x04].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
+            [p.right_button, p.middle_button] = [0x02, 0x04].map(|vk| shared.focused.load(Ordering::Relaxed) && key_async(vk));
             photo_seen = *p;
         }
         renderer.set_custom_sun(photo_sun);
@@ -2523,6 +2558,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             fps_counter,
             frame_ms,
             frame_max_ms,
+            #[cfg(windows)]
             timing: shared.timing(),
             paused: ac_replay_line.is_none() && (shared.paused.load(Ordering::Relaxed) || unfocused),
             camera: camera.name(),
@@ -2566,6 +2602,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         // (the free camera is ACCameraManager's eFree too: the GUI's and Python's camera mode)
         let mut shown = camera;
         shown.shown = if mouse_camera.is_some() { Some(6) } else { camera.shown };
+        #[cfg(windows)]
         if let Some(gui) = renderer.gui() {
             gui.python_camera = Some(onboard_free::CameraCopy { camera, start: start_camera, free: mouse_camera, last: last_frame, count: shapes[focus.index].car_cameras.len(), cinematic: cinematic.is_some() });
         }
@@ -2721,6 +2758,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     drop(chain);
     drop(window);
     // SAFETY: as above; the display may sleep again.
+    #[cfg(windows)]
     unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
     let audio_timing = audio.map(GameAudio::finish);
     let (view, timing) = outcome?;
@@ -3042,6 +3080,8 @@ pub fn main() {
         std::process::exit(2);
     }
     // SAFETY: the handler only touches two atomics.
+    // shortcut: off Windows Ctrl+C ends the process at once (no handler); a SIGINT handler with L5
+    #[cfg(windows)]
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(console_handler), true);
     }

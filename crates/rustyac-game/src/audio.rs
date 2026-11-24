@@ -25,9 +25,9 @@ use rustyac_audio::track::{cache_surface_sounds, Scene, TrackAudio};
 use rustyac_physics::data::ini::{append_path, IniReader};
 use rustyac_physics::vecmath::xm_matrix_multiply;
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 use crate::input_file::StepInput;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 use crate::physics_thread::StepSink;
 use crate::render::scene::{CarShape, DrivingCamera};
 use crate::sim::GameSim;
@@ -279,20 +279,20 @@ impl Feed {
 }
 
 /// The physics thread's end: after every step the sound's inputs go into the feed.
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub struct AudioSink {
     feed: Arc<Mutex<Feed>>,
     sticky: Vec<[StickySurface; 4]>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 impl AudioSink {
     pub fn new(feed: Arc<Mutex<Feed>>) -> AudioSink {
         AudioSink { feed, sticky: Default::default() }
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 impl StepSink for AudioSink {
     fn after_step(&mut self, sim: &GameSim, _input: &StepInput) -> Result<(), String> {
         // the copy is made outside the lock; the lock is held for a move
@@ -734,7 +734,7 @@ impl GameAudio {
     /// when the camera mode last changed (`ACCameraManager::setAudioDistanceScale` is not
     /// called for a change of the focus).
     /// The sound as the Audio app reads it.
-    #[cfg(not(feature = "wgpu"))]
+    #[cfg(any(not(feature = "wgpu"), target_os = "linux"))]
     /// The player's car's skid sounds: volumes, pitches.
     pub fn skids(&self) -> Option<[[f32; 4]; 2]> {
         self.world.cars.first().and_then(|car| car.audio.as_ref()).map(|audio| audio.skids())

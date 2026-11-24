@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use super::ini::ControlsIni;
 use super::keyboard::Keys;
 use super::pad::{button, button_from_name, button_label, PadButton, PAD_ACTIONS};
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::cli::Options;
 
 /// The sections of AC's file that rustyAC reads (whole sections are carried over).
@@ -296,7 +296,7 @@ pub fn effective(source: &ControlsIni) -> ControlsIni {
 }
 
 /// Can a `controls.ini` be used: does it say how to drive with a pad or a keyboard?
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 fn usable(ini: &ControlsIni) -> bool {
     ini.has_section("X360") || ini.has_section("KEYBOARD") || ini.has_section("STEER")
 }
@@ -357,7 +357,7 @@ impl Bindings {
     }
 
     /// Finds the bindings as the module's head describes; `notes` gets what happened on the way.
-    #[cfg(windows)]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(options: &Options, notes: &mut Vec<String>) -> Bindings {
         let try_file = |path: &Path, notes: &mut Vec<String>| -> Option<ControlsIni> {
             match ControlsIni::load(path) {
@@ -624,7 +624,7 @@ mod tests {
         // an AC file without a [KEYBOARD] section still gives a keyboard that steers
         let pad_only = Bindings::from_ini(&ControlsIni::parse("[HEADER]\nINPUT_METHOD=X360\n[X360]\nSTEER_THUMB=LEFT\n"), "test".to_string());
         assert_eq!(KeyboardCarControl::from_ini(&pad_only.ini).keys.left, 0x25);
-        #[cfg(windows)]
+        #[cfg(not(target_arch = "wasm32"))]
         assert!(!usable(&ControlsIni::parse("[VIDEO]\nX=1\n")));
     }
 

@@ -47,6 +47,12 @@ everything that links the car physics is GPL.
   calls it. The browser preview never links it. Only Embree's own Intel files go into the library:
   the Kitware files are CMake scripts, and `sse2neon.h` (MIT) is for ARM only.
   No Embree file is in this repository; its listing is in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+- **SDL 3.4.20** (Simple DirectMedia Layer), copyright (C) 1997-2026 Sam Lantinga, under the
+  `Zlib` license. The Linux `rustyac` (Task P3a) opens its window and reads the keyboard and the
+  mouse through it: the `sdl3` crate's `build-from-source-static` feature builds SDL from the
+  source in the `sdl3-src` crate (CMake and a C compiler) and links it into the program, so a
+  player needs no SDL package. Not used on Windows or in the browser. Its notice is in
+  [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 - **MSVCR120.dll**, Microsoft's Visual C++ 2013 runtime. rustyAC loads it at run time from the
   user's system, when it is installed, to get the same maths results as the game. It is never
   shipped with rustyAC. Where a DLL cannot be loaded (the browser preview),
@@ -112,7 +118,7 @@ everything that links the car physics is GPL.
 
 ### Every crate in the lock files
 
-These are all 186 third-party crates in `Cargo.lock` and the tools' own `tools/*/Cargo.lock`, by the
+These are all 199 third-party crates in `Cargo.lock` and the tools' own `tools/*/Cargo.lock`, by the
 license each one declares on crates.io (a crate under "A OR B" may be used under either). Some
 are only built for other platforms or only for the tools; none of them is in this repository.
 
@@ -121,13 +127,13 @@ which the Windows zip and the web zip both carry. `python tools/notices.py` make
 [cargo-about](https://github.com/EmbarkStudios/cargo-about) 0.9.3 (`MIT OR Apache-2.0`), a
 tool that is installed by hand, run on the lock files and not part of rustyAC.
 
-- **MIT OR Apache-2.0** (121): `allocator-api2`, `android_system_properties`, `arrayvec`, `ash`, `autocfg`, `bit-set`, `bit-vec`, `bitflags`, `bumpalo`, `cassowary`, `cc`, `cfg-if`, `console_error_panic_hook`, `crc32fast`, `document-features`, `either`, `equivalent`, `errno`, `fdeflate`, `find-msvc-tools`, `flate2`, `futures-core`, `futures-task`, `futures-util`, `getrandom`, `gpu-allocator`, `half`, `hashbrown`, `heck`, `ident_case`, `indexmap`, `indoc`, `itertools`, `itoa`, `jni-sys`, `jni-sys-macros`, `jpeg-decoder`, `js-sys`, `khronos-egl`, `libc`, `litrs`, `lock_api`, `log`, `naga`, `naga-types`, `ndk-sys`, `num-traits`, `once_cell`, `parking_lot`, `parking_lot_core`, `paste`, `pin-project-lite`, `pkg-config`, `png`, `portable-atomic`, `portable-atomic-util`, `presser`, `proc-macro2`, `profiling`, `quote`, `range-alloc`, `raw-window-metal`, `renderdoc-sys`, `rustc-hash`, `rustls-pki-types`, `rustversion`, `scopeguard`, `serde`, `serde_core`, `serde_derive`, `shlex`, `signal-hook`, `signal-hook-mio`, `signal-hook-registry`, `smallvec`, `static_assertions`, `syn`, `thiserror`, `thiserror-impl`, `unicode-segmentation`, `unicode-truncate`, `unicode-width`, `version_check`, `wasm-bindgen`, `wasm-bindgen-futures`, `wasm-bindgen-macro`, `wasm-bindgen-macro-support`, `wasm-bindgen-shared`, `web-sys`, `wgpu`, `wgpu-core`, `wgpu-core-deps-wasm`, `wgpu-core-deps-windows-linux-android`, `wgpu-hal`, `wgpu-naga-bridge`, `wgpu-types`, `winapi`, `winapi-i686-pc-windows-gnu`, `winapi-x86_64-pc-windows-gnu`, `windows`, `windows-collections`, `windows-core`, `windows-future`, `windows-implement`, `windows-interface`, `windows-link`, `windows-numerics`, `windows-result`, `windows-strings`, `windows-sys`, `windows-targets`, `windows-threading`, `windows_aarch64_gnullvm`, `windows_aarch64_msvc`, `windows_i686_gnu`, `windows_i686_gnullvm`, `windows_i686_msvc`, `windows_x86_64_gnu`, `windows_x86_64_gnullvm`, `windows_x86_64_msvc`, `zeroize`.
-- **MIT** (31): `castaway`, `cfg_aliases`, `compact_str`, `crossterm`, `crossterm_winapi`, `crunchy`, `darling`, `darling_core`, `darling_macro`, `dlib`, `instability`, `libm`, `lru`, `mio`, `objc2`, `objc2-encode`, `objc2-foundation`, `ordered-float`, `ratatui`, `redox_syscall`, `simd-adler32`, `slab`, `strsim`, `strum`, `strum_macros`, `tokio`, `wayland-sys`, `webview2-com`, `webview2-com-macros`, `webview2-com-sys`, `xml-rs`.
-- **MIT OR Apache-2.0 OR Zlib** (9): `bytemuck`, `bytemuck_derive`, `dispatch2`, `glow`, `miniz_oxide`, `objc2-core-foundation`, `objc2-metal`, `objc2-quartz-core`, `raw-window-handle`.
+- **MIT OR Apache-2.0** (124): `allocator-api2`, `android_system_properties`, `arrayvec`, `ash`, `autocfg`, `bit-set`, `bit-vec`, `bitflags`, `bumpalo`, `cassowary`, `cc`, `cfg-if`, `cmake`, `console_error_panic_hook`, `crc32fast`, `document-features`, `either`, `equivalent`, `errno`, `fdeflate`, `find-msvc-tools`, `flate2`, `futures-core`, `futures-task`, `futures-util`, `getrandom`, `gpu-allocator`, `half`, `hashbrown`, `heck`, `ident_case`, `indexmap`, `indoc`, `itertools`, `itoa`, `jni-sys`, `jni-sys-macros`, `jpeg-decoder`, `js-sys`, `khronos-egl`, `libc`, `litrs`, `lock_api`, `log`, `naga`, `naga-types`, `ndk-sys`, `num-traits`, `once_cell`, `parking_lot`, `parking_lot_core`, `paste`, `pin-project-lite`, `pkg-config`, `png`, `portable-atomic`, `portable-atomic-util`, `presser`, `proc-macro2`, `profiling`, `quote`, `range-alloc`, `raw-window-metal`, `renderdoc-sys`, `rustc-hash`, `rustls-pki-types`, `rustversion`, `scopeguard`, `serde`, `serde_core`, `serde_derive`, `shlex`, `signal-hook`, `signal-hook-mio`, `signal-hook-registry`, `smallvec`, `static_assertions`, `syn`, `thiserror`, `thiserror-impl`, `unicode-segmentation`, `unicode-truncate`, `unicode-width`, `vcpkg`, `version_check`, `wasm-bindgen`, `wasm-bindgen-futures`, `wasm-bindgen-macro`, `wasm-bindgen-macro-support`, `wasm-bindgen-shared`, `web-sys`, `wgpu`, `wgpu-core`, `wgpu-core-deps-emscripten`, `wgpu-core-deps-wasm`, `wgpu-core-deps-windows-linux-android`, `wgpu-hal`, `wgpu-naga-bridge`, `wgpu-types`, `winapi`, `winapi-i686-pc-windows-gnu`, `winapi-x86_64-pc-windows-gnu`, `windows`, `windows-collections`, `windows-core`, `windows-future`, `windows-implement`, `windows-interface`, `windows-link`, `windows-numerics`, `windows-result`, `windows-strings`, `windows-sys`, `windows-targets`, `windows-threading`, `windows_aarch64_gnullvm`, `windows_aarch64_msvc`, `windows_i686_gnu`, `windows_i686_gnullvm`, `windows_i686_msvc`, `windows_x86_64_gnu`, `windows_x86_64_gnullvm`, `windows_x86_64_msvc`, `zeroize`.
+- **MIT** (32): `castaway`, `cfg_aliases`, `compact_str`, `crossterm`, `crossterm_winapi`, `crunchy`, `darling`, `darling_core`, `darling_macro`, `dlib`, `instability`, `libm`, `lru`, `mio`, `objc2`, `objc2-encode`, `objc2-foundation`, `ordered-float`, `ratatui`, `redox_syscall`, `sdl3`, `simd-adler32`, `slab`, `strsim`, `strum`, `strum_macros`, `tokio`, `wayland-sys`, `webview2-com`, `webview2-com-macros`, `webview2-com-sys`, `xml-rs`.
+- **MIT OR Apache-2.0 OR Zlib** (10): `bytemuck`, `bytemuck_derive`, `dispatch2`, `glow`, `miniz_oxide`, `objc2-core-foundation`, `objc2-metal`, `objc2-quartz-core`, `raw-window-handle`, `rpkg-config`.
 - **Apache-2.0** (5): `codespan-reporting`, `gl_generator`, `glutin_wgl_sys`, `khronos_api`, `spirv`.
 - **Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT** (3): `linux-raw-sys`, `rustix`, `wasi`.
 - **ISC** (3): `libloading`, `rustls-webpki`, `untrusted`.
-- **Zlib** (3): `foldhash`, `slotmap`, `zlib-rs`.
+- **Zlib** (11): `foldhash`, `sdl3-image-src`, `sdl3-image-sys`, `sdl3-mixer-src`, `sdl3-mixer-sys`, `sdl3-src`, `sdl3-sys`, `sdl3-ttf-src`, `sdl3-ttf-sys`, `slotmap`, `zlib-rs`.
 - **MIT OR Apache-2.0 OR BSD-2-Clause** (2): `zerocopy`, `zerocopy-derive`.
 - **MIT OR Unlicense** (2): `termcolor`, `winapi-util`.
 - **(MIT OR Apache-2.0) AND Unicode-3.0** (1): `unicode-ident`.

@@ -207,6 +207,12 @@ impl Drop for TrackIr {
     }
 }
 
+/// Off Windows there is no NPClient (TrackIR's DLL): no head tracker.
+#[cfg(not(windows))]
+pub fn open(_window: isize, _documents: Option<&std::path::Path>) -> Option<TrackIr> {
+    None
+}
+
 /// The game's whole start: the registry's folder, the DLL, [`NpClient::from_symbols`],
 /// [`TrackIr::start`]. `documents`: the Documents `Assetto Corsa` folder.
 #[cfg(windows)]

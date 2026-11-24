@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rustyac_physics::car::{CarControls, CarControlsInput, VibrationDef};
+#[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 use super::bindings::Bindings;
@@ -24,7 +25,12 @@ use crate::sim::DriverSource;
 /// `GetAsyncKeyState`, which other programs can eat; only "down now" is used here.)
 pub fn key_is_down(key: i32) -> bool {
     // SAFETY: a plain query of the keyboard state.
-    key > 0 && key < 256 && unsafe { GetAsyncKeyState(key) } < 0
+    #[cfg(windows)]
+    let down = |key| unsafe { GetAsyncKeyState(key) } < 0;
+    // (SDL's keys have no "pressed since" bit: held is down now)
+    #[cfg(not(windows))]
+    let down = crate::window::key_async;
+    key > 0 && key < 256 && down(key)
 }
 
 /// The live devices as the car's driver.
@@ -60,22 +66,15 @@ struct CursorOnWindow(isize);
 
 impl MouseSteeringWindow for CursorOnWindow {
     fn cursor_x(&mut self) -> i32 {
-        let mut point = windows::Win32::Foundation::POINT::default();
-        // SAFETY: a plain query; on failure the point stays as it was (the game's too).
-        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) };
-        point.x
+        crate::window::cursor_pos().0
     }
 
     fn window_rect(&mut self) -> [i32; 4] {
-        let mut rect = windows::Win32::Foundation::RECT::default();
-        // SAFETY: a plain query on the game's own window.
-        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(windows::Win32::Foundation::HWND(self.0 as *mut _), &mut rect) };
-        [rect.left, rect.top, rect.right, rect.bottom]
+        crate::window::window_rect(self.0)
     }
 
     fn set_cursor(&mut self, x: i32, y: i32) {
-        // SAFETY: a plain call.
-        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) };
+        crate::window::set_cursor_pos(x, y);
     }
 }
 

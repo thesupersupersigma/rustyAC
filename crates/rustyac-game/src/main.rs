@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `rustyac`: the game on Windows ([`desktop`]). Built for another target (wasm32-wasip1) it
+//! `rustyac`: the game on Windows, and on Linux with `wgpu` (Task P3a) ([`desktop`]). Built for another target (wasm32-wasip1) it
 //! is only the replay runner, which is how a wasm build of the physics is held against the
 //! desktop's: `rustyac --replay <file.ryin> --headless [--dump-states <file>]`.
 
-#[cfg(all(windows, not(feature = "wgpu")))]
+#[cfg(any(all(windows, not(feature = "wgpu")), all(target_os = "linux", feature = "wgpu")))]
 mod desktop;
 
-#[cfg(all(windows, not(feature = "wgpu")))]
+#[cfg(any(all(windows, not(feature = "wgpu")), all(target_os = "linux", feature = "wgpu")))]
 fn main() {
     desktop::main()
 }
 
-#[cfg(any(not(windows), feature = "wgpu"))]
+#[cfg(not(any(all(windows, not(feature = "wgpu")), all(target_os = "linux", feature = "wgpu"))))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|at| args.get(at + 1));

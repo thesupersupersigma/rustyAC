@@ -89,6 +89,13 @@ rustyac-ode = { path = "../rustyac-ode", features = ["embree"] }
 [target.'cfg(not(any(windows, all(target_arch = "wasm32", target_os = "unknown"))))'.dependencies]
 rustyac-render = { path = "../rustyac-render", optional = true }
 
+# Linux (Task P3a): the game's window, keyboard and mouse on SDL3, built from its source and
+# linked statically (many distros have no SDL3 package; CMake and a C compiler build it), and
+# wgpu's GL backend beside Vulkan (WSLg's GPU is reached only through GL)
+[target.'cfg(target_os = "linux")'.dependencies]
+sdl3 = { version = "0.22", features = ["build-from-source-static", "raw-window-handle"], optional = true }
+wgpu = { version = "=30.0.1", default-features = false, features = ["gles", "vulkan", "wgsl"], optional = true }
+
 # The page's Full mode: AC's renderer on kgl's wgpu backend (WebGPU is turned on by rustyac-web,
 # which gives kgl the page's device).
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
@@ -101,5 +108,5 @@ js-sys = "0.3"
 # AC's renderer (`render::ac`) on kgl's wgpu backend on Windows too, as in the page: only for
 # the native proofs of Full mode (rustyac-web's full_frame example). It leaves out the window,
 # the debug view, the GUI, the sound and the command line, so rustyac.exe is the replay-only
-# build with it.
-wgpu = ["dep:rustyac-render", "rustyac-render/backend-wgpu"]
+# build with it. On Linux it is the game (Task P3a): the window on SDL3 and this renderer.
+wgpu = ["dep:rustyac-render", "rustyac-render/backend-wgpu", "dep:sdl3", "dep:wgpu"]

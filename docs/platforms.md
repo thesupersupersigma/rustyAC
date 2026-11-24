@@ -13,7 +13,8 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   (nothing reads it), and `rustyac-audio` and `rustyac-game --features wgpu` build off Windows.
 - Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
   the native game from section 8's L1, starting with the list in 10.4.
-- **P3 (Task P3a, branch `web`): resume at L2** (section 11.4). L1 is done (11.2).
+- **P3 (Task P3a, branch `web`): resume at section 11.5.** L1 is done (11.2); L2 + L3 run on Linux
+  (11.3, 11.4): what is left is the quit test, L3's frame comparison and the physics goldens.
 
 ## 1. Plain-English summary
 
@@ -525,38 +526,95 @@ Proofs (logs in `re/scratch/taskP3/`):
 | Windows: clippy `-D warnings --all-targets`, the three crates, with and without `wgpu` | clean |
 | Windows: `run_all.sh --quick`, every area, 2 lanes (10.3 GB free RAM) | **258 cases IDENTICAL** in 14 areas, 0 different, 0 errors, csp's 1 expected skip; 1h05m (`quick_l1.log`) |
 
-### 11.3 What L2 and L3 meet (read for the plan, nothing built)
+### 11.3 L2 + L3 steps 1 to 3: the game on Linux (built, committed as one piece)
 
-- `desktop.rs` (3,062 lines) is built only for `all(windows, not(feature = "wgpu"))`.
-  `run_window` alone is 1,391 lines (1351 to 2742). It draws through `render::picture::Picture`
-  (an enum over the D3D11 debug view and `AcRenderer`, with an `HWND` swap chain), and it calls
-  about 40 of Picture's methods. Its direct Win32 uses are few (about a dozen `windows::` paths,
-  `window.pump`, `window.handle`, `window.client_size`). Most of the Windows-only part is the
-  modules it imports: `window`, `mouse_hider`, `physics_thread` plus `timer`, `shm`, the pad
-  (XInput) and the wheel (DirectInput), `python`, VR, TrackIR and `audio`'s sink.
-- The renderer side is closer than the plan said. With `wgpu`, `render::ac::AcRenderer` is the
-  same type on kgl's wgpu backend, and it already has `present_to(view, format)` and `resize`.
-  L3 is therefore a wgpu surface on the SDL window plus a `Picture` with the `Ac` variant only.
-- **L2 and L3 can't be proven apart on Linux**: menus, the HUD and Esc's menu are drawn by that
-  renderer, so L2's proof ("Esc opens AC's menu") needs L3's surface. Plan: do them as one
-  piece, in this order, each committed with Windows quick (fresh, gui, render) IDENTICAL:
-  1. `desktop.rs` compiled for `any(windows, linux)` with `wgpu` off Windows. Platform layer:
-     `window.rs` stays Win32. A new `window_sdl.rs` gives the same `Event`, `pump`, `client_size`
-     and a raw window handle. Pads and the wheel answer "none" (L4); `shm` answers "off" (L5);
-     no Python, VR or TrackIR. Windows' code paths stay as they are (the cfg only picks a file).
-  2. `physics_thread` and `timer` off Windows: `Instant` plus sleep. This is L5's timer pulled
-     forward, because the loop needs it; L5 keeps `/dev/shm`.
-  3. The surface: `wgpu::Surface` from SDL's handle, on kgl's device, then `present_to` each
-     frame and `resize` on the window's size event.
-- SDL3: the `sdl3` crate against the distro's `libsdl3-dev` (the player installs `libsdl3-0`)
-  rather than its build-from-source feature (that one needs CMake and a C toolchain in every
-  build). zlib licence, goes in `LICENSING.md`. Not used on Windows.
+The plan was three commits; they came as one, because the loop, the timer and the surface only
+run together (the window needs the surface to draw the first frame, the drive needs the timer).
 
-### 11.4 Resume here (P3a)
+- **`desktop.rs` builds for `any(all(windows, not(wgpu)), all(linux, wgpu))`.** On Windows its
+  code paths are as they were: the cfg picks a file, and the few Win32 calls the loop made itself
+  (`GetAsyncKeyState`, `GetCursorPos`, `SetCursorPos`, `GetWindowRect`, the screen's size) are
+  now `window::key_async` and friends, which make the same calls in `window.rs`.
+- **The platform layer, Linux** (`#[path]` picks the file, the Windows file is untouched):
+  `window_sdl.rs` (the same `Event`s, the virtual-key codes `controls.ini` binds made from SDL's
+  scancodes, keys and the cursor in atomics for the physics thread, `WM_CHAR`'s control
+  characters, Win32's `ShowCursor` counter for `mouse_hider.rs`), `timer_unix.rs` (sleep, then a
+  250 us spin; no raised priority without `CAP_SYS_NICE`), `input/dinput_none.rs` and a
+  non-Windows `XInput` (no pads or wheels: L4), `shm_none.rs` (no pages: L5). TrackIR, Python,
+  VR, the console's Ctrl+C handler, the power request and the debug view (`--debug-view`, D3D11)
+  are Windows only; SDL keeps the screen saver off by itself.
+- **Opened to Linux** (their code unchanged): `physics_thread`, `live`, `wheel`, `mouse_hider`,
+  `ai_record`, `audio::AudioSink`, `Bindings::load`. `render::picture` (`box_downscale` and
+  `write_png` moved there from `render/mod.rs`, which re-exports them) has a debug view that
+  cannot be made on Linux, so its arms stay as they are.
+- **The surface** (`Window::create`): a wgpu instance with SDL's display handle (GL needs it),
+  a surface from SDL's raw handles, an adapter compatible with it, the device given to kgl
+  (`AcRenderer::give_device`) before the renderer is made; `AcRenderer::swap_chain` /
+  `resize_swap_chain` / `present` on Linux take that surface (`present_to`, as the page does).
+  `WGPU_BACKEND` (`vulkan`, `gl`) is read by rustyAC (wgpu's own reading needs its `std`
+  feature, which is off).
+- **SDL3: built from source and linked statically** (`sdl3` 0.22 with `build-from-source-static`,
+  SDL 3.4.20): the player needs no SDL package. The build needs CMake, a C compiler and the X11 /
+  Wayland headers (in WSL: `cmake ninja-build pkg-config libx11-dev libxext-dev libxrandr-dev
+  libxcursor-dev libxi-dev libxss-dev libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev
+  wayland-protocols libegl-dev libgl-dev libdecor-0-dev libdrm-dev libgbm-dev libudev-dev
+  libdbus-1-dev libasound2-dev libpulse-dev`); SDL loads X11 / Wayland at run time. What a player
+  needs: an X11 or Wayland desktop, Vulkan drivers (Mesa's or the GPU maker's), and for L7's
+  launcher `libwebkit2gtk-4.1`. Licences: `LICENSING.md` (SDL's row, 13 new crates in the list)
+  and `tools/notices.py` (SDL's Zlib text with its copyright).
 
-- Done: L1 (11.2), commits on `web`.
-- Next: L2 and L3 together (11.3), steps 1 to 3. Estimate unchanged in total (3 sessions for
-  L2 + L3), but in one piece.
-- Then: the physics goldens from the Linux game build (`rustyac --replay x.ryin --headless
-  --dump-states` on Linux against Windows' dump, NaN-blind as in section 4).
+**What wgpu gets in WSLg** (Ubuntu 26.04.1, Mesa 26.0.8, SDL picks X11 there):
 
+| Backend | Adapter | Result |
+|---|---|---|
+| Vulkan (the default pick) | llvmpipe (lavapipe, the CPU) | **right**: 0 wgpu errors; 1.9 FPS at 1280 x 720 (Spa, the F2004, autodrive) |
+| GL (`WGPU_BACKEND=gl`) | llvmpipe through EGL (no DRI3 on WSLg's X server) | 461 validation errors in 30 s, 7.2 FPS |
+| GL with `GALLIUM_DRIVER=d3d12` | **D3D12 (AMD Radeon Pro 5500M)**, GL 4.6: the GPU | the same validation errors, 7.2 FPS |
+
+kgl on wgpu's GL backend breaks two GL limits: AC's float targets are sampled with filtering
+samplers (GL adapters have no `FLOAT32_FILTERABLE`: "Sampler binding N expects filtering =
+false"), and one texture is read with two samplers in one shader (GLSL's combined samplers
+cannot: "A image was used with multiple samplers"). Real Linux has Vulkan on the GPU, so this
+only matters for WSLg; as the lead chat allowed, L3 is proved on lavapipe and a GPU run waits
+for L8's live USB. A kgl fix for GL is in "Not done". (Wayland, `SDL_VIDEO_DRIVER=wayland`:
+the GL run crashed on exit, exit code 139; not looked into, X11 is SDL's pick on WSLg.)
+
+### 11.4 Proofs of 11.3
+
+| Check | Result |
+|---|---|
+| Windows: `run_all.sh --quick render gui fresh` (one lane, 10.5 GB free RAM) | **110 cases IDENTICAL** (render 18, gui 29, fresh 63), 0 different, 0 errors; 33 min (`re/scratch/taskP3/quick_l2.log`) |
+| Windows: clippy `-D warnings --all-targets -p rustyac-game`, with and without `wgpu` | clean |
+| Linux: clippy `-D warnings --all-targets -p rustyac-game`, with and without `wgpu` | clean |
+| Linux: `cargo test -p rustyac-game --features wgpu --lib window` (scancodes to virtual keys, Ctrl's sides) | pass |
+| Linux, WSLg: `--autodrive` at Spa, 90 s (`run/gl60`) | physics 30,060 steps at 333.33 Hz; 169 frames, 1.9 FPS on lavapipe; clean end |
+| Linux, WSLg: real X11 keys from `xdotool` (`keys.sh keys2`): Up held 8 s, F8, Esc | the car drove about 190 m on the Up key; F8 wrote the game's own picture (right colours); Esc opened AC's pause menu (Resume, Back to pits, Restart Session, Replay, Exit); the end at `--duration`: exit 0, the usual report |
+| Linux, WSLg: the same with a click on the menu's Exit (`keys.sh keys6`) | the program ended at once, exit 0, the usual report |
+| wasm32-unknown-unknown clippy `-p rustyac-web --all-targets`; wasm32-wasip1 clippy lib + bins `rustyac-game`, `rustyac-content` | clean |
+
+Pictures: `re/scratch/taskP3/run/keys6/2_esc.png` (the pause menu over Spa, grabbed with
+ImageMagick's `import`), `run/keys2/screenshots/` (the game's own F8 picture). The grabs in
+`run/keys2/*.png` have wrong colours: `xwdtopnm` reads WSLg's 32-bit visual as (G, R, alpha).
+Focus: WSLg's window manager has no `_NET_ACTIVE_WINDOW`; `xdotool windowfocus` gives the window
+the keyboard, but only while nobody is using the desktop (runs keys3 to keys5 got none: the
+physics stayed paused, as the game does without focus). One drive by hand ended with its report
+and then sat until the 300 s watchdog of `run.sh` killed it (exit 124, `run/super_drive`); it
+was not seen again (keys2 at `--duration`, keys6 at Exit: exit 0).
+
+### 11.5 Resume here (P3a)
+
+- Done: L1 (11.2); L2 + L3's code (11.3), committed, Windows unchanged (11.4).
+- Next, in this order:
+  1. The window's close button (WSLg's window manager ignores `wmctrl -c`: a small X11 client
+     sending `WM_DELETE_WINDOW` is the test), and the one unexplained 300 s run (above).
+  2. L3's frame comparison: the Linux drive's frames against the browser's Full mode on the same
+     input (the `browser` area's way, kgl call logs too), on lavapipe; frame time.
+  3. The physics goldens from the Linux game build (`rustyac --replay x.ryin --headless
+     --dump-states` against Windows' dump, NaN-blind as in section 4).
+- Tools: `re/scratch/taskP3/run.sh <name> <args>` (a windowed run with its own cfg and Documents),
+  `keys.sh <name>` (real keys), `wsl.sh` (builds). The debug build is
+  `re/scratch/taskP2/target-linux/debug/rustyac`.
+- Not done, for later: kgl on wgpu's GL backend (non-filtering samplers for float textures
+  without `FLOAT32_FILTERABLE`, one sampler per texture in a shader), which WSLg's GPU needs;
+  Ctrl+C off Windows ends the process at once (no SIGINT handler yet, L5); the GL run under
+  Wayland crashed on exit; the window grabs' colours (a tool's fault, 11.4).

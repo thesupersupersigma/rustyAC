@@ -223,3 +223,43 @@ impl Drop for Window {
         self.pump();
     }
 }
+
+// The platform's keyboard and cursor, as the game's loop and the physics thread ask for them
+// (`window_sdl.rs` has the same functions on Linux).
+
+/// `GetAsyncKeyState(vk) != 0`.
+pub fn key_async(vk: i32) -> bool {
+    // SAFETY: a plain query of the keyboard state.
+    unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) != 0 }
+}
+
+/// The cursor in screen pixels.
+pub fn cursor_pos() -> (i32, i32) {
+    let mut cursor = windows::Win32::Foundation::POINT::default();
+    // SAFETY: a plain query; on failure the point stays as it was.
+    let _ = unsafe { GetCursorPos(&mut cursor) };
+    (cursor.x, cursor.y)
+}
+
+pub fn set_cursor_pos(x: i32, y: i32) {
+    // SAFETY: a plain call.
+    let _ = unsafe { SetCursorPos(x, y) };
+}
+
+/// A window's rectangle in screen pixels: left, top, right, bottom.
+pub fn window_rect(window: isize) -> [i32; 4] {
+    let mut rect = RECT::default();
+    // SAFETY: a plain query on a window handle.
+    let _ = unsafe { GetWindowRect(HWND(window as *mut _), &mut rect) };
+    [rect.left, rect.top, rect.right, rect.bottom]
+}
+
+/// The desktop window's right edge and the virtual screen's height.
+pub fn screen_size() -> (i32, i32) {
+    let mut rect = RECT::default();
+    // SAFETY: plain calls.
+    unsafe {
+        let _ = GetWindowRect(GetDesktopWindow(), &mut rect);
+        (rect.right, GetSystemMetrics(SM_CYVIRTUALSCREEN))
+    }
+}

@@ -41,7 +41,7 @@ use windows::Win32::Graphics::Dxgi::{
 
 use crate::view::{CarView, Mat};
 use font::FontBitmap;
-pub use picture::Picture;
+pub use picture::{box_downscale, write_png, Picture};
 use hud::{HudInfo, HudVertex};
 use models::{frustum, sphere_visible, GpuModel, ModelOptions, ModelStats};
 use scene::{cube, cylinder, mul, mul_precise, perspective_reversed, point, rotate_pitch, scale_then, translation, view_matrix, CameraFrame, CarShape, Vertex};
@@ -1083,45 +1083,6 @@ impl DebugRenderer {
             Ok(status.0 != 0x087A_0001)
         }
     }
-}
-
-/// `--supersample <n>`: a picture drawn `n` times wider and higher, averaged down (every pixel
-/// is the rounded mean of its `n` x `n` block, channel by channel). `width` and `height` are
-/// the size of the result.
-pub fn box_downscale(rgba: &[u8], width: u32, height: u32, n: u32) -> Vec<u8> {
-    let (w, h, n) = (width as usize, height as usize, n as usize);
-    assert_eq!(rgba.len(), w * n * h * n * 4, "the picture is not {n} times {width} x {height}");
-    let stride = w * n * 4;
-    let area = (n * n) as u32;
-    let mut out = Vec::with_capacity(w * h * 4);
-    for y in 0..h {
-        for x in 0..w {
-            let mut sum = [0u32; 4];
-            for row in 0..n {
-                let at = (y * n + row) * stride + x * n * 4;
-                for pixel in rgba[at..at + n * 4].chunks_exact(4) {
-                    for (total, value) in sum.iter_mut().zip(pixel) {
-                        *total += *value as u32;
-                    }
-                }
-            }
-            out.extend(sum.map(|total| ((total + area / 2) / area) as u8));
-        }
-    }
-    out
-}
-
-/// Writes RGBA pixels as a PNG.
-pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file = rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_compression(png::Compression::Best);
-    let mut writer = encoder.write_header().map_err(|e| format!("{}: {e}", path.display()))?;
-    writer.write_image_data(rgba).map_err(|e| format!("{}: {e}", path.display()))?;
-    // the end of the file is written here, not when the writer is dropped (which could not say that it failed)
-    writer.finish().map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(test)]
