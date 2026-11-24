@@ -137,7 +137,8 @@ pub struct Joined {
 }
 
 /// Connects, shakes hands, asks for the cars and prepares the checksums.
-pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
+/// `csp`: CSP mode (`--csp` or `[CSP] ENABLED`): CSP 4305's handshake ([`rustyac_net::csp`]).
+pub fn join(options: &Options, target: &JoinTarget, csp: bool) -> Result<Joined, String> {
     let root = rustyac_content::install::ac_root();
     let mut notes = Vec::new();
     let identity = identity::resolve(options.guid.as_deref(), !options.no_steam, root.as_deref(), options.net_identity.as_deref(), &crate::conditions::own_dir(options))?;
@@ -146,7 +147,10 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
         GuidSource::Own(file) => format!("online: Steam is not running (or was not asked): your player id is rustyAC's own, kept in {}", file.display()),
         GuidSource::Given => "online: the player id of the command line".to_string(),
     });
-    let request = JoinRequest { guid: identity.guid, name: target.name.clone(), team: target.team.clone(), nation_code: target.nation_code.clone(), car: target.car.clone(), password: target.password.clone() };
+    let request = JoinRequest { guid: identity.guid, name: target.name.clone(), team: target.team.clone(), nation_code: target.nation_code.clone(), car: target.car.clone(), password: target.password.clone(), features: csp.then(|| rustyac_net::csp::FEATURES.to_string()) };
+    if csp {
+        notes.push(format!("online: CSP mode: the handshake is CSP {}'s (its feature list; what rustyAC does not read yet is logged and skipped)", rustyac_net::csp::BUILD));
+    }
     notes.push(format!("online: joining {} as {:?}{}", target.gateway.clone().unwrap_or(format!("{}:{}", target.host, target.port)), request.name, if target.server_name.is_empty() { String::new() } else { format!(" ({})", target.server_name) }));
     let transport: BoxedTransport = match &target.gateway {
         // through a gateway: both channels in one WebSocket

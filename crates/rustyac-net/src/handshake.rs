@@ -35,15 +35,21 @@ pub struct JoinRequest {
     pub nation_code: String,
     pub car: String,
     pub password: String,
+    /// `--csp`: CSP's `Features` tail ([`crate::csp::FEATURES`]); `None`: Kunos' request.
+    pub features: Option<String>,
 }
 
 impl JoinRequest {
     /// Message 0x3d: the id, the protocol version, then the GUID (narrow), the name (the
-    /// one wide string), team, nation, car and password (narrow).
+    /// one wide string), team, nation, car and password (narrow); with CSP its feature
+    /// list (`u16` length, UTF-8) and no ticket field (CSP 4305 sends none without Steam auth).
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::with_id(id::HANDSHAKE);
         w.u16(PROTOCOL_VERSION);
         w.ansi(&self.guid).wide(&self.name).ansi(&self.team).ansi(&self.nation_code).ansi(&self.car).ansi(&self.password);
+        if let Some(features) = &self.features {
+            w.u16(features.len() as u16).bytes(features.as_bytes());
+        }
         w.finish()
     }
 }
@@ -378,7 +384,7 @@ mod tests {
 
     #[test]
     fn handshake_request_layout() {
-        let request = JoinRequest { guid: "81234567890123456".into(), name: "ab".into(), team: "t".into(), nation_code: "ITA".into(), car: "bmw_z4_gt3".into(), password: String::new() };
+        let request = JoinRequest { guid: "81234567890123456".into(), name: "ab".into(), team: "t".into(), nation_code: "ITA".into(), car: "bmw_z4_gt3".into(), password: String::new(), features: None };
         let bytes = request.encode();
         assert_eq!(&bytes[..3], &[0x3d, 0xca, 0x00]);
         // what a tape keeps: the same lengths, no id and no password
@@ -393,6 +399,11 @@ mod tests {
         assert_eq!(&bytes[21..30], &[2, b'a', 0, 0, 0, b'b', 0, 0, 0]);
         assert_eq!(&bytes[30..32], &[1, b't']);
         assert_eq!(*bytes.last().unwrap(), 0);
+        // with CSP: the same, then the feature list
+        let csp = JoinRequest { features: Some(crate::csp::FEATURES.to_string()), ..request.clone() }.encode();
+        assert_eq!(&csp[..bytes.len()], &bytes[..]);
+        assert_eq!(&csp[bytes.len()..bytes.len() + 2], &[189, 0]);
+        assert!(csp.ends_with(b",EXPLICIT_ADMIN_STATE,4305"));
         assert_eq!(send_interval_ms(18), 54.0);
         assert_eq!(send_interval_ms(20), 48.0);
         assert_eq!(send_interval_ms(60), 15.0);

@@ -300,6 +300,7 @@ stays: **`re/gold/net/`** (git-ignored, like all of `re/`; never delete it).
 | the five tapes (`laguna_a`, `laguna_b`, `rich_a`, `rich_b`, `rich_c`) | `re/gold/net/tapes/<name>.nettape` |
 | the 20 goldens (each tape in `net_watch`, `net_block`, `net_drive`, `net_pit`, every step) | `re/gold/net/<tape>_<scenario>.netgold` |
 | what the game's client said when it made them | `re/gold/net/gold.log` |
+| NH-2: NH-1's AssettoServer tape at Spa (2.2 MB, CSP off, five remote cars with slot jumps) and its 4 goldens (110,000 steps, 7.0 MB each); `gold.sh as_spa` makes only these | `re/gold/net/tapes/as_spa.nettape`, `re/gold/net/as_spa_<scenario>.netgold` |
 
 To make them again (all three scripts are committed, under `tools/net_gold/`):
 
