@@ -763,7 +763,40 @@ worktree's `target/release`), `cmp.py <ref frames> <rustyAC frames>`, `frames.py
 the real CSP capture (`cap/` and the server's dumps; it holds the player's id, name and key: never copy
 them out).
 
+## NH-7: CSP's custom car updates
+
+With `--csp` the feature list stays byte-equal to CSP 4305's (lead's decision), so the server sends every
+car position as UDP `AB 03` (§NH-2.2). NH-7 reads that format and sends rustyAC's own car the way CSP does.
+
+### NH-7.0 The capture kit (part 0)
+
+* **Why a new relay.** NH-2's relay logs TCP only; the custom updates are UDP, and the game's UDP went
+  straight to the server's 19660. `re/scratch/taskNH7/relay.py` is NH-2's relay plus UDP both ways:
+  * The handshake reply (`0x3E`: `u8` n, n × `u32` name, then the `u16` UDP port) is the first frame
+    the server sends. The relay rewrites its port from 19660 to 9650 (and the JSON's `"port"`), so the
+    game's UDP comes to the relay. `tcp.log` keeps the server's bytes as sent and notes the rewrite.
+  * UDP 9650 still answers LAN checks (`0xC8`) itself. Everything else goes to the server's 19660 and
+    back, both ways in `cap/udp.log` (time, the client's endpoint, `C>S`/`S>C`, hex). The relay uses one
+    upstream socket per client endpoint.
+  * **The server takes UDP only from the TCP connection's IP** (`ACTcpClient.TryAssociateUdp`: the
+    `CarConnect` `0x4E`'s address must `IpEquals` the TCP peer's, and the first one that passes is
+    kept as the car's endpoint). It still holds: the TCP upstream connects to the client's own address
+    (as in NH-2), and each UDP upstream socket is **bound to the client's IP** and sends to that same
+    address, so the server sees the same IP on both (the port is the relay's, which the server
+    doesn't check).
+  * A refused upstream connection (a client that comes before the server is up) now drops only that
+    client. In NH-2's relay it ended the TCP accept loop.
+* `srv.sh` is NH-2's, using the new relay and `taskNH2/cfg/` (same server, entry list and CSP
+  defaults; the debug dumps still land in `taskNH2/cfg/`). It also clears `udp.log`. `join.sh` is
+  NH-2's, with `bin/rustyac.exe` copied from NH-2 (v1.1.5 + NH-2).
+* **Tested with rustyAC `--csp`** (90 s and 30 s joins, `CAP=cap_kit`): the server associated the
+  relayed UDP (no "Rejected UDP association"). In 90 s the relay logged 3,713 datagrams: 1,629 `AB 03`
+  and 91 `AB 01` from the server, and rustyAC's `0x4E`, `0x4F` and `0x46`. rustyAC itself still got 0
+  remote-car states (expected until part 2). After each run no relay or server port stayed open.
+
 ## Resume here
 
-NH-2 is done (parts 0-3, §NH-2.0 to §NH-2.5). Next: NH-3 / NH-4 / NH-7. **NH-7 first is worth weighing:**
-until `CUSTOM_UPDATE` is read, a `--csp` join on AssettoServer shows no other cars (§NH-2.2).
+NH-7 part 0 is done (§NH-7.0): waiting for Super's capture with real AC + CSP 4305 through
+`re/scratch/taskNH7/srv.sh` (it leaves `cap/`). Next: part 1. Read `cap/udp.log` (`AB 03` from the
+server; what CSP sends for its own car), `cap/tcp.log`, `cap/out.txt` and AssettoServer's
+custom-update writer. Then part 2.
