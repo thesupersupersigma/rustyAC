@@ -668,12 +668,102 @@ flipped relay. Joined 17:34:50; the server's timeout ended it after about 10 min
   layout: **corrected** (above). Still open: §3's jump handling (NH-5), the WeatherFX-in-the-wild line
   (§5) and the null-minimum startup check with client messages on (§6): this capture used minimum 2651.
 
+### NH-2.2 rustyAC `--csp` sends and handles the same (part 2)
+
+Code: `crates/rustyac-net/src/csp.rs` (new), the join and the client (`handshake.rs`, `client.rs`), the
+game's side in `crates/rustyac-game/src/{join,online}.rs`. **Without `--csp` nothing changes**: the join
+request has no tail, no `0xAB` is intercepted, the track name and checksums are read as before.
+
+* **The request (`0x3D`):** Kunos' fields, then `u16` 189 and CSP 4305's list exactly as §NH-2.1, no
+  ticket field (`csp::FEATURES`). rustyAC claims what CSP claims, as the prompt asks.
+* **The track name:** `csp/<build>/../[<letter>/../]<track>` (AssettoServer's own pattern) loads `<track>`.
+  A minimum build above 4305 is refused with its own message, as CSP would. The checksum paths keep the
+  server's names in the list and are read from `content/tracks/<track>/`.
+* **`CSPFACE`:** a track's `data/surfaces.ini` (never `system/`) is hashed with the first `SURFACE_0`
+  read as `CSPFACE_0`, not at byte 0 (the server's own rule, `ChecksumManager.cs`).
+* **The welcome (`0x51`):** the text before the tabs is shown; after `$CSP0:` the base64 (padding cut),
+  zlib (`miniz_oxide`, already in the tree through `flate2`, pure Rust, builds for wasm) and the INI. A
+  repeated section adds its keys to the first (`csp::parse_ini`; `'...'` values over several lines). No
+  key matches a setting rustyAC's `--csp` reads yet, so all four are **stored** (`OnlineSession::csp_settings`)
+  **and listed** on the console. *shortcut:* not INIpp (no includes, variables or expressions); enough for
+  what AssettoServer writes.
+* **`0xAB`:** HandshakeIn (`AB 03 FF 0000`) is answered at once with HandshakeOut: `AB 03 0100`, 4305,
+  WeatherFX 1, input 3, RainFX 1, 0, then **rustyAC's own 8-byte key** (MD5 of a fixed text and the player
+  id: the same for the same player, nobody's hardware). `AB 02` visibility and `AB 05` kick reasons are
+  read and logged; other client messages are logged with type and size; UDP `AB xx` are logged once per
+  sub-id. Nothing in them can crash or end the session.
+
+**Proof (2026-11-23, `re/scratch/taskNH2/proof.sh 360`):** the CSP-default server (§NH-2.0's config B,
+the relay's capture to `cap_rusty/`), rustyAC `--csp --autodrive` headless at Spa in `bmw_1m`:
+
+* **joined and stayed 6 min** (120,457 steps): the server's log has the connect at 18:43:13 and
+  "has disconnected" at 18:49:14 (rustyAC's own goodbye at `--duration`). No kick, no checksum failure, no
+  timeout.
+* **bytes, `cmp.py ref_csp/frames.txt cap_rusty/frames.txt`:** the `0x3D` tail (191 bytes) **EQUAL**;
+  `0x44` (10 MD5s, the `CSPFACE` one included) **EQUAL**; HandshakeOut 20 bytes, all but the key **EQUAL**.
+  The `0x3D` fields before it differ only where the player differs (id, name, nation: Content Manager
+  wrote `PLA` into race.ini; rustyAC sends the nation it is given).
+* **the server's log, both clients side by side** (names, ids and keys cut):
+
+| Real AC + CSP 4305 (17:34) | rustyAC `--csp` (18:43) |
+|---|---|
+| `<player> (<id> - 10.0.0.0:…) is attempting to connect (bmw_1m)` | `NH2 rustyAC (<id> - 127.0.0.0:…) is attempting to connect (bmw_1m)` |
+| `supports extra CSP features: ["STEAM_TICKET", "CLIENT_MESSAGES", …]` | the same list |
+| `has connected` (slot 0, `bmw_1m-crimson_red`) | the same |
+| `CSP handshake received …: Version=4305 WeatherFX=True InputMethod=Wheel RainFX=True HWID <cut>` | the same line, its own key |
+| collisions with traffic and walls, laps | collisions with walls only (see below) |
+| the server's timeout after ~10 min (Super had left) | `has disconnected` after 6 min |
+
+* **rustyAC's log** (`join/csp1.log`): the visible welcome lines, the four server settings, `AB 02` for
+  slots 0 and 2-5, the handshake answered, UDP `AB 01` (34 bytes, weather) and `AB 03` (63 bytes, custom
+  update) skipped.
+
+**What `--csp` still ignores** (logged, never a kick):
+
+* **`CUSTOM_UPDATE` (NH-7) — a cost of claiming CSP's list.** With `CUSTOM_UPDATE` in the list, the server
+  sends **every** other car's position as UDP `AB 03` instead of `0x46`, so in the 6-minute run rustyAC
+  got **0 remote-car states** (`join/csp1.arrivals.csv`; NH-1's run without CSP: 26,414). Traffic is in
+  the car list but never moves on screen, which is also why rustyAC hit only walls. Until NH-7 reads the
+  format, a `--csp` join on AssettoServer shows no other cars. Dropping `CUSTOM_UPDATE`/`_V2` from the
+  list would bring them back, at the cost of the byte-equal handshake (a choice for the lead).
+* UDP `AB 01` WeatherFX (NH-4); `AB 02` visibility not applied, client messages unread (NH-3); the server
+  script and `AS_LuaReady` (`AB 03 60EA`, CSP's second message) not sent (NH-6); the ticket (NH-8); the
+  four server settings not applied.
+
+### NH-2.3 NH-1's AssettoServer tape as a net golden (part 3)
+
+NH-1's `long2a.nettape` (**2.2 MB**, Spa, CSP off, AI on, five remote cars with the slot jumps of NH-1.2)
+is `re/gold/net/tapes/as_spa.nettape`. `sh tools/net_gold/gold.sh as_spa` (new: named tapes only, the
+others untouched, Spa as the track) made its four goldens with the game's own client: **IDENTICAL** in
+`net_watch`, `net_block`, `net_drive` and `net_pit` over 110,000 steps each (124,190,000 values; 6,428 to
+6,430 outgoing messages), **7.0 MB each** (28 MB, git-ignored like all of `re/`). The net area now has
+24 goldens (96 cases); `as_spa_net_drive` is in the quick list. No server is shipped: the tape is
+recorded input.
+
+### NH-2.4 Checks
+
+* `cargo test -p rustyac-net` (new: `csp::tests`, the `0x3D` tail in `handshake_request_layout`); clippy
+  `-D warnings` native (`rustyac-net`, `rustyac-game`, all targets) and both wasm targets
+  (`rustyac-net` + `rustyac-web` on `wasm32-unknown-unknown`, `rustyac-net` on `wasm32-wasip1`): clean.
+* `run_all.sh --quick` (2026-11-23): sound 4, launcher 1, dumps 6, render 18, shaders 4, **net 20 of 20**
+  (`as_spa_net_drive` four ways included), gui 29, python 1, ai_page 10, all IDENTICAL. The first run
+  had `car_oracle` failing to build and `browser`'s `web_pack` test failing, both on `--locked`: the
+  tools' own lock files lacked `miniz_oxide` (fixed in `2de0f9fd`). Rerun of those areas: physics 9,
+  fresh 63, replays 6, browser 18, all IDENTICAL; csp 64 IDENTICAL, 3 EXPECTED and **3 DIFFERENT
+  (`refused off`, `layouts`, `row ks_ferrari_f2004 two`) that `master` already fixed** (`65bebd60`,
+  `70a5c9cc`; `web` is 3 commits behind it; `master`'s own csp run at 17:36: 66 of 66). The csp area
+  runs no net code.
+
+### NH-2.5 How to rerun
+
+`re/scratch/taskNH2/` (git-ignored): `srv.sh [s]` (`CAP=<folder>` keeps `cap/` untouched), `proof.sh
+[s]` (server + rustyAC `--csp` join, label `LABEL`, default `csp1`), `join.sh <label> <s> [options]`
+(NH-1's, on the relay's port 9652, `rcfg/` as rustyAC's cfg, `bin/rustyac.exe` copied from the
+worktree's `target/release`), `cmp.py <ref frames> <rustyAC frames>`, `frames.py`. `ref_csp/` is a copy of
+the real CSP capture (`cap/` and the server's dumps; it holds the player's id, name and key: never copy
+them out).
+
 ## Resume here
 
-NH-2 parts 0 and 1 are done (§NH-2.0, §NH-2.1); the capture is in `re/scratch/taskNH2/cap/` (keep it:
-part 2's byte proof compares against `cap/frames.txt`). Next: **part 2** in `rustyac-net` (no CSP code
-there yet): with `--csp`, append §NH-2.1's `Features` string to `0x3D` (no ticket field); accept a
-`csp/<n>/../<track>` name and load `<track>`; hash the track's `data/surfaces.ini` with the `CSPFACE`
-rule; decode `$CSP0:` from `0x51` (merge repeated sections); route `0xAB` (log type and size), answer
-`AB 03` HandshakeIn with HandshakeOut (no session byte; the 8-byte key rustyAC's own, never Super's).
-Then the 5-minute join with `srv.sh`, then part 3 (NH-1's tape as a `net` golden).
+NH-2 is done (parts 0-3, §NH-2.0 to §NH-2.5). Next: NH-3 / NH-4 / NH-7. **NH-7 first is worth weighing:**
+until `CUSTOM_UPDATE` is read, a `--csp` join on AssettoServer shows no other cars (§NH-2.2).

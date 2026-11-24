@@ -1,12 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Checks the port against the 20 multiplayer goldens of gold.sh in four ways: the desktop
+# Checks the port against the 24 multiplayer goldens of gold.sh in four ways: the desktop
 # transport, the browser's WebSocket transport, through the gateway, and the wasm build
 # under wasmtime. Every way must say IDENTICAL and print the same numbers and digests.
 # Needs the AC folder, cardata/ and wasmtime (docs/port/multiplayer.md, "Golden tapes").
 #
-#   sh tools/net_gold/check.sh [golden name ...]    (default: all 20; $NET_GOLD_WAYS: which ways)
+#   sh tools/net_gold/check.sh [golden name ...]    (default: all 24; $NET_GOLD_WAYS: which ways)
 #   -> one line per golden and way in $NET_GOLD_OUT/check.log (target/proofs/net_check)
 set -eu
 # in Windows form (C:/...): rustc and wasmtime get it in places no path conversion reaches

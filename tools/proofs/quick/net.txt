@@ -6,3 +6,5 @@ laguna_a_net_block
 rich_a_net_drive
 rich_b_net_pit
 laguna_b_net_watch
+# NH-2: the AssettoServer tape (NH-1, Spa, five remote cars with slot jumps)
+as_spa_net_drive

@@ -1,8 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Multiplayer (Tasks 25-26, 37): the 20 goldens of re/gold/net checked four ways by
-# tools/net_gold/check.sh (desktop, browser, gateway, wasm): 80 cases.
+# Multiplayer (Tasks 25-26, 37, NH-2): the 24 goldens of re/gold/net checked four ways by
+# tools/net_gold/check.sh (desktop, browser, gateway, wasm): 96 cases.
 area=net
 . "$(dirname "$0")/lib.sh"
 # the goldens were made by the game on MSVCR120's FMA3 bodies (the PC): off FMA3 the native ways take
