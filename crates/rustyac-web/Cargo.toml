@@ -27,9 +27,12 @@ rustyac-gui = { path = "../rustyac-gui" }
 # the `wgpu` feature (the full_frame example).
 [target.'cfg(any(windows, all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 rustyac-render = { path = "../rustyac-render" }
+# Linux (Task P3a): the full_frame example on wgpu, as rustyac-game takes the renderer there
+[target.'cfg(not(any(windows, all(target_arch = "wasm32", target_os = "unknown"))))'.dependencies]
+rustyac-render = { path = "../rustyac-render", optional = true }
 
 [features]
-wgpu = ["rustyac-game/wgpu"]
+wgpu = ["rustyac-game/wgpu", "dep:rustyac-render"]
 
 [dev-dependencies]
 # the full_frame example's picture (already in the lock file through rustyac-game)
