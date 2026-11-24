@@ -13,8 +13,8 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   (nothing reads it), and `rustyac-audio` and `rustyac-game --features wgpu` build off Windows.
 - Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
   the native game from section 8's L1, starting with the list in 10.4.
-- **P3 (Task P3a, branch `web`): resume at section 11.5.** L1 is done (11.2); L2 + L3 run on Linux
-  (11.3, 11.4): what is left is the quit test, L3's frame comparison and the physics goldens.
+- **P3 (Task P3a, branch `web`): done (section 11).** L1 (11.2), L2 + L3 (11.3, 11.4), the frame
+  check against the page's Full mode, the physics dumps and quitting (11.5). Next: L4 (11.6).
 
 ## 1. Plain-English summary
 
@@ -285,7 +285,7 @@ ARM: ship nothing new until the emulated row is green.
 | M1 | macOS Apple Silicon: Metal limits, app bundle, Gatekeeper ("unsigned: right-click, Open"; signing needs a paid Apple account), the NaN replay check | 2 |
 | X1 | Linux ARM + macOS Intel (universal binary) | 0.5 |
 | W1 | Windows on ARM: read the emulated row; if `rcpps` differs, the table under emulation | 0.5 |
-| Later | YEBIS on wgpu (also brings post-processing to the browser) 2–3; CPython 3.3 builds 2; triple screens on wgpu 0.3; VR via OpenXR (not sized) | 4.5+ |
+| Later | YEBIS on wgpu (also brings post-processing to the browser) 2–3; CPython 3.3 builds 2; triple screens on wgpu 0.3; VR via OpenXR (not sized); kgl on wgpu's GL backend 0.5 (non-filtering samplers for float textures without `FLOAT32_FILTERABLE`, one sampler per texture in a shader: only for WSLg's GPU and cards without Vulkan, section 11.3) | 5+ |
 
 **Per platform:**
 
@@ -541,8 +541,8 @@ run together (the window needs the surface to draw the first frame, the drive ne
   characters, Win32's `ShowCursor` counter for `mouse_hider.rs`), `timer_unix.rs` (sleep, then a
   250 us spin; no raised priority without `CAP_SYS_NICE`), `input/dinput_none.rs` and a
   non-Windows `XInput` (no pads or wheels: L4), `shm_none.rs` (no pages: L5). TrackIR, Python,
-  VR, the console's Ctrl+C handler, the power request and the debug view (`--debug-view`, D3D11)
-  are Windows only; SDL keeps the screen saver off by itself.
+  VR, the power request and the debug view (`--debug-view`, D3D11)
+  are Windows only; SDL keeps the screen saver off by itself. (Ctrl+C: 11.5.)
 - **Opened to Linux** (their code unchanged): `physics_thread`, `live`, `wheel`, `mouse_hider`,
   `ai_record`, `audio::AudioSink`, `Bindings::load`. `render::picture` (`box_downscale` and
   `write_png` moved there from `render/mod.rs`, which re-exports them) has a debug view that
@@ -577,7 +577,7 @@ false"), and one texture is read with two samplers in one shader (GLSL's combine
 cannot: "A image was used with multiple samplers"). Real Linux has Vulkan on the GPU, so this
 only matters for WSLg; as the lead chat allowed, L3 is proved on lavapipe and a GPU run waits
 for L8's live USB. A kgl fix for GL is in "Not done". (Wayland, `SDL_VIDEO_DRIVER=wayland`:
-the GL run crashed on exit, exit code 139; not looked into, X11 is SDL's pick on WSLg.)
+the GL run crashed on exit, exit code 139: found and fixed in 11.5. X11 is SDL's pick on WSLg.)
 
 ### 11.4 Proofs of 11.3
 
@@ -601,20 +601,75 @@ physics stayed paused, as the game does without focus). One drive by hand ended 
 and then sat until the 300 s watchdog of `run.sh` killed it (exit 124, `run/super_drive`); it
 was not seen again (keys2 at `--duration`, keys6 at Exit: exit 0).
 
-### 11.5 Resume here (P3a)
+### 11.5 P3a's end: the frame check, the physics dumps, quitting (done)
 
-- Done: L1 (11.2); L2 + L3's code (11.3), committed, Windows unchanged (11.4).
-- Next, in this order:
-  1. The window's close button (WSLg's window manager ignores `wmctrl -c`: a small X11 client
-     sending `WM_DELETE_WINDOW` is the test), and the one unexplained 300 s run (above).
-  2. L3's frame comparison: the Linux drive's frames against the browser's Full mode on the same
-     input (the `browser` area's way, kgl call logs too), on lavapipe; frame time.
-  3. The physics goldens from the Linux game build (`rustyac --replay x.ryin --headless
-     --dump-states` against Windows' dump, NaN-blind as in section 4).
+**L3's frames against the browser's Full mode.** The `browser` area compares physics only, so the
+check is Task 38i's (`docs/port/web_renderer.md`, "Step 4"): the page's fixed frame (`full.rs`, a
+drive as it starts, 3 frames of 1/60 s, 1280 x 720, HUD hidden, kgl's call log from the
+renderer's making to the last frame), run by the `full_frame` example. 38i showed that the page's
+log equals native wgpu's and native Direct3D 11's (Spa: 17,409 lines). `full_frame` now builds on
+Linux (`rustyac-web --features wgpu`: `full` and `rustyac-render` open to it, as `rustyac-game`
+takes the renderer there; the lock file is unchanged), so the Linux log is compared with Windows'
+Direct3D 11 one, which stands for the page through 38i's chain. The game's own frames after a
+drive (`--screenshot`) are compared as pictures: in the game `--gpu-log` is Direct3D 11's own
+log (`gpulog`, below kgl), so it has no kgl log to set beside Linux's.
+
+| Frame (1280 x 720) | kgl log, Linux (wgpu, lavapipe) vs Windows (Direct3D 11) | pixels vs Windows on the GPU (Radeon Pro 5500M) |
+|---|---|---|
+| fixed frame, ks_ferrari_f2004 at Spa from the pit | **IDENTICAL** (17,409 lines, the page's count in 38i) | 39.75 dB, 0.48 % off by more than 8 |
+| fixed frame, bmw_m3_e30 at Laguna Seca from the pit | **IDENTICAL** (17,898 lines) | 35.84 dB, 1.70 % |
+| the game, `--replay spa_autodrive_300s.ryin --at 20 --screenshot` (269.1 km/h on both) | (none, above) | 28.60 dB, 11.7 % (the road's and grass's texture detail at speed) |
+| the game, `--track ks_laguna_seca --car bmw_m3_e30 --autodrive --at 8 --screenshot` | (none) | 30.61 dB, 4.1 % |
+
+The picture differences are the two rasterizers' (lavapipe against AMD's driver; 38i measured
+31–35 dB between the page and WARP). Side by side pictures (Windows left, Linux right):
+`re/scratch/taskP3/run/ff/*_win_linux.png`, `run/shots/*_win_linux.png`; the window with AC's
+pause menu: `run/keys6/2_esc.png`.
+
+**Frame time (release build, lavapipe, 1280 x 720, Spa, the F2004):** 2.1 FPS in the window
+(42 frames in 20.1 s, slowest 518 ms; `run/rel_wm`); the fixed frame's 3 frames with loading,
+26 s (Windows on the GPU: 8 s). A GPU's numbers come with L8 (Vulkan on real Linux).
+
+**The physics from the Linux game build.** The dumps area's quick drives, `rustyac --replay
+<drive> --headless --dump-states -` by the Linux release game build (`--features wgpu`, on copies
+of the drives whose AC folder is `/mnt/c/...`, as `drive()` rewrites them for the farm) and by
+Windows' `rustyac.exe`: **6 of 6 byte-identical** dumps (sha256; car_random,
+conditions_spa_cold_green_wind, t17 kerb strike, t22b crash, t18 Laguna Seca pit, the 300 s Spa
+autodrive). Both x86, so no NaN-blind compare was needed.
+
+**Quitting** (`re/scratch/taskP3/close.sh <name> wm|int|term`, `close.py` sends the close
+button's `WM_DELETE_WINDOW`; `head_int.sh` for a headless run):
+
+| How | Result |
+|---|---|
+| the window's close button (debug twice, release once) | the end report, exit 0 |
+| Ctrl+C (SIGINT) in a window drive | the end report, exit 0 (before the fix too: SDL turned it into its quit event) |
+| Ctrl+C in a headless drive | **the end report, exit 0** (before: the process died at once) |
+| the GL run under Wayland | **exit 0** (before: SIGSEGV after the end report) |
+
+- **Ctrl+C:** a SIGINT / SIGTERM handler (`desktop.rs`, `cfg(unix)`) sets the `STOP` flag that
+  Windows' console handler sets, so every loop ends the same tidy way. A second Ctrl+C ends the
+  process at once (the handler puts the default back). Set before SDL starts, so SDL leaves the
+  two signals alone.
+- **The Wayland crash, found:** gdb's stack (`run/wl_gl1/out.txt`): `eglTerminate` in wgpu's GL
+  instance's drop, inside `libwayland-client`, after `Window`'s drop had shut SDL down and closed
+  its Wayland display. wgpu's instance holds that display and goes last (the renderer's buffers,
+  kgl's given device). `window_sdl.rs` now never shuts SDL's video down (the window itself is
+  still destroyed), so the display stays open until the process ends: exit 0 under gdb.
+- **The hand drive that sat after its report (11.4), narrowed:** it hung after the last line
+  `run_window` prints, so in the teardown after it (the renderer's and kgl's wgpu objects, then
+  the process's end), the same place as the Wayland crash. On X11 with Vulkan, lavapipe's
+  surface code also talks to SDL's display. Not seen in this session's 8 ends (the close button 3 times,
+  Ctrl+C in a window twice and headless once, `--duration` twice under Wayland GL). If it comes back, `close.sh` prints the
+  command for every thread's stack (`wsl -u root gdb -p <pid>`, as ptrace_scope is 1).
+
+### 11.6 Resume here (P3a)
+
+- P3a is done: L1 (11.2), L2 + L3 (11.3, 11.4), the frame check, the physics dumps and quitting
+  (11.5). Next: L4 (pads, wheels with FFB on SDL3).
 - Tools: `re/scratch/taskP3/run.sh <name> <args>` (a windowed run with its own cfg and Documents),
-  `keys.sh <name>` (real keys), `wsl.sh` (builds). The debug build is
-  `re/scratch/taskP2/target-linux/debug/rustyac`.
-- Not done, for later: kgl on wgpu's GL backend (non-filtering samplers for float textures
-  without `FLOAT32_FILTERABLE`, one sampler per texture in a shader), which WSLg's GPU needs;
-  Ctrl+C off Windows ends the process at once (no SIGINT handler yet, L5); the GL run under
-  Wayland crashed on exit; the window grabs' colours (a tool's fault, 11.4).
+  `keys.sh` (real keys), `close.sh` (quit tests), `ff.sh` / `shots.sh` + `frames.py` (the frame
+  check), `dumps.sh` (the physics dumps), `wsl.sh` (builds). Builds:
+  `re/scratch/taskP2/target-linux/{debug,release}/rustyac`, `release/examples/full_frame`.
+- Not done, for later: kgl on wgpu's GL backend (section 8's "Later"); the window grabs' colours
+  (a tool's fault, 11.4); the dumps of all 228 drives (only the quick six ran).
