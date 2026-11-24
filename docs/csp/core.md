@@ -80,9 +80,13 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5k s1 part 1. finisher | done: csp_oracle runs CSP's car-load finisher (record, trails array, stand-ins); RSS 3's air is CSP's (1.1128, the port's); the air pin goes |
 | C5k s1 part 2. survey | the first record-woken difference is CSP's Lua car script (`data/script.lua`), held in the oracle; pin moved to it |
 | C5k s2 1. frame count | no physics reader; past 10 the script path faults on the game window (+0x2820640): RSS 3 pinned "Lua car script: needs the Lua host (phase 2)" |
+| C5k s2 2. record without script | BDC S14 (record, no script): the record turns on CSP's own tyre contact (+0x6a0570), not ported (2-4 sessions); row `bdc_streetspec_s14_v4 lap` pinned at step 0 |
+| C5k s2 3. installed cars | record ⇔ car.ini `VERSION=extended-N`: 19 of 210 cars; 9 of them carry a car script |
+| C5k s2 4. record by default | on for every csp case but RSS 3's (its record holds the car on the script); `words` passes with +0x3d10 on CSP's own list |
+| C5k s2 5. phase 2 sizing | Lua host + the scripts' ~35 `ac.*` calls: about 7-10 sessions, needs LuaJIT (a new dependency) |
 
-**Resume here:** C5k session 2 part 2: dirt/grip on a car with a record and no car script
-([C5k](#c5k-cars-csp-record)).
+**Resume here:** C5k done. Next (lead chat's choice): CSP's extended tyre contact (+0x6a0570's record
+branch, the BDC S14 pin) or phase 2's Lua host ([C5k](#c5k-the-cars-csp-record)).
 
 ## The core in one paragraph
 
@@ -1750,5 +1754,56 @@ script path, which faults at step 0 (+0x10b23e7, reading address 0x14): the scri
 (+0x10b23c0 from +0x10b2730) reads the game window object `dwrite+0x2820640`, which the oracle has
 not got. So the script needs the Lua host's state, not one write: the RSS 3 row stays pinned at
 step 0, now with the reason "Lua car script: needs the Lua host (phase 2)".
+
+**Part 2: a record without a car script.** The ten BDC street cars have a record and no script;
+`bdc_streetspec_s14_v4` at Spa (`rowt.sh`, `coret.sh`, 600 and 20 steps). Without the record the
+oracle and the port agree hook by hook (core: 40 world steps, 0 differ); with it the car differs
+from step 0 (core: 326 world steps differ from world step 3). Survey, record on vs off:
+
+| hook | reached | differs | ported |
+|---|---|---|---|
+| finisher +0xf35b50 | yes | Car+0x3db4 only (the record flag) | yes (C5k s1) |
+| stepComponents +0x58b790 | yes | air density Car+0xae8 (1.1856 vs 1.1128), then the tyre step | air yes |
+| tyre step +0x6a0570 (x4, "Car #1/Tyre/Raycasts", "Ray processing", "Post RC") | yes | CSP's own tyre rays replace acs.exe's (no 92b970 ray from acs+0x283a9a); forces/torques from +0x118a580 (`add_force_at_local_pos` 4x, `add_torque`), +0x5bdfa0, +0x6a43b9, +0x6afebb | no |
+| record step +0x5897d0 | yes | `body_add_force` +0x5898cd, +0x5899c9 | no |
+
+So the record switches CSP's extended tyre contact on for every extended car; the port has only
+the no-record branch. Porting it is the tyre step's record branch (2,934 decompiled lines) and its
+force callers: 2-4 sessions, not this one. New row `bdc_streetspec_s14_v4 lap 4000` pinned at its
+first difference (step 0 `world_matrix[3]`, -0.98704976 vs -0.98704994): "CSP extended tyre
+contact, not ported".
+
+**Part 3: installed cars.** 210 cars. The record is set exactly for car.ini `VERSION=extended-N`
+(`extendedV2-N` too): 15 of 15 loaded extended cars set it, 114 of 114 others do not (81 more have
+no extracted `cardata/` and are judged by their car.ini). 19 cars have a record: the ten
+`bdc_streetspec_*_v4`, `rss_formula_2010`, `rss_formula_hybrid_2026`, `rss_formula_rss_3_v6_2026`,
+`vrc_formula_alpha_2026_csp`, `vrc_formula_lithium_2023_csp`, `pxw_sl_v4`, `urd_darche_992_23`,
+`vrc_formula_alpha_2025_csp`, `vrc_formula_beta_2024_csp`. 9 of them carry a car script (`.lua` in
+`data`): all but the BDC cars. Readable: RSS 3, `rss_formula_2010`, `pxw_sl_v4`,
+`vrc_formula_lithium_2023_csp`, `vrc_formula_alpha_2026_csp`; `rss_formula_hybrid_2026` is
+obfuscated; `urd_darche_992_23` and the alpha 2025 / beta 2024 CSP scripts are encrypted for CSP
+(never decrypted).
+
+**Part 4: the record by default.** `csp.sh`'s `oracle` sets `CSP_ORACLE_RECORD=1` for every run but
+RSS 3's (a run may still set it, the RSS 3 row does; `CSP_ORACLE_RECORD=0` is off). The session 1
+failures: `words` (CSP's record set-up +0x7ef3a0 writes 2 at Car+0x3d10): +0x3d10 is on
+`csp_words.py`'s list of CSP's own words; all 18 `words` cases IDENTICAL (13 extended cars with the record).
+`collision rss 3` and `core rss 1` (the held car) and `world rss 3` (dirt fault +0xb44335 with
+workers 0) are RSS 3's: its record holds the car on its Lua script until the Lua host exists, so
+RSS 3's cases keep running it without the record. The F2004 cases are unchanged (no record).
+
+**Part 5: phase 2 sizing.** The readable scripts call about 35 `ac.*` functions: RSS 3's
+(`ac.getSim`, `ac.accessCarPhysics`, `ac.overrideCarState`, `ac.setEngineRPMLimit`,
+`ac.getScriptSetupValue`, `ac.DataLUT21.carData`, `ac.ControlButton`, `ac.setMessage`, `car.*`
+fields, `script.update`), `rss_formula_2010`'s (`ac.setEngineRPM`, `ac.setEngineStalling`,
+`ac.StructItem`/`ac.connect` shared memory, `ac.DataLUT11`, session/flag enums), `pxw_sl_v4`'s
+(`ac.addForce`, `ac.decodeBase64`, `ac.getServerIP`, `os.queueEvent`, `bit.*`; an online check),
+lithium's (`ac.setTurboUserWastegate`, `sim.*` session flags). CSP's LuaJIT is "LuaJIT
+2.1.1791809196" (rolling 2.1, JIT on with "fold cse dce fwd dse narrow loop abc sink fuse", FFI
+used); the car physics API is `extension/internal/lua-sdk/ac_car_cphys/lib.lua` (473 `ac.`
+functions, stubs; bodies in CSP's `lua.zip`). Estimate: LuaJIT host, loader and CSP's update
+cadence 1-2 sessions; the car state / `accessCarPhysics` structs 2; the ~35 calls 2-3; the oracle
+running CSP's real script path (its sim state, the window object) 1-2: about 7-10 sessions. It
+needs LuaJIT as a dependency (Super's decision). Obfuscated or encrypted scripts stay out of reach.
 
 **Resume here (C5k):** see the table at the top.
