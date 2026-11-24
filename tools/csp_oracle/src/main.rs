@@ -973,7 +973,7 @@ unsafe fn arm_breaks(dll: usize) {
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
         let (rva, dump) = match rva.chars().last() {
-            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v' | 'U' | 'V')) => (&rva[..rva.len() - 1], kind),
+            Some(kind @ ('f' | 'p' | 'q' | 'c' | 't' | 'r' | 'j' | 'h' | 'd' | 'm' | 'g' | 'b' | 'i' | 'w' | 'l' | 'a' | 'z' | 'e' | 'y' | 'n' | 'v' | 'U' | 'V' | 'G')) => (&rva[..rva.len() - 1], kind),
             _ => (rva, ' '),
         };
         let address = dll + usize::from_str_radix(rva.trim_start_matches("0x"), 16).expect("CSP_ORACLE_BREAK takes hex offsets");
@@ -1065,6 +1065,15 @@ unsafe extern "system" fn break_hit(pointers: *const *const usize) -> i32 {
         if dump == 'b' {
             line.push_str(&format!(" {} {}", read::<f64>(context + 0x1b0), read::<u32>(rcx + 0x38)));
             crate::ode::BODY_FIELDS.iter().for_each(|&(offset, n)| (0..n).for_each(|i| line.push_str(&format!(" {}", read::<f64>(rcx + offset + i * 8)))));
+        }
+        if dump == 'G' {
+            // Task C5j: the tyre's grain inputs at Tyre::step (rcx = tyre): wheel, threshold, gamma, gain,
+            // load, ndSlip, core temp, hub velocity, grain, surface gripMod, consumption rate
+            let surface = read::<usize>(rcx + 0x410);
+            let rate = read::<f32>(read::<usize>(read::<usize>(rcx + 0x640) + 0x138) + 0xcc);
+            line.push_str(&format!(" w{}", read::<u32>(rcx + 0x628)));
+            [0x2c, 0x34, 0x3c, 0x2ec, 0x314, 0x45c, 0x614].iter().for_each(|&o| line.push_str(&format!(" {:?}", read::<f32>(rcx + o))));
+            line.push_str(&format!(" {:?} {:?} {rate:?}", read::<f64>(rcx + 0x368), if surface == 0 { f32::NAN } else { read::<f32>(surface + 0x90) }));
         }
         if dump == 'i' {
             crate::island::enter(rcx, step);

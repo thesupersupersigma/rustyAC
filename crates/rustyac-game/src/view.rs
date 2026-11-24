@@ -71,6 +71,8 @@ pub struct RenderState {
     pub virtual_km: [f32; 4],
     pub inflation: [f32; 4],
     pub flat_spot: [f32; 4],
+    pub grain: [f32; 4],
+    pub blister: [f32; 4],
     pub water: f32,
     pub turbo_boost: f32,
     pub turbo_bov: f32,
@@ -580,6 +582,8 @@ impl CarView {
             kers_is_charging: self.hybrid.charging,
             sus_damage: self.suspension_damage,
             tyre_flat_spot: r.flat_spot,
+            tyre_grain: r.grain,
+            tyre_blister: r.blister,
             water: r.water,
             tyre_thermal_states: thermal,
             disc_temps: r.disc_temps,
@@ -825,6 +829,8 @@ impl CarView {
             r.virtual_km[index] = s.virtual_km as f32;
             r.inflation[index] = s.inflation;
             r.flat_spot[index] = s.flat_spot as f32;
+            r.grain[index] = s.grain as f32;
+            r.blister[index] = s.blister as f32;
             r.core_temps[index] = tyre.thermal_model.core_temp;
             // Car::getTyreThermalState 0x1402727b0
             let model = &tyre.thermal_model;
