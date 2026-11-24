@@ -18,6 +18,7 @@ pub mod car_update;
 pub mod client;
 pub mod csp;
 pub mod csp_motion;
+pub mod custom_update;
 pub mod datagram;
 /// The matrix blend of the game (`lerp` 0x140108600), which lives with the other maths.
 pub mod dxmath {

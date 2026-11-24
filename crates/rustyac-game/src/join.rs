@@ -159,7 +159,7 @@ pub fn join(options: &Options, target: &JoinTarget, csp: bool) -> Result<Joined,
     };
     let transport: BoxedTransport = if options.net_tape.is_some() { Box::new(Taped::new(transport)) } else { transport };
     let transport: BoxedTransport = match &options.net_arrivals {
-        Some(file) => Box::new(Arrivals { inner: transport, file: file.clone(), rows: Vec::new() }),
+        Some(file) => Box::new(Arrivals { inner: transport, file: file.clone(), rows: Vec::new(), custom: None }),
         None => transport,
     };
     // the handshake and the car list: the same state machine the browser steps, here
@@ -211,6 +211,23 @@ struct Arrivals {
     inner: BoxedTransport,
     file: std::path::PathBuf,
     rows: Vec<(f64, u8, u8, [u32; 3])>,
+    /// `AB 03`'s reader, from the format in the server's welcome (as the client's).
+    custom: Option<rustyac_net::custom_update::Reader>,
+}
+
+impl Arrivals {
+    /// The server's welcome carries the `AB 03` format (`--csp`).
+    fn read_format(&mut self, message: Option<&[u8]>) {
+        let Some(message) = message.filter(|m| m.first() == Some(&rustyac_net::messages::id::TEXT_FILE)) else {
+            return;
+        };
+        for decoded in rustyac_net::messages::decode(message, 0) {
+            if let rustyac_net::messages::Message::WelcomeMessage(text) = decoded {
+                let settings = rustyac_net::csp::split_welcome(&text).map(|(_, ini)| rustyac_net::csp::parse_ini(&ini));
+                self.custom = settings.and_then(|s| rustyac_net::custom_update::Reader::from_settings(&s)).and_then(Result::ok);
+            }
+        }
+    }
 }
 
 impl Transport for Arrivals {
@@ -221,18 +238,22 @@ impl Transport for Arrivals {
         self.inner.send_datagram(message)
     }
     fn poll_reliable(&mut self) -> Result<Option<Vec<u8>>, String> {
-        self.inner.poll_reliable()
+        let message = self.inner.poll_reliable()?;
+        self.read_format(message.as_deref());
+        Ok(message)
     }
     fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
         let datagram = self.inner.poll_datagram()?;
         if let Some(datagram) = datagram.as_ref().filter(|d| (matches!(d.first(), Some(0x46 | 0x48)) || d.starts_with(&rustyac_net::datagram::CUSTOM_UPDATE)) && self.rows.len() < 2_000_000) {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-            self.rows.extend(rustyac_net::datagram::car_state_keys(datagram).into_iter().map(|(slot, sequence, position)| (now, slot, sequence, position)));
+            self.rows.extend(rustyac_net::datagram::car_state_keys(datagram, self.custom.as_mut()).into_iter().map(|(slot, sequence, position)| (now, slot, sequence, position)));
         }
         Ok(datagram)
     }
     fn wait_reliable(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
-        self.inner.wait_reliable(timeout_ms)
+        let message = self.inner.wait_reliable(timeout_ms)?;
+        self.read_format(message.as_deref());
+        Ok(message)
     }
     fn set_datagram_port(&mut self, port: u16) {
         self.inner.set_datagram_port(port)

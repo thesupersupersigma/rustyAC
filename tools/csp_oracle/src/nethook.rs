@@ -37,7 +37,9 @@ type Arrival = (f64, u8, NetCarState);
 
 fn arrivals(file: &str) -> Vec<Arrival> {
     let bytes = std::fs::read(file).unwrap_or_else(|e| panic!("{file}: {e}"));
-    let decode = |d: &[u8]| if d.starts_with(&rustyac_net::datagram::CUSTOM_UPDATE) { rustyac_net::datagram::decode_custom_update(d) } else { rustyac_net::datagram::decode(d) };
+    // the capture's server is AssettoServer pre49: its format text
+    let custom = std::cell::RefCell::new(rustyac_net::custom_update::Reader::new(rustyac_net::custom_update::Format::parse(rustyac_net::custom_update::ASSETTO_SERVER).expect("AssettoServer's format")));
+    let decode = |d: &[u8]| if d.starts_with(&rustyac_net::datagram::CUSTOM_UPDATE) { custom.borrow_mut().decode(d) } else { rustyac_net::datagram::decode(d) };
     let states = |t: f64, d: &[u8]| decode(d).into_iter().filter_map(move |i| if let rustyac_net::datagram::Incoming::CarState { slot, state } = i { Some((t, slot, state)) } else { None });
     if file.ends_with(".nettape") {
         let tape = rustyac_net::transport::Tape::from_bytes(&bytes).expect("a network tape");

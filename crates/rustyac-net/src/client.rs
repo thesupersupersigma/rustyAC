@@ -119,6 +119,9 @@ pub struct Client<T: Transport> {
     pub messages_in: u64,
     /// `--csp`: the key of CSP's handshake reply ([`crate::csp::handshake_key`]); `None`: Kunos' client.
     pub csp: Option<u64>,
+    /// `--csp`: the `AB 03` reader built from the server's `CUSTOM_UPDATE_FORMAT`; without it
+    /// `AB 03` is not read (as CSP).
+    pub custom_update: Option<crate::custom_update::Reader>,
     /// `--csp`: the datagram sub-ids already logged (each once).
     csp_datagrams_seen: Vec<u8>,
 }
@@ -346,6 +349,7 @@ impl<T: Transport> Client<T> {
             datagrams_out: 0,
             messages_in: 0,
             csp: None,
+            custom_update: None,
             csp_datagrams_seen: Vec::new(),
             accepted,
         }
@@ -448,7 +452,10 @@ impl<T: Transport> Client<T> {
     fn on_datagram(&mut self, datagram: &[u8], physics_time: f64, clock_ms: f64) {
         self.datagrams_in += 1;
         // --csp: the server sends every car as CSP's custom update instead of 0x48
-        let decoded = if self.csp.is_some() && datagram.starts_with(&datagram::CUSTOM_UPDATE) { datagram::decode_custom_update(datagram) } else { datagram::decode(datagram) };
+        let decoded = match &mut self.custom_update {
+            Some(reader) if datagram.starts_with(&datagram::CUSTOM_UPDATE) => reader.decode(datagram),
+            _ => datagram::decode(datagram),
+        };
         for incoming in decoded {
             match incoming {
                 Incoming::Ping { ping, datagram } => {

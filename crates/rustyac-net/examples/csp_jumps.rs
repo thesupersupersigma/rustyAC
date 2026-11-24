@@ -68,6 +68,11 @@ fn main() {
         }
         let (client, cars) = Client::join(TapePlayer::new(&tape), &request).expect("the tape's join");
         let mut replay = NetReplay::build_on(&recording, &paths, track, client, cars).expect("the replay");
+        if csp {
+            // the tapes' server is AssettoServer pre49 (the online join reads the text from its welcome)
+            let format = rustyac_net::custom_update::Format::parse(rustyac_net::custom_update::ASSETTO_SERVER).expect("AssettoServer's format");
+            replay.session.client.custom_update = Some(rustyac_net::custom_update::Reader::new(format));
+        }
         if mode != "the game's add" {
             let mut motion = CspMotion::new(2651);
             motion.read_settings(&[]);
