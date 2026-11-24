@@ -35,6 +35,7 @@ mod collision;
 mod island;
 mod joints;
 mod hit;
+mod nethook;
 mod ode;
 mod reduce;
 mod solver;
@@ -2282,12 +2283,21 @@ unsafe fn maths(dll: usize) {
     let (expf, atanf, logf) = (f(0x1db_8350), f(0x1dc_7150), f(0x1dc_9b50));
     let powf: extern "C" fn(f32, f32) -> f32 = std::mem::transmute(dll + 0x1db_47a0);
     println!("maths: MXCSR {csr:#06x}, expf(1) {} atanf(1) {} logf(2) {} powf(2, 3) {}", expf(1.0), atanf(1.0), logf(2.0), powf(2.0, 3.0));
-    one("expf", Box::new(move |x| expf(x)), rustyac_math::pure::expf, rustyac_math::expf);
-    one("atanf", Box::new(move |x| atanf(x)), rustyac_math::pure::atanf, rustyac_math::atanf);
-    one("logf", Box::new(move |x| logf(x)), rustyac_math::pure::logf, rustyac_math::logf);
-    // the law's only exponent (0x238ba88)
-    const Y: f32 = f32::from_bits(0x40a8_2f53);
-    one("powf(x, 5.2557769)", Box::new(move |x| powf(x, Y)), |x| rustyac_math::pure::powf(x, Y), |x| rustyac_math::powf(x, Y));
+    // CSP_ORACLE_MATHS=sincos: only sinf / cosf (Task NH-5)
+    let all = std::env::var("CSP_ORACLE_MATHS").as_deref() != Ok("sincos");
+    if all {
+        one("expf", Box::new(move |x| expf(x)), rustyac_math::pure::expf, rustyac_math::expf);
+        one("atanf", Box::new(move |x| atanf(x)), rustyac_math::pure::atanf, rustyac_math::atanf);
+        one("logf", Box::new(move |x| logf(x)), rustyac_math::pure::logf, rustyac_math::logf);
+        // the law's only exponent (0x238ba88)
+        const Y: f32 = f32::from_bits(0x40a8_2f53);
+        one("powf(x, 5.2557769)", Box::new(move |x| powf(x, Y)), |x| rustyac_math::pure::powf(x, Y), |x| rustyac_math::powf(x, Y));
+    }
+    // Task NH-5: CSP's sinf / cosf (the rotation of a snapped remote car) against the static UCRT's
+    // (f32::sin / f32::cos: "pure" column) and MSVCR120's (rustyac_math, which csp_motion takes)
+    let (sinf, cosf) = (f(0x1dc_7c90), f(0x1dc_75f0));
+    one("sinf", Box::new(move |x| sinf(x)), f32::sin, rustyac_math::sinf);
+    one("cosf", Box::new(move |x| cosf(x)), f32::cos, rustyac_math::cosf);
 }
 
 fn main() {
@@ -2308,6 +2318,11 @@ fn main() {
     }
     // --maths: CSP's C runtime functions of the air density against rustyac_math (Task C4a)
     let maths_check = arguments.iter().position(|a| a == "--maths").map(|i| arguments.remove(i)).is_some();
+    // --net-hook <nettape|udp.log>: CSP's hook on the remote-state add against rustyac_net::csp_motion (Task NH-5)
+    let net_hook = arguments.iter().position(|a| a == "--net-hook").map(|i| {
+        arguments.remove(i);
+        full_path(&arguments.remove(i))
+    });
     // --ode <breaks.txt>: CSP's ODE functions against rustyac-ode's f64 ones on that drive's inputs (Task C5c)
     let ode_check = arguments.iter().position(|a| a == "--ode").map(|i| {
         arguments.remove(i);
@@ -2508,6 +2523,10 @@ fn main() {
         checkpoint("called", &before, &functions);
         if maths_check {
             maths(dll as usize);
+            stop(0, "end of the run");
+        }
+        if let Some(file) = &net_hook {
+            nethook::run(&acs, dll as usize, file);
             stop(0, "end of the run");
         }
         if let Some(breaks) = &ode_check {

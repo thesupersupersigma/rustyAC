@@ -119,11 +119,13 @@ pub struct NetSession<T: Transport> {
     pub events: Vec<Event>,
     /// Steps so far (the clock of a tape).
     pub steps: u64,
+    /// `--csp`: CSP's hook on every remote state's add; `None`: the game's add.
+    pub csp_motion: Option<crate::csp_motion::CspMotion>,
 }
 
 impl<T: Transport> NetSession<T> {
     pub fn new(client: Client<T>) -> NetSession<T> {
-        NetSession { client, cars: Vec::new(), track: None, horn: false, events: Vec::new(), steps: 0 }
+        NetSession { client, cars: Vec::new(), track: None, horn: false, events: Vec::new(), steps: 0, csp_motion: None }
     }
 
     /// The frame's work of every remote car (`NetCarStateProvider::update`): the game calls
@@ -179,7 +181,10 @@ impl<T: Transport> StepHooks for NetSession<T> {
         for (slot, state) in self.client.take_car_states() {
             // (the first car with that slot; the player's own slot has none)
             if let Some(remote) = self.cars.iter_mut().find(|remote| remote.session_id == slot) {
-                remote.on_remote_state_received(state, physics_time, send_interval);
+                match &mut self.csp_motion {
+                    Some(motion) => motion.add(remote, state, physics_time, send_interval),
+                    None => remote.on_remote_state_received(state, physics_time, send_interval),
+                };
             }
         }
         for event in self.client.take_events() {
