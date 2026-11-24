@@ -24,7 +24,7 @@ dumps oracle/game/conditions_spa_setup_launch.ryin | the old exe dumps nothing: 
 browser Full mode's fallback banner (montreal) | the montreal mod is not installed: no other track names a shader the install lacks
 # Task C5i-c: the csp area's rows whose first difference (past CSP's view fields) is a known gap; any
 # earlier step or other value stays DIFFERENT. One a line: <area> <case> | first <difference> | why
-csp row ks_ferrari_f2004 lap | first car 0 step 63 world_matrix[3] | a body step difference with equal tyre outputs (suspension and velocity first, tyre loads a step later), not traced yet: CSP's stock-car tyre step is Vanilla's but for updateAngularSpeed's tail, ported in Task C5j; the rest of C5j finds this
-csp row ks_ferrari_f2004 wall | first car 0 step 154 world_matrix[3] | the same as the lap row's (Task C5j's tail port did not move it)
-csp row ks_ferrari_f2004 two | first car 0 step 165 world_matrix[3] | the same as the lap row's (car 1 matches to step 171 since Task C5j put it on the road)
+csp row ks_ferrari_f2004 lap | first car 0 step 1417 tyre_grain[1] | the only value that differs in 4000 steps: the game's grain starts (4e-11) where the port's stays 0, with equal core temperatures, loads and slips; Tyre::stepGrainBlister is not hooked by CSP, not traced yet (Task C5j)
+csp row ks_ferrari_f2004 wall | first car 0 step 1414 tyre_grain[1] | the same as the lap row's
+csp row ks_ferrari_f2004 two | first car 0 step 620 world_matrix[3] | car 0 reaches the parked car 1: both cars' bodies differ from that step (the port's car 0 takes damage 14.09, the game's 0) though every collision callback equals the port's csp_hit; car-vs-car contact not traced yet (Task C5j)
 csp row rss_formula_rss_3_v6_2026 lap | first car 0 step 0 air_density[0] | the oracle's CSP has Vanilla's air: it skips CSP's car-load finisher (+0xf35b50, the per-car list the air hook reads); real CSP and the port use CSP's law (Task C5i-c part 3)

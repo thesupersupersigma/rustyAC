@@ -1940,6 +1940,13 @@ impl RollingChassis {
     /// controls are locked, which the game samples here too.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step_car_begin(&mut self, physics_time: f64) -> bool {
+        // CSP's `Car::step` wrapper (dwrite +0x58afc0 / +0x58a8d0, build 4305) sets the sleep limit
+        // to 250 frames before the original, every step, for every car (Task C5j).
+        // shortcut: only `DISABLE_AUTOBRAKING=0` (CSP's default) away from the pits; its other
+        // stationary modes and the in-pits reset are not ported, upgrade when a row needs them
+        if crate::csp::enabled() {
+            self.frames_to_sleep = 250;
+        }
         self.physics_time = physics_time;
         // PhysicsEngine::step counts its steps first of all
         self.step_counter = self.step_counter.wrapping_add(1);
