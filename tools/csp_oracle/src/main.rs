@@ -1712,9 +1712,9 @@ unsafe fn finish_car(dll: usize, car: *mut u8, guid: usize) {
     if read::<u32>(context) == 1 && read::<usize>(context + 0x10) != 0 && (mode == 0 || read::<u8>(mode + 27) != 9) {
         put(context as *mut u8, 0x10, 0usize);
     }
-    // Task C5k: CSP_ORACLE_RECORD=1 keeps the car's CSP record (the rows); without it the oracle's CSP runs
-    // the car as one without (every other case): the record wakes CSP code the port lacks (the Lua car script)
-    let record = if std::env::var_os("CSP_ORACLE_RECORD").is_some() { read::<usize>(context + 0xe0) } else { 0 };
+    // Task C5k: CSP_ORACLE_RECORD (not 0) keeps the car's CSP record (csp.sh sets it but for RSS 3, whose
+    // record holds the car on its Lua car script); without it the oracle's CSP runs the car as one without
+    let record = if std::env::var("CSP_ORACLE_RECORD").is_ok_and(|v| v != "0") { read::<usize>(context + 0xe0) } else { 0 };
     let alloc: extern "C" fn(usize) -> *mut usize = std::mem::transmute(dll + 0x2b_ace0);
     if read::<usize>(avatar as usize + 0xf80) == 0 {
         // shortcut: a zeroed RaceEngineer stand-in whose +8 is the Car, all the air hook's ground

@@ -15,6 +15,7 @@ CSP_ONLY = {
     0x2D8: "colliderManager observer lastChanged = -1 (FileChangeObserver::observe detour; no file watcher in rustyAC)",
     0x3630: "screenName length (CSP's SCREEN_NAME is ui_car.json's name; the physics car has no name)",
     0x3638: "screenName capacity (same)",
+    0x3D10: "2 at +0x3d10: the car's CSP record's set-up (+0x7ef3a0, extended cars)",
     0x3DB0: "padding after Car+0x3db0: CSP's extension flag at +0x3db4",
     0x3E28: "padding at +0x3e2d (CSP zeroes it)",
     0xAE8: "AeroMap padding at +0xaec (CSP zeroes it)",

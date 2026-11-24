@@ -57,7 +57,9 @@ grep -q 'SPAWN_SET=HOTLAP_START' "$cfg/race.ini" || { echo "csp_oracle's RACE_IN
 oracle() {
     r=$out/runs/$1; shift
     rm -rf "$r"; mkdir -p "$out/runs"
-    timeout 300 "$CSP" re/csp/fakeac "$r" "$cfg" "$@" > "$r.txt" 2>&1
+    # every car's CSP record, as real CSP (Task C5k), but RSS 3's unless asked: its record holds the car on its Lua car script (phase 2)
+    rec=1; case "$r $*" in *rss_formula_rss_3_v6_2026*) rec=0 ;; esac
+    CSP_ORACLE_RECORD=${CSP_ORACLE_RECORD:-$rec} timeout 300 "$CSP" re/csp/fakeac "$r" "$cfg" "$@" > "$r.txt" 2>&1
 }
 # stale <car>: the install's data.acd no longer matches its copy in cardata/ (the car was reinstalled
 # or updated): its cases say so instead of DIFFERENT
@@ -353,9 +355,9 @@ done
 # C5i-c). The two row (Task C5i-c): car 1 parked 5.5 m ahead of car 0 along the spawn's tail, on rustyAC's
 # parked controls (CSP_ORACLE_PARK=last; the tape's opponent and oracle_gap), 0.2 m higher than the spawn
 # (Task C5j: the road climbs ~19 cm there, at the spawn's height it started sunk; oracle_lift)
-# CSP_ORACLE_RECORD: the cars' CSP record, as real CSP (Task C5k; RSS 3's holds its Lua script, pinned)
+# CSP_ORACLE_RECORD=1: RSS 3's record too (Task C5k; it holds the car on its Lua script, BDC S14's turns on CSP's own tyre contact, both pinned)
 view='actions_state|tyre_surface_def|last_ff_final|body_work_volume|time_stamp|ride_height|setup_state|gear_rpm_window|tyre_thermal_states|lock_controls_time|anti_squat|caster|ground_plane|normalized_spline_position|acc_g|wheel_angular_speed'
-for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_ferrari_f2004 wall 6667" "ks_ferrari_f2004 two 1600"; do
+for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "bdc_streetspec_s14_v4 lap 4000" "ks_ferrari_f2004 wall 6667" "ks_ferrari_f2004 two 1600"; do
     set -- $row; car=$1; kind=$2; steps=$3
     keep "row $car $kind" || continue
     tape=$lap; [ $kind = wall ] && tape=oracle/game/collide_spa_wall_high.ryin
