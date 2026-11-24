@@ -138,7 +138,13 @@ pub fn finish_join(mut client: Client<BoxedTransport>, cars: Vec<CarEntry>, root
         client.shutdown();
         return Err(message);
     }
-    Ok(OnlineSession::new(client, &cars))
+    let csp = client.csp.is_some();
+    let mut session = OnlineSession::new(client, &cars);
+    // --csp: every remote state goes through CSP's hook on the add (NH-5)
+    if csp {
+        session.net.csp_motion = Some(rustyac_net::csp_motion::CspMotion::new(csp_track.as_ref().map_or(0, |(build, _, _)| *build)));
+    }
+    Ok(session)
 }
 
 /// What the server dictates of the physics (the handshake's reply), as the game applies it.
@@ -730,11 +736,27 @@ impl OnlineSession {
                     }
                     if let Some((_, ini)) = csp {
                         self.csp_settings = rustyac_net::csp::parse_ini(&ini);
-                        // shortcut: stored and listed only: rustyAC's --csp reads none of them yet (NH-3/6/7 do)
+                        // shortcut: stored and listed; --csp reads only CUSTOM_MOTION / EXTRAPOLATE_STATE / CUSTOM_UPDATE_FORMAT (NH-5), NH-3/6 read the rest
                         for (section, keys) in &self.csp_settings {
                             for (key, value) in keys {
                                 self.console.push(format!("csp: server setting [{section}] {key} = {} (stored, not used yet)", value.replace(['\r', '\n'], " ")));
                             }
+                        }
+                    }
+                    // CSP's reader (@ 0x1805596e0) runs on every welcome, `$CSP0:` or not (its hook after
+                    // ACClient::onWelcomeMessageReceived); without one it reads its settings as they were
+                    if self.net.client.csp.is_some() {
+                        if let Some(motion) = &mut self.net.csp_motion {
+                            motion.read_settings(&self.csp_settings);
+                        }
+                        // CSP clears its reader and parses the text again; a bad text leaves none (its log's line)
+                        match rustyac_net::custom_update::Reader::from_settings(&self.csp_settings) {
+                            Some(Ok(reader)) => self.net.client.custom_update = Some(reader),
+                            Some(Err(error)) => {
+                                self.net.client.custom_update = None;
+                                self.console.push(format!("csp: Failed to initialize: {error}"));
+                            }
+                            None => {}
                         }
                     }
                 }

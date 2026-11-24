@@ -14,7 +14,7 @@
 //! | 0x57 | in | the race's start time: `i32` start, `u32` the server's idea of this client's clock, `u16` ping |
 //! | 0xf9 | in | ping: bytes 1..4 to echo, `u16` the client's ping as the server measured it |
 //! | 0xf8 | out | pong: the ping with id 0xf8 and the client's clock (`u32` ms) at offset 5, two bytes longer than the ping |
-//! | 0xab 0x03 | in | `--csp` only: CSP's custom update ([`decode_custom_update`]) |
+//! | 0xab 0x03 | in | `--csp` only: CSP's custom update ([`crate::custom_update::Reader`]) |
 
 // Comparisons are spelled the way the original branches so NaN takes the same path.
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_clamp, clippy::needless_range_loop)]
@@ -100,9 +100,12 @@ fn decode_state(r: &mut Reader<'_>, single: bool) -> (u8, NetCarState) {
 /// The car states of a datagram as (slot, sequence number, the position's three floats as
 /// bits): what tells one state from another on every client that gets it (the time stamp
 /// and the ping in it are each recipient's own). For measuring when the same state reaches
-/// two clients.
-pub fn car_state_keys(datagram: &[u8]) -> Vec<(u8, u8, [u32; 3])> {
-    let decoded = if datagram.starts_with(&CUSTOM_UPDATE) { decode_custom_update(datagram) } else { decode(datagram) };
+/// two clients. `AB 03` needs the server's format (`custom`).
+pub fn car_state_keys(datagram: &[u8], custom: Option<&mut crate::custom_update::Reader>) -> Vec<(u8, u8, [u32; 3])> {
+    let decoded = match custom {
+        Some(reader) if datagram.starts_with(&CUSTOM_UPDATE) => reader.decode(datagram),
+        _ => decode(datagram),
+    };
     decoded
         .into_iter()
         .filter_map(|incoming| match incoming {
@@ -172,58 +175,6 @@ pub fn decode(datagram: &[u8]) -> Vec<Incoming> {
 
 /// The id of CSP's custom update datagram (`0xAB`, then sub-id 3).
 pub const CUSTOM_UPDATE: [u8; 2] = [crate::csp::EXTENDED, 0x03];
-const CUSTOM_RECORD: usize = 60;
-
-/// CSP's `value * scale + offset` of a custom-update field (dwrite.dll @ 0x180d75780: `mulss`,
-/// `addss`; so -0.0 comes out +0.0).
-fn custom(value: f32, scale: f32, offset: f32) -> f32 {
-    value * scale + offset
-}
-
-/// `--csp`: the server's custom update `AB 03 <n>` and `n` records of 60 bytes, read the way CSP
-/// 4305 reads them (the record handler @ 0x180d76dd0 of dwrite.dll).
-// shortcut: the record layout is AssettoServer's CUSTOM_UPDATE_FORMAT, hard-wired instead of parsed
-// from the welcome's [EXTRA_DATA]; parse the format if another server sends a different one.
-pub fn decode_custom_update(datagram: &[u8]) -> Vec<Incoming> {
-    let mut out = Vec::new();
-    if datagram.len() < 3 {
-        out.push(Incoming::Truncated(crate::csp::EXTENDED));
-        return out;
-    }
-    let mut r = Reader::new(&datagram[3..]);
-    for _ in 0..datagram[2] {
-        // CSP throws "Unexpected end" here: the records before stay applied
-        if r.remaining() < CUSTOM_RECORD {
-            out.push(Incoming::Truncated(crate::csp::EXTENDED));
-            break;
-        }
-        let slot = r.u8();
-        let mut state = NetCarState { pak_sequence_id: r.u8(), time_stamp: r.i32() as f64, ..NetCarState::default() };
-        state.ping = custom(r.u16() as f32, 1.0, 0.0) as i32;
-        for v in [&mut state.pos, &mut state.rotation, &mut state.velocity] {
-            *v = r.vec3().map(|x| custom(x, 1.0, 0.0));
-        }
-        for wheel in 0..4 {
-            // `byte, -100, tyreAngularSpeed`: the same bits as decode_wheel_speed (0 gives +1 * 0)
-            let x = custom(r.u8() as f32, 1.0, -100.0);
-            let sign = if x < 0.0 { -1.0f32 } else { 1.0 };
-            state.tyre_angular_speed[wheel] = (powf(10.0, f32::from_bits(x.to_bits() & 0x7fff_ffff) * f32::from_bits(0x3d4c_cccd)) - 1.0) * sign;
-        }
-        state.steer_angle = custom(r.u8() as f32, 1.0, -127.0);
-        // `byte, -127, /2`: the modifiers act on the offset too, so offset -63.5
-        state.wheel_angle = custom(r.u8() as f32, 0.5, -63.5);
-        let rpm = custom(r.u16() as f32, 1.0, 0.0) as i32;
-        state.engine_rpm = if rpm < 0 { 0 } else if rpm < 0xffff { rpm as u16 } else { 0xffff };
-        state.gear_index = custom(r.u8() as f32, 1.0, 0.0) as i32;
-        state.status_bytes = r.u32();
-        state.gas = custom(r.u8() as f32, 1.0 / 255.0, 0.0);
-        // `short` with no scale: CSP keeps the server's milliseconds where AC's 0x46 has seconds
-        state.performance_delta = custom(r.i16() as f32, 1.0, 0.0);
-        out.push(Incoming::CarState { slot, state });
-    }
-    out
-}
-
 /// The answer to a ping (`UDPSocket::receive`): the ping itself with id 0xf8 and the
 /// client's clock, whole milliseconds, at offset 5; two bytes longer than the ping.
 pub fn pong(ping: &[u8], clock_ms: f64) -> Vec<u8> {
@@ -290,19 +241,5 @@ mod tests {
         assert_eq!((state.pak_sequence_id, state.time_stamp, state.ping), (5, 1000.0, 40));
         assert_eq!((state.steer_angle, state.wheel_angle, state.engine_rpm, state.gear_index, state.status_bytes), (0.0, 1.0, 7000, 4, 0x20));
         assert_eq!(decode(&datagram[..40]), vec![Incoming::Truncated(0x48)]);
-    }
-
-    #[test]
-    fn custom_update_record() {
-        // the first AB 03 of Super's capture (taskNH7 cap/udp.log, 121.535 s)
-        let datagram: Vec<u8> = (0..126).step_by(2).map(|i| u8::from_str_radix(&"ab03010200d4240000000022d192c3b94ca64134242fc448586ec000e69b3c44781a3b27f734c1f256c83e935789c1888888887f7f130b0200000000000000"[i..i + 2], 16).unwrap()).collect();
-        let decoded = decode_custom_update(&datagram);
-        assert_eq!(decoded.len(), 1);
-        let Incoming::CarState { slot, state } = &decoded[0] else { panic!() };
-        assert_eq!((*slot, state.pak_sequence_id, state.time_stamp, state.ping), (2, 0, 9428.0, 0));
-        assert_eq!(state.pos, [f32::from_bits(0xc392d122), f32::from_bits(0x41a64cb9), f32::from_bits(0xc42f2434)]);
-        assert_eq!((state.steer_angle, state.wheel_angle, state.engine_rpm, state.gear_index, state.status_bytes, state.gas), (0.0, 0.0, 2835, 2, 0, 0.0));
-        assert_eq!(state.tyre_angular_speed, [decode_wheel_speed(136); 4]);
-        assert_eq!(decode_custom_update(&datagram[..40]), vec![Incoming::Truncated(0xab)]);
     }
 }

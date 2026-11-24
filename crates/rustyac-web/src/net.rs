@@ -118,7 +118,7 @@ impl NetLink {
     pub fn arrivals(&self) -> String {
         let mut out = String::from("arrived_ms,taken_ms,slot,sequence,x,y,z\n");
         for arrival in self.link.arrivals.borrow().iter() {
-            for (slot, sequence, position) in rustyac_net::datagram::car_state_keys(&arrival.head) {
+            for (slot, sequence, position) in rustyac_net::datagram::car_state_keys(&arrival.head, None) {
                 out.push_str(&format!("{:.3},{:.3},{slot},{sequence},{:08x},{:08x},{:08x}\n", arrival.arrived, arrival.taken, position[0], position[1], position[2]));
             }
         }

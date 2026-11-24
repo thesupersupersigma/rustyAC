@@ -12,6 +12,8 @@ rustyac-math = { path = "../../crates/rustyac-math" }
 rustyac-physics = { path = "../../crates/rustyac-physics" }
 # Task C5c: the f64 ODE functions held against CSP's
 rustyac-ode = { path = "../../crates/rustyac-ode", features = ["embree"] }
+# Task NH-5: CSP's hook on the remote-state add held against rustyac-net's csp_motion
+rustyac-net = { path = "../../crates/rustyac-net" }
 
 [profile.release]
 opt-level = 3
