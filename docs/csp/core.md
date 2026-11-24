@@ -77,8 +77,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5j s3 1. `tyre_grain` | done: the port's step was right; its `--physics-states` record left grain/blister 0 (`view.rs`); F2004 lap/wall rows IDENTICAL past the view list |
 | C5j s3 2. two-car contact | done: the row ran the game's car on csp_oracle's stand-in box collider; `CSP_ORACLE_LOADER=use` on the rows, two-car row IDENTICAL past the view list |
 
-**Resume here:** C5j: RSS 3 air and dirt (plan step 3, 2-3 sessions)
-([C5j session 3](#session-3-neither-difference-was-in-the-physics)).
+| C5k s1 part 1. finisher | done: csp_oracle runs CSP's car-load finisher (record, trails array, stand-ins); RSS 3's air is CSP's (1.1128, the port's); the air pin goes |
+| C5k s1 part 2. survey | the first record-woken difference is CSP's Lua car script (`data/script.lua`), held in the oracle; pin moved to it |
+
+**Resume here:** C5k part 2: make the oracle's CSP run RSS 3's car script (frame count), then decide the port's car scripts
+([C5k](#c5k-cars-csp-record)).
 
 ## The core in one paragraph
 
@@ -1666,3 +1669,70 @@ loads it with `--csp` (named), any other changed row fails. With Super's `pxw_sl
 `acu_mexico_2021`: all three IDENTICAL, naming them.
 
 **Resume here (C5j):** see the table at the top.
+
+## C5k: the car's CSP record
+
+Task C5k: CSP's per-car record for cars with extended data (RSS 3), the oracle side first.
+
+### Session 1: the finisher, and the record is a Lua script
+
+**The finisher (part 1).** At the end of `build_car`, csp_oracle now does what CSP's car-load
+finisher (+0xf35b50) does for physics (`finish_car` in `tools/csp_oracle/src/main.rs`): the car's
+state slot (`dwrite+0x28213d8[guid]`) gets the car and its list index, the loading context's record
+(`context+0xe0`) is filled (+0x318 car, +0x320 avatar, +0x328/+0x330 avatar parts, CSP's own set-up
++0x7ef3a0, +0x6ec stamp) and pushed onto the per-car record list `dwrite+0x28213f0` the air hook
+reads. The session objects it wakes, each CSP's own where CSP has a constructor:
+
+| Object | Built from | Why |
+|---|---|---|
+| per-car tyre-trail array `dwrite+0x28177c0` (1376 B a car) | CSP's constructor +0xb448a0, once for all the cars before they load | the dirt hook (+0x6a65e0 -> +0x8cc4c0) reads it; real CSP sizes it from the car list at session start (+0x676560), which the oracle never runs (rebuilt per car, three RSS 3 faulted in the dirt code at +0xb44335) |
+| RaceEngineer, avatar+0xf80 | stand-in: zeroed 0x100, +8 = Car | the air hook's ground height (+0x1150ae0) reads only +8 |
+| Sim's car vector, Sim+0x208..0x218 | stand-in: the avatars by guid | acs `Sim::getCar` from the record step |
+| SetupInformation `dwrite+0x2815000` | stand-in: zeroed 0x180, +0x178 = Sim | the record step's debug readout (+0x692530) reads only its Sim |
+
+Checked how: no real-game dump (reading a running game is not the oracle's means); instead the
+record run's values against the port's on the same tape. RSS 3's step-0 air is now CSP's law,
+1.1127756, the port's (and real CSP's, C5j); the row's air pin is gone from
+`tools/proofs/expected_skips.txt`.
+
+The record is opt-in: `CSP_ORACLE_RECORD=1` (the four rows in `csp.sh`). Without it the finisher
+still runs but lists no record, so the oracle's CSP runs every car as one without (Vanilla air), as
+before C5k. Why: with the record on everywhere, the RSS cars' other csp cases failed: `words` (CSP's
+set-up +0x7ef3a0 writes Car+0x3d10 = 2, not on the own-words list), `collision rss 3` and `core rss 1`
+(the world step on the port's contacts: 8914 and 10848 values differ, the held car), and `world rss 3`
+at workers 0 (a fault in the dirt code at +0xb44335 with three record cars; workers 7 ran). Those wait
+until the script part matches.
+
+**The survey (part 2).** New break kind `R` (rcx = Car): the Car's 16032 bytes as words into
+`snap_<n>.txt` in the run folder (pointers as `ptr`), so a `CSP_ORACLE_RECORD=1` run and one
+without can be diffed hook by hook (`re/scratch/taskC5k/rowt.sh`, `REC=1`). Step 0, RSS 3 at Spa:
+
+| Hook | Reached | Differs (record vs no record) | Ported |
+|---|---|---|---|
+| +0x58afc0 car step wrapper | yes | no | - |
+| +0x591910 pollControls | yes | yes: handBrake (+0x150) 1.0, drivetrain +0x250 flag 1, sleepingFrames (+0x3d94) 3 | no |
+| +0x588850 air | yes | no (CSP's air, the port's value) | (C5j) |
+| +0x58b790 stepComponents | yes | 108 more Car words after it (the held car) | no |
+
+The pollControls difference is CSP's car script runner +0x84c110 (record+0x258/+0x250 objects):
+RSS 3's `data/script.lua` (Race SIM Studio's throttle and clutch maps, `Clutch_map.2Dlut` /
+`throttle_map.2Dlut`, a launch-control rpm limit). While CSP's frame count `dwrite+0x2820e90` is
+below 10 the runner holds the car (pedals 0, handbrake 1, sleeping 3, drivetrain +0x250 = 1,
++0x318 = 0); after that it runs the script every step. The oracle draws no frames, so the count stays
+0 and the oracle's CSP holds RSS 3 at every step; real CSP is past 10 frames before the session and
+runs the script. So the oracle's record run is not yet real CSP. The row is pinned on its new first
+difference (`world_matrix[3]`, step 0) with that reason.
+
+**Plan change.** Part 2's "port what differs" is now a Lua car-script question, not dirt/grip:
+the port would need CSP's script runner and the `ac.*` car API the script uses (or LuaJIT itself).
+Next: (1) give the oracle a frame count past 10 (one write; check the other ~30 readers of
+`dwrite+0x2820e90` are not physics) and see the script run in process; (2) then decide with Super
+how the port runs car scripts. The dirt/grip hooks come after, once the script part matches.
+
+The held car never calls the collision callback, so its run prints no callback line; `csp.sh`
+now reads a run that drove with no line as 0 calls, none differing.
+
+**Not done:** part 3 (which installed cars get a record: needs where CSP sets `context+0xe0`);
+the dirt/grip survey past the script; the record on by default (the four cases above).
+
+**Resume here (C5k):** see the table at the top.
