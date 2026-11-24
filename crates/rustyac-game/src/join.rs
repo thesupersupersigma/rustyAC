@@ -225,7 +225,7 @@ impl Transport for Arrivals {
     }
     fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
         let datagram = self.inner.poll_datagram()?;
-        if let Some(datagram) = datagram.as_ref().filter(|d| matches!(d.first(), Some(0x46 | 0x48)) && self.rows.len() < 2_000_000) {
+        if let Some(datagram) = datagram.as_ref().filter(|d| (matches!(d.first(), Some(0x46 | 0x48)) || d.starts_with(&rustyac_net::datagram::CUSTOM_UPDATE)) && self.rows.len() < 2_000_000) {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64() * 1000.0);
             self.rows.extend(rustyac_net::datagram::car_state_keys(datagram).into_iter().map(|(slot, sequence, position)| (now, slot, sequence, position)));
         }

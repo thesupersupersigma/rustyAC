@@ -447,7 +447,9 @@ impl<T: Transport> Client<T> {
 
     fn on_datagram(&mut self, datagram: &[u8], physics_time: f64, clock_ms: f64) {
         self.datagrams_in += 1;
-        for incoming in datagram::decode(datagram) {
+        // --csp: the server sends every car as CSP's custom update instead of 0x48
+        let decoded = if self.csp.is_some() && datagram.starts_with(&datagram::CUSTOM_UPDATE) { datagram::decode_custom_update(datagram) } else { datagram::decode(datagram) };
+        for incoming in decoded {
             match incoming {
                 Incoming::Ping { ping, datagram } => {
                     // UDPSocket::receive answers the ping itself
@@ -477,8 +479,8 @@ impl<T: Transport> Client<T> {
                         self.events.push(Event::RaceStart(start as f64));
                     }
                 }
-                // --csp: CSP's datagrams (weather, custom updates, client messages) are not
-                // read yet (NH-4, NH-7): the first of each kind is logged
+                // --csp: CSP's other datagrams (weather, client messages) are not read yet
+                // (NH-4): the first of each kind is logged
                 Incoming::Unknown(crate::csp::EXTENDED) if self.csp.is_some() => {
                     let sub = datagram.get(1).copied().unwrap_or(0);
                     if !self.csp_datagrams_seen.contains(&sub) {
