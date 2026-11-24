@@ -922,6 +922,14 @@ and CSP 4305's `dwrite.dll`.
   `cp ../../../target/...` copied the main folder's build. Copy by absolute path (now in the kit's
   memory note).
 
+* **Checks:** `cargo test -p rustyac-net --lib datagram` (5 pass, `custom_update_record` new);
+  clippy `-D warnings --all-targets` on `rustyac-net` + `rustyac-game`: clean;
+  `run_all.sh --quick net`: **20 / 20 IDENTICAL**, `as_spa_net_drive` included (the Kunos path is
+  unchanged without `--csp`). **Skipped:** the wasm clippy (both targets) and the browser area, because
+  this PC's toolchain (Program Files Rust 1.97, no rustup) has no wasm std installed. The change is
+  plain Rust with nothing platform-specific; the web build only gains `car_state_keys` reading
+  `AB 03`.
+
 ### NH-7.3 Left over
 
 * **CSP's state-add hook** (§NH-7.1: teleport refill at -30/-60/-90 ms, ≥ FLT_MAX drop, per-car send
