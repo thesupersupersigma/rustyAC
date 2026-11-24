@@ -13,6 +13,7 @@
 //! Left out on purpose: the game's `SetUnhandledExceptionFilter(MiniDumpFunction)`, which sends
 //! crash dumps through Steam to the game's makers; a crash of rustyAC is not theirs.
 
+#[cfg(windows)]
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::Mutex;
@@ -115,8 +116,10 @@ impl Drop for Steam {
 }
 
 /// Assetto Corsa's Steam application id (the game's own `steam_appid.txt`).
+#[cfg(windows)]
 const AC_APP_ID: &str = "244210";
 
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
     fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
@@ -124,7 +127,14 @@ extern "system" {
 }
 
 /// The `steam_api64.dll` of the Assetto Corsa folder, when it is there and Steam is running
-/// (`SteamAPI_IsSteamRunning`).
+/// (`SteamAPI_IsSteamRunning`). Off Windows: none (no Steam there, `docs/platforms.md` section 2).
+#[cfg(not(windows))]
+pub fn load(_ac_root: &Path) -> Option<SteamApi> {
+    None
+}
+
+/// See the other `load`.
+#[cfg(windows)]
 pub fn load(ac_root: &Path) -> Option<SteamApi> {
     use std::os::windows::ffi::OsStrExt;
     let path = ac_root.join("steam_api64.dll");

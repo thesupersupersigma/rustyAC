@@ -110,7 +110,7 @@ pub fn default_name() -> String {
     if let Some((_, name)) = crate::steam::session().filter(|(_, name)| !name.trim().is_empty()) {
         return name.trim().to_string();
     }
-    match std::env::var("USERNAME") {
+    match std::env::var(if cfg!(windows) { "USERNAME" } else { "USER" }) {
         Ok(name) if !name.trim().is_empty() => name.trim().to_string(),
         _ => "rustyAC driver".to_string(),
     }

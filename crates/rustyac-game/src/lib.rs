@@ -16,7 +16,7 @@
 // What is left on another target (wasm: the browser build `rustyac-web`, and the replay check
 // under WASI) is the simulation, the replay files, AC's keyboard and pad classes and the scene
 // maths, and in the browser the sound (FMOD's HTML5 build, see `rustyac-audio`'s `fmod::web`).
-#[cfg(any(windows, all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "unknown"))]
 pub mod audio;
 pub mod ac_replay;
 #[cfg(windows)]
@@ -25,24 +25,24 @@ pub mod ghost;
 pub mod telemetry;
 pub mod trackir;
 pub mod autodrive;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod achievements;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod conditions;
 pub mod crt;
 pub mod dump;
 pub mod focus;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gateway;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod identity;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod steam;
 pub mod input;
 pub mod input_file;
-#[cfg(windows)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod join;
 pub mod online;
 pub mod race_cars;

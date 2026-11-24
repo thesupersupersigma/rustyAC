@@ -65,17 +65,19 @@ features = [
 # Windows only, like the `windows` crate above: on another target (the browser build, the
 # replay check under WASI) the crate is the simulation, the input classes and the scene maths.
 [target.'cfg(windows)'.dependencies]
-# AC's sound: its own FMOD banks through the player's own FMOD DLLs
-rustyac-audio = { path = "../rustyac-audio" }
 # AC's Python apps: the `ac` module on the player's own python33.dll
 rustyac-python = { path = "../rustyac-python" }
 # AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
 rustyac-render = { path = "../rustyac-render" }
+
 # `--join wss://...`: TLS to a gateway behind an HTTPS address (a Cloudflare Tunnel). rustls
 # with the ring provider and Mozilla's root certificates compiled in; nothing of the
-# system's TLS is used.
+# system's TLS is used. Native only (the browser has its own).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+# AC's sound: its own FMOD banks through the player's own FMOD DLLs (off Windows: none yet, L6)
+rustyac-audio = { path = "../rustyac-audio" }
 
 # x64 Windows (the release's rustyac.exe): CSP mode's tyre rays on Embree 3.13.4 as CSP casts them
 # (Task C5i-a; built by rustyac-ode's build.rs, which needs Visual Studio's C++ tools, CMake and

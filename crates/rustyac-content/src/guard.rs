@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// The user's real `Documents\Assetto Corsa`, whatever `--documents` says.
 fn real_documents() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join("Documents").join("Assetto Corsa"))
+    crate::install::user_documents()
 }
 
 /// The absolute path with links and junctions of its existing part resolved, `..` folded, in
@@ -24,7 +24,8 @@ fn resolved(path: &Path) -> Option<PathBuf> {
         if let Ok(real) = existing.canonicalize() {
             break real;
         }
-        rest.push(existing.file_name()?.to_os_string());
+        // the last part, `..` too: off Windows `absolute` keeps it (file_name() would be None)
+        rest.push(existing.components().next_back()?.as_os_str().to_os_string());
         existing = existing.parent()?;
     };
     for part in rest.iter().rev() {

@@ -368,7 +368,7 @@ pub struct GameAudio {
     last: Option<Vec<CarFrame>>,
     camera: Option<(i32, i32)>,
     /// the sound cards' names (`AudioEngine::getDriverInfo`)
-    #[cfg_attr(feature = "wgpu", allow(dead_code))]
+    #[cfg_attr(any(feature = "wgpu", not(any(windows, target_os = "unknown"))), allow(dead_code))]
     drivers: Vec<String>,
     bonnet_external: bool,
     bumper_external: bool,
@@ -747,6 +747,7 @@ impl GameAudio {
         u[4] + u[3]
     }
 
+    #[cfg(any(windows, target_os = "unknown", feature = "wgpu"))] // render::gui_apps is there
     pub fn app_sound(&self) -> crate::render::gui_apps::AppSound {
         crate::render::gui_apps::AppSound { drivers: self.drivers.clone(), camera: [self.bonnet_external, self.bumper_external] }
     }
