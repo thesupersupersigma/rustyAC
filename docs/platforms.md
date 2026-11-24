@@ -13,6 +13,7 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   (nothing reads it), and `rustyac-audio` and `rustyac-game --features wgpu` build off Windows.
 - Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
   the native game from section 8's L1, starting with the list in 10.4.
+- **P3 (Task P3a, branch `web`): resume at L2** (section 11.4). L1 is done (11.2).
 
 ## 1. Plain-English summary
 
@@ -465,3 +466,97 @@ plain one. No code change: nothing reachable needs canonicalising.
   audio and game changes are `cfg` gates for other targets, and the Windows dependency graph and
   lock file are unchanged), so it can't break what the quick lane proves. Wasm clippy also skipped:
   the wasm side compiles the same code as before (the gates include `wasm32`).
+
+## 11. Task P3: the native Linux game (L1 to L3)
+
+### 11.1 Where it runs
+
+WSL's distro `Ubuntu` on this PC is **Ubuntu 26.04.1** (P2 upgraded it; the prompt says 24.04).
+Packages go inside the distro; sources, `target/` and logs stay in the repo through `/mnt/c`.
+`re/scratch/taskP3/wsl.sh <log> <cmd...>` runs a command there with P2's toolchain (1.97.0) and
+P2's target folder (`re/scratch/taskP2/target-linux`, reused so nothing builds twice). P3 added
+the two wasm targets to WSL's 1.97.0 (this PC's Windows Rust has none, so wasm clippy runs there).
+
+What WSLg offers a window (checked, nothing installed for it yet): Wayland and X11 (`wayland-0`,
+`:0`); SDL3 is in the archive (`libsdl3-dev` 3.4.2); Mesa 26.0.8's Vulkan drivers have **no
+`dzn`** (Vulkan on D3D12), so Vulkan is only lavapipe (the CPU); the GPU is reached through
+Mesa's d3d12 driver for **OpenGL** (WSLg's `/usr/lib/wsl/lib/libd3d12.so`). So wgpu gets GL (EGL)
+on the GPU, or Vulkan on the CPU. Which one works for kgl's shaders is L3's first check.
+
+### 11.2 L1: the portable modules (done)
+
+- **Ungated off Windows:** `cli`, `conditions`, `identity`, `join`, `gateway`, `steam`,
+  `achievements` (native targets only: both wasm builds keep the modules they had), and `audio`
+  (now every native target too).
+  `ai_record` stays Windows: it is a physics-thread sink (L5).
+- **TLS:** `rustls` and `webpki-roots` are declared for every native target (they were Windows
+  only); `rustyac-audio` too (sound off Windows comes with L6). The lock file is unchanged.
+- **Steam off Windows:** `steam::load` and `achievements::Flat::loaded` answer "no Steam", so the
+  rest of both modules (the achievement rules, the stand-in Steam of `steam_check`) builds and
+  runs everywhere. `identity::default_name` reads `USER` off Windows (`USERNAME` on Windows).
+- **FMOD off Windows:** `rustyac-audio`'s `raw::load` says "no FMOD on this platform yet (step
+  L6)"; the drive goes on without sound, as when the DLLs are missing on Windows.
+- **Paths** (`rustyac-content::install`): the game's folder inside a library is joined one part at
+  a time (a backslash is no separator off Windows; on Windows the string is the same). Off
+  Windows Steam's folders are `~/.local/share/Steam`, `~/.steam/steam` and Flatpak's
+  `~/.var/app/com.valvesoftware.Steam/.local/share/Steam`, each read through the existing
+  `libraryfolders.vdf` parser (a test now holds a Linux file too). `Documents\Assetto Corsa` off
+  Windows is the one in **Proton's prefix** beside the library AC is in
+  (`steamapps/compatdata/244210/pfx/drive_c/users/steamuser/Documents/Assetto Corsa`), else
+  `~/Documents/Assetto Corsa`. The write guard (`guard.rs`) uses the same function.
+- **A guard hole found on Linux and closed:** `std::path::absolute` keeps `..` off Windows (it
+  folds it on Windows), so `resolved` met a last part with no file name and let the path through.
+  It now keeps the `..` and folds it itself (`documents_refused_elsewhere_allowed` caught it on
+  Linux). On Windows the path never ends in `..` there, so nothing changes.
+- **Tests and examples:** `the_static_page_holds_the_hybrid_as_built` is Windows until `shm` (L5);
+  `mirror_check` needs `--features wgpu` off Windows; `tls_front` runs on any native target.
+- Without `wgpu`, `conditions` and `audio` skip `render::gui_apps` off Windows (the replay
+  runner build has no renderer).
+
+Proofs (logs in `re/scratch/taskP3/`):
+
+| Check | Result |
+|---|---|
+| Linux x64: `cargo build --locked --workspace --all-targets --exclude rustyac-web --exclude rustyac-render` (the two by-design rows of 10.4) | ok (`l1_ws6.log`) |
+| Linux x64: clippy `-D warnings --all-targets`, `rustyac-game` (with and without `wgpu`), `rustyac-content`, `rustyac-audio` | clean |
+| Linux x64: `cargo test --release` of those three (with `wgpu`, the real AC files read through `/mnt/c`) | all pass (`l1_test2.log`) |
+| wasm32-unknown-unknown: clippy `-D warnings --all-targets -p rustyac-web` | clean |
+| wasm32-wasip1: clippy `-D warnings` lib and bins of `rustyac-game`, `rustyac-content` | clean (`--all-targets` fails as before P3: `write_guard.rs` imports `cli`) |
+| Windows: clippy `-D warnings --all-targets`, the three crates, with and without `wgpu` | clean |
+| Windows: `run_all.sh --quick`, every area, 2 lanes (10.3 GB free RAM) | **258 cases IDENTICAL** in 14 areas, 0 different, 0 errors, csp's 1 expected skip; 1h05m (`quick_l1.log`) |
+
+### 11.3 What L2 and L3 meet (read for the plan, nothing built)
+
+- `desktop.rs` (3,062 lines) is built only for `all(windows, not(feature = "wgpu"))`.
+  `run_window` alone is 1,391 lines (1351 to 2742). It draws through `render::picture::Picture`
+  (an enum over the D3D11 debug view and `AcRenderer`, with an `HWND` swap chain), and it calls
+  about 40 of Picture's methods. Its direct Win32 uses are few (about a dozen `windows::` paths,
+  `window.pump`, `window.handle`, `window.client_size`). Most of the Windows-only part is the
+  modules it imports: `window`, `mouse_hider`, `physics_thread` plus `timer`, `shm`, the pad
+  (XInput) and the wheel (DirectInput), `python`, VR, TrackIR and `audio`'s sink.
+- The renderer side is closer than the plan said. With `wgpu`, `render::ac::AcRenderer` is the
+  same type on kgl's wgpu backend, and it already has `present_to(view, format)` and `resize`.
+  L3 is therefore a wgpu surface on the SDL window plus a `Picture` with the `Ac` variant only.
+- **L2 and L3 can't be proven apart on Linux**: menus, the HUD and Esc's menu are drawn by that
+  renderer, so L2's proof ("Esc opens AC's menu") needs L3's surface. Plan: do them as one
+  piece, in this order, each committed with Windows quick (fresh, gui, render) IDENTICAL:
+  1. `desktop.rs` compiled for `any(windows, linux)` with `wgpu` off Windows. Platform layer:
+     `window.rs` stays Win32. A new `window_sdl.rs` gives the same `Event`, `pump`, `client_size`
+     and a raw window handle. Pads and the wheel answer "none" (L4); `shm` answers "off" (L5);
+     no Python, VR or TrackIR. Windows' code paths stay as they are (the cfg only picks a file).
+  2. `physics_thread` and `timer` off Windows: `Instant` plus sleep. This is L5's timer pulled
+     forward, because the loop needs it; L5 keeps `/dev/shm`.
+  3. The surface: `wgpu::Surface` from SDL's handle, on kgl's device, then `present_to` each
+     frame and `resize` on the window's size event.
+- SDL3: the `sdl3` crate against the distro's `libsdl3-dev` (the player installs `libsdl3-0`)
+  rather than its build-from-source feature (that one needs CMake and a C toolchain in every
+  build). zlib licence, goes in `LICENSING.md`. Not used on Windows.
+
+### 11.4 Resume here (P3a)
+
+- Done: L1 (11.2), commits on `web`.
+- Next: L2 and L3 together (11.3), steps 1 to 3. Estimate unchanged in total (3 sessions for
+  L2 + L3), but in one piece.
+- Then: the physics goldens from the Linux game build (`rustyac --replay x.ryin --headless
+  --dump-states` on Linux against Windows' dump, NaN-blind as in section 4).
+
