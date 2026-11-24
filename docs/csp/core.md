@@ -71,10 +71,11 @@ Nothing is ported in C5a: this page is the map and the plan. Task C5b ran plan p
 | C5j 0. two cars' second car | done: it stood 19 cm into the climbing road; `oracle_lift` lifts it 0.2 m, car 1 matches to step 171 ([below](#task-c5j-csps-tyre-step-for-stock-cars)) |
 | C5j 1. survey | done: CSP's tyre step runs Vanilla's for stock cars (no tyre extension) but for `updateAngularSpeed`'s tail |
 | C5j 2. port | started: that tail ported (`angular_speed_tail`), bit-equal in process (kinds `U`/`V`); F2004 lap row's first difference step 2 → 63 |
+| C5j s2 1. body difference | done: the lap tape had no collide keys (row set-up); CSP's car step sets the sleep limit to 250 frames (ported); F2004 lap/wall rows differ only in `tyre_grain` from step 1417/1414, the two-car row at the cars' contact (step 620) |
+| C5j s2 3. RSS 3 air | more than small: the finisher's record wakes record-dependent CSP code (air, dirt, splines) that needs session objects the oracle lacks; pin stays |
 
-**Resume here:** C5j part 2: the F2004 rows' step-63 (lap) / 154 (wall) / 165 (two) body difference with
-equal tyre outputs: break CSP's hooks of the car step past the tyres (suspension, drivetrain, aero, the
-car step itself) at step 62-63 ([C5j](#task-c5j-csps-tyre-step-for-stock-cars)), then v1.1.5.
+**Resume here:** C5j: the F2004 rows' `tyre_grain` start (step 1417 lap, 1414 wall) and the two-car row's
+car-vs-car contact (step 620) ([C5j session 2](#session-2-the-body-difference)).
 
 ## The core in one paragraph
 
@@ -1572,5 +1573,65 @@ outputs: the car step's other CSP hooks or the core. The three F2004 rows are pi
 identical (fresh 63, render 18, gui 29, net 16, dumps 6, shaders 4, replays 6, sound 4, python 1,
 launcher 1) but browser 17 of 18 (render scale 100 % to 50 %: an edge along the middle column, 17
 against 4); browser again alone, 18 of 18.
+
+### Session 2: the body difference
+
+**The lap rows' set-up.** `oracle/game/track_spa_lap.ryin` has no `oracle_collide` keys, so rustyAC
+replayed the F2004 lap row with collisions off (`replay.rs`: `chassis.collisions_enabled = self.collide.on`)
+while the game always collides; at world step 62 the game has 3 chassis-vs-track contact joints. `csp.sh`
+now adds the wall tape's collide keys (`oracle_collide=1 oracle_collider_mesh=1 oracle_mesh_bounce_vel=0000028b
+oracle_no_collision_steps=0 oracle_floor=0`) to the lap and two rows' rustyAC tapes. With them, every core
+call (`CSP_CORE_TRACE`) is equal through step 164.
+
+**The sleep limit.** At step 165 the port's chassis velocity was zero: Vanilla's sleeping rule
+(`sleepingFrames > framesToSleep`, 50) stopped the car, the game's did not. CSP's `Car::step` wrapper
+`+0x58afc0` sets `framesToSleep` (Car+0x3e28) to 250 before the original, every step: other cars directly
+(`+0x58b108`), the car with GUID 0 at the start of `+0x58a8d0`. That function then applies
+`[PHYSICS_EXPERIMENTS] DISABLE_AUTOBRAKING` (general.ini, byte `0x28031e8`; 0 "Original" by default,
+1 realistic, 2 adapted, 3 auto-braking: 500 frames, `sleepingFrames` capped at 498, flag 0x10000) and
+a second setting (byte `0x2803218`+6, probably `AWAKE_IN_PITS`, not checked: within 1 m of a stored
+position, `sleepingFrames = 0`). In the oracle (mode 0, not
+in the pits) only the 250 stays (breaks: `+0x58ae06` and the return hit, `+0x58ac05` / `+0x58ae17` /
+`+0x58af5e` not). Ported in `RollingChassis::step_car_begin` under `csp::enabled()`; the other modes are a
+`shortcut:` comment. Break-tool note: plain breaks on instructions with a RIP-relative operand
+(`+0x58ae0e`, `+0x58ae4a`, `+0x58af42`) never logged a hit here; break the next instruction.
+
+`actions_state` joined the rows' view list (CSP's getPhysicsState fills it; rustyAC's view does not).
+
+| row | steps | session 1 | now |
+|---|---|---|---|
+| F2004 lap | 4000 | step 63 world_matrix[3] | step 1417 tyre_grain[1] 4.08e-11 vs 0 (1012 of 1106 equal; nothing else differs) |
+| F2004 wall | 6667 | step 154 world_matrix[3] | step 1414 tyre_grain[1] 5.46e-11 vs 0 (988; nothing else differs) |
+| two F2004 | 1600 | car 0 step 165 | step 620 both cars (car 0 meets the parked car 1; port damage 14.09, game 0) |
+| RSS 3 lap | 4000 | step 0 air_density | the same (pinned) |
+
+`tyre_grain`: core temperatures, loads, slips and forces are equal at every step; CSP does not hook
+`Tyre::stepGrainBlister` (`0x140284600`), but does hook `Tyre::setCompound` and `Tyre::reset`, so the
+grain inputs (`GRAIN_THRESHOLD`, `GRAIN_GAIN`) or the surface are the suspects. The two-car contact: every
+collision callback (`+0x587cc0`) equals the port's `csp_hit`, so it is in the contact itself.
+
+**RSS 3 tail (U/V).** `COL=1 BRK=69e818U,69e8a4V rowc.sh rss_formula_rss_3_v6_2026 600`: 1200 tails, all same.
+
+**RSS 3 air: more than small.** The finisher `+0xf35b50` (from `+0xf36950`, the car-extension step) was
+run for its physics part (`re/scratch/taskC5j/finisher.patch`: car+0x3db4 bits, car+0x3e9c list index, the
+per-car record pushed to `0x28213f0`, `+0x7ef3a0`). With a record, more CSP code wakes up, each needing a
+session object the oracle does not have: the air hook reads the avatar's RaceEngineer (`avatar+0xf80`,
+stand-in fixed it); `stepDirtyLevel` (`+0x6a65e0`) reads `record+528` and runs CSP's dirt/wet code
+(`+0x8cc4c0`, scales the tyre's grip factors `+768/+772/+796/+800`) on the per-car array `0x28177c0`
+(sized at session start by `+0x676560`; built by hand, fixed); then a fault in acs `SplineLocator::step`
+(`FuelLapEvaluator::step`, a null CSP spline object via `+0x936db0`). Stopped there. So the part-1 survey's
+"stepDirtyLevel: original, then nothing" holds only without a record: a car with CSP's record (RSS 3)
+gets CSP's dirt code, which the port lacks too.
+
+**Not now (written down).** CSP's own tyre code for cars with a tyre extension (3-4 sessions; neither
+proof car has one). The sunk lone car's push-out difference at steps 1-3.
+
+### Plan (sessions, after session 2)
+
+1. `tyre_grain` (1 session): break the grain inputs in process (CSP's `setCompound` result: thresholds,
+   gains), port what differs.
+2. The two-car contact at step 620 (1 session): `CSP_CORE_TRACE` both cars around it.
+3. RSS 3 air and dirt (2-3 sessions): the oracle builds CSP's session objects (spline, dirt arrays,
+   RaceEngineer) so the finisher can run; then port CSP's dirt code.
 
 **Resume here (C5j):** see the table at the top.
