@@ -978,6 +978,9 @@ unsafe fn arm_breaks(dll: usize) {
     if list.is_empty() && watch.is_none() {
         return;
     }
+    // before the first int3: CSP's own threads may hit one while the rest are armed
+    let add_handler: extern "system" fn(u32, usize) -> *mut c_void = std::mem::transmute(GetProcAddress(GetModuleHandleA(c"kernel32.dll".as_ptr().cast()), c"AddVectoredExceptionHandler".as_ptr().cast()));
+    add_handler(1, break_hit as *const () as usize);
     let mut breaks = BREAKS.lock().unwrap();
     for rva in list.split(',').filter(|rva| !rva.is_empty()) {
         let rva = rva.trim();
@@ -992,8 +995,6 @@ unsafe fn arm_breaks(dll: usize) {
         VirtualProtect(address as *mut c_void, 1, 0x40, &mut old);
         set_byte(address, 0xcc);
     }
-    let add_handler: extern "system" fn(u32, usize) -> *mut c_void = std::mem::transmute(GetProcAddress(GetModuleHandleA(c"kernel32.dll".as_ptr().cast()), c"AddVectoredExceptionHandler".as_ptr().cast()));
-    add_handler(1, break_hit as *const () as usize);
     println!("{} breakpoints armed", breaks.len());
     if let Some(rva) = watch {
         drop(breaks);
