@@ -341,7 +341,7 @@ done
 # C5i-c). The two row (Task C5i-c): car 1 parked 5.5 m ahead of car 0 along the spawn's tail, on rustyAC's
 # parked controls (CSP_ORACLE_PARK=last; the tape's opponent and oracle_gap), 0.2 m higher than the spawn
 # (Task C5j: the road climbs ~19 cm there, at the spawn's height it started sunk; oracle_lift)
-view='tyre_surface_def|last_ff_final|body_work_volume|time_stamp|ride_height|setup_state|gear_rpm_window|tyre_thermal_states|lock_controls_time|anti_squat|caster|ground_plane|normalized_spline_position|acc_g|wheel_angular_speed'
+view='actions_state|tyre_surface_def|last_ff_final|body_work_volume|time_stamp|ride_height|setup_state|gear_rpm_window|tyre_thermal_states|lock_controls_time|anti_squat|caster|ground_plane|normalized_spline_position|acc_g|wheel_angular_speed'
 for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_ferrari_f2004 wall 6667" "ks_ferrari_f2004 two 1600"; do
     set -- $row; car=$1; kind=$2; steps=$3
     keep "row $car $kind" || continue
@@ -350,7 +350,9 @@ for row in "ks_ferrari_f2004 lap 4000" "rss_formula_rss_3_v6_2026 lap 4000" "ks_
     tape=$(drive "$tape")  # on the farm: a copy naming its own AC folder
     build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     r=$out/runs/row_${car}_$kind
-    cars=1; more=; [ $kind = two ] && { cars=2; more="\\nopponent=$car:parked\\noracle_gap=-5.5\\noracle_lift=0.2"; }
+    # the lap tape has no collide keys, so rustyac would replay with collisions off; the game always collides
+    cars=1; more=; [ $kind = wall ] || more="\\noracle_collide=1\\noracle_collider_mesh=1\\noracle_mesh_bounce_vel=0000028b\\noracle_no_collision_steps=0\\noracle_floor=0"
+    [ $kind = two ] && { cars=2; more="$more\\nopponent=$car:parked\\noracle_gap=-5.5\\noracle_lift=0.2"; }
     ( [ $kind = two ] && export CSP_ORACLE_PARK=last CSP_ORACLE_GAP=-5.5 CSP_ORACLE_LIFT=0.2
       CSP_ORACLE_BREAK=587cc0f oracle "row_${car}_$kind" --car $car --track "$ac/content/tracks/spa" --drive "$(cygpath -w "$tape")" --workers 0 --cars $cars --steps $steps )
     # the tape for rustyac: this car (and the parked one), CSP mode on CSP's core, cut after its first $steps steps (40 bytes a step)
