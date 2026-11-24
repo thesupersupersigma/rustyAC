@@ -68,6 +68,20 @@ unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
     true.into()
 }
 
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
+/// Ctrl+C (SIGINT) or SIGTERM: every loop ends, as with Windows' console handler; a second one
+/// ends the process at once (the handler puts back SIG_DFL, 0).
+#[cfg(unix)]
+extern "C" fn on_signal(signum: i32) {
+    STOP.store(true, Ordering::Relaxed);
+    // SAFETY: signal() is async-signal-safe
+    unsafe { signal(signum, 0) };
+}
+
 /// The car and session of a live drive: from the command line, and the conditions of the
 /// game's own last session (race.ini) unless that is switched off.
 fn live_setup(options: &Options) -> Result<SimSetup, String> {
@@ -3080,10 +3094,16 @@ pub fn main() {
         std::process::exit(2);
     }
     // SAFETY: the handler only touches two atomics.
-    // shortcut: off Windows Ctrl+C ends the process at once (no handler); a SIGINT handler with L5
     #[cfg(windows)]
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(console_handler), true);
+    }
+    // SAFETY: the handler stores an atomic and calls signal(), both async-signal-safe. Set before
+    // SDL starts, so SDL leaves SIGINT / SIGTERM to it (SDL takes them only while they are SIG_DFL).
+    #[cfg(unix)]
+    unsafe {
+        signal(2, on_signal as extern "C" fn(i32) as usize);
+        signal(15, on_signal as extern "C" fn(i32) as usize);
     }
     // the game's SteamInit, when Steam runs and owns the game; never in a proof run, whose
     // content must not hang on the player's DLCs

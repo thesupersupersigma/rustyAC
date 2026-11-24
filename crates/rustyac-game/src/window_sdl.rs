@@ -73,17 +73,17 @@ pub fn take_chain() -> Result<Chain, String> {
 
 pub struct Window {
     pub handle: Handle,
-    // (dropped in this order: the events, the window, SDL itself)
+    // (dropped in this order: the events, the window; SDL itself never: see `Drop`)
     pump: RefCell<sdl3::EventPump>,
     window: sdl3::video::Window,
-    _video: sdl3::VideoSubsystem,
-    _sdl: sdl3::Sdl,
+    _video: std::mem::ManuallyDrop<sdl3::VideoSubsystem>,
+    _sdl: std::mem::ManuallyDrop<sdl3::Sdl>,
 }
 
 /// The display's handle as wgpu's GL backend wants it at the instance (EGL's display).
 #[derive(Debug)]
 struct Display(wgpu::rwh::RawDisplayHandle);
-// SAFETY: only an address of the display, which lives as long as SDL's video (the window's).
+// SAFETY: only an address of the display, which SDL's video keeps open until the process ends.
 unsafe impl Send for Display {}
 // SAFETY: as above.
 unsafe impl Sync for Display {}
@@ -121,7 +121,7 @@ impl Window {
         let chain = surface(&window)?;
         println!("window: SDL {} on {}, wgpu: {}", sdl3::version::version(), video.current_video_driver(), chain.adapter);
         CHAIN.with(|c| *c.borrow_mut() = Some(chain));
-        Ok(Window { handle, pump: RefCell::new(pump), window, _video: video, _sdl: sdl })
+        Ok(Window { handle, pump: RefCell::new(pump), window, _video: std::mem::ManuallyDrop::new(video), _sdl: std::mem::ManuallyDrop::new(sdl) })
     }
 
     /// The client area's size, pixels.
@@ -149,6 +149,9 @@ impl Drop for Window {
     fn drop(&mut self) {
         // a surface left unused must go before its window
         CHAIN.with(|c| c.borrow_mut().take());
+        // SDL's video stays up (its display connection open) until the process ends: wgpu's
+        // instance holds that display and goes last (the renderer, kgl's device), and its GL
+        // backend's eglTerminate on a display SDL had closed crashed on exit under Wayland
     }
 }
 
