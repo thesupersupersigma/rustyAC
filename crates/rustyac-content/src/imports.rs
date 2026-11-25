@@ -51,28 +51,34 @@ impl Source {
 
     pub fn read_dir(&self, rel: &str) -> io::Result<Vec<(String, bool)>> {
         match self {
-            Source::Folder(_) => Ok(std::fs::read_dir(self.disk(rel))?.flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir())).collect()),
+            Source::Folder(_) => Ok(crate::vfs::or_on_disk(&self.disk(rel), |p| std::fs::read_dir(p))?.flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir())).collect()),
             Source::Zip(z) => z.read_dir(rel),
         }
     }
 
     pub fn is_file(&self, rel: &str) -> bool {
         match self {
-            Source::Folder(_) => self.disk(rel).is_file(),
+            Source::Folder(_) => {
+                let p = self.disk(rel);
+                p.is_file() || crate::vfs::on_disk(&p).is_file()
+            }
             Source::Zip(z) => z.is_file(rel),
         }
     }
 
     pub fn is_dir(&self, rel: &str) -> bool {
         match self {
-            Source::Folder(_) => self.disk(rel).is_dir(),
+            Source::Folder(_) => {
+                let p = self.disk(rel);
+                p.is_dir() || crate::vfs::on_disk(&p).is_dir()
+            }
             Source::Zip(z) => z.is_dir(rel),
         }
     }
 
     pub fn read(&self, rel: &str) -> io::Result<Vec<u8>> {
         match self {
-            Source::Folder(_) => std::fs::read(self.disk(rel)),
+            Source::Folder(_) => crate::vfs::or_on_disk(&self.disk(rel), |p| std::fs::read(p)),
             Source::Zip(z) => z.read(rel),
         }
     }
@@ -272,14 +278,14 @@ impl Vfs for Layers {
         match self.route(path) {
             Some((source, rel)) => source.read(&rel).map(Into::into),
             None if path.starts_with(&self.root) => Err(not_found()),
-            None => std::fs::read(path).map(Into::into),
+            None => crate::vfs::or_on_disk(path, |p| std::fs::read(p)).map(Into::into),
         }
     }
 
     fn is_file(&self, path: &Path) -> bool {
         match self.route(path) {
             Some((source, rel)) => source.is_file(&rel),
-            None => !path.starts_with(&self.root) && path.is_file(),
+            None => !path.starts_with(&self.root) && (path.is_file() || crate::vfs::on_disk(path).is_file()),
         }
     }
 
@@ -289,7 +295,7 @@ impl Vfs for Layers {
         }
         match self.route(path) {
             Some((source, rel)) => source.is_dir(&rel),
-            None => !path.starts_with(&self.root) && path.is_dir(),
+            None => !path.starts_with(&self.root) && (path.is_dir() || crate::vfs::on_disk(path).is_dir()),
         }
     }
 
@@ -300,7 +306,7 @@ impl Vfs for Layers {
         match self.route(path) {
             Some((source, rel)) => source.read_dir(&rel),
             None if path.starts_with(&self.root) => Err(not_found()),
-            None => Ok(std::fs::read_dir(path)?.flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir())).collect()),
+            None => Ok(crate::vfs::or_on_disk(path, |p| std::fs::read_dir(p))?.flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir())).collect()),
         }
     }
 }

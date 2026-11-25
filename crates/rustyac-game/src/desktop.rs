@@ -2,6 +2,7 @@
 
 //! `rustyac.exe`: see `docs/game/first_drive.md`.
 
+use rustyac_content::vfs::PathExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -262,7 +263,7 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
     if let Some(folder) = &info.track_folder {
         let loaded = rustyac_content::TrackFiles::find_lenient(folder, &info.track_layout).and_then(|files| {
             // (a model file that is not there is left out, as in the physics)
-            let models: Vec<_> = files.models.iter().filter(|m| m.file.is_file()).collect();
+            let models: Vec<_> = files.models.iter().filter(|m| m.file.vfs_is_file()).collect();
             let paths: Vec<_> = models.iter().map(|m| m.file.clone()).collect();
             let placements: Vec<_> = models.iter().map(|m| rustyac_game::render::models::Placement { position: m.position, rotation: m.rotation }).collect();
             renderer.load_track(&paths, &placements, &model_options)
@@ -436,7 +437,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                     // (as the cars are drawn: the skin asked for, else the first of the folder)
                     let asked = if i == 0 { options.skin.clone() } else { car.skin.clone() };
                     asked.unwrap_or_else(|| {
-                        let mut skins: Vec<String> = std::fs::read_dir(game.join("content/cars").join(&car.name).join("skins")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+                        let mut skins: Vec<String> = rustyac_content::vfs::read_dir(&game.join("content/cars").join(&car.name).join("skins")).map(|d| d.into_iter().filter(|(_, dir)| *dir).map(|(name, _)| name).collect()).unwrap_or_default();
                         skins.sort();
                         skins.first().cloned().unwrap_or_default()
                     })
@@ -581,7 +582,7 @@ fn replay_rig(options: &Options, window: bool) -> Option<Arc<Mutex<ReplayRig>>> 
         if let Some(game) = rustyac_content::install::ac_root() {
             files.push(game.join("cfg/replay.ini"));
         }
-        ini = files.iter().find(|file| file.is_file()).and_then(|file| rustyac_physics::data::ini::IniReader::load(file).ok());
+        ini = files.iter().find(|file| file.vfs_is_file()).and_then(|file| rustyac_physics::data::ini::IniReader::load(file).ok());
     }
     Some(Arc::new(Mutex::new(ReplayRig::new(folder, ini, -16.0, 1))))
 }
@@ -1577,7 +1578,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     };
     // the chase cameras: rustyAC's own chase_cam.ini (the ChaseCam Editor saves it), else the game's
     let chase_ini = [cfg_dir(options).join("system/cfg/chase_cam.ini"), rustyac_content::install::ac_root().unwrap_or_default().join("system/cfg/chase_cam.ini")];
-    if let Some(path) = chase_ini.iter().find(|p| p.is_file()) {
+    if let Some(path) = chase_ini.iter().find(|p| p.vfs_is_file()) {
         if let Err(e) = camera.read_chase_ini(path) {
             eprintln!("WARNING: {}: {e}", path.display());
         }

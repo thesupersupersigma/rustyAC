@@ -24,11 +24,11 @@ pub struct PpFilterSelector {
 /// `Path::getFiles(dir\*.ini)` + `getFileNameWithoutExtension`: the folder's order (NTFS'),
 /// directories skipped.
 pub fn filter_names(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = rustyac_content::vfs::read_dir(dir) else { return Vec::new() };
     entries
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| !t.is_dir()))
-        .map(|e| Path::new(&e.file_name()).to_path_buf())
+        .into_iter()
+        .filter(|(_, is_dir)| !is_dir)
+        .map(|(name, _)| Path::new(&name).to_path_buf())
         .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ini")))
         .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .collect()

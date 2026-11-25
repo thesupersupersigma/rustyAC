@@ -6,6 +6,7 @@
 //! is one. The others answer as in the game and change nothing (see
 //! `docs/port/apps_telemetry.md`, "The console").
 
+use rustyac_content::vfs::PathExt;
 use rustyac_gui::console::{Console, ConsoleAction, VarKind};
 use rustyac_physics::car::setup::SetupJob;
 use rustyac_physics::data::ini::IniReader;
@@ -180,7 +181,7 @@ fn run(gui: &mut super::gui::GameGui, name: &str, line: &str, index: usize) {
             let path = format!("content/cars/{unix}/data/car.ini");
             let mult = gui.gui.apps.cars.first().map_or(0.0, |c| c.ff_mult);
             let value = format!("{:.3}", (mult * 1000.0) as f64);
-            if gui.setup.game.join(&path).is_file() {
+            if gui.setup.game.join(&path).vfs_is_file() {
                 gui.gui.apps.actions.push(rustyac_gui::apps::AppAction::WriteProfileString { file: path.clone(), section: "CONTROLS".into(), key: "FFMULT".into(), value: value.clone() });
                 for s in [format!("ffMult ({value}) saved to:"), path, "\n".to_string()] {
                     gui.console.print(&s);

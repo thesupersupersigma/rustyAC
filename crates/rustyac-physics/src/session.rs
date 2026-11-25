@@ -507,8 +507,8 @@ pub fn draws_before_the_cars(ini: &IniReader, rand: &mut dyn FnMut() -> i32) {
 pub fn model_skins(cars_folder: &std::path::Path, model: &str) -> Vec<String> {
     // (no sorting: `read_dir` lists a folder with the same system call as the game's
     // `_wfindfirst`, so the order is the game's on any file system)
-    match std::fs::read_dir(cars_folder.join(model).join("skins")) {
-        Ok(entries) => entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
+    match rustyac_content::vfs::read_dir(&cars_folder.join(model).join("skins")) {
+        Ok(entries) => entries.into_iter().filter(|(_, dir)| *dir).map(|(name, _)| name).collect(),
         Err(_) => Vec::new(),
     }
 }
@@ -519,7 +519,7 @@ pub fn model_skins(cars_folder: &std::path::Path, model: &str) -> Vec<String> {
 pub fn skin_available(cars_folder: &std::path::Path, model: &str, skin: &str) -> bool {
     let mut text = cars_folder.as_os_str().to_os_string();
     text.push(format!("/{model}/skins/{skin}"));
-    std::path::Path::new(&text).is_dir()
+    rustyac_content::vfs::is_dir(std::path::Path::new(&text))
 }
 
 /// `TrackAvatar::getMaxSlotsAvailable("PIT")` as `RaceManager::initOffline` finds it: the pit

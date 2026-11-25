@@ -11,6 +11,7 @@
 //! [`set_log`] records every path asked for, found or not. `tools/web_pack` loads a car on a
 //! track once with it and so learns exactly which files a pack needs.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -59,7 +60,7 @@ fn note(path: &Path, found: bool) {
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     let result = match mounted() {
         Some(fs) => fs.read(path).map(|bytes| bytes.to_vec()),
-        None => std::fs::read(path),
+        None => or_on_disk(path, |p| std::fs::read(p)),
     };
     note(path, result.is_ok());
     result
@@ -70,7 +71,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
     match mounted() {
         Some(_) => String::from_utf8(read(path)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
         None => {
-            let result = std::fs::read_to_string(path);
+            let result = or_on_disk(path, |p| std::fs::read_to_string(p));
             note(path, result.is_ok());
             result
         }
@@ -81,7 +82,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
 pub fn is_file(path: &Path) -> bool {
     let found = match mounted() {
         Some(fs) => fs.is_file(path),
-        None => path.is_file(),
+        None => path.is_file() || on_disk(path).is_file(),
     };
     note(path, found);
     found
@@ -91,7 +92,7 @@ pub fn is_file(path: &Path) -> bool {
 pub fn is_dir(path: &Path) -> bool {
     match mounted() {
         Some(fs) => fs.is_dir(path),
-        None => path.is_dir(),
+        None => path.is_dir() || on_disk(path).is_dir(),
     }
 }
 
@@ -99,10 +100,95 @@ pub fn is_dir(path: &Path) -> bool {
 pub fn read_dir(path: &Path) -> io::Result<Vec<(String, bool)>> {
     match mounted() {
         Some(fs) => fs.read_dir(path),
-        None => Ok(std::fs::read_dir(path)?
+        None => Ok(or_on_disk(path, |p| std::fs::read_dir(p))?
             .flatten()
             .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir()))
             .collect()),
+    }
+}
+
+/// `op(path)`, then `op` again on [`on_disk`]'s spelling when `path` is not there as spelled.
+pub fn or_on_disk<T>(path: &Path, op: impl Fn(&Path) -> io::Result<T>) -> io::Result<T> {
+    op(path).or_else(|e| match on_disk(path) {
+        Cow::Owned(p) if e.kind() == io::ErrorKind::NotFound => op(&p),
+        _ => Err(e),
+    })
+}
+
+/// `path` as the disk spells it. AC and its mods were made on Windows, which does not tell
+/// `Spa.kn5` from `spa.kn5`, and their code and ini files spell names in any case. Off Windows a
+/// path that is not there as spelled is looked for again ignoring ASCII case, one folder at a
+/// time from the deepest one that is there, each folder listed once and kept (what Proton gets
+/// from Wine). On Windows and in a browser: the path as it is.
+pub fn on_disk(path: &Path) -> Cow<'_, Path> {
+    #[cfg(not(any(windows, target_family = "wasm")))]
+    if path.symlink_metadata().is_err() {
+        return fold::on_disk(path).map_or(Cow::Borrowed(path), Cow::Owned);
+    }
+    Cow::Borrowed(path)
+}
+
+#[cfg(not(any(windows, target_family = "wasm")))]
+mod fold {
+    use std::collections::HashMap;
+    use std::path::{Component, Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    /// A folder's names by their lower-case spelling.
+    type Names = Arc<HashMap<String, String>>;
+    // shortcut: a folder is listed once, so a file made later and asked for in another case is not found; forget a folder on write if the game ever needs that
+    static FOLDERS: Mutex<Option<HashMap<PathBuf, Names>>> = Mutex::new(None);
+
+    fn names(folder: &Path) -> Names {
+        if let Some(names) = FOLDERS.lock().unwrap().get_or_insert_with(HashMap::new).get(folder) {
+            return names.clone();
+        }
+        let mut names: HashMap<String, String> = HashMap::new();
+        let listed = std::fs::read_dir(if folder.as_os_str().is_empty() { Path::new(".") } else { folder });
+        for entry in listed.into_iter().flatten().flatten() {
+            if let Ok(name) = entry.file_name().into_string() {
+                // two names differing only in case (possible here): the smaller, whatever the disk's order
+                let kept = names.entry(name.to_ascii_lowercase()).or_insert_with(|| name.clone());
+                if name < *kept {
+                    *kept = name;
+                }
+            }
+        }
+        let names = Arc::new(names);
+        FOLDERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(folder.to_path_buf(), names.clone());
+        names
+    }
+
+    /// `None`: nothing matches better than the path itself.
+    pub fn on_disk(path: &Path) -> Option<PathBuf> {
+        let parts: Vec<Component> = path.components().collect();
+        let mut there = parts.len();
+        let mut out = PathBuf::new();
+        while there > 0 {
+            there -= 1;
+            out = parts[..there].iter().collect();
+            if out.as_os_str().is_empty() || out.symlink_metadata().is_ok() {
+                break;
+            }
+        }
+        let mut changed = false;
+        for (i, part) in parts.iter().enumerate().skip(there) {
+            let Component::Normal(name) = part else {
+                out.push(part);
+                continue;
+            };
+            match name.to_str().and_then(|n| names(&out).get(&n.to_ascii_lowercase()).cloned()) {
+                Some(real) => {
+                    changed |= real.as_str() != name.to_str().unwrap_or("");
+                    out.push(real);
+                }
+                None => {
+                    out.extend(&parts[i..]);
+                    break;
+                }
+            }
+        }
+        changed.then_some(out)
     }
 }
 
@@ -134,7 +220,7 @@ impl File {
     pub fn open(path: &Path) -> io::Result<File> {
         let result = match mounted() {
             Some(fs) => fs.read(path).map(|bytes| File::Memory(io::Cursor::new(bytes))),
-            None => std::fs::File::open(path).map(File::Disk),
+            None => or_on_disk(path, |p| std::fs::File::open(p)).map(File::Disk),
         };
         note(path, result.is_ok());
         result
@@ -311,6 +397,38 @@ impl Vfs for MemFs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_disk_ignores_letter_case_like_windows() {
+        // off Windows a folder that tells cases apart (under WSL's /mnt/c: `fsutil file
+        // setCaseSensitiveInfo target\test-scratch\case-sensitive enable`, new folders inherit it)
+        let mut dir = crate::zip::tests::scratch("case");
+        if !cfg!(windows) {
+            dir = dir.parent().unwrap().join("case-sensitive").join(dir.file_name().unwrap());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        for f in ["Content/Cars/Abarth500/UI/ui_car.json", "Content/Tracks/spa/SPA.kn5", "system/cfg/a.ini", "system/cfg/A.INI"] {
+            let p = dir.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, f.as_bytes()).unwrap();
+        }
+        let p = |f: &str| dir.join(f);
+        assert_eq!(read(&p("content/cars/ABARTH500/ui/UI_CAR.JSON")).unwrap(), b"Content/Cars/Abarth500/UI/ui_car.json");
+        assert_eq!(read_to_string(&p("CONTENT/tracks/Spa/spa.kn5")).unwrap(), "Content/Tracks/spa/SPA.kn5");
+        assert!(is_file(&p("content/tracks/SPA/Spa.KN5")) && !is_file(&p("content/tracks/spa")));
+        assert!(is_dir(&p("content/TRACKS/spa")) && !is_dir(&p("content/tracks/spa/spa.kn5")));
+        assert_eq!(read_dir(&p("content/cars/abarth500/ui")).unwrap(), vec![("ui_car.json".to_string(), false)]);
+        assert_eq!(read(&p("content/cars/abarth500/ui/nothing.json")).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(!is_file(&p("content/nowhere/x")) && File::open(&p("Content/Tracks/SPA/spa.KN5")).is_ok());
+        // as spelled first; two names differing only in case (only Linux has both): the smaller
+        assert!(matches!(on_disk(&p("system/cfg/a.ini")), Cow::Borrowed(_)));
+        if std::fs::read(p("system/cfg/a.ini")).unwrap() != b"system/cfg/a.ini" {
+            eprintln!("{}: the folder does not tell cases apart, so its look-ups ignoring case were not tried", dir.display());
+        } else if !cfg!(windows) {
+            assert_eq!(read(&p("system/cfg/a.ini")).unwrap(), b"system/cfg/a.ini");
+            assert_eq!(read(&p("system/cfg/A.ini")).unwrap(), b"system/cfg/A.INI");
+        }
+    }
 
     #[test]
     fn a_memory_file_system_answers_like_a_disk() {

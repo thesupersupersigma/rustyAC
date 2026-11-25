@@ -657,7 +657,7 @@ fn nth_bezier(control: &[P3], t: f32) -> P3 {
 /// `data/side_l.csv` and `side_r.csv` when both are there and one of them was written after
 /// the fast lane's file: the game then works the track limits out again from them.
 pub fn newer_side_files(data: &Path, fast_lane: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let modified = |path: &Path| rustyac_content::vfs::or_on_disk(path, |p| std::fs::metadata(p)).and_then(|m| m.modified()).ok();
     let (left, right) = (data.join("side_l.csv"), data.join("side_r.csv"));
     let line = modified(fast_lane)?;
     (modified(&left)? > line || modified(&right)? > line).then_some((left, right))
