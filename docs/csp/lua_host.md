@@ -4,13 +4,12 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a is done (below). C6b parts 1-3 are done, part 4 is begun: the 8 car scripts CSP's data.acd reader can
-give were run in CSP's own state in the oracle (part 4 below: which natives they reach and refer to), and
-the first two natives are ported (`lj_encodeBase64`, `lj_decodeBase64`, csp::lua_natives; proof case
-`csp lua env` 80/80 identical). Next: the rest of part 4, the maths/type/encoding natives in the order of
-the part 4 table (`lj_lut_*`/`lj_lut2d_*` for ac.DataLUT11/21, `lj_structBytes` for ac.StructItem,
-`lj_getPatchVersionCode`, then `lj_mat_*`, checksums, compression, perlin, half floats, rgb), each against
-CSP's function at the RVA listed there, then part 5, then C6c.
+C6a is done (below). C6b parts 1-4 are done: what the 9 car scripts use of part 4 is ported (base64,
+the 1D DataLUT11 natives, `lj_structBytes`, `lj_random_seed`, `getPatchVersionCode`; csp::lua_natives,
+proof case `csp lua env` 98/98 identical); the rest of part 4 is "on demand" (an unported native
+names itself when called). Next: part 5 (`ac.INIConfig`, `lj_loadINIppFile`, `ac.store`, binary
+inputs, `ac.getCarDataFiles`), then C6c (CSP's car_cphys step sub_18085AD10 with its 82 natives needs
+the car state, so it is C6c's; also `ac.connect` and DataLUT21).
 
 ## C6b part 1: the car physics script's environment (survey, dwrite.dll build 4305)
 
@@ -120,17 +119,61 @@ gives in CSP's state): strings out are a per-thread MSVC `std::string` (`const s
 |---|---|---|
 | `lj_encodeBase64({begin,end}, no_pad)` | 0x1813d2c00 (coder sub_181433D70) | yes |
 | `lj_decodeBase64(const char*)` | 0x1813d2e30 (sub_181435190: stops at `=` or a byte not alnum/`+`/`/`) | yes |
-| `lj_lut_*` (add atkey atvalue empty gc get load loadcardata parse refresh serialize) | 0x180fedbb0..0x180fee320 | |
-| `lj_lut2d_*` (add empty gc get load loadcardata parse refresh serialize) | 0x180fee460..0x180feeba0 | |
-| `lj_structBytes` | 0x1813d3210 | |
-| `lj_getPatchVersionCode`, `lj_getPatchVersion` | 0x1802fd360, 0x1813caf80 | |
+| `lj_lut_*` (add atkey atvalue empty gc get loadcardata parse refresh) | 0x180fedbb0..0x180fee320 | yes (Resume 2, below) |
+| `lj_lut_load`, `lj_lut_serialize` | 0x180fee170, 0x180fedc10 | on demand |
+| `lj_lut2d_*` (add empty gc get load loadcardata parse refresh serialize) | 0x180fee460..0x180feeba0 | on demand |
+| `lj_structBytes` | 0x1813d3210 | yes |
+| `lj_getPatchVersionCode` | 0x1802fd360 (`(11078 - dword_1827FAB10) >> 1`, 4305 here) | yes (4305) |
+| `lj_getPatchVersion` | 0x1813caf80 | on demand |
 | `lj_mat_*` (euler inverse(self) look mul(self) multo normalize(self) ortho pack perspective proj=rotation scaling toeuler translation transpose(self) unpack) | 0x1813d05e0..0x1813d1b10, normalizeself 0x181002a70 | |
 | `lj_checksumCRC32`, `lj_checksumSHA256`, `lj_checksumXXH` | 0x1813d23f0, 0x1813d2290, 0x1813d23d0 | |
 | `lj_compress`, `lj_decompress` | 0x1813d2410, 0x1813d2b30 | |
 | `lj_encodeHalf(2)`, `lj_decodeHalf(2)` | 0x1813d04f0, 0x1813d0500, 0x1813d0530, 0x1813d0570 | |
 | `lj_perlin_1/2/3` | 0x1813d35a0, 0x1813d37f0, 0x1813d3c10 | |
-| `lj_utf8To16`, `lj_random_seed`, `lj_2d_segments_intersection` | 0x1813d30a0, 0x1813d1e60, 0x1813d2140 | |
+| `lj_random_seed` | 0x1813d1e60 (xoshiro256** per thread, seeded from random_device + QPC, 0..=2147483646) | yes (a random int in range) |
+| `lj_utf8To16`, `lj_2d_segments_intersection` | 0x1813d30a0, 0x1813d2140 | |
 | `lj_rgb_from_string`, `lj_rgbm_from_string` | 0x1813cb0a0, 0x1813caf90 | |
+
+**"On demand"**: ported only when a script reaches it. Until then the call stops the game with
+`CSP Lua: <name> is not ported yet (docs/csp/lua_host.md)`, the name being the `ffi.C.lj_*` one (each
+unported `ffi.C` name resolves to its own stub, `UNPORTED_FFI` in csp::lua_env) or `ac.<name>` /
+`__util.<name>` / `string.<name>` (the closure carries its name). Left on demand: the rows above without
+"yes" (`lj_mat_*`, checksums, compression, half floats, perlin, rgb strings, utf16, segments, 2D LUTs,
+`lj_lut_load`, `lj_lut_serialize`, `lj_getPatchVersion`).
+
+### Resume 2: DataLUT11, StructItem, getPatchVersionCode
+
+Natives a call reaches in CSP's state (the oracle with the logging prelude): `ac.DataLUT11.parse` and
+`:get` -> `lj_lut_parse`, `lj_lut_get`; `ac.DataLUT11.carData(0, ...)` -> `lj_lut_loadcardata` (nil
+without the game's car list); `ac.DataLUT21.parse` -> `lj_lut2d_parse` (on demand: its grid builder
+sub_1814A55E0 and constructor sub_1814A63E0 are 5.5 KB); `ac.StructItem.combine` -> `lj_random_seed`
+(the struct's type name); `ac.connect` crashes the stand-in (dwrite+0xfe183f, the game's shared
+memory: C6c).
+
+The 1D LUT (csp::lua_natives, `LuaLut` = CSP's `lua_lut` cdef, the points a `[f32; 2]` vector):
+
+- **parse** (sub_1814A3160): trimmed of `
+	 `; an `=` anywhere means the inline form
+  `(x=y|x=y)` (keys and values through csp::parse_float, a value's first `,` piece, pushed unsorted);
+  else a digit, `+`, `-` or a comment means the file form (sub_1814A1B30: lines `x|y`, comments `;`,
+  `#`, `//`, the value's first `,` piece; unsorted, repeated keys kept); else empty. NULL gives NULL.
+- **get** (sub_1814A2120 linear, sub_1814A21F0 cubic): 0 points 0, 1 point its y; with `extrapolate`
+  the end segment's slope past either end (`x > last` / `!(x >= first)`, so NaN extrapolates from the
+  first); else the segment by upper-bound binary search (sub_1814A3780), `t` clamped to 0..1 with the
+  width at least f32::EPSILON; linear `(y1 - y0) * t + y0`, cubic Hermite with the tangents of
+  sub_1814A38A0 in CSP's operation order. **add** keeps keys sorted (sub_1814A2670), **refresh**
+  the bounds (sub_1814A23C0), **atkey/atvalue** NaN out of range.
+- **loadcardata**: CSP reads the car's data file (its reader sub_18142A660, cached per file) into the
+  file-form parser; rustyAC reads `<car>/data/<file>` (data.acd or the folder, crate::data) for the
+  host's car only (any other index gives NULL, as CSP does without the car). Not in the snippet proof
+  (CSP's stand-in has no car): the file form is the one `parse` proves, the read is a unit test.
+
+Proof: `csp lua env` 98/98 identical under both MXCSR (18 new snippets: inline and file forms, NULL and
+empty strings, linear/cubic/extrapolated `get` at and between points, past both ends and NaN, repeated
+keys, `add`/`refresh`, `atkey`/`atvalue` out of range, StructItem layout and values, `lj_structBytes`
+bytes, `lj_random_seed` range, `getPatchVersionCode`). The struct's ctype number differs by one
+(CSP's state has declared one more ctype before; layout and values are the same), so the snippet
+compares the layout, not `tostring`.
 
 ## C6b part 3: CSP's set-up of the state
 

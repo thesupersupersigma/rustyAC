@@ -50,19 +50,41 @@ const STRING: [&CStr; 28] = [
 /// `lj_free` (declared by an old cdef, not answered); found by asking CSP for each (part 3).
 const FFI_NAMES: &str = include_str!("lua_names.txt");
 
-/// Called through any of the names above not ported yet (csp::lua_natives): a script reaching one stops.
-unsafe extern "C-unwind" fn unported(_: *mut lua_State) -> c_int {
-    eprintln!("CSP Lua: a CSP native not ported yet was called (C6b)");
+/// Called through any C function of the set-up not ported yet: a script reaching one stops, naming it (upvalue 1).
+unsafe extern "C-unwind" fn unported(l: *mut lua_State) -> c_int {
+    let name = CStr::from_ptr(lua_tolstring(l, LUA_GLOBALSINDEX - 1, std::ptr::null_mut()));
+    eprintln!("CSP Lua: {} is not ported yet (docs/csp/lua_host.md)", name.to_string_lossy());
     std::process::abort();
 }
+
+/// The same for the `ffi.C` name on line `I` of lua_names.txt: one function per name, so each names itself.
+unsafe extern "C" fn unported_ffi<const I: usize>() {
+    eprintln!("CSP Lua: ffi.C.{} is not ported yet (docs/csp/lua_host.md)", FFI_NAMES.lines().nth(I).unwrap_or("?"));
+    std::process::abort();
+}
+
+macro_rules! row {
+    ($a:literal) => {
+        row!($a; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63)
+    };
+    ($a:literal; $($b:literal)*) => {
+        [$(unported_ffi::<{ $a * 64 + $b }> as unsafe extern "C" fn()),*]
+    };
+}
+
+/// `unported_ffi` for lines 0..1792 of lua_names.txt (1788 names).
+static UNPORTED_FFI: [[unsafe extern "C" fn(); 64]; 28] = [
+    row!(0), row!(1), row!(2), row!(3), row!(4), row!(5), row!(6), row!(7), row!(8), row!(9), row!(10), row!(11), row!(12), row!(13),
+    row!(14), row!(15), row!(16), row!(17), row!(18), row!(19), row!(20), row!(21), row!(22), row!(23), row!(24), row!(25), row!(26), row!(27),
+];
 
 /// `ffi.C` in a CSP state: CSP's own names only (Windows' are not found, as in CSP).
 unsafe extern "C" fn resolve(name: *const c_char) -> *mut c_void {
     let name = CStr::from_ptr(name).to_bytes();
-    if !FFI_NAMES.lines().any(|n| n.as_bytes() == name) {
+    let Some(line) = FFI_NAMES.lines().position(|n| n.as_bytes() == name) else {
         return std::ptr::null_mut();
-    }
-    super::lua_natives::native(name).unwrap_or(unported as *mut c_void)
+    };
+    super::lua_natives::native(name).unwrap_or(UNPORTED_FFI[line / 64][line % 64] as *mut c_void)
 }
 
 unsafe fn run(l: *mut lua_State, code: &[u8], name: &CStr, mode: &CStr) -> Result<(), String> {
@@ -79,12 +101,19 @@ unsafe fn set_string(l: *mut lua_State, idx: c_int, key: &CStr, value: &str) {
     lua_setfield(l, idx, key.as_ptr());
 }
 
+/// `unported` as `table[name]` (the table on top), named `<prefix>.<name>`.
+unsafe fn set_unported(l: *mut lua_State, prefix: &CStr, name: &CStr) {
+    let full = CString::new([prefix.to_bytes(), b".", name.to_bytes()].concat()).unwrap();
+    lua_pushstring(l, full.as_ptr());
+    lua_pushcclosure(l, unported, 1);
+    lua_setfield(l, -2, name.as_ptr());
+}
+
 /// A table of `unported` under `names`, sized as CSP's (LuaJIT's hash size of `nrec`).
-unsafe fn table(l: *mut lua_State, nrec: c_int, names: &[&CStr]) {
+unsafe fn table(l: *mut lua_State, prefix: &CStr, nrec: c_int, names: &[&CStr]) {
     lua_createtable(l, 0, nrec);
     for name in names {
-        lua_pushcclosure(l, unported, 0);
-        lua_setfield(l, -2, name.as_ptr());
+        set_unported(l, prefix, name);
     }
 }
 
@@ -113,13 +142,12 @@ unsafe fn set_up(l: *mut lua_State, root: &str, host: &Host) -> Result<(), Strin
     lua_pushboolean(l, host.allow_io as c_int);
     lua_setfield(l, LUA_GLOBALSINDEX, c"__allowIO__".as_ptr());
     for (name, nrec, names) in [(c"ac", 0x2ed, &AC[..]), (c"__script", 9, &[]), (c"__util", 0x63, &UTIL), (c"ui", 0x257, &[])] {
-        table(l, nrec, names);
+        table(l, name, nrec, names);
         lua_setfield(l, LUA_GLOBALSINDEX, name.as_ptr());
     }
     lua_getfield(l, LUA_GLOBALSINDEX, c"string".as_ptr());
     for name in STRING {
-        lua_pushcclosure(l, unported, 0);
-        lua_setfield(l, -2, name.as_ptr());
+        set_unported(l, c"string", name);
     }
     lua_settop(l, 0);
     lua_pushnumber(l, (host.car_index + 1) as f64);
@@ -156,6 +184,8 @@ pub unsafe fn car_physics(dwrite: &Path, host: &Host) -> Result<*mut lua_State, 
     lua_setfield(l, -2, c"ffi".as_ptr());
     lua_settop(l, 0);
     lj_clib_resolver = Some(resolve);
+    // `ac.DataLUT11.carData`: the script folder of a car physics script is its car's data folder
+    super::lua_natives::set_car_data(host.car_index, host.dir);
     let root = dwrite.parent().unwrap_or(Path::new("")).to_string_lossy();
     let mut r = set_up(l, &root, host);
     for name in LIBS {
@@ -182,6 +212,16 @@ pub unsafe fn car_physics(dwrite: &Path, host: &Host) -> Result<*mut lua_State, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each unported `ffi.C` name has its own stub (so it names itself), the ported ones theirs.
+    #[test]
+    fn unported_names() {
+        assert!(FFI_NAMES.lines().count() <= 28 * 64);
+        let at = |n: &CStr| unsafe { resolve(n.as_ptr()) };
+        let stubs = [at(c"lj_memoryBarrier"), at(c"lj_lut2d_get"), at(c"lj_lut_get"), at(c"lj_getSim")];
+        assert!(stubs.iter().all(|p| !p.is_null()) && stubs.iter().collect::<std::collections::HashSet<_>>().len() == 4);
+        assert!(at(c"GetCurrentProcessId").is_null());
+    }
 
     /// The state builds from the stand-in AC folder's dwrite.dll, when there is one (csp proof area otherwise).
     #[test]

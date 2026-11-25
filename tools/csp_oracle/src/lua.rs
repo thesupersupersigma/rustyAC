@@ -212,10 +212,11 @@ pub unsafe fn run(dll: usize, file: &str, dwrite: Option<&Path>) {
     }
 }
 
-/// Counts `ac.<name>`, `physics.<name>`, `__util.<name>` and `C.<name>` (ffi.C) references in a Lua source, names only.
+/// Counts `ac.<name>`, `physics.<name>`, `__util.<name>`, `C.<name>` (ffi.C) and `DataLUT11/DataLUT21/StructItem.<name>`
+/// references in a Lua source, names only.
 fn api_refs(src: &[u8], refs: &mut std::collections::BTreeMap<String, u32>) {
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    for table in [&b"ac."[..], b"physics.", b"__util.", b"C."] {
+    for table in [&b"ac."[..], b"physics.", b"__util.", b"C.", b"DataLUT11.", b"DataLUT21.", b"StructItem."] {
         let mut i = 0;
         while let Some(at) = src[i..].windows(table.len()).position(|w| w == table) {
             let start = i + at;
