@@ -4,12 +4,13 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a is done (below). C6b parts 1-3 are done: the survey, CSP's car physics libraries on rustyAC's
-LuaJIT, and CSP's own set-up of the state (part 3: proof case `csp lua env` 77/77 identical, `ffi.C`
-answers exactly CSP's 1,788 names). Next: C6b part 4 (the maths, type and encoding natives, each
-against CSP's), then part 5, then C6c. First step of part 4: run each of the 9 car scripts of classes
-1 and 2 in CSP in the oracle (the stand-in host of part 3, `data/script.lua` loaded by the host
-from data.acd) and log the natives each calls, so parts 4-5 port those first.
+C6a is done (below). C6b parts 1-3 are done, part 4 is begun: the 8 car scripts CSP's data.acd reader can
+give were run in CSP's own state in the oracle (part 4 below: which natives they reach and refer to), and
+the first two natives are ported (`lj_encodeBase64`, `lj_decodeBase64`, csp::lua_natives; proof case
+`csp lua env` 80/80 identical). Next: the rest of part 4, the maths/type/encoding natives in the order of
+the part 4 table (`lj_lut_*`/`lj_lut2d_*` for ac.DataLUT11/21, `lj_structBytes` for ac.StructItem,
+`lj_getPatchVersionCode`, then `lj_mat_*`, checksums, compression, perlin, half floats, rgb), each against
+CSP's function at the RVA listed there, then part 5, then C6c.
 
 ## C6b part 1: the car physics script's environment (survey, dwrite.dll build 4305)
 
@@ -66,6 +67,70 @@ they call is known only when CSP runs them (C6c: log the natives CSP calls per s
 - C6c: the state structs over rustyAC's car (ac.StateCar, physics overrides and forces), `update(dt)` /
   `reset()` from the physics step, getting the scripts' bytecode (open question: without decrypting
   anything ourselves), then the RSS 3 row.
+
+## C6b part 4: what the car scripts reach, and the natives ported
+
+**Running the scripts in CSP** (csp_oracle `--lua-env`, scratch only, not a proof case): with
+`CSP_ORACLE_LUA_CAR=<car folder>` the oracle runs, after CSP's libraries, the host's next step for a
+car_cphys state (sub_18085AD10: CSP's own 3,529-B chunk and its 82 natives, which put the real
+`ac.accessCarPhysics` in place of the "Physics API is not available here" one; rustyAC's lua_env lacks
+this step, part 5/C6c), then reads the car's data.acd in memory (rustyac_content::acd) and puts each
+`*.lua` entry in `package.preload` under its name, through CSP's own lua_load: that is what CSP's file
+hook (sub_1813DB7A0) does with a plain source its car_acd_lookup (vtable 0x182301e78, read
+sub_180849C70) returns. Nothing is written or printed; the oracle prints names only
+(`lua refs ...`: `ac.`, `physics.`, `__util.`, `C.` references counted in the sources).
+`CSP_ORACLE_LUA_PRE=<file>` runs a prelude after the set-up; the scratch one wraps every `ffi.C`
+name, `__util.native/nativf`, the C functions of `ac`/`__util`/`physics` and their C upvalues, and
+counts calls per phase (load = `require 'script'`, update = `script.update(0.003)` x3 with zeroed and
+with 0x3f-filled `car`/`sim`/physics state).
+
+Why CSP's own path to the script was not used: `require` gives CSP's hook full paths from
+`package.path`, and car_acd_lookup::read returns nothing for a name with `/` or `\`; `loadfile` of a
+bare name goes through the read-permission check sub_1813CA370, which needs the game's car list
+(qword_1828213D8) and car (+1088 path), and still said "permission denied" with stand-ins.
+
+What a run without the game reaches (natives the game must answer were stubbed: `lj_getSim`,
+`lj_getCar` return zeroed state_sim/state_car, `lj_getCarID` the folder name; `lj_getSim` crashes in
+sub_1810B23C0 without the game's sim):
+
+| Car | Load | Update | Refers to (names, of the API) |
+|---|---|---|---|
+| `pxw_sl_v4` | runs; no native (offline: entitlement check skipped) | runs, 1 line (entitled: does nothing) | 7: ac.decodeBase64, ac.INIConfig, ac.getCarID, ac.getServerIP, ac.addForce, ac.accessCarPhysics, ac.debug |
+| `rss_formula_2010` | `lj_getSim`, then a C++ exception (a native needing the game) | not reached | 15 |
+| `rss_formula_rss_3_v6_2026` | crashes in dwrite+0x489f8d after `lj_getSim` | not reached | 8 |
+| `rss_formula_hybrid_2026` | `lj_getCarID`, `__util.__si_cdef`, then "RSS protected Lua owning car identity unavailable" | not reached | 0 (packed) |
+| `urd_darche_992_23` | not run: CSP's FolderEncrypter (needs CSP's reader sub_18142A660) | | |
+| `vrc_formula_alpha_2025_csp` | `lj_getCarID`, `__util.__si_cdef`, then ac_common_base "attempt to index a nil value" | not reached | 62 |
+| `vrc_formula_alpha_2026_csp` | the same | not reached | 41 (packed) |
+| `vrc_formula_beta_2024_csp` | `ac.getCarDataFiles` (nil without the game's car) | not reached | 45 |
+| `vrc_formula_lithium_2023_csp` | `lj_getSim` | runs, 2 lines | 2 |
+
+So a run without the game's car and sim reaches few natives; the names the sources refer to are the
+better list. Of the part 4 group they use: `ac.decodeBase64` (4 cars), `ac.DataLUT11`/`DataLUT21`
+(3), `ac.StructItem` (3), `ac.getPatchVersionCode` (1); the rest of what they refer to is car state
+and controls (C6c: `ac.accessCarPhysics` 5, `ac.getSim` 5, `ac.getCarID` 5, `ac.setEngineRPM` 3,
+`ac.overrideGasInput`, `ac.setDRS`, `ac.addHubForce`, ... 70 names in all) and config (part 5:
+`ac.INIConfig` 4, `ac.getCarDataFiles` 3, `ac.storage`/`ac.store`, `ac.readDataFile`). The VRC
+`physics.<Name>` references are the scripts' own modules, not CSP's. No script names `ffi.C` itself.
+
+**The part 4 natives** (ffi.C name, CSP's function in dwrite.dll 4305, from the address `ffi.C`
+gives in CSP's state): strings out are a per-thread MSVC `std::string` (`const struct 187 *`).
+
+| Native | RVA | Ported |
+|---|---|---|
+| `lj_encodeBase64({begin,end}, no_pad)` | 0x1813d2c00 (coder sub_181433D70) | yes |
+| `lj_decodeBase64(const char*)` | 0x1813d2e30 (sub_181435190: stops at `=` or a byte not alnum/`+`/`/`) | yes |
+| `lj_lut_*` (add atkey atvalue empty gc get load loadcardata parse refresh serialize) | 0x180fedbb0..0x180fee320 | |
+| `lj_lut2d_*` (add empty gc get load loadcardata parse refresh serialize) | 0x180fee460..0x180feeba0 | |
+| `lj_structBytes` | 0x1813d3210 | |
+| `lj_getPatchVersionCode`, `lj_getPatchVersion` | 0x1802fd360, 0x1813caf80 | |
+| `lj_mat_*` (euler inverse(self) look mul(self) multo normalize(self) ortho pack perspective proj=rotation scaling toeuler translation transpose(self) unpack) | 0x1813d05e0..0x1813d1b10, normalizeself 0x181002a70 | |
+| `lj_checksumCRC32`, `lj_checksumSHA256`, `lj_checksumXXH` | 0x1813d23f0, 0x1813d2290, 0x1813d23d0 | |
+| `lj_compress`, `lj_decompress` | 0x1813d2410, 0x1813d2b30 | |
+| `lj_encodeHalf(2)`, `lj_decodeHalf(2)` | 0x1813d04f0, 0x1813d0500, 0x1813d0530, 0x1813d0570 | |
+| `lj_perlin_1/2/3` | 0x1813d35a0, 0x1813d37f0, 0x1813d3c10 | |
+| `lj_utf8To16`, `lj_random_seed`, `lj_2d_segments_intersection` | 0x1813d30a0, 0x1813d1e60, 0x1813d2140 | |
+| `lj_rgb_from_string`, `lj_rgbm_from_string` | 0x1813cb0a0, 0x1813caf90 | |
 
 ## C6b part 3: CSP's set-up of the state
 

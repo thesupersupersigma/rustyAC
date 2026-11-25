@@ -6,7 +6,7 @@
 //! sets the global `ffi` (sub_1813E2260), runs its set-up (the car physics host's
 //! sub_18084A7F0 over sub_1813E25E0), then CSP's own libraries, LuaJIT bytecode read out of the
 //! installed dwrite.dll at run time. rustyAC carries none of that bytecode; the set-up's C
-//! functions and the libraries' `ffi.C.lj_*` natives are named here and none is ported yet.
+//! functions and the libraries' `ffi.C.lj_*` natives are named here; csp::lua_natives has the ported ones.
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::Path;
@@ -50,16 +50,19 @@ const STRING: [&CStr; 28] = [
 /// `lj_free` (declared by an old cdef, not answered); found by asking CSP for each (part 3).
 const FFI_NAMES: &str = include_str!("lua_names.txt");
 
-/// Called through any of the names above: none is ported yet, so a script reaching one stops.
+/// Called through any of the names above not ported yet (csp::lua_natives): a script reaching one stops.
 unsafe extern "C-unwind" fn unported(_: *mut lua_State) -> c_int {
-    eprintln!("CSP Lua: a CSP native was called; none is ported yet (C6b)");
+    eprintln!("CSP Lua: a CSP native not ported yet was called (C6b)");
     std::process::abort();
 }
 
 /// `ffi.C` in a CSP state: CSP's own names only (Windows' are not found, as in CSP).
 unsafe extern "C" fn resolve(name: *const c_char) -> *mut c_void {
     let name = CStr::from_ptr(name).to_bytes();
-    if FFI_NAMES.lines().any(|n| n.as_bytes() == name) { unported as *mut c_void } else { std::ptr::null_mut() }
+    if !FFI_NAMES.lines().any(|n| n.as_bytes() == name) {
+        return std::ptr::null_mut();
+    }
+    super::lua_natives::native(name).unwrap_or(unported as *mut c_void)
 }
 
 unsafe fn run(l: *mut lua_State, code: &[u8], name: &CStr, mode: &CStr) -> Result<(), String> {
