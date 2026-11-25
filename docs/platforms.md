@@ -20,9 +20,11 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   Windows'). L6's sound done (12.3: FMOD Engine 2.03 native, call logs identical to the page's on
   the 18 drives and to the game's on the 3 end-to-end rows), its licence text and required-files
   list too, split into the base game and one list per DLC (12.3). **P3b done**; next is L7 (12.4).
-- **P3c (branch `web`), section 13:** L7 parts 1 and 2 committed (13.1: imports, zip, the lists'
-  checks; 13.2: the launcher on wry with the chooser, built, not yet proved: the page stalls in WSL).
-  **Resume at 13.3** (L7's proof, then L8).
+- **P3c (branch `web`), section 13:** L7 done (13.1 imports, zip, the lists' checks; 13.2 the
+  launcher on wry with the chooser; 13.3 the page's synchronous requests never wait on a listing,
+  letter case, every read of AC's folder through `vfs`, `quickrace` against fresh Windows gold).
+  L8's pieces done (13.4 the tar.gz and `release.yml`'s Linux job, 13.5 the tester's kit), not
+  run. **Resume at 13.6** (the other seven scripts, the transcripts, the tester's results).
 
 ## 1. Plain-English summary
 
@@ -1007,35 +1009,151 @@ loads and 2,600 to 2,700 bridge requests are answered, then the page stalls. Two
 On a native Linux disk the listing should take about what Windows takes; this PC cannot show it
 (the repo and AC's files are on `/mnt/c`, and files stay in the repo, rule 6).
 
-### 13.3 Resume here (P3c)
+### 13.3 L7 part 3: the page never waits on a listing, letter case, every read through `vfs`, the proof
 
-- **Done and committed:** 13.1 (part 1) and 13.2 (part 2, built and clippy clean everywhere).
-  Windows: the launcher area's quick proof **1 / 1 IDENTICAL** (`l7_quick_launcher.log`); every other area skipped
-  because no Windows code path of theirs changed (the content modules are new, the `desktop.rs`
-  and `fmod/native.rs` changes are `cfg(not(windows))`, the lock file keeps every Windows version).
-- **Next (L7, about one session):**
-  1. Find the `NetworkError`: hold the main loop on purpose (a test-only delay) for 5 s and 70 s
-     before answering, to tell a time limit from a connection limit; if the main loop is the
-     cause, answer the bridge on a thread of its own (the `Bridge` behind a mutex, events and log
-     to the main loop) so a long listing never stalls the page's other requests.
-  2. The proof: record **fresh Windows request lists** into scratch (not `re/gold/launcher`, which
-     was recorded before this install's mods changed: 62 tracks and 207 cars there, 71 and 210
-     now) with `launcher_record.sh`'s steps, run the same scripts on Linux (`l7_run.sh`), compare
-     the lists without jQuery's `_=<time>`, and the `race.ini` each writes. Then the transcripts:
-     every `re/gold/launcher` list through Linux's `--transcript --fixed-host` against Windows'.
-  3. `ipc` messages (the page's console through `REPORT_JS`) do not reach the log on Linux; the
-     console goes to the launcher's own output (`enable-write-console-messages-to-stdout`) for
-     now. Find why.
-  4. A zip end to end: the game's readers that use `std::fs` directly (`render/gui.rs`,
-     `gui_apps.rs`, `conditions.rs`, … about 70 calls) and whether any of them reads AC's own
-     folder.
-  5. A real Linux disk (the tester, L8) settles cause 1 of 13.2.
-- **Then L8:** `release.yml`'s Linux row (the two programs, FMOD's Linux libraries and their EULA
-  credit, `required/`, `THIRD_PARTY_NOTICES.txt` made again with `tools/notices.py` since the lock
-  file changed), the tar.gz, what a player needs (Vulkan drivers, `libwebkit2gtk-4.1`), and the
-  tester's kit (CachyOS: `webkit2gtk-4.1`, `vulkan-icd-loader` and the GPU's Vulkan driver,
-  `sdl3` if it is not static; one script that runs the checklist and packs the logs).
-- **Open question for Super:** letter case. On a real Linux disk a Proton install keeps Windows'
-  file names, but the game and the theme ask for files in whatever case their code spells them;
-  Windows and `/mnt/c` do not care, ext4 does. The tester's run will show whether a lookup that
-  ignores case is needed (the zip reader already ignores it).
+**The `NetworkError`, found** (`l7_probe3.txt`: a page-side timer sends synchronous requests while
+a listing runs): **WebKitGTK ends a synchronous request after 10 s** (`TimeoutError` at 10,012 ms;
+Chromium, so the Windows launcher, waits as long as it takes). The theme sends its three listings
+with `async=true` and polls `carcount` / `uimessage` synchronously meanwhile, so any listing longer
+than 10 s on the main loop failed the polls, and the page stalled. WSL's slow disk only showed it:
+a slow HDD or a network share does the same. The fix, in three parts, all Linux-only:
+
+1. **The listings run on a thread of their own.** `Bridge::listing` (shared code, used only by the
+   Linux shell) hands every request the theme sends with `async=true` whose handler reads files
+   only (`listcars`, `listtracks`, `listspecialevents`, `listseries`, `listfiles`, `getiniasjson`,
+   `getachievements`, `getskinmeta`) to a bridge without the window's host on one worker thread,
+   in the order asked, as Windows answers them (the log keeps that order). The state they fill in
+   and other requests read (`carcount`, `eventcount`, `generatecss`) is shared (`Arc<Mutex>`); on
+   Windows every request is still answered in turn on the window's thread. Chosen over a cache or
+   answering in parts: no stale lists, and it is the theme's own `async=true`.
+2. **Synchronous requests on a port of their own.** After `listcars` the theme sends ~2,500
+   asynchronous `getskinmeta`; WebKit counts its connections per host and port and queued a
+   synchronous `uimessage` behind them past 10 s. The bridge's server now listens on two ports;
+   the hook in the page sends `async: false` requests to the second, and the server never queues
+   one of those on the listings' thread.
+3. **`until` asks again**: wry keeps a script sent before the first page has loaded and drops its
+   callback, so a script's first check never got its answer (the page sat "loading" for good in
+   the step runner's eyes). A check unanswered for a second is asked again.
+
+Also found on the way: **wry's `ipc` drops every message of a `file://` page** (it makes an
+`http::Request` of the page's address and `http` refuses `file:///...`), so the page's errors and
+console lines never reached the log (13.2's item 3): they now go to the bridge's server (a beacon
+to `__report`). **`net::uri_path` wrote `file:////mnt/...`** for a Unix path (fixed off Windows:
+the path's own `/` is the third). Requests on WSL's `/mnt/c` that still take long are printed
+(`bridge: <url> answered after <s> s`).
+
+**Letter case** (`vfs::on_disk`, `vfs::or_on_disk`): off Windows, a path that is not there as
+spelled is looked for again ignoring ASCII case, one folder at a time from the deepest folder that
+is there, each folder listed once and its names kept; two names that differ only in case: the
+smaller. The game (every `vfs` call), the launcher (`files::Disk`) and the imports' folders and
+disk fallbacks use it; the zip reader already ignored case. **Cost:** nothing for a path found as
+spelled (the call is tried first); a path not there as spelled costs one more `lstat`, one per
+folder up to the deepest one that is there, and a look-up in each kept listing below it (a folder
+is listed once: about 50 bytes a name kept). A probe for a file that really is missing (the
+game's `dlc_ui_car.json`, LODs) pays that each time. Shortcut: a file made after its folder was
+listed and asked for in another case is not found. The unit test (`vfs`, mixed-case tree, the
+"two names" case) needs a case-sensitive folder: under WSL's `/mnt/c` that is
+`target\test-scratch\case-sensitive` (`fsutil file setCaseSensitiveInfo <dir> enable`, made here;
+new folders inherit it); elsewhere it says it was not tried.
+
+**The reads that went around `vfs`** (13.2's item 4): of ~130 direct `std::fs` reads in the game's
+crates, the ones that read Assetto Corsa's folder now go through `vfs` (zips and extra roots, letter
+case): the skins of a car (`session.rs`, `desktop.rs`), `skin_available`, the track models
+(`desktop.rs`), `cfg/replay.ini`, `system/cfg/chase_cam.ini`, `pitstop.ini`,
+`assetto_corsa.ini` (twice), the apps' car-file checks (`gui_apps.rs`, `console.rs`), the car
+boundaries' model (`scene.rs`), `ppfilters` (`app_pp_filter.rs`); file times (`ai_line.rs`'s side
+files, `car.rs`'s `proview_nodes.ini`, the fake-shadow stamp) follow the case only (a zip's files
+have no time: the side files are then never "newer", `proview_nodes.ini` never fresh, as when it is
+missing). The rest read the player's own folders (Documents, cfg, setups, replays, ghosts), the
+program's folder, `/proc`, or are Windows-only (D3D11, DirectWrite, Python, YEBIS) or CSP's
+(untouched). `race/shm.rs` reads `changelog.txt` from the working folder, as the game does.
+
+**The proof** (`re/scratch/taskP3/l7_run.sh <name>`, `l7_cmp.py`): fresh Windows request lists
+for this install, recorded as new gold (`LAUNCHER_GOLD=launcher_p3c sh
+tools/proofs/launcher_record.sh`: `re/gold/launcher_p3c/`, 8 scripts, about 22,800 requests).
+`launcher_record.sh` now passes `--player-cfg none --player-name "You, the player"`: the first
+recording seeded the empty player folder from the real `Documents\Assetto Corsa\cfg` (Task 46c),
+which chose another default car. Linux, the same `quickrace` script under Xvfb (waits x3, and 150 s
+after the page is ready: WSL's listings go on for minutes, where Windows has them in seconds):
+
+| | Windows (WebView2) | Linux (WebKitGTK 4.1, Xvfb, WSL `/mnt/c`) |
+|---|---|---|
+| script steps | 0 failed | **0 failed**, Drive started the Linux game, exit 0, the results page |
+| requests | 2,849 | 2,979 (the progress polls: the page now polls while listing, as it was written to) |
+| asynchronous requests (as a set) | 2,508 | **2,508**, the same but the personal best's lap time (the race is driven in real time) |
+| synchronous requests (as a set, no polls) | 340 | 333: the same but the screen size (3072 x 1920 against Xvfb's 1600 x 900), the random AI opponent's name and nation, one `specialevents_neutral.ini` (timing), and six `getskinmeta/urd_darche_992_23/` that WebKit sends once (identical requests in flight: that car's skins start with `#`, so the URL ends before the skin) |
+| `race.ini` written | | **identical** but the random AI opponent's name and nation |
+
+The other seven scripts and the transcripts (every list through Linux's `--transcript
+--fixed-host` against Windows') are next (13.6).
+
+### 13.4 L8: the Linux tar.gz
+
+`packaging/package_linux.sh <version> <inputs> <out>` (as `package.ps1` for Windows): the archive's
+whole content is listed in the script and read back. **`rustyAC-v1.1.5-linux-x64.tar.gz`, 12 MB
+(33 MB unpacked)**, made here from the WSL build (`re/scratch/taskP3/l8_dist/`): `rustyac`
+(25 MB, SDL3 built in), `rustyac-launcher` (2.9 MB), `libfmod.so.14` and `libfmodstudio.so.14`
+(Firelight's, unchanged, 1.6 MB each), `required/` (`base.json` and the 11 DLC lists), `HOW_TO_RUN.txt`
+(`packaging/HOW_TO_RUN_LINUX.txt`: what a player needs, the FMOD credit), `linux_check.sh`, the
+README, `LICENSING.md`, `THIRD_PARTY_NOTICES.txt` and the licence files. Unpacked and run as it is
+(no `LD_LIBRARY_PATH`): no library missing (`ldd`), `--list-tracks` finds the install, a headless
+drive loads FMOD from beside the program ("Audio engine: FMOD Studio by Firelight Technologies Pty
+Ltd.") and writes its sound.
+
+**What a player needs:** Linux x64 (X11 or Wayland), Vulkan drivers (Mesa's radv / anv or
+NVIDIA's; Arch / CachyOS: `vulkan-icd-loader` and `vulkan-radeon` / `vulkan-intel` /
+`nvidia-utils`), WebKitGTK 4.1 (`webkit2gtk-4.1`; Debian / Ubuntu `libwebkit2gtk-4.1-0`), and
+their own AC files (a Steam / Proton install is found).
+
+**`release.yml`:** a `linux` job on `ubuntu-24.04` (WebKitGTK's and GTK's dev packages, the build,
+the tests that need no game files plus the launcher's, `package_linux.sh`) hands the tar.gz to the
+Windows job, which publishes it with the others. FMOD's libraries and the lists cannot come from the
+repository: the job reads `linux-inputs.tar.gz` from the pre-release `linux-inputs`, which Super
+uploads once (`docs/release.md`, step 3b). **`platforms.yml`** gets the same two dev packages: since
+L7 its Linux rows build the launcher, which needs them. Not run (no release in this task).
+
+**Licences:** `LICENSING.md`'s table had 80 crates of the lock files missing (wry's macOS, Android
+and optional-feature dependencies, which L7's check, made for Linux alone, did not see): now all
+341, by `re/scratch/taskP3/l8_lic.py` (`cargo metadata` for every platform and feature, the
+tools' lock files too). Five of them are MPL-2.0 (`cssparser`, `cssparser-macros`, `dtoa-short`,
+`selectors`: wry's optional HTML parser, not built; `option-ext`); `tools/about.toml` accepts
+MPL-2.0 (file-level, GPL-compatible), and `THIRD_PARTY_NOTICES.txt` is made again (366 crates,
+167 licence texts, 12 lock files). `tools/web_pack/Cargo.lock` had not followed L7's new crates
+(`--locked` refused it): updated offline, every version as the root lock's.
+
+### 13.5 The tester's kit (CachyOS)
+
+Super sends the tester a test build: `re/scratch/taskP3/l8_dist/rustyAC-v1.1.5-linux-x64.tar.gz`
+(made again with `package_linux.sh` after any change), not a release. What the tester does:
+
+1. **Install** (Arch / CachyOS): `sudo pacman -S --needed webkit2gtk-4.1 vulkan-icd-loader
+   vulkan-tools` and the GPU's Vulkan driver (`vulkan-radeon`, `vulkan-intel` or `nvidia-utils`;
+   CachyOS usually has it). `gdb` is useful but optional.
+2. **Unpack** anywhere: `tar -xzf rustyAC-v1.1.5-linux-x64.tar.gz && cd rustyAC-v1.1.5-linux-x64`.
+3. **The game files:** a Steam install of Assetto Corsa with Proton is found by itself; otherwise
+   the launcher asks for the folder, or a zip of it (step 3 of the script).
+4. **Run** `./linux_check.sh` (about 10 minutes) and send back the `rustyac-check-<time>.tar.gz` it
+   makes. Its steps: the computer (distribution, kernel, CPU, RAM, GPU and Vulkan driver, audio
+   server, the package versions, missing libraries); the game files (track count); the launcher
+   (choose the files if asked, Drive a short race, two y / n answers); the frame check (a screenshot
+   of the BMW M3 E30 at Laguna Seca after 8 s, off screen, to compare with Windows'); frame times and
+   sound (a window, the AI drives 60 s: the end report's FPS and slowest frame, "did you hear the
+   engine", "did the picture look right"); the devices (`--list-devices`); driving by hand
+   (keyboard, pad or wheel, with force feedback on), then the close button, **the hang check** (the
+   end report printed and the process still there 20 s later is recorded as a hang and killed);
+   with a pad or wheel, two more answers (does it drive, does the force feedback pull towards the
+   centre). **It collects** only what it lists at its top: no game, settings or replay file; the
+   launcher's log without the values it sent (they can hold the driver name); home folder, user name
+   and computer name replaced by `~`, `<user>`, `<host>`.
+
+### 13.6 Resume here (P3c)
+
+- **Done:** L7 (13.1 to 13.3) and L8's pieces (13.4, 13.5), committed on `web`. L7's proof ran
+  for `quickrace` (13.3).
+- **Next:** the other seven scripts of `tools/proofs/launcher/` on Linux against
+  `re/gold/launcher_p3c` (`l7_run.sh <name>` with `GOLD=re/gold/launcher_p3c SETTLE=150000`, then
+  `l7_cmp.py`; about 12 minutes each in WSL), and the transcripts (every `re/gold/launcher_p3c`
+  list through `--transcript --fixed-host` on both; paths differ only by `C:/` against `/mnt/c/`).
+  Then the tester's results (13.5): a real disk, a GPU with Vulkan, PipeWire, pads and wheels.
+- **Super:** upload `linux-inputs` (`docs/release.md`, 3b) before the first Linux release; merge
+  `web` (its `platforms.yml` needs the two dev packages added here).

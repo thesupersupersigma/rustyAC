@@ -42,6 +42,21 @@
    `re/gold/<area>/` (recordings and other game-derived files; ignored, never committed, with a
    README on how it was made). `docs/port/proofs.md` says what each area compares.
 
+3b. **The Linux tar.gz's inputs** (once, and again when FMOD or the install's DLC lists change):
+   the release workflow's `linux` job reads `linux-inputs.tar.gz` from this repo's pre-release
+   `linux-inputs`, because neither part may come from the repository: FMOD Engine 2.03's
+   `libfmod.so.14` and `libfmodstudio.so.14` (fmod.com's Linux download, `api/core/lib/x86_64/`
+   and `api/studio/lib/x86_64/`, the `.so.14.15` files renamed) and `required/` (`base.json` and
+   the `dlc_<app>.json` lists, `tools/web_pack --required` on a full install: paths and sizes,
+   no content). Pack them at the top of the archive and upload it:
+
+   ```
+   tar -czf linux-inputs.tar.gz libfmod.so.14 libfmodstudio.so.14 required
+   gh release create linux-inputs linux-inputs.tar.gz --prerelease --title "Linux build inputs" --notes "FMOD Engine 2.03 (FMOD EULA) and the required-files lists, for the release workflow"
+   ```
+
+   `packaging/package_linux.sh <version> <inputs> dist` makes the same tar.gz by hand.
+
 4. Commit and tag:
 
    ```
