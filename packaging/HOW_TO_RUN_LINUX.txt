@@ -1,0 +1,54 @@
+rustyAC @VERSION@ for Linux (x64) - how to run
+=====================================================
+
+rustyAC is a Rust rewrite of Assetto Corsa 1.16, checked bit for bit against
+the original game. This is the native Linux build: the physics, the AI, the
+renderer (on Vulkan, without the post-processing), the sound, the HUD and
+menus, the launcher, replays and online play. Not in it yet: Python apps,
+VR, TrackIR, Steam's achievements, Custom Shaders Patch.
+
+Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
+
+
+1. What you need
+----------------
+
+- Linux on a 64-bit x86 PC, X11 or Wayland.
+- Vulkan drivers for your graphics card (Mesa's radv / anv, or NVIDIA's).
+  Arch / CachyOS: vulkan-icd-loader plus vulkan-radeon, vulkan-intel or
+  nvidia-utils. Debian / Ubuntu: libvulkan1 plus mesa-vulkan-drivers.
+- WebKitGTK 4.1 for the launcher.
+  Arch / CachyOS: webkit2gtk-4.1. Debian / Ubuntu: libwebkit2gtk-4.1-0.
+- Your own Assetto Corsa files. No Assetto Corsa file comes with rustyAC.
+  A Steam install (with Proton) is found by itself; otherwise the launcher
+  asks for the folder with the game files, or a zip of it. Later you can
+  add folders or zips of extra cars and tracks: they are read in place,
+  nothing is copied or unpacked. AC_ROOT=/path/to/assettocorsa still
+  overrides everything.
+
+SDL3 is built into the program. FMOD's two libraries come in this folder.
+
+
+2. Running it
+-------------
+
+    ./rustyac-launcher          the game's own launcher (choose, then Drive)
+    ./rustyac --help            the game by itself, from a terminal
+
+./rustyac-launcher --choose-files brings the game-files window back.
+Your settings, replays and setups go to ~/Documents/Assetto Corsa (or to
+the Proton prefix's Documents when the game is a Proton install).
+
+
+3. Licences
+-----------
+
+rustyAC is GPL-3.0-or-later (some crates MIT or Apache-2.0): LICENSING.md,
+THIRD_PARTY_NOTICES.txt and the LICENSE files here.
+
+Audio engine: FMOD Studio by Firelight Technologies Pty Ltd.
+libfmod.so.14 and libfmodstudio.so.14 are Firelight's, unchanged, under the
+FMOD End User License Agreement (https://www.fmod.com/legal), not the GPL.
+
+Assetto Corsa is Kunos Simulazioni's. rustyAC is not made by or connected
+with Kunos Simulazioni or Firelight Technologies.

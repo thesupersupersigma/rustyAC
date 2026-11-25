@@ -13,6 +13,8 @@ accepted = [
     "Unlicense",
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
+    # wry's optional HTML parser (cssparser, selectors) and dirs' option-ext: file-level copyleft, GPL-compatible (MPL 2.0, 3.3)
+    "MPL-2.0",
 ]
 
 # rustyAC's own crates (publish = false) are not third-party
