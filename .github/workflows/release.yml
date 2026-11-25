@@ -99,6 +99,13 @@ jobs:
           git clone --depth 1 --branch v3.13.4 https://github.com/embree/embree.git "$RUNNER_TEMP/embree"
           echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
 
+      # rustyac.exe's CSP mode loads CSP's car configs with LuaJIT: rustyac-lua's build.rs builds
+      # commit c6ffc141 from this clone (git archive, so a full clone)
+      - name: LuaJIT source
+        run: |
+          git clone --branch v2.1 https://github.com/LuaJIT/LuaJIT.git "$RUNNER_TEMP/luajit"
+          echo "LUAJIT_DIR=$RUNNER_TEMP/luajit" >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release --workspace --locked
 

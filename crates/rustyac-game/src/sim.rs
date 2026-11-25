@@ -983,6 +983,16 @@ fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool, rules: Optio
     env
 }
 
+/// With --csp, the car's CSP configs (Task C6a-2c): x64 Windows, the one build with LuaJIT.
+fn csp_configs(car: &mut VanillaCar<Driver>, data_path: &Path, skin: Option<&str>, index: i32) {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    if rustyac_physics::csp::enabled() {
+        car.csp.add_configs(data_path, skin, index);
+    }
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    let _ = (car, data_path, skin, index);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_car(
     setup: &SimSetup,
@@ -1270,7 +1280,9 @@ fn build_world(
     // (an online session always has the engine: the other players' cars are bodies in it)
     // (the AI line recorder is the engine's: it steps inside the engine's step)
     if setup.opponents.is_empty() && rules.is_none() && !setup.ai_record {
-        return Ok((build_car(setup, data_path, physics_time, driver, track, spawn, None, 0, None)?, Vec::new(), None));
+        let mut car = build_car(setup, data_path, physics_time, driver, track, spawn, None, 0, None)?;
+        csp_configs(&mut car, data_path, setup.player_skin.as_deref(), 0);
+        return Ok((car, Vec::new(), None));
     }
     // (Task C5i-c: csp_oracle's cars along the spawn's tail are the one exception)
     if setup.oracle.as_ref().is_some_and(|o| o.track.as_ref().is_none_or(|t| t.gap.is_none())) {
@@ -1288,7 +1300,8 @@ fn build_world(
             engine.start_ai_recording();
         }
     }
-    let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit), rules)?;
+    let mut car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit), rules)?;
+    csp_configs(&mut car, data_path, setup.player_skin.as_deref(), 0);
     let mut opponents = Vec::new();
     let gap = setup.oracle.as_ref().and_then(|o| o.track.as_ref()).and_then(|t| t.gap);
     let lift = setup.oracle.as_ref().and_then(|o| o.track.as_ref()).map_or(0.0, |t| t.lift);
@@ -1333,7 +1346,8 @@ fn build_world(
             other.auto_blip = recorded.auto_blip;
         }
         let pit_box = opponent.place.map_or(slot, |place| place.pit);
-        let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), pit_box, None)?;
+        let mut built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), pit_box, None)?;
+        csp_configs(&mut built, &opponent_data, Some(opponent.skin.as_str()).filter(|s| !s.is_empty()), slot as i32);
         opponents.push(OpponentCar { car: built, setup: opponent.clone(), data_path: opponent_data, spawn: pose });
     }
     Ok((car, opponents, Some(engine)))

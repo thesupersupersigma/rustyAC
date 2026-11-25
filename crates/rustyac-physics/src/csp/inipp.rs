@@ -106,8 +106,72 @@ struct Parser {
     dirs: Vec<PathBuf>,
     /// (file, variables) pairs already read (sub_18149A620)
     seen: Vec<(PathBuf, Vars)>,
+    /// variables the `[INCLUDE]` sections around the current file give: no `[DEFAULTS]` overrides them
+    given: Vec<B>,
     /// the parser's Lua state (parser +192..+248 flags, sub_181489730); `None`: Lua off
     lua: Option<Lua>,
+    /// `read()`'s data provider (the loader's; none: only csp/version)
+    #[cfg(feature = "lua")]
+    read: Option<Reader>,
+    /// where `PREFIX_...` section numbers start (sub_18149B1C0's argument)
+    base: i64,
+}
+
+/// A loader's answer to Lua's `read(path)`, `None` for none.
+pub type Reader = Box<dyn Fn(&[u8]) -> Option<B>>;
+
+/// Resolved sections: name, then keys with their values.
+pub type Sections = Vec<(B, Vars)>;
+
+#[cfg(feature = "lua")]
+impl super::inipp_lua::Host for Parser {
+    fn read(&self, path: &[u8]) -> Option<B> {
+        self.read.as_ref().and_then(|r| r(path))
+    }
+
+    fn find(&self, sec: &super::inipp_lua::Pat, key: Option<&super::inipp_lua::Pat>, val: Option<&super::inipp_lua::Pat>) -> Option<Vec<B>> {
+        let hit = |v: &Vec<B>| val.is_none_or(|p| v.iter().any(|x| p.hit(x)));
+        self.done.iter().filter(|s| sec.hit(&s.name)).find_map(|s| match key {
+            None => Some(Vec::new()),
+            Some(k) => s.keys.iter().find(|(n, v)| k.hit(n) && hit(v)).map(|(_, v)| v.clone()),
+        })
+    }
+}
+
+/// One config as CSP's car and track loaders read it (ini ctor sub_181588210: mode 0, Lua on).
+#[cfg(feature = "lua")]
+pub struct Load<'a> {
+    /// [`super::inipp_lua::ini_std`]
+    pub std: &'a [u8],
+    /// include folders to start with (ini +136)
+    pub dirs: Vec<PathBuf>,
+    /// files read after it by the same parser (ini +104: the generic config)
+    pub after: Vec<PathBuf>,
+    /// where `PREFIX_...` section numbers start
+    pub base: i64,
+    pub read: Reader,
+}
+
+/// `path` read as `o` says; `None` if it can't be read or Lua can't start.
+#[cfg(feature = "lua")]
+pub fn load(path: &Path, o: Load) -> Option<Sections> {
+    let text = std::fs::read(path).ok()?;
+    let mut p = Parser { file: path.to_path_buf(), lua: Some(Lua::new(o.std)?), dirs: o.dirs, read: Some(o.read), base: o.base, ..Default::default() };
+    p.seen.push((path.to_path_buf(), Vec::new()));
+    p.scan(strip_bom(&text), &mut vec![Vec::new()]);
+    for f in o.after {
+        let Ok(text) = std::fs::read(&f) else { continue };
+        p.file = f.clone();
+        p.seen.push((f, Vec::new()));
+        p.scan(strip_bom(&text), &mut vec![Vec::new()]);
+    }
+    Some(p.resolve().into_iter().map(|s| (s.name, s.keys)).collect())
+}
+
+/// The flattened text of resolved sections (as [`flatten`] gives).
+pub fn text(sections: &Sections) -> String {
+    let secs: Vec<Section> = sections.iter().map(|(n, k)| Section { name: n.clone(), keys: k.clone(), ..Default::default() }).collect();
+    String::from_utf8_lossy(&write(&secs)).into_owned()
 }
 
 /// CSP's flattened text of the ini at `path` with Lua off, or `None` if it can't be read.
@@ -150,7 +214,7 @@ fn find(s: &[u8], pat: &[u8]) -> Option<usize> {
 }
 
 /// bool of a value (sub_1802C5520): starts with "true" (any case), else an integer != 0.
-fn truthy(v: Option<&B>) -> bool {
+pub(crate) fn truthy(v: Option<&B>) -> bool {
     let Some(v) = v else { return false };
     if v.is_empty() || v[0] == 0 {
         return false;
@@ -187,6 +251,16 @@ fn num(v: Option<&B>) -> f64 {
 }
 
 impl Parser {
+    /// Run Lua with this parser answering `read`, `has` and `get`.
+    #[cfg(feature = "lua")]
+    fn host<R>(&self, f: impl FnOnce() -> R) -> R {
+        super::inipp_lua::with_host(self, f)
+    }
+    #[cfg(not(feature = "lua"))]
+    fn host<R>(&self, f: impl FnOnce() -> R) -> R {
+        f()
+    }
+
     /// The line scanner (sub_181499CE0) over one file's text; `vars` is the scope chain.
     fn scan(&mut self, t: &[u8], vars: &mut Vec<Vars>) {
         vars.push(Vec::new());
@@ -395,7 +469,7 @@ impl Parser {
         if !sec.name.is_empty() {
             target.push((b"TARGET".to_vec(), vec![sec.name.clone()]));
         }
-        let get = |k: &[u8]| t.keys.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        let get = |k: &[u8]| t.keys.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.clone());
         let scope = |sec: &Section, target: &Vars| -> Vec<Vars> {
             let mut s = sc.clone();
             s.extend([sec.keys.clone(), target.clone(), args.clone()]);
@@ -419,7 +493,7 @@ impl Parser {
                 let mut s = sc.clone();
                 s.extend([target.clone(), args.clone()]);
                 if let Some(items) = self.expand(k, v.clone(), &scope(sec, &target)) {
-                    self.generator(sec, &items, &s);
+                    self.generator(sec, &items, &s, args);
                 }
                 continue;
             }
@@ -427,7 +501,7 @@ impl Parser {
                 let mut s = sc.clone();
                 s.extend([target.clone(), args.clone()]);
                 if let Some(items) = self.expand(k, v.clone(), &scope(sec, &target)) {
-                    self.mixin(sec, &items, &s, protect);
+                    self.mixin(sec, &items, &s, args, protect);
                 }
                 continue;
             }
@@ -447,7 +521,9 @@ impl Parser {
             }
             let mut key = k.clone();
             if find(k, b"${").is_some() || find(k, b"$\"").is_some() || find(k, LUA_MARK).is_some() {
-                match self.expand(k, split(k, k[0] == b'@'), &s) {
+                // a key the template line already marked as Lua is one item (its commas are the code's)
+                let ks = if k.starts_with(LUA_MARK) { vec![k.clone()] } else { split(k, k[0] == b'@') };
+                match self.expand(k, ks, &s) {
                     Some(n) => key = n.into_iter().next().unwrap_or_default(),
                     None => return,
                 }
@@ -468,14 +544,21 @@ impl Parser {
     }
 
     /// `@ = NAME, ARG = value, ...` (sub_1814952E0): the mixin's keys with the arguments as variables.
-    fn mixin(&mut self, sec: &mut Section, items: &[B], vars: &[Vars], protect: bool) {
+    /// `outer`: the calling mixin's arguments, which win over the section's keys here too.
+    fn mixin(&mut self, sec: &mut Section, items: &[B], vars: &[Vars], outer: &Vars, protect: bool) {
         let Some(name) = items.first().filter(|n| !n.is_empty()) else { return };
         let mut s = vars.to_vec();
-        s.push(sec.keys.clone());
-        let mut args: Vars = Vec::new();
+        s.extend([sec.keys.clone(), outer.clone()]);
+        let mut args = outer.clone();
         for it in &items[1..] {
-            // shortcut: arguments without `=` (sub_181492970's other branch) are skipped, upgrade if one is used
-            let Some(e) = it.iter().position(|&c| c == b'=') else { continue };
+            // a bare `FLAG` is 1, as for @GENERATOR (sub_181492970)
+            let Some(e) = it.iter().position(|&c| c == b'=') else {
+                // shortcut: a bare number (a generator's count) is skipped in a mixin, upgrade if a config passes one
+                if !trim(it).is_empty() && !trim(it)[0].is_ascii_digit() {
+                    set_var(&mut args, trim(it).to_vec(), vec![b"1".to_vec()]);
+                }
+                continue;
+            };
             let v = self.expand(b"", split(trim(&it[e + 1..]), false), &s).unwrap_or_default();
             set_var(&mut args, trim(&it[..e]).to_vec(), v);
         }
@@ -486,11 +569,11 @@ impl Parser {
     /// section from the template (and its parents) per combination of the counts, `$1`, `$2`, ...
     /// from 1, the last fastest; stored at once, before the section naming it; the host's keys are
     /// variables, a bare `FLAG` is 1; no `@OUTPUT`: the unnamed section. A missing template is only logged.
-    fn generator(&mut self, host: &Section, items: &[B], vars: &[Vars]) {
+    fn generator(&mut self, host: &Section, items: &[B], vars: &[Vars], outer: &Vars) {
         let Some(name) = items.first().filter(|n| !n.is_empty()) else { return };
         let mut s = vars.to_vec();
-        s.push(host.keys.clone());
-        let (mut args, mut counts): (Vars, Vec<i64>) = (Vec::new(), Vec::new());
+        s.extend([host.keys.clone(), outer.clone()]);
+        let (mut args, mut counts): (Vars, Vec<i64>) = (outer.clone(), Vec::new());
         for it in &items[1..] {
             match it.iter().position(|&c| c == b'=') {
                 Some(e) => {
@@ -544,8 +627,11 @@ impl Parser {
         let at_key = key[0] == b'@';
         let mut items = split(raw, at_key);
         let plain = sec.tpl.is_some() || sec.name == b"DEFAULTS" || sec.name == b"INCLUDE";
+        // the section's keys so far are variables too, over [DEFAULTS]
+        let mut scope = vars.to_vec();
+        scope.push(sec.keys.clone());
         if !plain {
-            match self.expand(key, items, vars) {
+            match self.expand(key, items, &scope) {
                 Some(v) => items = v,
                 None => return,
             }
@@ -554,7 +640,7 @@ impl Parser {
         if let Some(d) = key.iter().position(|&c| c == b'$') {
             if matches!(key.get(d + 1), Some(b'{' | b'"')) {
                 let k = split(&key, at_key);
-                let k = if plain { Some(k) } else { self.expand(&key, k, vars) };
+                let k = if plain { Some(k) } else { self.expand(&key, k, &scope) };
                 match k {
                     Some(k) => key = k.into_iter().next().unwrap_or_default(),
                     None => return,
@@ -567,21 +653,17 @@ impl Parser {
                 None => (&mut self.templates, tn.as_slice()),
             };
             if let Some((_, tp)) = list.iter_mut().find(|(n, _)| n == name) {
-                // repeated `@` and `PREFIX_...` keys all stay: each is its own line in CSP's template
-                if key == b"@" || key.starts_with(b"@MIXIN") || key.ends_with(b"_...") || key.ends_with("_\u{2026}".as_bytes()) {
-                    tp.keys.push((key, items));
-                } else {
-                    set_var(&mut tp.keys, key, items);
-                }
+                // a repeated key is another line of CSP's template, applied in order (a `discard()` skips only its line)
+                tp.keys.push((key, items));
             }
             return;
         }
         if key == b"@" || key.starts_with(b"@MIXIN") {
-            self.mixin(sec, &items, vars, false);
+            self.mixin(sec, &items, vars, &Vec::new(), false);
             return;
         }
         if key.starts_with(b"@GENERATOR") {
-            self.generator(sec, &items, vars);
+            self.generator(sec, &items, vars, &Vec::new());
             return;
         }
         if key == b"@ERASE_REFERENCED" && sec.name == b"@INIPP" {
@@ -594,7 +676,7 @@ impl Parser {
             } else {
                 (key, items)
             };
-            if let Some(top) = vars.last_mut() {
+            if let Some(top) = vars.last_mut().filter(|_| !self.given.contains(&name)) {
                 set_var(top, name, vals);
             }
             return;
@@ -654,12 +736,12 @@ impl Parser {
         let first = |k: &[u8]| sec.get(k).and_then(|v| v.first()).cloned().unwrap_or_default();
         match (&self.lua, &sec.name[..]) {
             (Some(lua), b"FUNCTION") => {
-                lua.function(&first(b"NAME"), sec.get(b"ARGUMENTS").map_or(&[][..], |v| v), &first(b"CODE"));
+                self.host(|| lua.function(&first(b"NAME"), sec.get(b"ARGUMENTS").map_or(&[][..], |v| v), &first(b"CODE")));
                 return;
             }
             (Some(_), b"USE") => {
                 if let Some(path) = self.resolve_file(&first(b"FILE")) {
-                    self.lua.as_ref().expect("Lua on").use_file(&path);
+                    self.host(|| self.lua.as_ref().expect("Lua on").use_file(&path));
                 }
                 return;
             }
@@ -701,7 +783,10 @@ impl Parser {
             let Ok(text) = std::fs::read(&path) else { continue };
             self.file = path;
             vars.push(child.clone());
+            let given = self.given.len();
+            self.given.extend(child.iter().map(|(n, _)| n.clone()));
             self.scan(strip_bom(&text), vars);
+            self.given.truncate(given);
             vars.pop();
             self.file = saved.clone();
         }
@@ -731,7 +816,8 @@ impl Parser {
         let mut out = Vec::new();
         let mut ok = true;
         for it in items {
-            if raw_eq && it.contains(&b'=') {
+            // an `ARG = value` stays raw for the mixin; a `$"..."` name with `==` in it is no argument
+            if raw_eq && it.contains(&b'=') && !it.starts_with(LUA_MARK) {
                 out.push(it);
             } else {
                 self.expand_item(&it, 0, vars, &mut out, &mut ok);
@@ -796,11 +882,11 @@ impl Parser {
         };
         let (prefix, expr, suffix) = (&s[..o], &s[o + LUA_MARK.len()..c], &s[c + LUA_END.len()..]);
         if find(prefix, LUA_MARK).is_none() {
-            *ok &= lua.eval(expr, prefix, suffix, out);
+            *ok &= self.host(|| lua.eval(expr, prefix, suffix, out));
             return;
         }
         let mut vals = Vec::new();
-        *ok &= lua.eval(expr, prefix, suffix, &mut vals);
+        *ok &= self.host(|| lua.eval(expr, prefix, suffix, &mut vals));
         for v in vals {
             self.run_lua(&v, out, ok);
         }
@@ -886,9 +972,13 @@ impl Parser {
     fn resolve(&mut self) -> Vec<Section> {
         // prefix -> (next number, numbers taken by explicit `PREFIX_<n>` names)
         let mut nums: Vec<(B, i64, Vec<i64>)> = Vec::new();
+        // sub_18149B080: car lights keep numbering from 0
+        let lights: [&[u8]; 8] = [b"HEADLIGHT", b"BRAKE", b"REVERSE", b"KERS", b"OPENDOORS", b"LED_PANEL", b"TURNSIGNAL", b"CORNERINGLAMP"];
+        let from = self.base;
+        let base = |p: &[u8]| if p.strip_prefix(b"LIGHT_").is_some_and(|r| lights.iter().any(|l| r.starts_with(l))) { 0 } else { from };
         let state = |nums: &mut Vec<(B, i64, Vec<i64>)>, p: &[u8]| -> usize {
             nums.iter().position(|(n, _, _)| n == p).unwrap_or_else(|| {
-                nums.push((p.to_vec(), 0, Vec::new()));
+                nums.push((p.to_vec(), base(p), Vec::new()));
                 nums.len() - 1
             })
         };
@@ -1131,6 +1221,8 @@ fn split(t: &[u8], at: bool) -> Vec<B> {
     let mut items: Vec<B> = Vec::new();
     let mut buf: B = Vec::new();
     let (mut q, mut dollar) = (0u8, false);
+    // the item's text before the open quote (an `@` line's `ARG = $"..."`)
+    let mut pre = 0;
     let (mut s, mut e) = (0i64, -1i64);
     let flush = |buf: &mut B, s: i64, e: i64| {
         if e >= s {
@@ -1207,14 +1299,14 @@ fn split(t: &[u8], at: bool) -> Vec<B> {
                     }
                     j += 1;
                 }
-                if !last {
-                    // text follows the closing quote: the quotes stay
-                    let mut nb = Vec::with_capacity(buf.len() + 3);
+                if !last || (dollar && pre > 0) {
+                    // text follows the closing quote, or an `ARG = $"..."` (split again by the mixin): the quotes stay
+                    let mut nb = buf[..pre].to_vec();
                     if dollar {
                         nb.push(b'$');
                     }
                     nb.push(c);
-                    nb.extend_from_slice(&buf);
+                    nb.extend_from_slice(&buf[pre..]);
                     nb.push(c);
                     buf = nb;
                 } else if dollar {
@@ -1226,6 +1318,7 @@ fn split(t: &[u8], at: bool) -> Vec<B> {
                 e = i;
             } else {
                 flush(&mut buf, s, e);
+                pre = buf.len();
                 q = c;
                 dollar = i > 0 && ch(i - 1) == b'$';
                 (s, e) = (i + 1, i);

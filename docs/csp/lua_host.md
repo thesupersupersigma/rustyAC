@@ -4,12 +4,66 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a part 1, C6a-2a and C6a-2b are done (below): rustyAC's INIpp (`rustyac_physics::csp::inipp`) flattens
-all 261 files as CSP does, with Lua on (`flatten_lua`, rustyac-lua's LuaJIT, feature `lua`) and off
-(proof case `csp inipp` runs Lua on). Next: **C6a-2c**: the car/track config order (which files, in which
-order, with `read`/`has`/`get`/`set` answering from the car and the config being loaded), `@GENERATOR`,
-`CspFeatures` from the flattened text, and rustyac.exe linking LuaJIT. C6a-2c so far: `@GENERATOR` ported
-(`Parser::generator`; CSP's results for probes q/gen1..5 and unit test `generator_like_csp`).
+C6a is done: part 1, C6a-2a, C6a-2b and C6a-2c (below). rustyAC's INIpp flattens all 261 files as CSP
+does with Lua on and off (proof case `csp inipp`), and its config loader finds, orders and flattens every
+installed car's and track's CSP configs as CSP does (proof case `csp configs` against the ConfigsCache
+the game wrote). rustyac.exe (x64 Windows) links LuaJIT and, with `--csp`, keeps each car's flattened
+configs in `CspFeatures::configs`; nothing reads them yet. Next: C6b (CSP's Lua host types), then C6c.
+
+## C6a-2c: the car and track configs
+
+**The proof**: case `configs` runs `inipp_flat --configs <ac> <dwrite.dll>` (every car with its first
+skin and each skin that has its own ext_config.ini, as car 0 and as car 1; every track layout) and
+`tools/proofs/csp_configs.py` compares each config with the entry CSP's ConfigsCache wrote for it
+(`cache\csp_configs\<id>.zip`, writer sub_181510A00; entry name = low 32 bits of XXH3-64 of the
+lower-case path, hex), key by key: 35/35 the same. Entries written under an older CSP install are
+skipped and counted: their dependency stamps (types 2-4, the common files) are the install's, not the
+files' times, so an entry older than the newest install stamp read older common files. Probes for each
+INIpp rule found on the way: re/scratch/taskC6a/q (`dcmp.sh`, all `extension\config` and content
+configs with the include folders: `dall.sh cars|tracks`, 155/155 and 23/23).
+
+**The order** (car loader sub_18150E200 / per file sub_18150D840, track loader sub_18141A1A0 / per file
+sub_181416320, file search sub_18142BFC0):
+- Folders: the user's `Documents\Assetto Corsa\cfg\extension\<kind>`, then for a car the skin's and the
+  car's `ext_config.ini`, for a track Content Manager's active track skins
+  (`skins\default\cm_skins_active.json` -> `skins\cm_skins\<name>\ext_config.ini`), the layout's and the
+  track's `extension\ext_config.ini`; then `extension\config\<kind>`. A folder is searched depth first
+  for `<car>__<skin>.ini`, `<car>.ini` (tracks: `<track>__<layout>.ini`, `<track>_<layout>.ini`,
+  `<track>.ini`), subfolders by upper-case name, `loaded` after the others; each file once.
+- The files are read with index n-1 down to 0 (`PREFIX_...` numbers from 10000 x index); the first file
+  outside the user folder gets `extension\config\<kind>\generic\generic.ini` included after it (alone,
+  uncached, when there is no such file); `[BASIC] IGNORE_OTHER_CONFIGS` drops later `extension\config`
+  files. Include folders: user, `extension\config`, `extension\lua`, each `\<kind>`.
+- `read()` answers (car reader sub_18150C4D0): `car/id`, `car/skin`, `car/index`,
+  `data/<file>/<section>/<key>` (the car's data, first value), `meta/year` (ui_car.json, else
+  `data_car_years.ini`, else 2000), `meta/open_wheeler` (ui tags), `meta/has_rain_tyres`,
+  `settings/<section>/<key>` (graphics_adjustments.ini), `fixed_random/...` (XXH3 seeded mt19937);
+  tracks `track/id` and settings. A config is cached unless its reads asked for the race (`car/index`,
+  `track/data`) or the skin (a skin's own file may).
+- `meta/has_rain_tyres`: a FRONT tyre of type rain (sub_18090C9A0: `TYPE_HINT`, else guessed from the
+  name and short name), counting the rain tyre CSP makes when it loads tyres.ini (sub_180914710): for a
+  car whose car.ini VERSION starts `extended-`/`extendedV2-`, or any car once the player's car is loaded
+  (a byte set in sub_1805E32E0), with slicks, or semislicks and no street tyre, unless
+  `[_EXTENSION] GENERATE_EXTRA_TYRES=0` or a tyre has `_VIRTUAL_ORIGIN`. The cache shows both: tatuusfa1
+  (the player's car) without, rss_formula_rss_3_v6 with. CSP's ini reader also ends lines at a lone CR.
+
+**INIpp rules found by the configs** (crates/rustyac-physics/src/csp/inipp.rs): `[DEFAULTS]` does not
+override a variable an enclosing `[INCLUDE: ...]` passed; a section's own earlier keys are variables
+for its later ones (over `[DEFAULTS]`); a repeated template key is another line applied in order
+(`discard()` skips only its line); a mixin inside a mixin sees the caller's arguments; an `ARG = $"..."`
+inside an `@` line stays text for the mixin; a Lua key is not split at commas; `read(path, "")` gives
+an empty string, not nil.
+
+**The port**: crates/rustyac-physics/src/csp/config.rs (`car`, `track`, `cache_name`, the readers),
+`CspFeatures::add_configs` in crates/rustyac-physics/src/csp.rs, called by crates/rustyac-game/src/sim.rs
+(`csp_configs`) for the player's car (index 0) and the offline opponents with `--csp`. rustyac-game
+turns on rustyac-physics' `lua` for x64 Windows only: the browser and the other platforms don't link
+LuaJIT. The release workflow clones LuaJIT for it (as CI does).
+
+Not done (shortcuts in the code): a car's own `data\csp_config.ini`, `sfp.ini` and CSP's built-in
+fallback configs (no installed car has them); `read()` keys no installed config asks for (other `meta/`,
+`track/data/`); online players' cars get no configs; urd_darche_992_23's tyres.ini is encrypted by CSP
+(only CSP can read it, so its `meta/has_rain_tyres` is unknown: the proof counts its entries apart).
 
 ## C6a-2b: INIpp with Lua
 
@@ -50,11 +104,11 @@ end` and vanishes; `[USE: f.lua]` runs the file
 **The port**: crates/rustyac-physics/src/csp/inipp.rs (`flatten_lua`, `run_lua`, `literal`,
 `csp_number`, `quote`, section end) and crates/rustyac-physics/src/csp/inipp_lua.rs (`ini_std`, `Lua`:
 the state, `eval`, `function`, `use_file`, `read`/`has`/`get`/`set`). Feature `lua` of rustyac-physics
-pulls rustyac-lua with `luajit` and miniz_oxide; off by default, so rustyac.exe and the browser build do
-not link LuaJIT.
+pulls rustyac-lua with `luajit` and miniz_oxide; off by default (rustyac.exe on x64 Windows turns it on
+since C6a-2c; the browser build never links LuaJIT).
 
 Not done (shortcuts in the code; none reached by the 261 files): `read`/`has`/`get`/`set` answering
-from a real car and config (C6a-2c), mixin arguments without `=` (CSP sets them to `1`),
+from a real car and config (done in C6a-2c), mixin arguments without `=` (CSP sets them to `1`; done in C6a-2c),
 `@GENERATOR_STARTING_INDEX` (named in docs/csp/rendering_config.md, in no installed config; our
 `@GENERATOR...` prefix match would take it for a generator). `@GENERATOR` is done in C6a-2c (below). Known difference outside the corpus: CSP's LuaJIT fork numbers its builtins differently
 (`tostring(print)` is `builtin#0` there, `#30` in upstream), so `pairs` over `_G`/`math`/`string` and

@@ -65,8 +65,89 @@ unsafe fn string_at(l: *mut lua_State, i: c_int) -> B {
     if p.is_null() { Vec::new() } else { std::slice::from_raw_parts(p.cast::<u8>(), n).to_vec() }
 }
 
-/// `read(path[, default])` (sub_181487CF0).
-// shortcut: the reader knows `csp/version` only, as csp_oracle's (CSP's car/track readers are C6a-2c)
+/// What `read`, `has` and `get` answer from while a parser runs Lua (C6a-2c).
+pub(crate) trait Host {
+    /// `read`'s value for a path from the loader's data provider (car reader sub_18150C4D0); `None`: the default stays.
+    fn read(&self, path: &[u8]) -> Option<B>;
+    /// The values of the first key matching `key` (and with a value matching `val`) in the first
+    /// finished section matching `sec` that has one (parser +24, in order); `key` `None`: `Some(empty)`
+    /// for a matching section.
+    fn find(&self, sec: &Pat, key: Option<&Pat>, val: Option<&Pat>) -> Option<Vec<B>>;
+}
+
+thread_local! {
+    static HOST: std::cell::Cell<Option<*const (dyn Host + 'static)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` (Lua calls) with `h` answering `read`, `has` and `get`.
+pub(crate) fn with_host<R>(h: &dyn Host, f: impl FnOnce() -> R) -> R {
+    // SAFETY: only dereferenced by the callbacks while `f` runs, `h` outlives it; restored after
+    let p: *const (dyn Host + 'static) = unsafe { std::mem::transmute(h as *const dyn Host) };
+    let old = HOST.with(|c| c.replace(Some(p)));
+    let r = f();
+    HOST.with(|c| c.set(old));
+    r
+}
+
+fn host<R>(f: impl FnOnce(&dyn Host) -> R) -> Option<R> {
+    HOST.with(|c| c.get()).map(|p| f(unsafe { &*p }))
+}
+
+/// A name pattern of `has`/`get` (sub_181487670): `X?` starts with, `?X` ends with, `?X?` contains,
+/// `?` alone (or no argument) anything; another `?` inside matches any run.
+pub(crate) struct Pat(Option<(B, u8)>);
+
+impl Pat {
+    fn new(p: Option<B>) -> Pat {
+        let Some(p) = p else { return Pat(None) };
+        if p == b"?" {
+            return Pat(None);
+        }
+        let n = p.len();
+        let mut mode = 0;
+        for (i, &c) in p.iter().enumerate() {
+            if c == b'?' {
+                mode = if i == 0 { 2 } else if i + 1 < n || mode == 4 { 4 } else if mode == 2 { 3 } else { 1 };
+            }
+        }
+        let core = if mode == 4 { p } else { p.into_iter().filter(|&c| c != b'?').collect() };
+        Pat(Some((core, mode)))
+    }
+
+    pub(crate) fn any(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub(crate) fn hit(&self, s: &[u8]) -> bool {
+        let Some((p, mode)) = &self.0 else { return true };
+        match mode {
+            0 => s == &p[..],
+            1 => s.starts_with(p),
+            2 => s.ends_with(p),
+            3 => s.windows(p.len().max(1)).any(|w| w == &p[..]) || p.is_empty(),
+            // shortcut: `?` inside taken as any run (sub_181487AE0 not decompiled, no config uses one)
+            _ => glob(p, s),
+        }
+    }
+}
+
+fn glob(p: &[u8], s: &[u8]) -> bool {
+    match p.iter().position(|&c| c == b'?') {
+        None => p == s,
+        Some(i) => s.starts_with(&p[..i]) && (i..=s.len()).any(|j| glob(&p[i + 1..], &s[j..])),
+    }
+}
+
+unsafe fn arg(l: *mut lua_State, i: c_int) -> Option<B> {
+    matches!(lua_type(l, i), LUA_TSTRING | LUA_TNUMBER).then(|| string_at(l, i))
+}
+
+unsafe fn push_str(l: *mut lua_State, s: &[u8]) {
+    lua_pushlstring(l, s.as_ptr().cast(), s.len());
+}
+
+/// `read(path[, default])` (sub_181487CF0): the provider answers by the default's type: none or
+/// nil a string (empty: nil), a number a float, a boolean a boolean, a string that string (empty too).
 unsafe extern "C-unwind" fn read(l: *mut lua_State) -> c_int {
     let n = lua_gettop(l);
     if !(1..=2).contains(&n) {
@@ -75,29 +156,80 @@ unsafe extern "C-unwind" fn read(l: *mut lua_State) -> c_int {
     if lua_type(l, 1) != LUA_TSTRING {
         return luaL_error(l, c"read: path is not a string".as_ptr());
     }
-    match if n == 1 { LUA_TNIL } else { lua_type(l, 2) } {
-        LUA_TSTRING | LUA_TBOOLEAN => lua_pushvalue(l, 2),
-        LUA_TNUMBER if string_at(l, 1) == b"csp/version" => lua_pushnumber(l, 4305.0),
-        // the reader's numbers are floats
-        LUA_TNUMBER => lua_pushnumber(l, f64::from(lua_tonumber(l, 2) as f32)),
-        _ => lua_pushnil(l),
+    let path = string_at(l, 1);
+    let got = host(|h| h.read(&path)).flatten();
+    let ty = if n == 1 { LUA_TNIL } else { lua_type(l, 2) };
+    if ty == LUA_TNIL {
+        match got {
+            Some(v) if !v.is_empty() => push_str(l, &v),
+            _ => lua_pushnil(l),
+        }
+    } else if lua_isnumber(l, 2) != 0 {
+        // the reader's numbers are floats; csp/version is the base reader's (sub_1805E53C0)
+        let x = if path == b"csp/version" { Some(4305.0) } else { got.and_then(|v| float(&v)) };
+        lua_pushnumber(l, f64::from(x.unwrap_or(lua_tonumber(l, 2) as f32)));
+    } else if ty == LUA_TBOOLEAN {
+        lua_pushboolean(l, got.map_or(lua_toboolean(l, 2), |v| super::inipp::truthy(Some(&v)) as c_int));
+    } else if ty == LUA_TSTRING {
+        push_str(l, &got.unwrap_or_else(|| string_at(l, 2)));
+    } else {
+        lua_pushnil(l);
     }
     1
 }
 
-/// `has(section[, key[, value]])` (sub_181488490); no sections to look at yet.
-// shortcut: always false as in csp_oracle (the config being loaded is C6a-2c)
+/// A float as CSP's readers parse one (leading blanks, the longest number prefix).
+fn float(v: &[u8]) -> Option<f32> {
+    let s = std::str::from_utf8(v).ok()?.trim();
+    (1..=s.len()).rev().find_map(|i| s.get(..i)?.parse::<f32>().ok())
+}
+
+/// `has(section[, key[, value]])` (sub_181488490): any finished section of the config being loaded.
 unsafe extern "C-unwind" fn has(l: *mut lua_State) -> c_int {
-    if !(1..=3).contains(&lua_gettop(l)) {
+    let n = lua_gettop(l);
+    if !(1..=3).contains(&n) {
         return luaL_error(l, c"has: needs section name, section name and key or section name, key and value".as_ptr());
     }
-    lua_pushboolean(l, 0);
+    let (sec, key, val) = (Pat::new(arg(l, 1)), Pat::new(arg(l, 2)), (n > 2).then(|| Pat::new(arg(l, 3))).filter(|p| !p.any()));
+    let key = (!key.any() || val.is_some()).then_some(&key);
+    lua_pushboolean(l, host(|h| h.find(&sec, key, val.as_ref()).is_some()).unwrap_or(false) as c_int);
     1
 }
 
-/// `get(section, key[, default])` (sub_181488920): the default, as `has`.
+/// `get(section, key[, default])` (sub_181488920): the key's values (else the default's) as the
+/// default's type wants (sub_181487200).
 unsafe extern "C-unwind" fn get(l: *mut lua_State) -> c_int {
-    lua_settop(l, 3);
+    let n = lua_gettop(l);
+    if !(2..=3).contains(&n) {
+        return luaL_error(l, c"get: needs section name and key".as_ptr());
+    }
+    let (sec, key) = (Pat::new(arg(l, 1)), Pat::new(arg(l, 2)));
+    let vals = match host(|h| h.find(&sec, Some(&key), None)).flatten() {
+        Some(v) => v,
+        None if n == 3 => {
+            let mut v = Vec::new();
+            conv(l, 3, b"", b"", &mut v);
+            v
+        }
+        None => Vec::new(),
+    };
+    let first = vals.first().cloned().unwrap_or_default();
+    match if n == 3 { lua_type(l, 3) } else { LUA_TNIL } {
+        LUA_TBOOLEAN => lua_pushboolean(l, super::inipp::truthy(Some(&first)) as c_int),
+        LUA_TNUMBER => lua_pushnumber(l, std::str::from_utf8(&first).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)),
+        LUA_TSTRING => push_str(l, &first),
+        // shortcut: a table default and nil take each value as a number if it reads as one, else a string (no config uses either)
+        _ => {
+            for v in &vals {
+                match std::str::from_utf8(v).ok().and_then(|s| s.parse::<f64>().ok()) {
+                    _ if v.is_empty() => lua_pushnil(l),
+                    Some(x) => lua_pushnumber(l, x),
+                    None => push_str(l, v),
+                }
+            }
+            return vals.len() as c_int;
+        }
+    }
     1
 }
 

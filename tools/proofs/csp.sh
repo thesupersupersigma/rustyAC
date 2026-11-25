@@ -28,6 +28,9 @@
 #   inipp          every .ini under extension/config and the installed cars' and tracks' extension folders,
 #                  flattened by CSP's INIpp with Lua on (csp_oracle --inipp) against rustyac-physics'
 #                  csp::inipp on rustyAC's LuaJIT (inipp_flat, feature lua), file by file (Tasks C6a-2a/2b, csp_inipp.py)
+#   configs        every installed car's and track's CSP configs as rustyAC's loader finds, orders and flattens them
+#                  (csp::config, inipp_flat --configs) against the ConfigsCache the game wrote (cache/csp_configs,
+#                  Task C6a-2c, csp_configs.py); entries from an older CSP install are skipped, counted
 #   smoke          rustyAC's own CSP mode (Task C5i-a), on CSP's core (--csp-core): both proof cars driven at Spa, the drive replayed twice
 # Quick keys (tools/proofs/quick/csp.txt): the case names above.
 area=csp
@@ -227,6 +230,17 @@ if keep "inipp"; then
         verdict "inipp" "${line%% |*}" "${line#* | }"
     else
         verdict "inipp" DIFFERENT "csp_oracle failed: $(why "$out/runs/inipp.txt" 'error|panic|fault|exit')"
+    fi
+fi
+
+# configs: CSP's car and track config loader against the configs cache CSP wrote when the game ran (Task C6a-2c)
+if keep "configs"; then
+    mkdir -p "$out/runs"
+    if target/release/inipp_flat.exe --configs "$ac" re/csp/fakeac/dwrite.dll > "$out/runs/configs_ours.txt" 2> "$out/runs/configs_err.txt"; then
+        line=$(python tools/proofs/csp_configs.py "$ac" "$out/runs/configs_ours.txt" 2>&1)
+        verdict "configs" "${line%% |*}" "${line#* | }"
+    else
+        verdict "configs" DIFFERENT "inipp_flat --configs failed: $(why "$out/runs/configs_err.txt" 'error|panic')"
     fi
 fi
 

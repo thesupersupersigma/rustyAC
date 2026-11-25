@@ -16,6 +16,8 @@ rustyac-content = { path = "../rustyac-content" }
 # feature `lua` (Task C6a-2b): INIpp's `$"..."` values on LuaJIT; x64 Windows CSP mode and tools only
 rustyac-lua = { path = "../rustyac-lua", optional = true }
 miniz_oxide = { version = "0.8", optional = true }
+# CSP's fixed_random/ (C6a-2c): XXH3-64 as dwrite.dll's
+twox-hash = { version = "2.1", optional = true, default-features = false, features = ["xxhash3_64"] }
 
 [features]
-lua = ["dep:rustyac-lua", "rustyac-lua/luajit", "dep:miniz_oxide"]
+lua = ["dep:rustyac-lua", "rustyac-lua/luajit", "dep:miniz_oxide", "dep:twox-hash"]

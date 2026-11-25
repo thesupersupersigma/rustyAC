@@ -79,6 +79,13 @@ jobs:
           git clone --depth 1 --branch v3.13.4 https://github.com/embree/embree.git "$RUNNER_TEMP/embree"
           echo "EMBREE_DIR=$RUNNER_TEMP/embree" >> "$GITHUB_ENV"
 
+      # x64 Windows: and LuaJIT (rustyac-lua's feature `luajit`, CSP's car configs) from this clone
+      - name: LuaJIT source
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          git clone --branch v2.1 https://github.com/LuaJIT/LuaJIT.git "$RUNNER_TEMP/luajit"
+          echo "LUAJIT_DIR=$RUNNER_TEMP/luajit" >> "$GITHUB_ENV"
+
       - name: Build and test
         env:
           TARGET: ${{ matrix.target }}

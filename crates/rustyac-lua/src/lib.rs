@@ -51,6 +51,8 @@ pub mod sys {
         pub fn lua_pushnumber(l: *mut lua_State, n: f64);
         pub fn lua_pushboolean(l: *mut lua_State, b: c_int);
         pub fn lua_pushstring(l: *mut lua_State, s: *const c_char);
+        pub fn lua_pushlstring(l: *mut lua_State, s: *const c_char, len: usize);
+        pub fn lua_isnumber(l: *mut lua_State, idx: c_int) -> c_int;
         pub fn lua_pushcclosure(l: *mut lua_State, f: lua_CFunction, n: c_int);
         pub fn lua_setfield(l: *mut lua_State, idx: c_int, k: *const c_char);
         pub fn lua_close(l: *mut lua_State);

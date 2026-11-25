@@ -11,6 +11,8 @@ pub mod air;
 pub mod core_body;
 pub mod core_car;
 pub mod core_track;
+#[cfg(feature = "lua")]
+pub mod config;
 pub mod inipp;
 #[cfg(feature = "lua")]
 pub mod inipp_lua;
@@ -214,6 +216,9 @@ pub struct CspFeatures {
     pub wav_pitch: Vec<(String, f32)>,
     /// CSP's own sections, file by file.
     pub sections: Vec<CspSection>,
+    /// The car's CSP configs as CSP loads them (`extension\config\cars`, the car's ext_config.ini):
+    /// the file, then its flattened sections, values joined with commas.
+    pub configs: Vec<CspSection>,
 }
 
 impl CspFeatures {
@@ -250,6 +255,30 @@ impl CspFeatures {
             features.add_sections(name, &IniReader::load(&data_path.join(name))?);
         }
         Ok(features)
+    }
+
+    /// The car's CSP configs ([`config::car`]) when CSP is installed (its dwrite.dll holds INIpp's
+    /// Lua library): `data_path` is `<ac>\content\cars\<car>\data`, `skin` `None` the first one,
+    /// `index` the car's place in the session (0 the driver's).
+    #[cfg(feature = "lua")]
+    pub fn add_configs(&mut self, data_path: &Path, skin: Option<&str>, index: i32) {
+        let Some(car) = data_path.parent() else { return };
+        let (Some(id), Some(ac)) = (car.file_name(), car.ancestors().nth(3)) else { return };
+        let Some(std) = inipp_lua::ini_std(&ac.join("dwrite.dll")) else { return };
+        let first = || {
+            let mut skins: Vec<String> = std::fs::read_dir(car.join("skins")).into_iter().flatten().flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            skins.sort();
+            skins.into_iter().next().unwrap_or_default()
+        };
+        let skin = skin.map_or_else(first, str::to_string);
+        let folders = config::Folders { ac: ac.to_path_buf(), user: rustyac_content::install::user_documents().map(|d| d.join("cfg").join("extension")) };
+        let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+        for c in config::car(&folders, &std, &id.to_string_lossy(), &skin, Some(index)) {
+            for (name, keys) in &c.sections {
+                let keys = keys.iter().map(|(k, v)| (text(k), v.iter().map(|x| text(x)).collect::<Vec<_>>().join(","))).collect();
+                self.configs.push(CspSection { file: c.file.display().to_string(), name: text(name), keys });
+            }
+        }
     }
 }
 

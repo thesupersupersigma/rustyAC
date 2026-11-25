@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Task C6a part 2: CSP's own INIpp on an ini file. It builds a `utils::ini_file` the way CSP's
-//! car and track config loaders do (dll+0x1588210: mode 0, Lua on, no extra search folders), then
+//! car and track config loaders do (dll+0x1588210: mode 0, Lua on, search folders from CSP_ORACLE_INIPP_DIRS), then
 //! prints its flattened text (dll+0x149ceb0, the form `[__DEBUG] DUMP_FLATTEN_INI` writes).
 
 /// MSVC std::string: 16 bytes of text or a pointer, then the size and the capacity.
@@ -33,7 +33,30 @@ pub unsafe fn csp_flatten(dll: usize, path: &str) -> String {
         *(p.buf.as_mut_ptr() as *mut *mut u8) = mem;
         p.cap = bytes.len();
     }
+    // CSP_ORACLE_INIPP_DIRS=<dir>;<dir>: include search folders (ini +136), as the loaders pass
+    // (C6a-2c): a std::vector of std::string (UTF-8)
     let mut dirs = [0usize; 3];
+    if let Ok(list) = std::env::var("CSP_ORACLE_INIPP_DIRS") {
+        let list: Vec<&str> = list.split(';').filter(|d| !d.is_empty()).collect();
+        let vec = new(32 * list.len().max(1));
+        for (i, d) in list.iter().enumerate() {
+            let bytes = d.as_bytes();
+            let e = vec.add(32 * i);
+            std::ptr::write_bytes(e, 0, 32);
+            if bytes.len() < 16 {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), e, bytes.len());
+                *(e.add(24) as *mut usize) = 15;
+            } else {
+                let mem = new(bytes.len() + 1);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), mem, bytes.len());
+                *mem.add(bytes.len()) = 0;
+                *(e as *mut *mut u8) = mem;
+                *(e.add(24) as *mut usize) = bytes.len();
+            }
+            *(e.add(16) as *mut usize) = bytes.len();
+        }
+        dirs = [vec as usize, vec as usize + 32 * list.len(), vec as usize + 32 * list.len().max(1)];
+    }
     let mut lists = [0usize; 7];
     let ini = new(160);
     std::ptr::write_bytes(ini, 0, 160);

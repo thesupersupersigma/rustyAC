@@ -84,6 +84,9 @@ rustyac-audio = { path = "../rustyac-audio" }
 # Ninja). Elsewhere, the browser too: ODE's rays.
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 rustyac-ode = { path = "../rustyac-ode", features = ["embree"] }
+# CSP's car configs flattened as CSP's INIpp does, `$"..."` values on LuaJIT (Task C6a-2c; LuaJIT
+# built by rustyac-lua's build.rs from a clone, Visual Studio's C++ tools)
+rustyac-physics = { path = "../rustyac-physics", features = ["lua"] }
 
 # Off Windows and the browser: AC's renderer only with the `wgpu` feature (native Full mode)
 [target.'cfg(not(any(windows, all(target_arch = "wasm32", target_os = "unknown"))))'.dependencies]
