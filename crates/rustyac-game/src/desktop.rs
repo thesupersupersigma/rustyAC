@@ -976,7 +976,8 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
         match SharedMemory::create() {
             Ok(memory) => {
                 println!(
-                    "shared memory: publishing Local\\acpmf_physics, acpmf_graphics, acpmf_static{}",
+                    "shared memory: publishing {}acpmf_physics, acpmf_graphics, acpmf_static{}",
+                    if cfg!(windows) { "Local\\" } else { "/dev/shm/" },
                     if memory.reused() { " (the pages were still held open by a reader of an earlier session)" } else { "" }
                 );
                 sinks.push(Box::new(ShmSink::new(memory)));

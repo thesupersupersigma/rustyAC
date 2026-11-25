@@ -16,7 +16,8 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
 - **P3 (Task P3a, branch `web`): done (section 11).** L1 (11.2), L2 + L3 (11.3, 11.4), the frame
   check against the page's Full mode, the physics dumps and quitting (11.5).
 - **P3b (branch `web`), section 12:** L4 done (12.1: pads, wheels, force feedback on SDL3, proved
-  against kernel devices made with `uinput`). Next: L5 (`/dev/shm`), then L6.
+  against kernel devices made with `uinput`). L5 done (12.2: `/dev/shm`, pages byte-identical to
+  Windows'). Next: L6 (12.3).
 
 ## 1. Plain-English summary
 
@@ -747,3 +748,38 @@ Wine's: read one wheel's raw values on both systems); pedal and wheel ranges and
 real drivers give (Logitech's `hid-logitech`, Fanatec's `hid-fanatecff`, Moza and Simagic on
 `hid-pidff`); hot-plugging; SDL's mapping for pads other than Xbox ones (a DualShock is a gamepad on
 Linux but a plain DirectInput device on Windows, where AC can't use it as the pad).
+
+### 12.2 L5: the shared memory in `/dev/shm`
+
+`shm.rs` now builds on Linux too: its pages, writers and timing are the same code. Only its two
+Windows calls have a Linux twin (`shm_unix.rs`); the Windows lines are as they were (only
+`cfg(windows)` added above them), and P3a's `shm_none.rs` is gone.
+
+- **Names and layout:** `Local\acpmf_physics`, `acpmf_graphics`, `acpmf_static` become POSIX
+  shared memory `/acpmf_physics` ... (`shm_open`), the files `/dev/shm/acpmf_physics` ..., with
+  the same bytes. Each file is whole 4096-byte pages, as Windows rounds a mapping (a reader may
+  map its own, longer struct). Mode 0600, the user's own, as Windows' default for a session's
+  objects.
+- **After the drive:** the files stay, with `status` = `AC_OFF`, as a Windows object stays while a
+  reader holds it; the next drive writes into the same files (the console says "still held open"
+  then).
+- **Two writers:** rustyAC refuses to publish while `acs.exe` (under Proton or Wine the process is
+  still called that, `/proc/<pid>/comm`) or another `rustyac` runs, as on Windows.
+- **Who reads it on Linux:** tools that read AC's layout from `/dev/shm/acpmf_*`: Spacefreak18's
+  `simapi` / `simd` (it makes those files for AC under Proton, through `simshmbridge`, which copies
+  the Wine mapping out to `/dev/shm`; its docs check AC by `hexdump /dev/shm/acpmf_physics`) and
+  `wine-linux-shm-adapter`. With rustyAC native, no bridge is needed: rustyAC writes the files
+  those tools read. SimHub itself is Windows only. AC's Python apps that open the pages by their
+  Windows name (`sim_info.py`) do not run on Linux anyway (section 7).
+
+| Check | Result |
+|---|---|
+| Linux unit test: a page made, written, made again (`existed`), 4096 bytes in `/dev/shm` | pass |
+| Linux: `the_static_page_holds_the_hybrid_as_built` (was Windows only until L5) | pass |
+| the same recorded drives (`car_random`, `conditions_spa_cold_green_wind`), `--replay <drive> --headless --realtime` (the paced loop with every sink); Windows: a script holds the three named mappings (as a reader would) and dumps them after the drive (`shm_win.ps1`); Linux: `/dev/shm/acpmf_*` copied after the drive (`shm_linux.sh`) | **6 of 6 pages byte-identical** (4096 bytes each; 68 to 436 non-zero bytes: the physics page at the last step, the graphics page at `AC_OFF`, the static page) (`run/shm/`) |
+| clippy `-D warnings --all-targets -p rustyac-game` (Linux with `wgpu`; Windows with and without) | clean |
+
+A third drive (Laguna Seca's pit, t18) could not run on Windows: Super started Assetto Corsa
+during the runs, and rustyAC refused to publish next to it, as it should. (The second drive's run
+ended two seconds after AC started; AC writes its own pages every frame and its static page after
+loading, so nothing of rustyAC's was left in them.)
