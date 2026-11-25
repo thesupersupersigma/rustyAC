@@ -17,7 +17,9 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   check against the page's Full mode, the physics dumps and quitting (11.5).
 - **P3b (branch `web`), section 12:** L4 done (12.1: pads, wheels, force feedback on SDL3, proved
   against kernel devices made with `uinput`). L5 done (12.2: `/dev/shm`, pages byte-identical to
-  Windows'). Next: L6 (12.3).
+  Windows'). L6 in part (12.3): the licence text and the required-files list are done; **FMOD's
+  Linux library is missing**: Super puts `fmodstudioapi20315linux.tar.gz` in `ignored/fmod/` (12.3), then
+  resume at L6's sound (12.4).
 
 ## 1. Plain-English summary
 
@@ -217,8 +219,8 @@ downloads nothing.
    track). It holds paths and sizes only, never content. There are two lists: "base game" and
    "everything". Missing files are named, grouped by car or track, so a player missing one DLC can
    still drive the rest. Sizes: this install is 38 GB in all (`content` 33.5 GB: 209 cars
-   21.4 GB, 26 tracks 10.3 GB, mods and CSP included). The base game alone was **not measured**:
-   the list generator's first run gives it (step L6).
+   21.4 GB, 26 tracks 10.3 GB, mods and CSP included). The lists (step L6, section 12.3):
+   **base 28.6 GB** (19,714 files), **everything 34.3 GB** (21,372 files).
 4. **A zip** of the game files: checked the same way, then **read in place, not unpacked**.
    Measured here (`re/scratch/taskP1/zipspeed.py`, Spa's 441 MB `spa.kn5`): deflate decompresses
    at **310 MB/s on one core**, 1.42 s against 1.19 s for reading the plain file. A drive already
@@ -307,7 +309,7 @@ ARM: ship nothing new until the emulated row is green.
 - **Not done (P2):** the rerun of the workflow with P2's changes (Super, 10.5); the made-up whole
   car for runners (10.1, about one session); a replay on a real ARM Mac; the native game itself
   (P3).
-- The base-game size of the required-files list isn't measured (step L6 generates it).
+- The base-game size of the required-files list: measured in L6 (section 12.3), 28.6 GB.
 - `actions/upload-artifact`: raised from v5 (Node 20) to v7 (Node 24) in P2.
 - Questions for Super: (1) SDL3 for window, input and FFB (one C library, zlib licence, shipped or
   from the distro) instead of `winit` + `gilrs` + our own FFB: recommended, because it is the only
@@ -699,7 +701,7 @@ unchanged on the same numbers as on Windows.
   - Values: SDL scales an evdev axis from the device's range to -32768..32767 in float
     (`AxisCorrect`); the raw value is found again from the range (read from the device,
     `EVIOCGABS`) and mapped to DirectInput's -10000..10000 as `MulDiv` does it (Wine's
-    `joystick_map_axis`; Windows' own rounding is the one thing not measured, section 12.3).
+    `joystick_map_axis`; Windows' own rounding is the one thing not measured: below).
   - Force: one constant force on SDL's steering axis (`SDL_HAPTIC_STEERING_AXIS`, Linux direction
     0x4000), endless, the wheel's auto-centre off (AC's `DIPROPAUTOCENTER_OFF`), capped at 30 % as
     on Windows. The level sent is the smallest that SDL's own DirectInput backend turns back into
@@ -783,3 +785,70 @@ A third drive (Laguna Seca's pit, t18) could not run on Windows: Super started A
 during the runs, and rustyAC refused to publish next to it, as it should. (The second drive's run
 ended two seconds after AC started; AC writes its own pages every frame and its static page after
 loading, so nothing of rustyAC's was left in them.)
+
+### 12.3 L6: sound, the licence, the required-files list
+
+**FMOD Engine 2.03 for Linux: stopped, the library is not here.** `ignored/fmod/` holds only the
+HTML5 builds (2.03.15, 2.04.00). What Super gets from fmod.com (Download, FMOD Engine, version
+**2.03.15**, the browser's, **Linux**): **`fmodstudioapi20315linux.tar.gz`**, saved as
+`ignored/fmod/fmodstudioapi20315linux.tar.gz` and unpacked beside it
+(`ignored/fmod/fmodstudioapi20315linux/`, with `api/core/lib/x86_64/` and
+`api/studio/lib/x86_64/` inside). Found while sizing it: the browser's 1.08-to-2.03 mapping is
+not in `fmod/web.rs` (that file only forwards each call to JavaScript) but in `web/sound.js`'s
+table, about 70 calls (the renames, the listener's attenuation, the advanced settings, the
+version answer, the event lookup by GUID...). L6's sound is therefore that table in Rust on 2.03's
+C functions, loaded with `libloading` behind `raw::load` off Windows (now: "no FMOD on this
+platform yet"), with the credit printed when the sound starts; then the `sound` area's call-log
+comparison against the page's 2.03 path on the same drive, and a listen in WSLg (PulseAudio).
+About 1.2 sessions, unchanged in total.
+
+**The licence** (`LICENSING.md`, done now as the prompt asks): an entry for FMOD Engine 2.03.15
+for Linux and macOS (the release zips carry Firelight's unchanged `libfmod` / `libfmodstudio`,
+under the FMOD EULA, not the GPL, loaded at run time through the C interface; the credit "Audio
+engine: FMOD Studio by Firelight Technologies Pty Ltd." when the sound starts and in the zips'
+notices), and the FMOD section says the Linux and macOS zips carry the libraries and that FMOD is
+in no release's Corresponding Source. The section-7 permission itself needed no change (it names
+the FMOD Engine, not the DLLs).
+
+**The required-files list:** `web_pack --config <cars ["*"], tracks ["*"]> --required <folder>`
+(`docs/flags.md`) probes every car and track as the pack does (`files_read_by_drive` +
+`files_of_picture` + the sound banks per car and track, the shared files, AC's launcher's files)
+and writes two manifests in the pack's format, paths and sizes only (no hashes, nothing copied):
+`base.json` (Kunos' cars and tracks; DLCs are Kunos' too, so a player missing one sees that
+DLC's cars or tracks named as missing, as section 5 planned) and `everything.json` (mods too).
+On this install (about 5 minutes; `re/scratch/taskP3/required/`, `l6_required.log`):
+
+| List | Cars | Tracks and layouts | Shared | AC's launcher | **In all** |
+|---|---|---|---|---|---|
+| base | 178 (15.4 GB) | 46 (22.7 GB; layouts share files) | 1.18 GB | 0.47 GB | **28.6 GB, 19,714 files** |
+| everything | 189 (17.6 GB) | 64 (30.8 GB) | 1.18 GB | 0.54 GB | **34.3 GB, 21,372 files** |
+
+Left out of both (28): content made for Custom Shaders Patch (CSP is Windows only) and two DLC
+cars this install does not own. Against section 5's 38 GB for the whole folder: the rest is what no
+drive reads (CSP, its content, unused files). Checks: `web_pack` clippy `-D warnings --all-targets`,
+its 6 tests; the `browser` area (its flags check now lists `--required`).
+
+### 12.4 Resume here (P3b), plan changes, not done
+
+- **Resume at L6's sound** once `ignored/fmod/fmodstudioapi20315linux/` is there: `web/sound.js`'s
+  table in Rust behind `rustyac-audio`'s `raw::load` off Windows (`libloading`, already a
+  dependency), the credit line, then the `sound` area's call-log comparison (Linux against the
+  page's 2.03 path, same drive) and a listen in WSLg.
+- Tools (`re/scratch/taskP3/`): `fakedev.py` + `l4run.sh` (L4, as root), `shm_win.ps1` /
+  `shm_linux.sh` (L5; never while Assetto Corsa runs), `all.toml` + `web_pack --required` (L6's
+  list), `wsl.sh` / `wasm.sh` (builds, wasm clippy).
+- **Plan changes:** **L7**'s folder / zip check reads these manifests: ship `base.json` (made from
+  a full Kunos install: paths and sizes of Kunos' files, none of their content) with the native
+  zips; mods are checked when chosen (whether they load), since no shipped list can know them.
+  **L8** gains the hardware list of 12.1 (a real wheel's force direction and DirectInput's
+  rounding on Windows against Linux, real pedal ranges, hot-plugging, non-Xbox pads) and a
+  real Linux PC's PulseAudio / PipeWire listen. Nothing else in L7 / L8 changes.
+- **Not done:** L6's sound (above); the hardware checks (L8); hot-plugging a wheel during a drive
+  on Linux (found at the next start only); a Windows run of the third page drive (Assetto Corsa
+  was running).
+- **Windows unchanged:** every Windows line of the changed files is as it was (`cfg` attributes
+  and `cfg!` added, the Windows strings the same); quick proofs of every area the changed files
+  touch: fresh 63, csp 71, sound 4, replays 6, ai_page 10, launcher 1, dumps 6 IDENTICAL, browser
+  18 IDENTICAL on its rerun (its one difference in the first run was the flags check: `docs/flags.md`
+  now lists `--required`) (`quick_l5.log`,
+  `quick_l6_browser.log`).

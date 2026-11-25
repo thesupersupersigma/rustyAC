@@ -4,8 +4,11 @@
 //!
 //! ```text
 //! web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run]
-//!          [--delta <the live pack's manifest.json>]
+//!          [--delta <the live pack's manifest.json>] [--required <folder>]
 //! ```
+//!
+//! `--required <folder>` writes the native builds' required-files list instead of a pack:
+//! `base.json` and `everything.json`, paths and sizes only ([`required`]).
 //!
 //! Reads which cars and tracks are wanted: from `--config`, else from `web/my_pack.toml` when
 //! that file exists (your own list, ignored by git), else from `web/preview.toml` (two cars,
@@ -580,6 +583,9 @@ fn run(args: &[String]) -> Result<(), String> {
     if track_items.is_empty() {
         return Err("none of the tracks can be used: a pack needs at least one".to_string());
     }
+    if let Some(folder) = value("--required") {
+        return required(Path::new(&folder), &root, &car_items, &track_items, &shared);
+    }
     if dry {
         return Ok(());
     }
@@ -680,7 +686,47 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run] [--delta <live manifest.json>] [--help, -h]
+/// `--required <folder>`: the native builds' required-files list (`docs/platforms.md`, section
+/// 5) as two manifests, `base.json` (Kunos' cars and tracks, its DLCs too) and
+/// `everything.json` (mods as well): paths and sizes, nothing copied, no hashes. The shared
+/// files and AC's launcher's are in both.
+fn required(folder: &Path, root: &Path, cars: &[Item], tracks: &[Item], shared: &BTreeMap<String, u64>) -> Result<(), String> {
+    std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    for (name, mods) in [("base", false), ("everything", true)] {
+        let mut manifest = Manifest::default();
+        let add = |manifest: &mut Manifest, files: &mut dyn Iterator<Item = (&String, &u64)>| -> Vec<usize> {
+            files.map(|(path, bytes)| manifest.file(PackFile { path: path.clone(), bytes: *bytes, sha256: String::new() })).collect()
+        };
+        for (items, kind) in [(cars, 0), (tracks, 1)] {
+            for item in items.iter().filter(|item| mods || !item.is_mod) {
+                let files = add(&mut manifest, &mut item.files.iter().map(|(path, bytes)| (path, bytes)));
+                let entry = PackItem { id: item.id.clone(), layout: item.layout.clone(), name: item.name.clone(), pinned: false, missing_shaders: item.missing_shaders.clone(), files };
+                if kind == 0 { manifest.cars.push(entry) } else { manifest.tracks.push(entry) }
+            }
+        }
+        manifest.shared = add(&mut manifest, &mut shared.iter());
+        let ids = |items: &[PackItem]| items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+        let launcher = launcher_files(root, &ids(&manifest.cars), &ids(&manifest.tracks));
+        manifest.launcher = add(&mut manifest, &mut launcher.iter());
+        let file = folder.join(format!("{name}.json"));
+        std::fs::write(&file, manifest.to_json()).map_err(|e| format!("{}: {e}", file.display()))?;
+        println!(
+            "{name}: {} cars ({}), {} tracks and layouts ({}), shared {}, launcher {}: {} in {} files -> {}",
+            manifest.cars.len(),
+            megabytes(manifest.cars.iter().map(|item| manifest.bytes_of(&item.files)).sum()),
+            manifest.tracks.len(),
+            megabytes(manifest.tracks.iter().map(|item| manifest.bytes_of(&item.files)).sum()),
+            megabytes(manifest.bytes_of(&manifest.shared)),
+            megabytes(manifest.bytes_of(&manifest.launcher)),
+            megabytes(manifest.total_bytes()),
+            manifest.files.len(),
+            file.display()
+        );
+    }
+    Ok(())
+}
+
+const USAGE: &str = "usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run] [--delta <live manifest.json>] [--required <folder>] [--help, -h]
 --delta: write only the files that are new or changed against that manifest, plus the new manifest.json, into an empty --out
 the config: --config, else web/my_pack.toml when it exists, else web/preview.toml";
 

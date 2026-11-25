@@ -89,6 +89,12 @@ everything that links the car physics is GPL.
   (`tools/web_pack` copies them from a local FMOD download when the pack is made); they are not
   in this repository, the web zip or a release. The page credits it: "Audio engine: FMOD Studio
   by Firelight Technologies Pty Ltd."
+- **FMOD Engine 2.03.15 for Linux and macOS** (`libfmod.so`, `libfmodstudio.so`; the `.dylib`
+  pair on macOS), the native builds' sound engine. It is not in this repository. The
+  Linux and macOS release zips carry Firelight's unchanged libraries, under the FMOD End User
+  License Agreement, not under the GPL; rustyAC loads them at run time through their C
+  interface (`crates/rustyac-audio`). The game credits it when its sound starts, and the zips'
+  notices do: "Audio engine: FMOD Studio by Firelight Technologies Pty Ltd."
 - **FW1FontWrapper**, copyright (c) 2011 Erik Rufelt, the library Assetto Corsa links for its
   text (DirectWrite glyphs drawn with Direct3D 11). `crates/rustyac-render/src/fw1.rs` is a
   Rust translation of the part the game uses, as the game has it (Kunos changed a few things),
@@ -156,9 +162,11 @@ tool that is installed by hand, run on the lock files and not part of rustyAC.
 rustyAC plays Assetto Corsa's sound through FMOD, a closed-source audio engine by
 Firelight Technologies Pty Ltd. On Windows it uses the FMOD DLLs from the player's own
 Assetto Corsa install. In the browser it uses FMOD's HTML5 (WebAssembly) build, served by
-the website next to the game. FMOD is not part of this repository or its releases and is
-not covered by the GPL: it is under the FMOD End User License Agreement
-(https://www.fmod.com/legal).
+the website next to the game. On Linux and macOS it uses the FMOD Engine's native libraries,
+which the release zips for those systems carry unchanged next to the game. FMOD is not part
+of this repository and is not covered by the GPL: it is under the FMOD End User License
+Agreement (https://www.fmod.com/legal), also where a release zip carries it, and it is not
+part of any release's Corresponding Source.
 
 **Additional permission under GNU GPL version 3 section 7.** If you modify this Program,
 or any covered work, by linking or combining it with the FMOD Engine (or a modified
