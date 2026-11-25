@@ -343,6 +343,7 @@ Makes the pack of cars and tracks the browser page downloads, from your Assetto 
 | `--ac <folder>` | the install that is found | Assetto Corsa's folder. |
 | `--dry-run` | | Checks the list and says what would be packed; writes nothing. |
 | `--delta <manifest.json>` | | Writes only the files that are new or changed against that manifest of a live pack, plus the new manifest, into an empty `--out`. |
+| `--required <folder>` | | Writes the native builds' required-files list instead of a pack: `base.json` (Kunos' cars and tracks without the DLCs), one `dlc_<Steam app>.json` per DLC (by the key in its models' headers) and `everything.json` (DLCs and mods too), paths and sizes only. |
 | `--help`, `-h` | | Prints the options. |
 
 ## The server kit

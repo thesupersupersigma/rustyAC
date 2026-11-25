@@ -2,10 +2,13 @@
 
 //! rustyAC's own binding to FMOD Studio 1.08.12, the version Assetto Corsa was built against.
 //! The DLLs are the player's (`fmod64.dll`, `fmodstudio64.dll` in the AC folder), loaded at run
-//! time; rustyAC ships no FMOD file and uses no FMOD header.
+//! time; rustyAC ships no FMOD file and uses no FMOD header. Off Windows the same functions
+//! stand on FMOD Engine 2.03 (`native`: Linux; `web`: the browser).
 
 pub mod dsp_abi;
 pub mod log;
+#[cfg(not(any(windows, target_arch = "wasm32")))]
+mod native;
 pub mod raw;
 pub mod types;
 #[cfg(target_arch = "wasm32")]

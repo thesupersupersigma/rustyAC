@@ -26,9 +26,9 @@
 pub mod bindings;
 #[cfg(windows)]
 pub mod dinput;
-// (Linux: no controllers yet, step L4)
+// Linux: SDL3's joysticks and haptics behind the same calls
 #[cfg(all(target_os = "linux", feature = "wgpu"))]
-#[path = "dinput_none.rs"]
+#[path = "dinput_sdl.rs"]
 pub mod dinput;
 pub mod ini;
 pub mod keyboard;
@@ -39,6 +39,8 @@ mod live;
 pub mod pad;
 #[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub mod wheel;
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
+mod xinput_sdl;
 
 pub use crate::sim::CarProbe;
 #[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]

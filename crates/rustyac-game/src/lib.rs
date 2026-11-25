@@ -80,10 +80,7 @@ pub mod render {
     pub mod scene;
     pub mod track_camera;
 }
-#[cfg(windows)]
-pub mod shm;
-#[cfg(all(target_os = "linux", feature = "wgpu"))]
-#[path = "shm_none.rs"]
+#[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]
 pub mod shm;
 pub mod sim;
 #[cfg(any(windows, all(target_os = "linux", feature = "wgpu")))]

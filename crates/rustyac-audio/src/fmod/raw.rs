@@ -68,11 +68,11 @@ unsafe fn symbol(module: Module, name: &str) -> Result<usize, String> {
 }
 
 /// Functions the layer itself needs and acs.exe does not import.
-struct Extra {
-    set_output: unsafe extern "C" fn(RawHandle, i32) -> i32,
-    set_dsp_buffer_size: unsafe extern "C" fn(RawHandle, u32, i32) -> i32,
-    flush_sample_loading: unsafe extern "C" fn(RawHandle) -> i32,
-    get_sample_loading_state: unsafe extern "C" fn(RawHandle, *mut i32) -> i32,
+pub(super) struct Extra {
+    pub(super) set_output: unsafe extern "C" fn(RawHandle, i32) -> i32,
+    pub(super) set_dsp_buffer_size: unsafe extern "C" fn(RawHandle, u32, i32) -> i32,
+    pub(super) flush_sample_loading: unsafe extern "C" fn(RawHandle) -> i32,
+    pub(super) get_sample_loading_state: unsafe extern "C" fn(RawHandle, *mut i32) -> i32,
 }
 
 pub struct Api {
@@ -148,11 +148,16 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
     keep(fns, extra, folder, output)
 }
 
-/// No FMOD off Windows and the browser yet: the drive goes on without sound.
-// shortcut: no native FMOD 2.03 loader, upgrade in docs/platforms.md step L6
+/// FMOD Engine 2.03's native libraries (see [`super::native`]), with FMOD's credit. Once per
+/// process, as [`load`] on Windows.
 #[cfg(not(any(windows, target_arch = "wasm32")))]
-pub fn load(_folder: &Path, _output: Output) -> Result<&'static Api, String> {
-    Err("no FMOD on this platform yet (step L6)".to_string())
+pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
+    if let Some(api) = API.get() {
+        return Ok(api);
+    }
+    let (fns, extra) = super::native::load()?;
+    println!("audio: FMOD Engine 2.03. Audio engine: FMOD Studio by Firelight Technologies Pty Ltd.");
+    keep(fns, extra, folder, output)
 }
 
 /// The browser's FMOD (see [`super::web`]): `web/sound.js` must have loaded it. `folder` is the
@@ -191,7 +196,6 @@ mod web_extra {
     }
 }
 
-#[cfg(any(windows, target_arch = "wasm32"))]
 fn keep(fns: Fns, extra: Extra, folder: &Path, output: Output) -> Result<&'static Api, String> {
     let wav_file = match &output {
         Output::WavNrt { file, .. } => {

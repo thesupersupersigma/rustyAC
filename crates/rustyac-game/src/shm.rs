@@ -11,15 +11,30 @@
 //!
 //! The names are AC's, so the two cannot publish at once: rustyAC refuses to start its writer
 //! while `acs.exe` runs.
+//!
+//! Linux: the same pages, named the same, in `/dev/shm` (`shm_unix.rs`), where Linux telemetry
+//! tools and the Proton bridges look for them.
 
+#[cfg(not(windows))]
+#[path = "shm_unix.rs"]
+mod unix;
+#[cfg(not(windows))]
+pub use unix::other_writer_running;
+#[cfg(not(windows))]
+use unix::Mapping;
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, INVALID_HANDLE_VALUE};
+#[cfg(windows)]
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+#[cfg(windows)]
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
+#[cfg(windows)]
 use windows::Win32::System::Threading::GetCurrentProcessId;
 
 use rustyac_physics::car::telemetry::PAGE_SIZE;
@@ -48,6 +63,7 @@ pub static REPLAY_FRAMES: std::sync::Mutex<Vec<[f32; 3]>> = std::sync::Mutex::ne
 
 /// Is the real game running? Looks at the names of the running processes, nothing more.
 /// Also reports another `rustyac.exe` (two writers on one page would garble it).
+#[cfg(windows)]
 pub fn other_writer_running() -> Option<String> {
     // SAFETY: a process snapshot is read through the documented calls with a correctly sized entry.
     unsafe {
@@ -71,6 +87,7 @@ pub fn other_writer_running() -> Option<String> {
     }
 }
 
+#[cfg(windows)]
 struct Mapping {
     handle: HANDLE,
     view: MEMORY_MAPPED_VIEW_ADDRESS,
@@ -79,6 +96,7 @@ struct Mapping {
     existed: bool,
 }
 
+#[cfg(windows)]
 impl Mapping {
     fn create(name: &str, size: usize) -> Result<Mapping, String> {
         let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
@@ -106,6 +124,7 @@ impl Mapping {
     }
 }
 
+#[cfg(windows)]
 impl Drop for Mapping {
     fn drop(&mut self) {
         // SAFETY: view and handle were created in `create` and are released once.
@@ -117,6 +136,7 @@ impl Drop for Mapping {
 }
 
 // SAFETY: the mapping is owned by whoever holds the struct; the raw view is plain memory.
+#[cfg(windows)]
 unsafe impl Send for Mapping {}
 
 /// The three pages, created like the game creates them.

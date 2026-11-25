@@ -2,20 +2,10 @@
 
 //! Smoke test of the FMOD binding: `fmod_smoke <AC folder> <out.wav> <event path> [block]`.
 
-#[cfg(any(windows, target_arch = "wasm32"))]
 use rustyac_audio::fmod::raw::{self as f, Handle, In, Out, OutHandle, Output, Str};
-#[cfg(any(windows, target_arch = "wasm32"))]
 use rustyac_audio::fmod::types::*;
-#[cfg(any(windows, target_arch = "wasm32"))]
 use std::ffi::CString;
 
-/// Elsewhere there is no FMOD 1.08 to load (`raw::load` is Windows and the browser only).
-#[cfg(not(any(windows, target_arch = "wasm32")))]
-fn main() {
-    eprintln!("fmod_smoke needs AC's FMOD 1.08 DLLs (Windows only)");
-}
-
-#[cfg(any(windows, target_arch = "wasm32"))]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let root = std::path::PathBuf::from(&args[1]);

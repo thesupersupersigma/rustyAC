@@ -442,6 +442,9 @@ impl WheelDevice {
                 return None;
             }
         };
+        // SDL lists devices in another order than DirectInput: `JOY` numbers come from `[CONTROLLERS]`
+        #[cfg(not(windows))]
+        let di = di.ordered(&bindings.ini);
         let mut control = DiCarControl::from_ini(&bindings.ini);
         let mut notes = Vec::new();
         let usable = |joy: i32| di.state(joy).is_some();

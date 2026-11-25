@@ -14,7 +14,12 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
 - Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
   the native game from section 8's L1, starting with the list in 10.4.
 - **P3 (Task P3a, branch `web`): done (section 11).** L1 (11.2), L2 + L3 (11.3, 11.4), the frame
-  check against the page's Full mode, the physics dumps and quitting (11.5). Next: L4 (11.6).
+  check against the page's Full mode, the physics dumps and quitting (11.5).
+- **P3b (branch `web`), section 12:** L4 done (12.1: pads, wheels, force feedback on SDL3, proved
+  against kernel devices made with `uinput`). L5 done (12.2: `/dev/shm`, pages byte-identical to
+  Windows'). L6's sound done (12.3: FMOD Engine 2.03 native, call logs identical to the page's on
+  the 18 drives and to the game's on the 3 end-to-end rows), its licence text and required-files
+  list too, split into the base game and one list per DLC (12.3). **P3b done**; next is L7 (12.4).
 
 ## 1. Plain-English summary
 
@@ -214,8 +219,8 @@ downloads nothing.
    track). It holds paths and sizes only, never content. There are two lists: "base game" and
    "everything". Missing files are named, grouped by car or track, so a player missing one DLC can
    still drive the rest. Sizes: this install is 38 GB in all (`content` 33.5 GB: 209 cars
-   21.4 GB, 26 tracks 10.3 GB, mods and CSP included). The base game alone was **not measured**:
-   the list generator's first run gives it (step L6).
+   21.4 GB, 26 tracks 10.3 GB, mods and CSP included). The lists (step L6, section 12.3):
+   **base 28.6 GB** (19,714 files), **everything 34.3 GB** (21,372 files).
 4. **A zip** of the game files: checked the same way, then **read in place, not unpacked**.
    Measured here (`re/scratch/taskP1/zipspeed.py`, Spa's 441 MB `spa.kn5`): deflate decompresses
    at **310 MB/s on one core**, 1.42 s against 1.19 s for reading the plain file. A drive already
@@ -304,7 +309,7 @@ ARM: ship nothing new until the emulated row is green.
 - **Not done (P2):** the rerun of the workflow with P2's changes (Super, 10.5); the made-up whole
   car for runners (10.1, about one session); a replay on a real ARM Mac; the native game itself
   (P3).
-- The base-game size of the required-files list isn't measured (step L6 generates it).
+- The base-game size of the required-files list: measured in L6 (section 12.3), 28.6 GB.
 - `actions/upload-artifact`: raised from v5 (Node 20) to v7 (Node 24) in P2.
 - Questions for Super: (1) SDL3 for window, input and FFB (one C library, zlib licence, shipped or
   from the distro) instead of `winit` + `gilrs` + our own FFB: recommended, because it is the only
@@ -673,3 +678,246 @@ button's `WM_DELETE_WINDOW`; `head_int.sh` for a headless run):
   `re/scratch/taskP2/target-linux/{debug,release}/rustyac`, `release/examples/full_frame`.
 - Not done, for later: kgl on wgpu's GL backend (section 8's "Later"); the window grabs' colours
   (a tool's fault, 11.4); the dumps of all 228 drives (only the quick six ran).
+
+## 12. Task P3b: pads, wheels, shared memory, sound (L4 to L6)
+
+### 12.1 L4: pads and wheels with force feedback (SDL3)
+
+The Windows files are untouched. Linux gets the same two device layers that AC's classes sit on,
+built on SDL3 (already linked statically since P3a), so `pad.rs`'s `JoypadCarControl` and
+`wheel.rs`'s `DiCarControl` (the ported arithmetic: dead zones, curves, gamma, filters) run
+unchanged on the same numbers as on Windows.
+
+- **Pads** (`input/xinput_sdl.rs`, `pad::XInput` on Linux): the first SDL gamepad that is not a
+  wheel, turned back into the `XINPUT_GAMEPAD` Windows reads. SDL defines its values from
+  XInput's in its own XInput backend (`SDL_xinputjoystick.c`: the sticks' y as `~y`, a trigger
+  byte `b` as `b * 257 - 32768`, then the gamepad's 0..32767); `xinput_sdl::pad_state` undoes
+  exactly that. Linux's `xpad` driver reports the same (`~y`, triggers 0..255, which SDL's evdev
+  scaling turns into the same `b * 257 - 32768`). Buttons by position (south = A ...). Rumble:
+  `SDL_RumbleGamepad` with XInput's two motor words (`pad::motor_word`), restarted on each send
+  (XInput keeps a level until the next call; SDL's lasts its duration, 65 s).
+- **Wheels** (`input/dinput_sdl.rs`, replacing P3a's `dinput_none.rs`): DirectInput's calls
+  (`open`, `poll`, `state`, `enable_ff`, `send_ff`, the device list) on SDL's joysticks and haptics.
+  - Values: SDL scales an evdev axis from the device's range to -32768..32767 in float
+    (`AxisCorrect`); the raw value is found again from the range (read from the device,
+    `EVIOCGABS`) and mapped to DirectInput's -10000..10000 as `MulDiv` does it (Wine's
+    `joystick_map_axis`; Windows' own rounding is the one thing not measured: below).
+  - Force: one constant force on SDL's steering axis (`SDL_HAPTIC_STEERING_AXIS`, Linux direction
+    0x4000), endless, the wheel's auto-centre off (AC's `DIPROPAUTOCENTER_OFF`), capped at 30 % as
+    on Windows. The level sent is the smallest that SDL's own DirectInput backend turns back into
+    DirectInput's magnitude (`level * 10000 / 0x7fff`), so both systems mean the same force.
+  - Not as on Windows: no exclusive access (evdev has none for force feedback); a device
+    unplugged and plugged in again is found at the next start only.
+
+**How a Windows `controls.ini` maps on Linux** (read and written as on Windows; `rustyAC`
+writes only its own `rustyac_controls.ini`, which on Linux keeps `[CONTROLLERS]` too):
+
+| Key | Windows (acs.exe) | Linux (rustyAC) |
+|---|---|---|
+| `JOY=n` | the n-th device of DirectInput's enumeration (the game never reads `[CONTROLLERS]`; CSP re-sorts by it) | the device whose product GUID is `[CONTROLLERS] PGUIDn`, built from SDL's vendor and product ids (`C24F046D-0000-0000-0000-504944564944` is a G29); a listed device that is missing keeps its number, empty ("not connected"); unlisted devices follow in SDL's order. No `[CONTROLLERS]`: SDL's order. `__IGUIDn` (instance GUIDs) and `CONn` (Windows' names) are not used: neither exists on Linux |
+| `AXLE=k` | `DIJOYSTATE2`'s slot: X, Y, Z, Rx, Ry, Rz, slider 0, slider 1 | the same slot: Linux's `hid-input` gives HID's X..Rz, Slider and Dial the evdev codes 0..7 in that order; SDL numbers only the axes a device has, so the codes come from the device (`EVIOCGBIT`). Other codes (`ABS_WHEEL`, `ABS_GAS`...) get no slot |
+| `BUTTON=b` | DirectInput's button b | SDL's button b (evdev's key codes in order from `BTN_JOYSTICK`, as `hid-input` numbers HID buttons) |
+| `INPUT_METHOD=X360`, `[X360]` | XInput pad 0 | the first SDL gamepad that is not a wheel; an Xbox-layout pad is listed under its `JOY` number but read as the pad, as Windows does with XInput's twin |
+
+**Proof in WSL** (`re/scratch/taskP3/`): WSL has no pads, but its kernel has `uinput` and evdev
+as modules. `fakedev.py` (as root) makes two kernel devices, an Xbox 360 pad as `xpad` reports one
+(045e:028e) and a Logitech G29 (046d:c24f) with force feedback (`FF_CONSTANT`, `FF_GAIN`,
+`FF_AUTOCENTER`) and axes X (0..65535), Z and Rz (0..255), a 10-bit slider and a hat, but **no Y**
+(so the slot map is tested), sets them to raw values and sends the same values to the example
+`linux_input_check` (`l4run.sh`). That goes further than SDL's virtual joystick, which the prompt
+named: the virtual joystick skips the kernel, SDL's evdev code and its pad mappings, and has no
+haptic, so force feedback could not have come out of it. The example reads the devices through the
+Linux path and computes Windows' (XInput's raw state as it is; DirectInput's value of the raw
+value), runs both through AC's classes and compares; the script answers the kernel's force
+uploads and compares each with DirectInput's magnitude. Bindings: AC's defaults, `[CONTROLLERS]`
+with the pad as JOY 0 and the wheel as JOY 1, while SDL lists the wheel first.
+
+| Check | Result |
+|---|---|
+| unit tests (Linux): every XInput stick value and trigger byte back through SDL's numbers; every raw value of the ranges 0..255, 0..1023, 0..4095, 0..16383, 0..65535, -32768..32767, -511..512 through SDL's float scaling to DirectInput's value; every magnitude -10000..10000 back out of SDL's DirectInput backend; the `[CONTROLLERS]` order; the slot map | pass (`l4_b2.log`) |
+| the device list | JOY 0 the pad (read as the pad), JOY 1 the G29 (steering wheel, force feedback, steers), as `[CONTROLLERS]` says |
+| 400 pad states (random, the dead zone's edges, the ends), `JoypadCarControl` on both | **400 IDENTICAL** (`l4_run2.log`) |
+| 400 wheel states (all four axes, hat, 16 buttons), DirectInput's state and `DiCarControl` on both | **400 IDENTICAL** (before the range fix: 32 one-unit misses on the 10-bit slider, `l4_run1.log`) |
+| 53 forces (0, ±1, ±1.5, NaN, tiny, random), what reached the kernel vs DirectInput's magnitude | **53 IDENTICAL**: constant force, direction 0x4000, endless, level back to the magnitude; unchanged magnitudes send nothing, as on Windows |
+| 6 rumbles (0, 1, over 1, below 0, NaN) | **6 IDENTICAL**: the kernel's strong / weak = XInput's motor words |
+| the wheel's set-up | the kernel saw gain 100 % and auto-centre 0 |
+| clippy `-D warnings --all-targets -p rustyac-game` (Linux with `wgpu`; Windows with and without); wasm32 clippy (`rustyac-web` all targets, wasip1 lib + bins) | clean |
+
+**Needs real hardware (L8):** a wheel's force direction (SDL's 0x4000 with a positive level is the
+convention, but each kernel driver turns it into its own motor sign: a real wheel must pull the way
+the car does); Windows' DirectInput rounding of a device range to ±10000 (the MulDiv model is
+Wine's: read one wheel's raw values on both systems); pedal and wheel ranges and the axis codes
+real drivers give (Logitech's `hid-logitech`, Fanatec's `hid-fanatecff`, Moza and Simagic on
+`hid-pidff`); hot-plugging; SDL's mapping for pads other than Xbox ones (a DualShock is a gamepad on
+Linux but a plain DirectInput device on Windows, where AC can't use it as the pad).
+
+### 12.2 L5: the shared memory in `/dev/shm`
+
+`shm.rs` now builds on Linux too: its pages, writers and timing are the same code. Only its two
+Windows calls have a Linux twin (`shm_unix.rs`); the Windows lines are as they were (only
+`cfg(windows)` added above them), and P3a's `shm_none.rs` is gone.
+
+- **Names and layout:** `Local\acpmf_physics`, `acpmf_graphics`, `acpmf_static` become POSIX
+  shared memory `/acpmf_physics` ... (`shm_open`), the files `/dev/shm/acpmf_physics` ..., with
+  the same bytes. Each file is whole 4096-byte pages, as Windows rounds a mapping (a reader may
+  map its own, longer struct). Mode 0600, the user's own, as Windows' default for a session's
+  objects.
+- **After the drive:** the files stay, with `status` = `AC_OFF`, as a Windows object stays while a
+  reader holds it; the next drive writes into the same files (the console says "still held open"
+  then).
+- **Two writers:** rustyAC refuses to publish while `acs.exe` (under Proton or Wine the process is
+  still called that, `/proc/<pid>/comm`) or another `rustyac` runs, as on Windows.
+- **Who reads it on Linux:** tools that read AC's layout from `/dev/shm/acpmf_*`: Spacefreak18's
+  `simapi` / `simd` (it makes those files for AC under Proton, through `simshmbridge`, which copies
+  the Wine mapping out to `/dev/shm`; its docs check AC by `hexdump /dev/shm/acpmf_physics`) and
+  `wine-linux-shm-adapter`. With rustyAC native, no bridge is needed: rustyAC writes the files
+  those tools read. SimHub itself is Windows only. AC's Python apps that open the pages by their
+  Windows name (`sim_info.py`) do not run on Linux anyway (section 7).
+
+| Check | Result |
+|---|---|
+| Linux unit test: a page made, written, made again (`existed`), 4096 bytes in `/dev/shm` | pass |
+| Linux: `the_static_page_holds_the_hybrid_as_built` (was Windows only until L5) | pass |
+| the same recorded drives (`car_random`, `conditions_spa_cold_green_wind`), `--replay <drive> --headless --realtime` (the paced loop with every sink); Windows: a script holds the three named mappings (as a reader would) and dumps them after the drive (`shm_win.ps1`); Linux: `/dev/shm/acpmf_*` copied after the drive (`shm_linux.sh`) | **6 of 6 pages byte-identical** (4096 bytes each; 68 to 436 non-zero bytes: the physics page at the last step, the graphics page at `AC_OFF`, the static page) (`run/shm/`) |
+| clippy `-D warnings --all-targets -p rustyac-game` (Linux with `wgpu`; Windows with and without) | clean |
+
+A third drive (Laguna Seca's pit, t18) could not run on Windows: Super started Assetto Corsa
+during the runs, and rustyAC refused to publish next to it, as it should. (The second drive's run
+ended two seconds after AC started; AC writes its own pages every frame and its static page after
+loading, so nothing of rustyAC's was left in them.)
+
+### 12.3 L6: sound, the licence, the required-files list
+
+**FMOD Engine 2.03 for Linux (done).** The library is Firelight's `fmodstudioapi20315linux.tar.gz`
+(fmod.com, FMOD Engine 2.03.15, Linux), unpacked by Super in `ignored/fmod/fmodstudioapi20315linux/`
+(`api/core/lib/x86_64/libfmod.so.14`, `api/studio/lib/x86_64/libfmodstudio.so.14`). The game looks
+for both next to its program (the Linux zip, L7), then where the system's loader finds them
+(`LD_LIBRARY_PATH` in the proofs). `crates/rustyac-audio/src/fmod/native.rs` binds `raw`'s 1.08
+functions to 2.03's C interface (`libloading`, a new dependency of `rustyac-audio` off Windows,
+already in the lock file through other crates): 50 of the 65 have a 2.03 C function with the same
+arguments (`getLowLevelSystem` is 2.03's `getCoreSystem`), and 15 are translated as `web/sound.js`
+translates them for the browser (the version answer 0x10812; `setParameterValue` to
+`setParameterByName`; `getMaximumDistance` to `getMinMaxDistance`; the listener with no
+attenuation position and 1.08's default before the first set; `Studio::System::create` with
+2.03's header version; both advanced-settings structures; `getCPUUsage`'s two structures as
+1.08's one; and the `bool` arguments as `FMOD_BOOL`). Unlike the browser's build, the native one has
+`Geometry::addPolygon` and runs the game's two DSP plug-ins from the banks: the plug-in ABI
+(`FMOD_DSP_DESCRIPTION`, `FMOD_DSP_STATE`, the parameter descriptions, the data-parameter types)
+is the same in 2.03's headers as in 1.08's, and 2.03 accepts the game's plug-in SDK version 108.
+The credit "Audio engine: FMOD Studio by Firelight Technologies Pty Ltd." is printed when the
+sound starts.
+
+Proofs (`re/scratch/taskP3/`):
+
+| What | Against | Result |
+|---|---|---|
+| The `sound` area's 18 drives: the port's side on Linux (`tape_proof`, a new example: the page's `sound_proof` with native paths; `tapes.sh`) | the page's 2.03 HTML5 path in node (`page18.sh`: `tools/web_checks/task41/node_proof.mjs` on this branch's site) | **18 / 18 identical** call logs (`snd_cmp.py`, `l6s_cmp18.log`) |
+| the same 18 | Windows' port side with FMOD 1.08 (`audio_oracle run --side port`, `desk18.sh`) | 11 identical; the other 7 differ only where FMOD 2.03 ends an event earlier than 1.08 (it answers stopping or stopped where 1.08 answers playing), the same 7 as the page in Task 41 (`docs/port/web_sound.md`) |
+| The area's three end-to-end rows: Linux's `rustyac --replay ... --headless --audio-script <the game's log>` (`e2e_linux.sh`) | Assetto Corsa's own sound code (`audio_oracle run --side ac`, FMOD 1.08) | **3 / 3 identical** (`logdiff.py`), the game's own hashes |
+| The mix (WAV, 3 drives, levels per second from each file's first sound, `levels.py`) | Windows' port, FMOD 1.08 | 0.36 to 0.76 dB RMS apart (Windows against itself: 0.10 to 0.13 dB; the page without the plug-ins was up to +8 dB on trackside) |
+| A real-time drive in WSLg (`listen.sh`: `--headless --realtime --audio-log`) | | FMOD found one output device (WSLg's PulseAudio, `PULSE_SERVER`), the game held its socket, the mixer ran the 24 s at 1.6 % of a core. **Whether it is heard is Super's to check** (`listen.sh`, by ear) |
+
+Two things the comparison leaves out, both FMOD's and not the mapping's: the setup's loop over
+the sound devices (`snd_cmp.py` skips `getNumDrivers` / `getDriverInfo`: this PC has 5 under
+Windows, WSL none without the WAV writer), and in its clock-less mode FMOD 2.03 mixes a few silent
+blocks while each bank loads (about 1 s more silence before the drive's first sound than 1.08), so
+WAV files are compared from their first sound. A headless run without `--audio-log` or
+`--audio-wav` has no sound at all, as on Windows. Windows: the `sound` area's quick rows 4 / 4
+identical (`l6s_quick_sound.log`); clippy `-D warnings --all-targets` clean on Linux, Windows and
+both wasm targets, `audio_oracle`'s too.
+
+**The licence** (`LICENSING.md`, done now as the prompt asks): an entry for FMOD Engine 2.03.15
+for Linux and macOS (the release zips carry Firelight's unchanged `libfmod` / `libfmodstudio`,
+under the FMOD EULA, not the GPL, loaded at run time through the C interface; the credit "Audio
+engine: FMOD Studio by Firelight Technologies Pty Ltd." when the sound starts and in the zips'
+notices), and the FMOD section says the Linux and macOS zips carry the libraries and that FMOD is
+in no release's Corresponding Source. The section-7 permission itself needed no change (it names
+the FMOD Engine, not the DLLs).
+
+**The required-files list:** `web_pack --config <cars ["*"], tracks ["*"]> --required <folder>`
+(`docs/flags.md`) probes every car and track as the pack does (`files_read_by_drive` +
+`files_of_picture` + the sound banks per car and track, the shared files, AC's launcher's files)
+and writes two manifests in the pack's format, paths and sizes only (no hashes, nothing copied):
+`base.json` (Kunos' cars and tracks; DLCs are Kunos' too, so a player missing one sees that
+DLC's cars or tracks named as missing, as section 5 planned) and `everything.json` (mods too).
+On this install (about 5 minutes; `re/scratch/taskP3/required/`, `l6_required.log`):
+
+| List | Cars | Tracks and layouts | Shared | AC's launcher | **In all** |
+|---|---|---|---|---|---|
+| base | 178 (15.4 GB) | 46 (22.7 GB; layouts share files) | 1.18 GB | 0.47 GB | **28.6 GB, 19,714 files** |
+| everything | 189 (17.6 GB) | 64 (30.8 GB) | 1.18 GB | 0.54 GB | **34.3 GB, 21,372 files** |
+
+Left out of both (28): content made for Custom Shaders Patch (CSP is Windows only) and two DLC
+cars this install does not own. Against section 5's 38 GB for the whole folder: the rest is what no
+drive reads (CSP, its content, unused files). Checks: `web_pack` clippy `-D warnings --all-targets`,
+its 6 tests; the `browser` area (its flags check now lists `--required`).
+
+**Split into the base game and the DLCs** (the lead chat's answer after session 1). How a car or
+track is assigned: by **the DLC key in its models' headers**, the game's own rule. A kn5 of
+version 6 and up carries a key after its version (0 for the base game); `KN5IO::load` refuses a
+model whose key the player's Steam account does not own, and `SteamInit` maps each key to a DLC's
+Steam app (`rustyac-game`'s `steam::DLC_KEYS`, 11 of them). The apps' names are Steam's own,
+from its local app cache (`appcache/appinfo.vdf`, each app's record read by its id and length,
+`re/scratch/taskP3/dlc_names.py`); Steam's install record (`appmanifest_244210.acf`) lists the
+same 11 apps as installed depots. Kunos' `dlc_ui_car.json` / `dlc_ui_track.json` markers (what the
+launcher shows a DLC badge for) agree with the keys on every marked car and track, but miss two
+Kunos cars that carry a DLC key without a marker (`ks_lamborghini_countach_s1`,
+`ks_lamborghini_gallardo_sl_s3`): the keys are the rule, the markers are not
+(`re/scratch/taskP3/dlc_survey.py`). `web_pack --required` now writes `base.json` (Kunos' content with
+key 0, the shared files, AC's launcher's), one `dlc_<app>.json` per DLC (its cars and tracks and
+their own launcher pictures, no shared files: checked only when one of them is picked, "this car
+needs the Dream Pack 1 DLC") and `everything.json` as before. A Kunos model with a key of no DLC
+in the table stops the run. Mods that reuse a DLC's models carry its key too (two here:
+`bdc_streetspec_ae86_v4`, Japanese Pack; `urd_darche_992_23`, Porsche Pack III): they stay in
+`everything.json` only, and L7's check of a mod (whether it loads) is where the missing DLC shows.
+
+| List (`re/scratch/taskP3/required/`, `l6d_required.log`) | Steam app | Cars | Tracks and layouts | **Size, files** | Steam's depot |
+|---|---|---|---|---|---|
+| `base.json`: the base game | 244210 | 86 | 36 | **17.6 GB, 11,016** (shared 1.18 GB, launcher 0.20 GB) | 27.5 GB |
+| `dlc_347990.json`: Dream Pack 1 | 347990 | 10 | 4 (`ks_nordschleife`: four layouts) | 2.04 GB, 1,128 | 2.82 GB |
+| `dlc_404430.json`: Dream Pack 2 | 404430 | 10 | 2 (`ks_barcelona`) | 1.23 GB, 1,046 | 1.70 GB |
+| `dlc_423630.json`: Dream Pack 3 | 423630 | 9 | 2 (`ks_brands_hatch`) | 1.23 GB, 978 | 1.96 GB |
+| `dlc_467980.json`: Japanese Pack | 467980 | 12 | 0 | 0.94 GB, 911 | 1.50 GB |
+| `dlc_493190.json`: Red Pack | 493190 | 7 | 2 (`ks_red_bull_ring`) | 1.21 GB, 801 | 1.73 GB |
+| `dlc_509350.json`: Tripl3 Pack | 509350 | 3 | 0 | 0.26 GB, 364 | 1.44 GB |
+| `dlc_526060.json`: Porsche Pack I | 526060 | 7 | 0 | 0.67 GB, 710 | 1.19 GB |
+| `dlc_540710.json`: Porsche Pack II | 540710 | 9 | 0 | 0.85 GB, 642 | 1.10 GB |
+| `dlc_540711.json`: Porsche Pack III | 540711 | 8 | 0 | 0.87 GB, 592 | 1.20 GB |
+| `dlc_619680.json`: Ready to Race Pack | 619680 | 10 | 0 | 0.95 GB, 875 | |
+| `dlc_675590.json`: Ferrari Pack (Steam's name; the 70th Anniversary pack) | 675590 | 7 | 0 | 0.75 GB, 651 | |
+| `everything.json`: DLCs and mods too | | 189 | 64 | **37.4 GB, 21,969** | |
+
+The base game and the 11 DLCs add up to session 1's Kunos list (28.6 GB, 178 cars, 46 tracks and
+layouts): nothing is lost or counted twice. Each list is smaller than its Steam depot (what no
+drive reads: unused files, CSP content). `everything.json` grew since session 1 (34.3 GB, 21,372
+files): the install's mod tracks changed in between, not the code (session 1's program gives the
+same 37.4 GB on today's install). Checks: `web_pack` clippy `-D warnings --all-targets`, its 7 tests
+(one new: a model's header names its DLC); `docs/flags.md` says what `--required` writes.
+
+### 12.4 Resume here (P3b), plan changes, not done
+
+- **P3b is done.** Next: L7 (the folder / zip chooser, which checks `base.json` and the DLC
+  lists), then L8 (the hardware list below).
+- Tools (`re/scratch/taskP3/`): `fakedev.py` + `l4run.sh` (L4, as root), `shm_win.ps1` /
+  `shm_linux.sh` (L5; never while Assetto Corsa runs), `all.toml` + `web_pack --required` (L6's
+  list), `tapes.sh` / `page18.sh` / `desk18.sh` / `snd_cmp.py`, `e2e_linux.sh`, `levels.py`,
+  `listen.sh`, `smoke.sh` (L6's sound), `wsl.sh` / `wasm.sh` (builds, wasm clippy; run `wsl` with
+  `MSYS_NO_PATHCONV=1` from Git Bash).
+- **Plan changes:** **L7**'s folder / zip check reads these manifests: ship `base.json` and the 11
+  `dlc_<app>.json` (made from a full Kunos install: paths and sizes of Kunos' files, none of their
+  content) with the native zips; missing base files: "this folder is not a complete Assetto
+  Corsa"; a picked car or track in a DLC list whose files are missing: "this car needs the <name>
+  DLC" (the names: the table in 12.3, to carry into L7's code). Mods are checked when chosen
+  (whether they load), since no shipped list can know them.
+  **L8** gains the hardware list of 12.1 (a real wheel's force direction and DirectInput's
+  rounding on Windows against Linux, real pedal ranges, hot-plugging, non-Xbox pads) and a
+  real Linux PC's PulseAudio / PipeWire listen. Nothing else in L7 / L8 changes.
+- **Not done:** the hardware checks (L8); hot-plugging a wheel during a drive
+  on Linux (found at the next start only); a Windows run of the third page drive (Assetto Corsa
+  was running).
+- **Windows unchanged:** every Windows line of the changed files is as it was (`cfg` attributes
+  and `cfg!` added, the Windows strings the same); quick proofs of every area the changed files
+  touch: fresh 63, csp 71, sound 4, replays 6, ai_page 10, launcher 1, dumps 6 IDENTICAL, browser
+  18 IDENTICAL on its rerun (its one difference in the first run was the flags check: `docs/flags.md`
+  now lists `--required`) (`quick_l5.log`,
+  `quick_l6_browser.log`).

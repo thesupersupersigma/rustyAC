@@ -256,14 +256,18 @@ impl XInput {
     }
 }
 
-/// Off Windows no pad yet (step L4 reads pads through SDL3): never one connected.
-#[cfg(not(windows))]
+/// Linux: SDL3's gamepads.
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
+pub use super::xinput_sdl::XInput;
+
+/// Elsewhere off Windows no pad: never one connected.
+#[cfg(not(any(windows, all(target_os = "linux", feature = "wgpu"))))]
 #[derive(Default)]
 pub struct XInput {
     pub index: Option<u32>,
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, all(target_os = "linux", feature = "wgpu"))))]
 impl XInput {
     pub fn new() -> XInput {
         XInput::default()
