@@ -27,12 +27,22 @@ pub mod sys {
     pub const LUA_TSTRING: c_int = 4;
     pub const LUA_TTABLE: c_int = 5;
 
+    extern "C" {
+        /// Asked by `ffi.C.name` before Windows' libraries (build.rs patch); null = not found.
+        pub static mut lj_clib_resolver: Option<unsafe extern "C" fn(*const c_char) -> *mut c_void>;
+    }
+
     extern "C-unwind" {
         pub fn luaL_newstate() -> *mut lua_State;
         pub fn luaL_openlibs(l: *mut lua_State);
         pub fn luaopen_base(l: *mut lua_State) -> c_int;
         pub fn luaopen_math(l: *mut lua_State) -> c_int;
         pub fn luaopen_string(l: *mut lua_State) -> c_int;
+        pub fn luaopen_package(l: *mut lua_State) -> c_int;
+        pub fn luaopen_table(l: *mut lua_State) -> c_int;
+        pub fn luaopen_debug(l: *mut lua_State) -> c_int;
+        pub fn luaopen_bit(l: *mut lua_State) -> c_int;
+        pub fn luaopen_ffi(l: *mut lua_State) -> c_int;
         pub fn lua_loadx(l: *mut lua_State, reader: lua_Reader, data: *mut c_void, name: *const c_char, mode: *const c_char) -> c_int;
         pub fn luaL_loadbufferx(l: *mut lua_State, buf: *const c_char, size: usize, name: *const c_char, mode: *const c_char) -> c_int;
         pub fn luaL_loadfilex(l: *mut lua_State, name: *const c_char, mode: *const c_char) -> c_int;
@@ -54,6 +64,7 @@ pub mod sys {
         pub fn lua_pushlstring(l: *mut lua_State, s: *const c_char, len: usize);
         pub fn lua_isnumber(l: *mut lua_State, idx: c_int) -> c_int;
         pub fn lua_pushcclosure(l: *mut lua_State, f: lua_CFunction, n: c_int);
+        pub fn lua_getfield(l: *mut lua_State, idx: c_int, k: *const c_char);
         pub fn lua_setfield(l: *mut lua_State, idx: c_int, k: *const c_char);
         pub fn lua_close(l: *mut lua_State);
     }

@@ -80,7 +80,7 @@ jobs:
         run: |
           git clone --branch v2.1 https://github.com/LuaJIT/LuaJIT.git "$RUNNER_TEMP/luajit"
           echo "LUAJIT_DIR=$RUNNER_TEMP/luajit" >> "$GITHUB_ENV"
-          echo "RUSTYAC_LUAJIT_LIB=$GITHUB_WORKSPACE/target/luajit-c6ffc141-mt" >> "$GITHUB_ENV"
+          echo "RUSTYAC_LUAJIT_LIB=$GITHUB_WORKSPACE/target/luajit-c6ffc141-mt-csp2" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --workspace --locked
