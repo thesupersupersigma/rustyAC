@@ -4,11 +4,85 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a is done: part 1, C6a-2a, C6a-2b and C6a-2c (below). rustyAC's INIpp flattens all 261 files as CSP
-does with Lua on and off (proof case `csp inipp`), and its config loader finds, orders and flattens every
-installed car's and track's CSP configs as CSP does (proof case `csp configs` against the ConfigsCache
-the game wrote). rustyac.exe (x64 Windows) links LuaJIT and, with `--csp`, keeps each car's flattened
-configs in `CspFeatures::configs`; nothing reads them yet. Next: C6b (CSP's Lua host types), then C6c.
+C6a is done (below). C6b part 1 (the survey) and part 2 (CSP's car physics libraries on rustyAC's LuaJIT,
+proof case `csp lua env` 60/60 identical) are done. Next: C6b part 3, CSP's environment set-up itself
+(the plan below), then parts 4 and 5 (the natives), then C6c.
+
+## C6b part 1: the car physics script's environment (survey, dwrite.dll build 4305)
+
+The RVAs in docs/csp/lua.md come from an earlier dwrite.dll; this build (md5 33e366945091) has them here:
+
+- **The state**: the script host (sub_1813E5BA0) makes a LuaJIT state with CSP's opener in mode 0 (base,
+  package, table, string, math, debug, bit; `ffi` preloaded; no io, os, jit: mode 0 never calls CSP's
+  luaopen_jit sub_18177C620, so car scripts run in the interpreter), then the environment set-up, then
+  runs the bundle entry `ac_common_base` (read from the zip in dwrite.dll, sub_1811C3870, lua_loadx +
+  pcall), the kind's library (`ac_car_cphys`), then the global `__script.__initbase__` when there is one.
+- **The set-up** (sub_1813E25E0, 4,691 B): `package.path` = `<script dir>/?.lua;<csp>/internal/lua-?.lua`;
+  globals `__dirname`, `__dirname__`, the script's name, `__mode__`, `__allowIO__` (from the host, vtable
+  +112); free functions `log warn error debug clearDebug dirname findFile getFolder lapTimeToString
+  getCountryName readDataFile parseINIppFile getTrackId getTrackLayout getTrackFullID getTrackName
+  getTrackDataFilename getCarTags uniqueMachineKey(Async) getCarDataFiles getCarColliders`; tables `ac`
+  (9 slots), `__script`, `ui`, `__util` (`native`, `nativf`, `result`, `parseDate`; `imageState` and the
+  io/os extras `loadDLL openSerialPort openURL ...` only for kinds other than 0); then the string
+  extensions (sub_18101E2C0: `split`, `trim`, `startsWith`, ...).
+- **Two ways to native code**: `ffi.C.lj_*` (CSP's LuaJIT resolves `ffi.C` names from its own table, the
+  names are not in the dll as text) and `__util.native(name, ...)` / `__util.nativf(hash, ...)`: name ->
+  hash sub_180A4D3D0(name, 0xDEADBEEF) -> a map (qword_1828187F8) filled by 296 static initialisers
+  (sub_18101A9E0(hash, fn)); "Unknown function: %s" when missing. Only hashes are in the dll; 250 of the
+  296 hashes are constants in the bundle's bytecode.
+- **CSP's bytecode runs on rustyAC's LuaJIT** (c6ffc141 built from source): all 135 bytecode entries of
+  the bundle load with only the 4-byte magic changed to `LJ`. Two differences of CSP's fork
+  needed patches in crates/rustyac-lua/build.rs (lib folder `-csp2`): `table.clone` keeps table values
+  (CSP's lj_tab_dup sub_1817AC270 has a flag; upstream makes them nil), and a missing `ffi.C` name says
+  "missing declaration for" without the name.
+
+What the car physics kind (`ac_common_base` 182,266 B + `ac_car_cphys` 35,299 B) asks for:
+
+| Group | `ffi.C.lj_*` names | Examples | When |
+|---|---|---|---|
+| maths and types | 47 | `lj_mat_*` (20), `lj_lut_*`/`lj_lut2d_*` (DataLUT11/21, 19), `lj_rgb(m)_from_string`, `lj_random_seed`, `lj_2d_segments_intersection` | C6b part 4 |
+| encoding, noise, misc | 34 | `lj_encode/decodeBase64`, `lj_checksum*`, `lj_(de)compress`, `lj_perlin_*`, `lj_utf8To16`, `lj_structBytes`, `lj_getPatchVersion` | C6b part 4 |
+| config and data | 19 | `lj_loadINIppFile`, `lj_binaryinput_*` (11), `lj_stringToFFIStruct_inner`, `lj_parseUInt64`, `lj_memoryBarrier` | C6b part 5 |
+| car, sim and track state, car controls | 63 | `lj_getCarState`, `lj_getCarPhysics`, `lj_getSim`, `lj_getSimState`, `lj_set*__carc` (24), `lj_getTrackDateTime`, `lj_simplex_*` | C6c |
+| `__util.nativf` keys (ac.INIConfig, stringify, ac.store, ...) | 37 hashes | INI group 0x180fec8a0..0x180fed670 (17), 0x180856170..0x1808617d0 (19) | C6b part 5 |
+
+163 `lj_*` names in all (lists: re/scratch/taskC6b/envnames.txt, not kept). Loading the two libraries only
+looks names up (the `lj_getTimeZone*`, `lj_binaryinput_*`, `lj_*__carc` ones); none is called before a
+script runs. The car scripts themselves are scrambled inside the cars' data.acd and are not read: what
+they call is known only when CSP runs them (C6c: log the natives CSP calls per script in the oracle).
+
+**Plan in sessions** (C6b rest about 3-5, C6c about 4-6):
+
+- C6b part 3 (1-2): CSP's set-up itself instead of the stand-in: the globals, `__util` (native/nativf with
+  the hash map), `__script`, the string extensions, `__initbase__`; proof: the same snippets in CSP's own
+  set-up, which needs a script host object CSP builds only with the game (find what sub_1813E25E0 reads
+  from it, or build one in the oracle).
+- C6b part 4 (1-2): the maths/type and encoding natives, each against CSP's function in the oracle.
+- C6b part 5 (1): ac.INIConfig, DataLUT `loadcardata`, `lj_loadINIppFile` (csp::inipp), ac.store,
+  binary inputs; proof: INIConfig and LUT reads of the 9 cars' files.
+- C6c: the state structs over rustyAC's car (ac.StateCar, physics overrides and forces), `update(dt)` /
+  `reset()` from the physics step, getting the scripts' bytecode (open question: without decrypting
+  anything ourselves), then the RSS 3 row.
+
+## C6b part 2: CSP's car physics libraries on rustyAC's LuaJIT
+
+**The proof**: case `lua env` runs `csp_oracle --lua-env tools/csp_oracle/lua_env_snippets.txt`: CSP's
+state (its newstate, its opener in mode 0, the stand-in set-up, then `ac_common_base` and `ac_car_cphys`
+out of the dwrite.dll) and rustyAC's (`csp::lua_env::car_physics`) run the same 60 chunks (what the
+state has: globals, `ac` keys and types, `__script`, `string`, `table`, `math`; errors for an undefined
+variable and for a Windows name through `ffi.C`; vec2/3/4, quat, rgb/rgbm/hsv, mat3x3; class, refnumber,
+refbool; math.lerp/clamp/saturate/round; table.clone/nkeys/isArray/contains/indexOf/map), results as
+bits or text, MXCSR 0x1f80 and 0x9fc0: 60/60 identical.
+
+**The port**: crates/rustyac-physics/src/csp/lua_env.rs (feature `lua`): `car_physics(dwrite)` opens the
+libraries as mode 0 does, runs `PRELUDE` and the `LIBS` from the installed dwrite.dll
+(`inipp_lua::bundle_entry`, nothing of CSP's is carried). `ffi.C` finds no Windows name (as in CSP);
+every `lj_` name resolves to a stop ("none is ported yet").
+
+Not done (shortcuts in the code): the stand-in set-up (`PRELUDE`: `ffi` and empty `ac`, `__util`,
+`__script`, `ui`, the same in both states); no native is ported, so snippets that reach one (mat4x4 `*`,
+DataLUT, ac.INIConfig, stringify) are not in the list yet; `ffi.C` answers every `lj_` name, CSP only
+its own.
 
 ## C6a-2c: the car and track configs
 

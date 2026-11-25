@@ -25,6 +25,8 @@
 #   row <car> lap|wall  the whole car with CSP live against rustyac --csp --csp-core, step by step on one tape (Task C5i-b)
 #   lua            CSP's own LuaJIT (a fresh state from its lua_newstate, its libraries) against rustyac-lua's
 #                  on tools/csp_oracle/lua_snippets.txt, each result's bits, at two MXCSR values (Task C6a)
+#   lua env        the same in CSP's car physics Lua state (its ac_common_base, ac_car_cphys) against
+#                  csp::lua_env's, tools/csp_oracle/lua_env_snippets.txt (Task C6b)
 #   inipp          every .ini under extension/config and the installed cars' and tracks' extension folders,
 #                  flattened by CSP's INIpp with Lua on (csp_oracle --inipp) against rustyac-physics'
 #                  csp::inipp on rustyAC's LuaJIT (inipp_flat, feature lua), file by file (Tasks C6a-2a/2b, csp_inipp.py)
@@ -217,6 +219,23 @@ if keep "lua"; then
         fi
     else
         verdict "lua" DIFFERENT "csp_oracle failed: $(why "$out/runs/lua.txt" 'error|panic|fault|exit')"
+    fi
+fi
+
+# lua env: the same in CSP's car physics state (opener mode 0, CSP's ac_common_base and ac_car_cphys out of
+# dwrite.dll) and in csp::lua_env's: maths types, class, tostring, ffi.C, table extension, key lists (Task C6b)
+if keep "lua env"; then
+    if oracle lua_env --lua-env tools/csp_oracle/lua_env_snippets.txt; then
+        run=$out/runs/lua_env.txt
+        l1=$(tr -d '' < "$run" | grep -m1 '^lua MXCSR 0x1f80: ')
+        l2=$(tr -d '' < "$run" | grep -m1 '^lua MXCSR 0x9fc0: ')
+        if echo "$l1" | grep -qE ': [0-9]{2,} snippets, 0 differ$' && echo "$l2" | grep -qE ': [0-9]{2,} snippets, 0 differ$'; then
+            verdict "lua env" IDENTICAL "${l1#lua MXCSR 0x1f80: } under both MXCSR"
+        else
+            verdict "lua env" DIFFERENT "$l1 / $l2 $(why "$run" '^lua 0x|error|panic|fault')"
+        fi
+    else
+        verdict "lua env" DIFFERENT "csp_oracle failed: $(why "$out/runs/lua_env.txt" 'error|panic|fault|exit|CSP Lua')"
     fi
 fi
 

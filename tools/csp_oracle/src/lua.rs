@@ -4,7 +4,9 @@
 //! its libraries opened by its own opener) and by rustyAC's (crates/rustyac-lua), each result
 //! printed as the raw 64-bit value LuaJIT keeps (GC64: the same layout in both) and compared.
 
-use std::ffi::c_void;
+use rustyac_physics::csp::{inipp_lua, lua_env};
+use std::ffi::{c_void, CStr};
+use std::path::Path;
 
 type Reader = extern "C" fn(*mut c_void, *mut c_void, *mut usize) -> *const u8;
 type Load = extern "C" fn(*mut c_void, Reader, *mut c_void, *const u8, *const u8) -> i32;
@@ -32,25 +34,56 @@ impl Vm {
     /// CSP's: `lua_newstate` (dwrite+0x1753460, LJ_ALLOCF_INTERNAL), then the libraries the way
     /// its INIpp / script states open them (dwrite+0x13dc780; mode 1 adds io, os and jit).
     pub unsafe fn csp(dll: usize) -> Vm {
+        Vm::csp_mode(dll, 1)
+    }
+
+    unsafe fn csp_mode(dll: usize, mode: i32) -> Vm {
         let newstate: extern "C" fn(usize, usize) -> *mut c_void = std::mem::transmute(dll + 0x175_3460);
         let open: extern "C" fn(*mut c_void, i32) = std::mem::transmute(dll + 0x13d_c780);
         let l = newstate(19792, 0);
         assert!(!l.is_null(), "CSP's lua_newstate returned NULL");
-        open(l, 1);
+        open(l, mode);
         Vm { l, load: std::mem::transmute::<usize, Load>(dll + 0x176_10b0), pcall: std::mem::transmute::<usize, Pcall>(dll + 0x176_0ec0) }
+    }
+
+    /// Task C6b: CSP's car physics state: its opener in mode 0, then csp::lua_env's prelude and
+    /// CSP's libraries as stored in the dll (CSP's magic), loaded by its own `lua_load`.
+    pub unsafe fn csp_car_physics(dll: usize, dwrite: &Path) -> Vm {
+        let vm = Vm::csp_mode(dll, 0);
+        assert_eq!(vm.exec(lua_env::PRELUDE.as_bytes(), c"=prelude"), "nil");
+        for name in lua_env::LIBS {
+            let b = inipp_lua::bundle_entry(dwrite, name).unwrap_or_else(|| panic!("{name} not in {}", dwrite.display()));
+            let cname = std::ffi::CString::new(name).unwrap();
+            assert_eq!(vm.exec(&b, &cname), "nil", "CSP's {name}");
+        }
+        vm
+    }
+
+    /// rustyAC's car physics state (csp::lua_env).
+    pub unsafe fn rustyac_car_physics(dwrite: &Path) -> Vm {
+        let l = lua_env::car_physics(dwrite).unwrap_or_else(|e| panic!("rustyAC's car physics state: {e}"));
+        Vm { l: l.cast(), ..Vm::rustyac_fns() }
     }
 
     /// rustyAC's.
     pub fn rustyac() -> Vm {
         let l = rustyac_lua::new_state();
         assert!(!l.is_null(), "rustyAC's lua_newstate returned NULL");
-        unsafe { Vm { l: l.cast(), load: std::mem::transmute::<*const (), Load>(rustyac_lua::sys::lua_loadx as *const ()), pcall: std::mem::transmute::<*const (), Pcall>(rustyac_lua::sys::lua_pcall as *const ()) } }
+        Vm { l: l.cast(), ..Vm::rustyac_fns() }
+    }
+
+    fn rustyac_fns() -> Vm {
+        unsafe { Vm { l: std::ptr::null_mut(), load: std::mem::transmute::<*const (), Load>(rustyac_lua::sys::lua_loadx as *const ()), pcall: std::mem::transmute::<*const (), Pcall>(rustyac_lua::sys::lua_pcall as *const ()) } }
     }
 
     /// One chunk's first result: `num <bits>`, `str "<text>"`, `bool`, `nil` or `error "<message>"`.
     pub fn run(&self, chunk: &str) -> String {
-        let mut data: &[u8] = chunk.as_bytes();
-        let status = (self.load)(self.l, reader, &mut data as *mut &[u8] as *mut c_void, c"=snippet".as_ptr().cast(), std::ptr::null());
+        self.exec(chunk.as_bytes(), c"=snippet")
+    }
+
+    fn exec(&self, chunk: &[u8], name: &CStr) -> String {
+        let mut data: &[u8] = chunk;
+        let status = (self.load)(self.l, reader, &mut data as *mut &[u8] as *mut c_void, name.as_ptr().cast(), std::ptr::null());
         let status = if status == 0 { (self.pcall)(self.l, 0, 1, 0) } else { status };
         unsafe {
             // lua_State (GC64): top at +40; a TValue is 8 bytes, its type in the top 17 bits
@@ -79,15 +112,16 @@ impl Vm {
 
 /// `--lua <file>`: every non-empty line not starting with `--` is a chunk; run by both VMs under
 /// MXCSR 0x1f80 and with FTZ / DAZ (0x9fc0, CSP's physics thread). Prints each differing line.
-pub unsafe fn run(dll: usize, file: &str) {
+/// `--lua-env <file>` (Task C6b, `dwrite` given): the same in the car physics states.
+pub unsafe fn run(dll: usize, file: &str, dwrite: Option<&Path>) {
     let text = std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{file}: {e}"));
     let chunks: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("--")).collect();
     let only_csp = std::env::var_os("CSP_ORACLE_LUA_CSP").is_some();
     for csr in [0x1f80u32, 0x9fc0] {
         std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags, readonly));
         // fresh states for each MXCSR: no trace compiled under the other one is reused
-        let csp = Vm::csp(dll);
-        let ours = if only_csp { None } else { Some(Vm::rustyac()) };
+        let csp = match dwrite { Some(d) => Vm::csp_car_physics(dll, d), None => Vm::csp(dll) };
+        let ours = match (only_csp, dwrite) { (true, _) => None, (_, Some(d)) => Some(Vm::rustyac_car_physics(d)), _ => Some(Vm::rustyac()) };
         let mut differ = 0;
         for (i, chunk) in chunks.iter().enumerate() {
             let want = csp.run(chunk);

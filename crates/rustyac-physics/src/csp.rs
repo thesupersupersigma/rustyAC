@@ -16,6 +16,8 @@ pub mod config;
 pub mod inipp;
 #[cfg(feature = "lua")]
 pub mod inipp_lua;
+#[cfg(feature = "lua")]
+pub mod lua_env;
 
 use crate::data::ini::IniReader;
 use std::path::Path;

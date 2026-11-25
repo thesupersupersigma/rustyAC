@@ -2494,6 +2494,11 @@ fn main() {
         arguments.remove(i);
         full_path(&arguments.remove(i))
     });
+    // --lua-env <snippets.txt>: the same in CSP's car physics state and csp::lua_env's (Task C6b)
+    let lua_env_file = arguments.iter().position(|a| a == "--lua-env").map(|i| {
+        arguments.remove(i);
+        full_path(&arguments.remove(i))
+    });
     // --inipp <list.txt>: CSP's own INIpp flatten of each ini of the list (Task C6a part 2)
     let inipp_list = arguments.iter().position(|a| a == "--inipp").map(|i| {
         arguments.remove(i);
@@ -2707,7 +2712,11 @@ fn main() {
             stop(0, "end of the run");
         }
         if let Some(file) = &lua_file {
-            lua::run(dll as usize, file);
+            lua::run(dll as usize, file, None);
+            stop(0, "end of the run");
+        }
+        if let Some(file) = &lua_env_file {
+            lua::run(dll as usize, file, Some(std::path::Path::new(&format!("{root}\\dwrite.dll"))));
             stop(0, "end of the run");
         }
         if let Some(file) = &inipp_list {

@@ -12,27 +12,31 @@ use rustyac_lua::sys::*;
 type B = Vec<u8>;
 
 /// CSP's `ini_std` (the expression library: `def`, `vec2`, `__conv_result`, ...) out of the
-/// installed dwrite.dll: a deflated zip entry, LuaJIT 2.1 bytecode with its own 4-byte magic.
+/// installed dwrite.dll, with LuaJIT's own magic.
 pub fn ini_std(dwrite: &Path) -> Option<B> {
+    let mut out = bundle_entry(dwrite, "ini_std")?;
+    out[..4].copy_from_slice(b"\x1bLJ\x02");
+    Some(out)
+}
+
+/// One library of the zip inside the installed dwrite.dll (`ac_common_base`, `lib_physics`, ...):
+/// a deflated entry, LuaJIT 2.1 bytecode with CSP's own 4-byte magic, as stored.
+pub fn bundle_entry(dwrite: &Path, name: &str) -> Option<B> {
     let d = std::fs::read(dwrite).ok()?;
     let u16at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]) as usize;
     let u32at = |i: usize| u32::from_le_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]]) as usize;
     let mut from = 0;
-    while let Some(p) = d[from..].windows(7).position(|w| w == b"ini_std").map(|p| p + from) {
+    while let Some(p) = d[from..].windows(name.len()).position(|w| w == name.as_bytes()).map(|p| p + from) {
         from = p + 1;
         let h = match p.checked_sub(30) {
-            Some(h) if d[h..h + 4] == *b"PK\x03\x04" && u16at(h + 26) == 7 => h,
+            Some(h) if d[h..h + 4] == *b"PK\x03\x04" && u16at(h + 26) == name.len() => h,
             _ => continue,
         };
         let (method, csize, usize_) = (u16at(h + 8), u32at(h + 18), u32at(h + 22));
-        let start = h + 30 + 7 + u16at(h + 28);
+        let start = h + 30 + name.len() + u16at(h + 28);
         let raw = d.get(start..start + csize)?;
-        let mut out = if method == 8 { miniz_oxide::inflate::decompress_to_vec(raw).ok()? } else { raw.to_vec() };
-        if out.len() != usize_ || out.len() < 4 {
-            return None;
-        }
-        out[..4].copy_from_slice(b"\x1bLJ\x02");
-        return Some(out);
+        let out = if method == 8 { miniz_oxide::inflate::decompress_to_vec(raw).ok()? } else { raw.to_vec() };
+        return (out.len() == usize_ && out.len() >= 4).then_some(out);
     }
     None
 }

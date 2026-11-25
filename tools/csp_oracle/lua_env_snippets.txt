@@ -1,0 +1,70 @@
+-- Task C6b: chunks run in CSP's car physics Lua state (its opener in mode 0, csp::lua_env's
+-- prelude, CSP's ac_common_base and ac_car_cphys from dwrite.dll) and in csp::lua_env's.
+-- None calls an ffi.C.lj_* native (none is ported yet); csp_oracle --lua-env.
+-- the state: libraries, globals, ac's keys
+return type(rawget(_G, 'jit')) .. type(rawget(_G, 'io')) .. type(rawget(_G, 'os')) .. type(bit.band) .. type(debug.getinfo) .. type(package.loaded.jit)
+return package.loaded.ffi == ffi and type(package.preload.ffi) == 'function'
+local t = {} for k in pairs(_G) do t[#t + 1] = tostring(k) end table.sort(t) return table.concat(t, ' ')
+local t = {} for k in pairs(ac) do t[#t + 1] = tostring(k) end table.sort(t) return table.concat(t, ' ')
+local t = {} for k, v in pairs(ac) do t[#t + 1] = k .. '=' .. type(v) end table.sort(t) return table.concat(t, ' ')
+local n = 0 for k in pairs(ac) do n = n + 1 end return n
+local t = {} for k in pairs(__util) do t[#t + 1] = tostring(k) end table.sort(t) return table.concat(t, ' ')
+local t = {} for k in pairs(__script) do t[#t + 1] = tostring(k) end table.sort(t) return table.concat(t, ' ')
+local t = {} for k in pairs(string) do t[#t + 1] = k end table.sort(t) return table.concat(t, ' ')
+local t = {} for k in pairs(table) do t[#t + 1] = k end table.sort(t) return table.concat(t, ' ')
+local t = {} for k in pairs(math) do t[#t + 1] = k end table.sort(t) return table.concat(t, ' ')
+local ok, e = pcall(function() return undefined_thing end) return e
+-- tostring as CSP prints (every address 0xff)
+return tostring(ac) .. tostring(vec3) .. tostring(tostring) .. tostring(coroutine.create(tostring))
+return tostring(ffi.new('int[2]')) .. tostring(ffi.cast('void *', 0))
+-- ffi.C: CSP's own names resolve, Windows' do not
+return tostring(ffi.C.lj_memoryBarrier)
+local ok, e = pcall(function() return ffi.C.GetCurrentProcessId end) return e
+-- vectors (pure Lua over FFI structs)
+return tostring(vec2(1, 2) + vec2(3, 4.5))
+return tostring(vec3(1, 2, 3):normalize())
+return vec3(1, 2, 3):normalize().y
+return tostring(vec3(1, 0, 0):cross(vec3(0, 1, 0)))
+return vec3(3, 4, 0):length()
+return vec3(1.1, 2.2, 3.3):lengthSquared()
+return vec3(1, 2, 3):dot(vec3(-4, 5, 0.25))
+return tostring(vec3(1, 2, 3) * 0.1 - vec3(0.3, 0.2, 0.1) / 3)
+return vec3(0.1, 0.7, 1.3):distance(vec3(-2, 0.5, 9))
+return tostring(vec3(1, 2, 3):clone():scale(1 / 3))
+return tostring(vec3(5, 0, 0):lerp(vec3(0, 5, 1), 0.3))
+return tostring(vec4(1, 2, 3, 4) * vec4(0.5, 0.25, 2, 1))
+return tostring(-vec3(1, -2, 3))
+return vec3(1, 2, 3) == vec3(1, 2, 3)
+return tostring(vec3.new(7, 8, 9))
+return tostring(vec3(1, 2, 3):set(4, 5, 6))
+return tostring(vec2(3, 4):normalize())
+return tostring(vec3(0.3, 0.4, 0.5):angle(vec3(1, 0, 0)))
+-- quaternions, colours, matrices
+return tostring(quat(0, 0, 0, 1):mul(quat(0, 0, 0, 1)))
+return tostring(quat.fromAngleAxis(0.5, vec3(0, 1, 0)))
+return tostring(quat.fromAngleAxis(1.25, vec3(1, 2, 3):normalize()):mul(quat.fromAngleAxis(-0.5, vec3(0, 0, 1))))
+return tostring(rgb(1, 0.5, 0):toHsv())
+return tostring(rgb(0.2, 0.4, 0.6) * 2)
+return tostring(rgbm(1, 0.5, 0.25, 0.8))
+return tostring(hsv(200, 0.5, 0.25):rgb())
+return tostring(mat3x3())
+return tostring(mat3x3(vec3(1, 2, 3), vec3(4, 5, 6), vec3(7, 8, 9)))
+-- classes, refs, ac_common_base's math.*
+local A = class('A') function A:initialize(x) self.x = x end return A(5).x
+local A = class('A') return tostring(A)
+return tostring(class)
+local r = refnumber(5) r.value = r.value + 1 return r.value
+local r = refbool(true) return tostring(r.value)
+return math.lerp and math.lerp(1, 3, 0.25)
+return math.clamp and math.clamp(5, 0, 3)
+return math.saturate and math.saturate(1.5)
+return math.round and math.round(2.5)
+-- CSP's table extension (in its LuaJIT, patched into rustyAC's)
+return table.nkeys({1, 2, x = 3, nil, 5})
+local f = require 'table.isarray' return f({1, 2, 3}) and not f({x = 1}) and f({[1.5] = nil, [3] = 1})
+return table.issequence({1, 2, 3}) and not table.issequence({1, nil, 3})
+local f = require 'table.isempty' return f({}) and not f({false})
+local t = table.clone({1, 2, x = {3}}) return #t .. type(t.x)
+return table.isArray and tostring(table.isArray({1, 2}))
+return tostring(table.contains({1, 2, 3}, 2)) .. table.indexOf({5, 6, 7}, 7)
+return table.concat(table.map({1, 2, 3}, function(x) return x * 2 end), ',')

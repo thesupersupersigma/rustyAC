@@ -498,8 +498,9 @@ read further), aliasing through tables.
 
 ## 8. Open questions and not mapped
 
-1. How `__allowIO__` is decided and whether `io.open`, `io.popen`, `loadstring`, `debug.*`, `os.exit` are removed in
-   no-IO kinds: needs 0x136f620 (4,691 B) read fully.
+1. Answered for the car physics kind in docs/csp/lua_host.md "C6b part 1" (the RVAs here are an earlier dwrite.dll;
+   in build 4305 the set-up is 0x13e25e0): `__allowIO__` comes from the script host (vtable +112), mode 0 opens no
+   io/os/jit, `ac_common_base` makes its own `io`/`os` tables.
 2. How the game calls into Lua per kind (UI frame, render pass callbacks, sim update, replay): the hooked caller
    functions are not identified except `Car::pollControls`. The host's scheduler is in the 0x136xxxx..0x138xxxx range.
 3. The Lua preprocessor: what `const()` and other transformations do; whether `---@ext` (top comment of many VRC
@@ -537,8 +538,7 @@ read further), aliasing through tables.
 
 ## Decompile requests
 
-1. `dwrite.dll` 0x136f620 (4,691 B): list every native bound into the Lua environment and show where `__allowIO__`,
-   `__mode__` are set (sandbox rules).
+1. Done (C6b part 1, build 4305 0x13e25e0): docs/csp/lua_host.md.
 2. 0x1373420, 0x13743f0, 0x1374a50, 0x1374cb0: the load pipeline (p0 / p1 / sync), bytecode cache key and the
    preprocessor invocation (0x1372bd0).
 3. 0x1375740, 0x1375c60, 0x136d110: how an `update` is invoked (thread, error handling, timing) and the per-kind
