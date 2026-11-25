@@ -20,6 +20,9 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   Windows'). L6's sound done (12.3: FMOD Engine 2.03 native, call logs identical to the page's on
   the 18 drives and to the game's on the 3 end-to-end rows), its licence text and required-files
   list too, split into the base game and one list per DLC (12.3). **P3b done**; next is L7 (12.4).
+- **P3c (branch `web`), section 13:** L7 parts 1 and 2 committed (13.1: imports, zip, the lists'
+  checks; 13.2: the launcher on wry with the chooser, built, not yet proved: the page stalls in WSL).
+  **Resume at 13.3** (L7's proof, then L8).
 
 ## 1. Plain-English summary
 
@@ -921,3 +924,118 @@ same 37.4 GB on today's install). Checks: `web_pack` clippy `-D warnings --all-t
   18 IDENTICAL on its rerun (its one difference in the first run was the flags check: `docs/flags.md`
   now lists `--required`) (`quick_l5.log`,
   `quick_l6_browser.log`).
+
+## 13. Task P3c: the launcher on wry, the game-files chooser, packaging (L7 to L8)
+
+### 13.1 L7 part 1: the portable pieces (done, `rustyac-content`)
+
+For every platform (the web build and the Windows launcher wire them in with Task W5):
+
+- **`imports`**: what a chosen folder or zip holds: the whole game (`content` with cars or
+  tracks, and `system`), cars and / or tracks (`content/cars|tracks`, `cars|tracks`), or one car
+  (`data.acd` or `data/`, and `ui/ui_car.json`) or one track (`models*.ini` or a `.kn5`, and
+  `ui/`); a folder or zip with only one folder in it is looked into (a zip of a folder).
+  **`Layers`** lays the extra imports' cars and tracks over the base's `content/cars` and
+  `content/tracks` (the base wins, then the first extra), reads every file in place, and is a
+  `vfs::Vfs`, so the game's readers need nothing new; a zip base stands at `<zip>/<folder>`.
+  `Layers::open` gives the player's messages ("Assetto Corsa's install folder wasn't found:
+  choose the folder with the game files", "… holds cars or tracks only …", "… holds no cars or
+  tracks …"). **`Remembered`**: the choice in `game_files.txt` (`root=`, `extra=`) under
+  `$XDG_CONFIG_HOME/rustyAC` (else `~/.config`), `~/Library/Application Support` on macOS,
+  `%APPDATA%` on Windows.
+- **`zip`**: only the central directory is read when the zip is opened; each file is read out of
+  the archive when asked for and checked against its CRC; zip64; stored and deflate (anything
+  else, or an encrypted entry: "unzip it and choose the folder"). `miniz_oxide` and `crc32fast`,
+  already in the tree, pure Rust.
+- **`required`**: `base.json` and the `dlc_<app>.json` lists (12.3) read back; `check_full`
+  ("this folder is not a complete Assetto Corsa: N files of the base game are missing:
+  content/cars/abarth500 (2 files), system/data (1 file), …"), `check_pick` ("this car needs the
+  Japanese Pack DLC"), `loads` for anything in no list (the car's data and the models its
+  `lods.ini` names, or the layout's models, opened as kn5; a model carrying a DLC's key needs that
+  DLC's files). The DLC table (key, app, name) moved here from `web_pack`, which uses it.
+- Tests on made-up folder trees and zips (built in the test, zip64 too): 9 kinds of folder and
+  their zips, layered reads, the messages, a mod's DLC key; and on this PC the real lists against
+  the real install (11,016 base files there, a base car loads). Linux, Windows and both wasm
+  targets clippy clean.
+
+### 13.2 L7 part 2: the launcher on Linux (built, not yet proved)
+
+- `crates/rustyac-launcher/src/shell_gtk.rs` (the module `shell` on Linux) and `sys_unix.rs` (the
+  bridge's host from GDK / GLib): a GTK window with WebKitGTK 4.1 through `wry` 0.58 (no tao, no
+  x11 feature), the same `Bridge`, theme, script steps and log as the WebView2 shell. The pieces
+  that do not depend on the browser moved verbatim from `shell.rs` to `page.rs` (theme, events,
+  steps, the wizard script, the controls page, Drive's command line, which now spells its paths
+  the system's way through `os_path`: unchanged on Windows).
+- **The bridge's synchronous requests:** WebKitGTK's custom schemes (and WKWebView's) give no
+  synchronous loads, and the theme's `$.ACCall` is `async: false`: the first synchronous request
+  failed inside WebKit ("loadResourceSynchronously … internal error") and the page hung. The
+  page's XMLHttpRequests now go to a small server of the launcher's on 127.0.0.1 (a free port, a
+  random token in every path, one write per answer: two writes waited on the delayed ACK, 50 ms a
+  request), which hands each to the main loop; `http://ac/` POSTs (CEF's
+  `OnBeforeResourceLoad`) are rewritten in the same hook. URLs are spelled as Chromium spells them
+  (host lower case, an empty path `/`), so the log matches Windows'. A scripted run's proxy
+  (127.0.0.1:9) leaves 127.0.0.1 alone.
+- **The chooser** (`choose_game_files`, before the theme unless `AC_ROOT`, `--ac-root`, a script
+  or a transcript names the folder; `--choose-files` brings it back): the remembered choice when
+  it still opens and checks out, else rustyAC's own page: "Assetto Corsa found in <folder>. N cars
+  and M tracks." or the message of 13.1, **Change… (a folder)** / **Change… (a zip)**, **Extra cars
+  and tracks** (Add a folder… / Add a zip… / Remove), **Continue** only when the choice checks out
+  against `required/base.json` beside the program. GTK's native file chooser (portals where the
+  desktop has them).
+- **Drive** checks the race's track and every distinct car (`check_pick`, else `loads`) and shows
+  the message instead of starting the game. The game gets `AC_ROOT`, or `RUSTYAC_GAME_FILES` (the
+  remembered file) when a zip or extra roots are in the choice: the game (off Windows) then mounts
+  the same layers at its start (`Remembered::mount_file`). FMOD's `loadBankFile` takes a bank the
+  disk does not have from the mounted files (`LoadBankMemory`, `fmod/native.rs`).
+- New crates (Linux only; every Windows entry of the lock file keeps its version, only second
+  versions were added): `wry`, `gtk`, `webkit2gtk` and what they pull, in `LICENSING.md`
+  (61 names, and WebKitGTK's own entry). `docs/flags.md`: `--choose-files`, `RUSTYAC_GAME_FILES`.
+
+**Measured, and where it stops.** Under Xvfb in WSL (`re/scratch/taskP3/l7_run.sh <name>`: a
+click script of `tools/proofs/launcher/`, X11, WebKit's caches in the run's folder) the theme
+loads and 2,600 to 2,700 bridge requests are answered, then the page stalls. Two causes found:
+
+1. **WSL's `/mnt/c` is 33 times slower than Windows for the bridge's listing work**:
+   `listcars` + `listtracks` + `listspecialevents` take **337 s** on Linux through 9P against
+   **10.4 s** on Windows (`l7_time.sh`, the same three requests through `--transcript`). The main
+   loop is busy that long.
+2. While it is busy, the page's synchronous requests fail in WebKit with `NetworkError: A network
+   error occurred` without reaching the server (`uimessage`, `carcount`, `uiready`, `getresults`…;
+   a lone synchronous request on a free main loop is answered with status 200). Not yet known: a
+   WebKit / libsoup limit (connections per host, a time limit) or something of the server's.
+
+On a native Linux disk the listing should take about what Windows takes; this PC cannot show it
+(the repo and AC's files are on `/mnt/c`, and files stay in the repo, rule 6).
+
+### 13.3 Resume here (P3c)
+
+- **Done and committed:** 13.1 (part 1) and 13.2 (part 2, built and clippy clean everywhere).
+  Windows: the launcher area's quick proof **1 / 1 IDENTICAL** (`l7_quick_launcher.log`); every other area skipped
+  because no Windows code path of theirs changed (the content modules are new, the `desktop.rs`
+  and `fmod/native.rs` changes are `cfg(not(windows))`, the lock file keeps every Windows version).
+- **Next (L7, about one session):**
+  1. Find the `NetworkError`: hold the main loop on purpose (a test-only delay) for 5 s and 70 s
+     before answering, to tell a time limit from a connection limit; if the main loop is the
+     cause, answer the bridge on a thread of its own (the `Bridge` behind a mutex, events and log
+     to the main loop) so a long listing never stalls the page's other requests.
+  2. The proof: record **fresh Windows request lists** into scratch (not `re/gold/launcher`, which
+     was recorded before this install's mods changed: 62 tracks and 207 cars there, 71 and 210
+     now) with `launcher_record.sh`'s steps, run the same scripts on Linux (`l7_run.sh`), compare
+     the lists without jQuery's `_=<time>`, and the `race.ini` each writes. Then the transcripts:
+     every `re/gold/launcher` list through Linux's `--transcript --fixed-host` against Windows'.
+  3. `ipc` messages (the page's console through `REPORT_JS`) do not reach the log on Linux; the
+     console goes to the launcher's own output (`enable-write-console-messages-to-stdout`) for
+     now. Find why.
+  4. A zip end to end: the game's readers that use `std::fs` directly (`render/gui.rs`,
+     `gui_apps.rs`, `conditions.rs`, … about 70 calls) and whether any of them reads AC's own
+     folder.
+  5. A real Linux disk (the tester, L8) settles cause 1 of 13.2.
+- **Then L8:** `release.yml`'s Linux row (the two programs, FMOD's Linux libraries and their EULA
+  credit, `required/`, `THIRD_PARTY_NOTICES.txt` made again with `tools/notices.py` since the lock
+  file changed), the tar.gz, what a player needs (Vulkan drivers, `libwebkit2gtk-4.1`), and the
+  tester's kit (CachyOS: `webkit2gtk-4.1`, `vulkan-icd-loader` and the GPU's Vulkan driver,
+  `sdl3` if it is not static; one script that runs the checklist and packs the logs).
+- **Open question for Super:** letter case. On a real Linux disk a Proton install keeps Windows'
+  file names, but the game and the theme ask for files in whatever case their code spells them;
+  Windows and `/mnt/c` do not care, ext4 does. The tester's run will show whether a lookup that
+  ignores case is needed (the zip reader already ignores it).
