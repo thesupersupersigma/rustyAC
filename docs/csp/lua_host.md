@@ -8,7 +8,8 @@ C6a part 1, C6a-2a and C6a-2b are done (below): rustyAC's INIpp (`rustyac_physic
 all 261 files as CSP does, with Lua on (`flatten_lua`, rustyac-lua's LuaJIT, feature `lua`) and off
 (proof case `csp inipp` runs Lua on). Next: **C6a-2c**: the car/track config order (which files, in which
 order, with `read`/`has`/`get`/`set` answering from the car and the config being loaded), `@GENERATOR`,
-`CspFeatures` from the flattened text, and rustyac.exe linking LuaJIT.
+`CspFeatures` from the flattened text, and rustyac.exe linking LuaJIT. C6a-2c so far: `@GENERATOR` ported
+(`Parser::generator`; CSP's results for probes q/gen1..5 and unit test `generator_like_csp`).
 
 ## C6a-2b: INIpp with Lua
 
@@ -52,10 +53,10 @@ the state, `eval`, `function`, `use_file`, `read`/`has`/`get`/`set`). Feature `l
 pulls rustyac-lua with `luajit` and miniz_oxide; off by default, so rustyac.exe and the browser build do
 not link LuaJIT.
 
-Not done (shortcuts in the code; none reached by the 261 files): `@GENERATOR` (sub_181493780, a template
-instantiated per number, Lua or not: only in templates the corpus never instantiates), `read`/`has`/
-`get`/`set` answering from a real car and config (C6a-2c), mixin arguments without `=` (CSP sets them to
-`1`). Known difference outside the corpus: CSP's LuaJIT fork numbers its builtins differently
+Not done (shortcuts in the code; none reached by the 261 files): `read`/`has`/`get`/`set` answering
+from a real car and config (C6a-2c), mixin arguments without `=` (CSP sets them to `1`),
+`@GENERATOR_STARTING_INDEX` (named in docs/csp/rendering_config.md, in no installed config; our
+`@GENERATOR...` prefix match would take it for a generator). `@GENERATOR` is done in C6a-2c (below). Known difference outside the corpus: CSP's LuaJIT fork numbers its builtins differently
 (`tostring(print)` is `builtin#0` there, `#30` in upstream), so `pairs` over `_G`/`math`/`string` and
 `tostring` of a builtin differ.
 

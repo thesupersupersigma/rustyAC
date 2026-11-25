@@ -416,7 +416,11 @@ impl Parser {
                 continue;
             }
             if k.starts_with(b"@GENERATOR") {
-                // shortcut: `@GENERATOR` template instances (sub_181493780, Lua or not) are not ported, none in the 261-file corpus outside templates; port in C6a-2c with the car/track config order
+                let mut s = sc.clone();
+                s.extend([target.clone(), args.clone()]);
+                if let Some(items) = self.expand(k, v.clone(), &scope(sec, &target)) {
+                    self.generator(sec, &items, &s);
+                }
                 continue;
             }
             if k == b"@" || k.starts_with(b"@MIXIN") {
@@ -478,6 +482,54 @@ impl Parser {
         self.apply(sec, &[b"\0".as_slice(), name].concat(), vars, &args, protect);
     }
 
+    /// `@GENERATOR = TEMPLATE, [count, ...], [FLAG | ARG = value, ...]` (sub_181493780): a new
+    /// section from the template (and its parents) per combination of the counts, `$1`, `$2`, ...
+    /// from 1, the last fastest; stored at once, before the section naming it; the host's keys are
+    /// variables, a bare `FLAG` is 1; no `@OUTPUT`: the unnamed section. A missing template is only logged.
+    fn generator(&mut self, host: &Section, items: &[B], vars: &[Vars]) {
+        let Some(name) = items.first().filter(|n| !n.is_empty()) else { return };
+        let mut s = vars.to_vec();
+        s.push(host.keys.clone());
+        let (mut args, mut counts): (Vars, Vec<i64>) = (Vec::new(), Vec::new());
+        for it in &items[1..] {
+            match it.iter().position(|&c| c == b'=') {
+                Some(e) => {
+                    let v = self.expand(b"", split(trim(&it[e + 1..]), false), &s).unwrap_or_default();
+                    set_var(&mut args, trim(&it[..e]).to_vec(), v);
+                }
+                None if trim(it).first().is_some_and(u8::is_ascii_digit) => counts.push(atoi(trim(it))),
+                None => set_var(&mut args, trim(it).to_vec(), vec![b"1".to_vec()]),
+            }
+        }
+        let (mut chain, mut late) = (Vec::new(), Vec::new());
+        self.template_chain(name, &mut chain, &mut late);
+        chain.extend(late);
+        let mut idx = vec![1i64; counts.len()];
+        loop {
+            let mut a = args.clone();
+            for (i, v) in idx.iter().enumerate() {
+                set_var(&mut a, (i + 1).to_string().into_bytes(), vec![v.to_string().into_bytes()]);
+            }
+            let mut sec = Section::default();
+            for t in &chain {
+                self.apply(&mut sec, t, &s, &a, true);
+            }
+            self.finalize(&mut sec, &mut s.clone());
+            let mut i = counts.len();
+            loop {
+                if i == 0 {
+                    return;
+                }
+                i -= 1;
+                idx[i] += 1;
+                if idx[i] <= counts[i] {
+                    break;
+                }
+                idx[i] = 1;
+            }
+        }
+    }
+
     /// One `KEY=value` into a section (sub_1814973D0).
     fn commit(&mut self, sec: &mut Section, t: &[u8], vstart: i64, vend: i64, key: &[u8], vars: &mut [Vars]) {
         if key.is_empty() {
@@ -529,7 +581,7 @@ impl Parser {
             return;
         }
         if key.starts_with(b"@GENERATOR") {
-            // shortcut: `@GENERATOR` not ported, see `apply`
+            self.generator(sec, &items, vars);
             return;
         }
         if key == b"@ERASE_REFERENCED" && sec.name == b"@INIPP" {
@@ -1341,6 +1393,18 @@ mod tests {
         assert_eq!(items(", ,"), ["", "", ""]);
         assert_eq!(items("spaced  ,  out"), ["spaced", "out"]);
         assert_eq!(items("\"x\\ny\\tz\\q\""), ["x\ny\tz\\q"]);
+    }
+
+    #[test]
+    fn generator_like_csp() {
+        // CSP's own result for this file (C6a-2c probe q/gen5.ini, Lua off and on)
+        let ini = "[TEMPLATE: _P]\nP = $1\n[TEMPLATE: _G1 EXTENDS _P]\n@OUTPUT = OUT_...\nA = ${Host:?}\nF = ${Flag:?}\nN = $Name\n\
+                   [OUT_...]\nHost = h\nX = 1\n@GENERATOR = _G1, 2, Flag, Name = $Host\n[TEMPLATE: _G2]\nK = $1\n[]\n@GENERATOR = _G2, 2\n";
+        let path = std::env::temp_dir().join(format!("rustyac_inipp_gen_{}.ini", std::process::id()));
+        std::fs::write(&path, ini).unwrap();
+        let out = flatten(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(out.unwrap(), "K=2\n\n[OUT_0]\nA=h\nF=1\nN=h\nP=1\n\n[OUT_1]\nA=h\nF=1\nN=h\nP=2\n\n[OUT_2]\nHost=h\nX=1\n\n");
     }
 
     #[test]
