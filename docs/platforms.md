@@ -19,7 +19,7 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   against kernel devices made with `uinput`). L5 done (12.2: `/dev/shm`, pages byte-identical to
   Windows'). L6's sound done (12.3: FMOD Engine 2.03 native, call logs identical to the page's on
   the 18 drives and to the game's on the 3 end-to-end rows), its licence text and required-files
-  list too; next: the list split into the base game and one list per DLC (12.4).
+  list too, split into the base game and one list per DLC (12.3). **P3b done**; next is L7 (12.4).
 
 ## 1. Plain-English summary
 
@@ -852,18 +852,63 @@ cars this install does not own. Against section 5's 38 GB for the whole folder: 
 drive reads (CSP, its content, unused files). Checks: `web_pack` clippy `-D warnings --all-targets`,
 its 6 tests; the `browser` area (its flags check now lists `--required`).
 
+**Split into the base game and the DLCs** (the lead chat's answer after session 1). How a car or
+track is assigned: by **the DLC key in its models' headers**, the game's own rule. A kn5 of
+version 6 and up carries a key after its version (0 for the base game); `KN5IO::load` refuses a
+model whose key the player's Steam account does not own, and `SteamInit` maps each key to a DLC's
+Steam app (`rustyac-game`'s `steam::DLC_KEYS`, 11 of them). The apps' names are Steam's own,
+from its local app cache (`appcache/appinfo.vdf`, each app's record read by its id and length,
+`re/scratch/taskP3/dlc_names.py`); Steam's install record (`appmanifest_244210.acf`) lists the
+same 11 apps as installed depots. Kunos' `dlc_ui_car.json` / `dlc_ui_track.json` markers (what the
+launcher shows a DLC badge for) agree with the keys on every marked car and track, but miss two
+Kunos cars that carry a DLC key without a marker (`ks_lamborghini_countach_s1`,
+`ks_lamborghini_gallardo_sl_s3`): the keys are the rule, the markers are not
+(`re/scratch/taskP3/dlc_survey.py`). `web_pack --required` now writes `base.json` (Kunos' content with
+key 0, the shared files, AC's launcher's), one `dlc_<app>.json` per DLC (its cars and tracks and
+their own launcher pictures, no shared files: checked only when one of them is picked, "this car
+needs the Dream Pack 1 DLC") and `everything.json` as before. A Kunos model with a key of no DLC
+in the table stops the run. Mods that reuse a DLC's models carry its key too (two here:
+`bdc_streetspec_ae86_v4`, Japanese Pack; `urd_darche_992_23`, Porsche Pack III): they stay in
+`everything.json` only, and L7's check of a mod (whether it loads) is where the missing DLC shows.
+
+| List (`re/scratch/taskP3/required/`, `l6d_required.log`) | Steam app | Cars | Tracks and layouts | **Size, files** | Steam's depot |
+|---|---|---|---|---|---|
+| `base.json`: the base game | 244210 | 86 | 36 | **17.6 GB, 11,016** (shared 1.18 GB, launcher 0.20 GB) | 27.5 GB |
+| `dlc_347990.json`: Dream Pack 1 | 347990 | 10 | 4 (`ks_nordschleife`: four layouts) | 2.04 GB, 1,128 | 2.82 GB |
+| `dlc_404430.json`: Dream Pack 2 | 404430 | 10 | 2 (`ks_barcelona`) | 1.23 GB, 1,046 | 1.70 GB |
+| `dlc_423630.json`: Dream Pack 3 | 423630 | 9 | 2 (`ks_brands_hatch`) | 1.23 GB, 978 | 1.96 GB |
+| `dlc_467980.json`: Japanese Pack | 467980 | 12 | 0 | 0.94 GB, 911 | 1.50 GB |
+| `dlc_493190.json`: Red Pack | 493190 | 7 | 2 (`ks_red_bull_ring`) | 1.21 GB, 801 | 1.73 GB |
+| `dlc_509350.json`: Tripl3 Pack | 509350 | 3 | 0 | 0.26 GB, 364 | 1.44 GB |
+| `dlc_526060.json`: Porsche Pack I | 526060 | 7 | 0 | 0.67 GB, 710 | 1.19 GB |
+| `dlc_540710.json`: Porsche Pack II | 540710 | 9 | 0 | 0.85 GB, 642 | 1.10 GB |
+| `dlc_540711.json`: Porsche Pack III | 540711 | 8 | 0 | 0.87 GB, 592 | 1.20 GB |
+| `dlc_619680.json`: Ready to Race Pack | 619680 | 10 | 0 | 0.95 GB, 875 | |
+| `dlc_675590.json`: Ferrari Pack (Steam's name; the 70th Anniversary pack) | 675590 | 7 | 0 | 0.75 GB, 651 | |
+| `everything.json`: DLCs and mods too | | 189 | 64 | **37.4 GB, 21,969** | |
+
+The base game and the 11 DLCs add up to session 1's Kunos list (28.6 GB, 178 cars, 46 tracks and
+layouts): nothing is lost or counted twice. Each list is smaller than its Steam depot (what no
+drive reads: unused files, CSP content). `everything.json` grew since session 1 (34.3 GB, 21,372
+files): the install's mod tracks changed in between, not the code (session 1's program gives the
+same 37.4 GB on today's install). Checks: `web_pack` clippy `-D warnings --all-targets`, its 7 tests
+(one new: a model's header names its DLC); `docs/flags.md` says what `--required` writes.
+
 ### 12.4 Resume here (P3b), plan changes, not done
 
-- **Resume at the required-files list's split** (the lead chat's answer: "base" is the game without
-  DLCs, each DLC its own list, checked when one of its cars or tracks is picked).
+- **P3b is done.** Next: L7 (the folder / zip chooser, which checks `base.json` and the DLC
+  lists), then L8 (the hardware list below).
 - Tools (`re/scratch/taskP3/`): `fakedev.py` + `l4run.sh` (L4, as root), `shm_win.ps1` /
   `shm_linux.sh` (L5; never while Assetto Corsa runs), `all.toml` + `web_pack --required` (L6's
   list), `tapes.sh` / `page18.sh` / `desk18.sh` / `snd_cmp.py`, `e2e_linux.sh`, `levels.py`,
   `listen.sh`, `smoke.sh` (L6's sound), `wsl.sh` / `wasm.sh` (builds, wasm clippy; run `wsl` with
   `MSYS_NO_PATHCONV=1` from Git Bash).
-- **Plan changes:** **L7**'s folder / zip check reads these manifests: ship `base.json` (made from
-  a full Kunos install: paths and sizes of Kunos' files, none of their content) with the native
-  zips; mods are checked when chosen (whether they load), since no shipped list can know them.
+- **Plan changes:** **L7**'s folder / zip check reads these manifests: ship `base.json` and the 11
+  `dlc_<app>.json` (made from a full Kunos install: paths and sizes of Kunos' files, none of their
+  content) with the native zips; missing base files: "this folder is not a complete Assetto
+  Corsa"; a picked car or track in a DLC list whose files are missing: "this car needs the <name>
+  DLC" (the names: the table in 12.3, to carry into L7's code). Mods are checked when chosen
+  (whether they load), since no shipped list can know them.
   **L8** gains the hardware list of 12.1 (a real wheel's force direction and DirectInput's
   rounding on Windows against Linux, real pedal ranges, hot-plugging, non-Xbox pads) and a
   real Linux PC's PulseAudio / PipeWire listen. Nothing else in L7 / L8 changes.

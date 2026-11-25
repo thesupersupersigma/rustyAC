@@ -8,7 +8,8 @@
 //! ```
 //!
 //! `--required <folder>` writes the native builds' required-files list instead of a pack:
-//! `base.json` and `everything.json`, paths and sizes only ([`required`]).
+//! `base.json`, one `dlc_<Steam app>.json` per DLC and `everything.json`, paths and sizes only
+//! ([`required`]).
 //!
 //! Reads which cars and tracks are wanted: from `--config`, else from `web/my_pack.toml` when
 //! that file exists (your own list, ignored by git), else from `web/preview.toml` (two cars,
@@ -686,32 +687,76 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Assetto Corsa's DLCs: the key a DLC's models carry in their header (`rustyac-game`'s
+/// `steam::DLC_KEYS`, the game's own table), its Steam app, and its name in Steam's own app
+/// cache (`appcache/appinfo.vdf`).
+const DLCS: [(u32, u32, &str); 11] = [
+    (0xa4691, 347990, "Dream Pack 1"),
+    (0xdeafd, 404430, "Dream Pack 2"),
+    (0xbebb1, 423630, "Dream Pack 3"),
+    (0x3b787, 467980, "Japanese Pack"),
+    (0xb5735, 493190, "Red Pack"),
+    (0x4c791, 509350, "Tripl3 Pack"),
+    (0xe09a1, 526060, "Porsche Pack I"),
+    (0xcc03f, 540710, "Porsche Pack II"),
+    (0x905f2, 540711, "Porsche Pack III"),
+    (0x7e4bf, 619680, "Ready to Race Pack"),
+    (0xdebda, 675590, "Ferrari Pack"),
+];
+
+/// The DLC key in the header of an item's models (kn5 version 6 and up; `KN5IO::load` refuses
+/// a model whose key the Steam account does not own): 0 for the base game.
+fn dlc_key(root: &Path, item: &Item) -> u32 {
+    item.files.iter().filter(|(path, _)| path.to_ascii_lowercase().ends_with(".kn5")).find_map(|(path, _)| {
+        let mut head = [0u8; 14];
+        std::io::Read::read_exact(&mut std::fs::File::open(root.join(path)).ok()?, &mut head).ok()?;
+        let key = u32::from_le_bytes(head[10..14].try_into().unwrap());
+        (&head[..6] == b"sc6969" && u32::from_le_bytes(head[6..10].try_into().unwrap()) > 5 && key != 0).then_some(key)
+    }).unwrap_or(0)
+}
+
 /// `--required <folder>`: the native builds' required-files list (`docs/platforms.md`, section
-/// 5) as two manifests, `base.json` (Kunos' cars and tracks, its DLCs too) and
-/// `everything.json` (mods as well): paths and sizes, nothing copied, no hashes. The shared
-/// files and AC's launcher's are in both.
+/// 12.3) as manifests, paths and sizes only, nothing copied, no hashes: `base.json` (Kunos' cars
+/// and tracks of the game without DLCs, the shared files, AC's launcher's), `dlc_<Steam app>.json`
+/// for each DLC (its cars and tracks and their launcher pictures: checked when one is picked)
+/// and `everything.json` (DLCs and mods too, the shared and launcher files).
 fn required(folder: &Path, root: &Path, cars: &[Item], tracks: &[Item], shared: &BTreeMap<String, u64>) -> Result<(), String> {
     std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    for (name, mods) in [("base", false), ("everything", true)] {
+    let keys: Vec<u32> = cars.iter().chain(tracks).map(|item| dlc_key(root, item)).collect();
+    if let Some((key, item)) = keys.iter().zip(cars.iter().chain(tracks)).find(|(&key, item)| key != 0 && !item.is_mod && !DLCS.iter().any(|d| d.0 == key)) {
+        return Err(format!("{}'s models carry the DLC key {key:#x}, which is in no DLC of the table", item.id));
+    }
+    let global = launcher_files(root, &[], &[]);
+    let lists = [("base".to_string(), "the base game".to_string(), Some(0))].into_iter().chain(DLCS.iter().map(|&(key, app, name)| (format!("dlc_{app}"), name.to_string(), Some(key)))).chain([("everything".to_string(), "everything".to_string(), None)]);
+    for (name, title, key) in lists {
+        let in_list = |index: usize, item: &Item| key.is_none_or(|key| !item.is_mod && keys[index] == key);
+        let whole = key.is_none_or(|key| key == 0);
         let mut manifest = Manifest::default();
         let add = |manifest: &mut Manifest, files: &mut dyn Iterator<Item = (&String, &u64)>| -> Vec<usize> {
             files.map(|(path, bytes)| manifest.file(PackFile { path: path.clone(), bytes: *bytes, sha256: String::new() })).collect()
         };
-        for (items, kind) in [(cars, 0), (tracks, 1)] {
-            for item in items.iter().filter(|item| mods || !item.is_mod) {
+        for (items, kind, first) in [(cars, 0, 0), (tracks, 1, cars.len())] {
+            for (_, item) in items.iter().enumerate().filter(|(i, item)| in_list(first + i, item)) {
                 let files = add(&mut manifest, &mut item.files.iter().map(|(path, bytes)| (path, bytes)));
                 let entry = PackItem { id: item.id.clone(), layout: item.layout.clone(), name: item.name.clone(), pinned: false, missing_shaders: item.missing_shaders.clone(), files };
                 if kind == 0 { manifest.cars.push(entry) } else { manifest.tracks.push(entry) }
             }
         }
-        manifest.shared = add(&mut manifest, &mut shared.iter());
+        if manifest.cars.is_empty() && manifest.tracks.is_empty() {
+            continue;
+        }
+        if whole {
+            manifest.shared = add(&mut manifest, &mut shared.iter());
+        }
         let ids = |items: &[PackItem]| items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
-        let launcher = launcher_files(root, &ids(&manifest.cars), &ids(&manifest.tracks));
+        let mut launcher = launcher_files(root, &ids(&manifest.cars), &ids(&manifest.tracks));
+        // (a DLC's list: only its own cars' and tracks' launcher files)
+        launcher.retain(|path, _| whole || !global.contains_key(path));
         manifest.launcher = add(&mut manifest, &mut launcher.iter());
         let file = folder.join(format!("{name}.json"));
         std::fs::write(&file, manifest.to_json()).map_err(|e| format!("{}: {e}", file.display()))?;
         println!(
-            "{name}: {} cars ({}), {} tracks and layouts ({}), shared {}, launcher {}: {} in {} files -> {}",
+            "{name} ({title}): {} cars ({}), {} tracks and layouts ({}), shared {}, launcher {}: {} in {} files -> {}",
             manifest.cars.len(),
             megabytes(manifest.cars.iter().map(|item| manifest.bytes_of(&item.files)).sum()),
             manifest.tracks.len(),
@@ -867,6 +912,22 @@ mod tests {
         // (stHalf has no _vs.fxo: AC's renderer refuses it too)
         assert_eq!(missing_shaders(&root, &files), ["stHalf", "stPerPixelNM_UVflow"]);
         assert!(missing_shaders(&root, &files[..0]).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_model_s_header_names_its_dlc() {
+        let root = std::env::temp_dir().join(format!("web_pack_dlc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("content/cars/c")).unwrap();
+        let head = |version: u32, key: u32| [b"sc6969".as_slice(), &version.to_le_bytes(), &key.to_le_bytes()].concat();
+        std::fs::write(root.join("content/cars/c/a.kn5"), head(6, 0)).unwrap();
+        std::fs::write(root.join("content/cars/c/b.kn5"), head(6, 0x3b787)).unwrap();
+        // version 5 has no key: what follows is the texture count
+        std::fs::write(root.join("content/cars/c/old.kn5"), head(5, 7)).unwrap();
+        let item = |files: &[&str]| Item { id: "c".into(), layout: String::new(), name: String::new(), is_mod: false, pinned: false, files: files.iter().map(|f| (format!("content/cars/c/{f}"), 0)).collect(), missing_shaders: Vec::new() };
+        assert_eq!(dlc_key(&root, &item(&["a.kn5", "b.kn5", "data.acd"])), 0x3b787);
+        assert_eq!(dlc_key(&root, &item(&["a.kn5", "old.kn5"])), 0);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
