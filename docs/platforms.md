@@ -14,7 +14,9 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
 - Next: Super merges and reruns the workflow (10.5); its rows should match section 3.4. Then P3,
   the native game from section 8's L1, starting with the list in 10.4.
 - **P3 (Task P3a, branch `web`): done (section 11).** L1 (11.2), L2 + L3 (11.3, 11.4), the frame
-  check against the page's Full mode, the physics dumps and quitting (11.5). Next: L4 (11.6).
+  check against the page's Full mode, the physics dumps and quitting (11.5).
+- **P3b (branch `web`), section 12:** L4 done (12.1: pads, wheels, force feedback on SDL3, proved
+  against kernel devices made with `uinput`). Next: L5 (`/dev/shm`), then L6.
 
 ## 1. Plain-English summary
 
@@ -673,3 +675,75 @@ button's `WM_DELETE_WINDOW`; `head_int.sh` for a headless run):
   `re/scratch/taskP2/target-linux/{debug,release}/rustyac`, `release/examples/full_frame`.
 - Not done, for later: kgl on wgpu's GL backend (section 8's "Later"); the window grabs' colours
   (a tool's fault, 11.4); the dumps of all 228 drives (only the quick six ran).
+
+## 12. Task P3b: pads, wheels, shared memory, sound (L4 to L6)
+
+### 12.1 L4: pads and wheels with force feedback (SDL3)
+
+The Windows files are untouched. Linux gets the same two device layers that AC's classes sit on,
+built on SDL3 (already linked statically since P3a), so `pad.rs`'s `JoypadCarControl` and
+`wheel.rs`'s `DiCarControl` (the ported arithmetic: dead zones, curves, gamma, filters) run
+unchanged on the same numbers as on Windows.
+
+- **Pads** (`input/xinput_sdl.rs`, `pad::XInput` on Linux): the first SDL gamepad that is not a
+  wheel, turned back into the `XINPUT_GAMEPAD` Windows reads. SDL defines its values from
+  XInput's in its own XInput backend (`SDL_xinputjoystick.c`: the sticks' y as `~y`, a trigger
+  byte `b` as `b * 257 - 32768`, then the gamepad's 0..32767); `xinput_sdl::pad_state` undoes
+  exactly that. Linux's `xpad` driver reports the same (`~y`, triggers 0..255, which SDL's evdev
+  scaling turns into the same `b * 257 - 32768`). Buttons by position (south = A ...). Rumble:
+  `SDL_RumbleGamepad` with XInput's two motor words (`pad::motor_word`), restarted on each send
+  (XInput keeps a level until the next call; SDL's lasts its duration, 65 s).
+- **Wheels** (`input/dinput_sdl.rs`, replacing P3a's `dinput_none.rs`): DirectInput's calls
+  (`open`, `poll`, `state`, `enable_ff`, `send_ff`, the device list) on SDL's joysticks and haptics.
+  - Values: SDL scales an evdev axis from the device's range to -32768..32767 in float
+    (`AxisCorrect`); the raw value is found again from the range (read from the device,
+    `EVIOCGABS`) and mapped to DirectInput's -10000..10000 as `MulDiv` does it (Wine's
+    `joystick_map_axis`; Windows' own rounding is the one thing not measured, section 12.3).
+  - Force: one constant force on SDL's steering axis (`SDL_HAPTIC_STEERING_AXIS`, Linux direction
+    0x4000), endless, the wheel's auto-centre off (AC's `DIPROPAUTOCENTER_OFF`), capped at 30 % as
+    on Windows. The level sent is the smallest that SDL's own DirectInput backend turns back into
+    DirectInput's magnitude (`level * 10000 / 0x7fff`), so both systems mean the same force.
+  - Not as on Windows: no exclusive access (evdev has none for force feedback); a device
+    unplugged and plugged in again is found at the next start only.
+
+**How a Windows `controls.ini` maps on Linux** (read and written as on Windows; `rustyAC`
+writes only its own `rustyac_controls.ini`, which on Linux keeps `[CONTROLLERS]` too):
+
+| Key | Windows (acs.exe) | Linux (rustyAC) |
+|---|---|---|
+| `JOY=n` | the n-th device of DirectInput's enumeration (the game never reads `[CONTROLLERS]`; CSP re-sorts by it) | the device whose product GUID is `[CONTROLLERS] PGUIDn`, built from SDL's vendor and product ids (`C24F046D-0000-0000-0000-504944564944` is a G29); a listed device that is missing keeps its number, empty ("not connected"); unlisted devices follow in SDL's order. No `[CONTROLLERS]`: SDL's order. `__IGUIDn` (instance GUIDs) and `CONn` (Windows' names) are not used: neither exists on Linux |
+| `AXLE=k` | `DIJOYSTATE2`'s slot: X, Y, Z, Rx, Ry, Rz, slider 0, slider 1 | the same slot: Linux's `hid-input` gives HID's X..Rz, Slider and Dial the evdev codes 0..7 in that order; SDL numbers only the axes a device has, so the codes come from the device (`EVIOCGBIT`). Other codes (`ABS_WHEEL`, `ABS_GAS`...) get no slot |
+| `BUTTON=b` | DirectInput's button b | SDL's button b (evdev's key codes in order from `BTN_JOYSTICK`, as `hid-input` numbers HID buttons) |
+| `INPUT_METHOD=X360`, `[X360]` | XInput pad 0 | the first SDL gamepad that is not a wheel; an Xbox-layout pad is listed under its `JOY` number but read as the pad, as Windows does with XInput's twin |
+
+**Proof in WSL** (`re/scratch/taskP3/`): WSL has no pads, but its kernel has `uinput` and evdev
+as modules. `fakedev.py` (as root) makes two kernel devices, an Xbox 360 pad as `xpad` reports one
+(045e:028e) and a Logitech G29 (046d:c24f) with force feedback (`FF_CONSTANT`, `FF_GAIN`,
+`FF_AUTOCENTER`) and axes X (0..65535), Z and Rz (0..255), a 10-bit slider and a hat, but **no Y**
+(so the slot map is tested), sets them to raw values and sends the same values to the example
+`linux_input_check` (`l4run.sh`). That goes further than SDL's virtual joystick, which the prompt
+named: the virtual joystick skips the kernel, SDL's evdev code and its pad mappings, and has no
+haptic, so force feedback could not have come out of it. The example reads the devices through the
+Linux path and computes Windows' (XInput's raw state as it is; DirectInput's value of the raw
+value), runs both through AC's classes and compares; the script answers the kernel's force
+uploads and compares each with DirectInput's magnitude. Bindings: AC's defaults, `[CONTROLLERS]`
+with the pad as JOY 0 and the wheel as JOY 1, while SDL lists the wheel first.
+
+| Check | Result |
+|---|---|
+| unit tests (Linux): every XInput stick value and trigger byte back through SDL's numbers; every raw value of the ranges 0..255, 0..1023, 0..4095, 0..16383, 0..65535, -32768..32767, -511..512 through SDL's float scaling to DirectInput's value; every magnitude -10000..10000 back out of SDL's DirectInput backend; the `[CONTROLLERS]` order; the slot map | pass (`l4_b2.log`) |
+| the device list | JOY 0 the pad (read as the pad), JOY 1 the G29 (steering wheel, force feedback, steers), as `[CONTROLLERS]` says |
+| 400 pad states (random, the dead zone's edges, the ends), `JoypadCarControl` on both | **400 IDENTICAL** (`l4_run2.log`) |
+| 400 wheel states (all four axes, hat, 16 buttons), DirectInput's state and `DiCarControl` on both | **400 IDENTICAL** (before the range fix: 32 one-unit misses on the 10-bit slider, `l4_run1.log`) |
+| 53 forces (0, ±1, ±1.5, NaN, tiny, random), what reached the kernel vs DirectInput's magnitude | **53 IDENTICAL**: constant force, direction 0x4000, endless, level back to the magnitude; unchanged magnitudes send nothing, as on Windows |
+| 6 rumbles (0, 1, over 1, below 0, NaN) | **6 IDENTICAL**: the kernel's strong / weak = XInput's motor words |
+| the wheel's set-up | the kernel saw gain 100 % and auto-centre 0 |
+| clippy `-D warnings --all-targets -p rustyac-game` (Linux with `wgpu`; Windows with and without); wasm32 clippy (`rustyac-web` all targets, wasip1 lib + bins) | clean |
+
+**Needs real hardware (L8):** a wheel's force direction (SDL's 0x4000 with a positive level is the
+convention, but each kernel driver turns it into its own motor sign: a real wheel must pull the way
+the car does); Windows' DirectInput rounding of a device range to ±10000 (the MulDiv model is
+Wine's: read one wheel's raw values on both systems); pedal and wheel ranges and the axis codes
+real drivers give (Logitech's `hid-logitech`, Fanatec's `hid-fanatecff`, Moza and Simagic on
+`hid-pidff`); hot-plugging; SDL's mapping for pads other than Xbox ones (a DualShock is a gamepad on
+Linux but a plain DirectInput device on Windows, where AC can't use it as the pad).

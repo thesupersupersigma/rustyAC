@@ -283,6 +283,11 @@ pub fn effective(source: &ControlsIni) -> ControlsIni {
             ini.set(section, &key, source.get_string(section, &key));
         }
     }
+    // Linux finds `JOY` n's device by `[CONTROLLERS] PGUIDn` (input/dinput_sdl.rs)
+    #[cfg(target_os = "linux")]
+    for key in source.keys("CONTROLLERS") {
+        ini.set("CONTROLLERS", &key, source.get_string("CONTROLLERS", &key));
+    }
     if !ini.has_section("KEYBOARD") {
         // AC's keyboard class without a file: its constructor's numbers, no driving keys.
         // The arrows are given here so that the keyboard works.
