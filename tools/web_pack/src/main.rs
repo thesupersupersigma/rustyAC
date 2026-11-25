@@ -687,31 +687,14 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Assetto Corsa's DLCs: the key a DLC's models carry in their header (`rustyac-game`'s
-/// `steam::DLC_KEYS`, the game's own table), its Steam app, and its name in Steam's own app
-/// cache (`appcache/appinfo.vdf`).
-const DLCS: [(u32, u32, &str); 11] = [
-    (0xa4691, 347990, "Dream Pack 1"),
-    (0xdeafd, 404430, "Dream Pack 2"),
-    (0xbebb1, 423630, "Dream Pack 3"),
-    (0x3b787, 467980, "Japanese Pack"),
-    (0xb5735, 493190, "Red Pack"),
-    (0x4c791, 509350, "Tripl3 Pack"),
-    (0xe09a1, 526060, "Porsche Pack I"),
-    (0xcc03f, 540710, "Porsche Pack II"),
-    (0x905f2, 540711, "Porsche Pack III"),
-    (0x7e4bf, 619680, "Ready to Race Pack"),
-    (0xdebda, 675590, "Ferrari Pack"),
-];
+/// Assetto Corsa's DLCs: key, Steam app, name (the native builds' check uses the same table).
+use rustyac_content::required::DLCS;
 
 /// The DLC key in the header of an item's models (kn5 version 6 and up; `KN5IO::load` refuses
 /// a model whose key the Steam account does not own): 0 for the base game.
 fn dlc_key(root: &Path, item: &Item) -> u32 {
     item.files.iter().filter(|(path, _)| path.to_ascii_lowercase().ends_with(".kn5")).find_map(|(path, _)| {
-        let mut head = [0u8; 14];
-        std::io::Read::read_exact(&mut std::fs::File::open(root.join(path)).ok()?, &mut head).ok()?;
-        let key = u32::from_le_bytes(head[10..14].try_into().unwrap());
-        (&head[..6] == b"sc6969" && u32::from_le_bytes(head[6..10].try_into().unwrap()) > 5 && key != 0).then_some(key)
+        Some(rustyac_content::required::kn5_file_key(&root.join(path))).filter(|&key| key != 0)
     }).unwrap_or(0)
 }
 

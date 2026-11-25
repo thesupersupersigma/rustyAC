@@ -8,3 +8,6 @@ publish.workspace = true
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+# a zip of the game's files read in place (imports, zip): already in the tree, pure Rust, builds for wasm
+miniz_oxide = "0.8"
+crc32fast = "1.5"
