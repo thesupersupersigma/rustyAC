@@ -18,3 +18,7 @@ rustyac-content = { path = "../rustyac-content" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # the browser's FMOD (FMOD Studio 2.03 HTML5, from the preview pack) is JavaScript: web/sound.js
 wasm-bindgen = "=0.2.129"
+
+[target.'cfg(not(any(windows, target_arch = "wasm32")))'.dependencies]
+# FMOD Engine 2.03's native libraries, loaded at run time (fmod/native.rs)
+libloading = "0.8"

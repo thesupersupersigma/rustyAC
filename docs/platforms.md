@@ -17,9 +17,9 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   check against the page's Full mode, the physics dumps and quitting (11.5).
 - **P3b (branch `web`), section 12:** L4 done (12.1: pads, wheels, force feedback on SDL3, proved
   against kernel devices made with `uinput`). L5 done (12.2: `/dev/shm`, pages byte-identical to
-  Windows'). L6 in part (12.3): the licence text and the required-files list are done; **FMOD's
-  Linux library is missing**: Super puts `fmodstudioapi20315linux.tar.gz` in `ignored/fmod/` (12.3), then
-  resume at L6's sound (12.4).
+  Windows'). L6's sound done (12.3: FMOD Engine 2.03 native, call logs identical to the page's on
+  the 18 drives and to the game's on the 3 end-to-end rows), its licence text and required-files
+  list too; next: the list split into the base game and one list per DLC (12.4).
 
 ## 1. Plain-English summary
 
@@ -788,19 +788,43 @@ loading, so nothing of rustyAC's was left in them.)
 
 ### 12.3 L6: sound, the licence, the required-files list
 
-**FMOD Engine 2.03 for Linux: stopped, the library is not here.** `ignored/fmod/` holds only the
-HTML5 builds (2.03.15, 2.04.00). What Super gets from fmod.com (Download, FMOD Engine, version
-**2.03.15**, the browser's, **Linux**): **`fmodstudioapi20315linux.tar.gz`**, saved as
-`ignored/fmod/fmodstudioapi20315linux.tar.gz` and unpacked beside it
-(`ignored/fmod/fmodstudioapi20315linux/`, with `api/core/lib/x86_64/` and
-`api/studio/lib/x86_64/` inside). Found while sizing it: the browser's 1.08-to-2.03 mapping is
-not in `fmod/web.rs` (that file only forwards each call to JavaScript) but in `web/sound.js`'s
-table, about 70 calls (the renames, the listener's attenuation, the advanced settings, the
-version answer, the event lookup by GUID...). L6's sound is therefore that table in Rust on 2.03's
-C functions, loaded with `libloading` behind `raw::load` off Windows (now: "no FMOD on this
-platform yet"), with the credit printed when the sound starts; then the `sound` area's call-log
-comparison against the page's 2.03 path on the same drive, and a listen in WSLg (PulseAudio).
-About 1.2 sessions, unchanged in total.
+**FMOD Engine 2.03 for Linux (done).** The library is Firelight's `fmodstudioapi20315linux.tar.gz`
+(fmod.com, FMOD Engine 2.03.15, Linux), unpacked by Super in `ignored/fmod/fmodstudioapi20315linux/`
+(`api/core/lib/x86_64/libfmod.so.14`, `api/studio/lib/x86_64/libfmodstudio.so.14`). The game looks
+for both next to its program (the Linux zip, L7), then where the system's loader finds them
+(`LD_LIBRARY_PATH` in the proofs). `crates/rustyac-audio/src/fmod/native.rs` binds `raw`'s 1.08
+functions to 2.03's C interface (`libloading`, a new dependency of `rustyac-audio` off Windows,
+already in the lock file through other crates): 50 of the 65 have a 2.03 C function with the same
+arguments (`getLowLevelSystem` is 2.03's `getCoreSystem`), and 15 are translated as `web/sound.js`
+translates them for the browser (the version answer 0x10812; `setParameterValue` to
+`setParameterByName`; `getMaximumDistance` to `getMinMaxDistance`; the listener with no
+attenuation position and 1.08's default before the first set; `Studio::System::create` with
+2.03's header version; both advanced-settings structures; `getCPUUsage`'s two structures as
+1.08's one; and the `bool` arguments as `FMOD_BOOL`). Unlike the browser's build, the native one has
+`Geometry::addPolygon` and runs the game's two DSP plug-ins from the banks: the plug-in ABI
+(`FMOD_DSP_DESCRIPTION`, `FMOD_DSP_STATE`, the parameter descriptions, the data-parameter types)
+is the same in 2.03's headers as in 1.08's, and 2.03 accepts the game's plug-in SDK version 108.
+The credit "Audio engine: FMOD Studio by Firelight Technologies Pty Ltd." is printed when the
+sound starts.
+
+Proofs (`re/scratch/taskP3/`):
+
+| What | Against | Result |
+|---|---|---|
+| The `sound` area's 18 drives: the port's side on Linux (`tape_proof`, a new example: the page's `sound_proof` with native paths; `tapes.sh`) | the page's 2.03 HTML5 path in node (`page18.sh`: `tools/web_checks/task41/node_proof.mjs` on this branch's site) | **18 / 18 identical** call logs (`snd_cmp.py`, `l6s_cmp18.log`) |
+| the same 18 | Windows' port side with FMOD 1.08 (`audio_oracle run --side port`, `desk18.sh`) | 11 identical; the other 7 differ only where FMOD 2.03 ends an event earlier than 1.08 (it answers stopping or stopped where 1.08 answers playing), the same 7 as the page in Task 41 (`docs/port/web_sound.md`) |
+| The area's three end-to-end rows: Linux's `rustyac --replay ... --headless --audio-script <the game's log>` (`e2e_linux.sh`) | Assetto Corsa's own sound code (`audio_oracle run --side ac`, FMOD 1.08) | **3 / 3 identical** (`logdiff.py`), the game's own hashes |
+| The mix (WAV, 3 drives, levels per second from each file's first sound, `levels.py`) | Windows' port, FMOD 1.08 | 0.36 to 0.76 dB RMS apart (Windows against itself: 0.10 to 0.13 dB; the page without the plug-ins was up to +8 dB on trackside) |
+| A real-time drive in WSLg (`listen.sh`: `--headless --realtime --audio-log`) | | FMOD found one output device (WSLg's PulseAudio, `PULSE_SERVER`), the game held its socket, the mixer ran the 24 s at 1.6 % of a core. **Whether it is heard is Super's to check** (`listen.sh`, by ear) |
+
+Two things the comparison leaves out, both FMOD's and not the mapping's: the setup's loop over
+the sound devices (`snd_cmp.py` skips `getNumDrivers` / `getDriverInfo`: this PC has 5 under
+Windows, WSL none without the WAV writer), and in its clock-less mode FMOD 2.03 mixes a few silent
+blocks while each bank loads (about 1 s more silence before the drive's first sound than 1.08), so
+WAV files are compared from their first sound. A headless run without `--audio-log` or
+`--audio-wav` has no sound at all, as on Windows. Windows: the `sound` area's quick rows 4 / 4
+identical (`l6s_quick_sound.log`); clippy `-D warnings --all-targets` clean on Linux, Windows and
+both wasm targets, `audio_oracle`'s too.
 
 **The licence** (`LICENSING.md`, done now as the prompt asks): an entry for FMOD Engine 2.03.15
 for Linux and macOS (the release zips carry Firelight's unchanged `libfmod` / `libfmodstudio`,
@@ -830,20 +854,20 @@ its 6 tests; the `browser` area (its flags check now lists `--required`).
 
 ### 12.4 Resume here (P3b), plan changes, not done
 
-- **Resume at L6's sound** once `ignored/fmod/fmodstudioapi20315linux/` is there: `web/sound.js`'s
-  table in Rust behind `rustyac-audio`'s `raw::load` off Windows (`libloading`, already a
-  dependency), the credit line, then the `sound` area's call-log comparison (Linux against the
-  page's 2.03 path, same drive) and a listen in WSLg.
+- **Resume at the required-files list's split** (the lead chat's answer: "base" is the game without
+  DLCs, each DLC its own list, checked when one of its cars or tracks is picked).
 - Tools (`re/scratch/taskP3/`): `fakedev.py` + `l4run.sh` (L4, as root), `shm_win.ps1` /
   `shm_linux.sh` (L5; never while Assetto Corsa runs), `all.toml` + `web_pack --required` (L6's
-  list), `wsl.sh` / `wasm.sh` (builds, wasm clippy).
+  list), `tapes.sh` / `page18.sh` / `desk18.sh` / `snd_cmp.py`, `e2e_linux.sh`, `levels.py`,
+  `listen.sh`, `smoke.sh` (L6's sound), `wsl.sh` / `wasm.sh` (builds, wasm clippy; run `wsl` with
+  `MSYS_NO_PATHCONV=1` from Git Bash).
 - **Plan changes:** **L7**'s folder / zip check reads these manifests: ship `base.json` (made from
   a full Kunos install: paths and sizes of Kunos' files, none of their content) with the native
   zips; mods are checked when chosen (whether they load), since no shipped list can know them.
   **L8** gains the hardware list of 12.1 (a real wheel's force direction and DirectInput's
   rounding on Windows against Linux, real pedal ranges, hot-plugging, non-Xbox pads) and a
   real Linux PC's PulseAudio / PipeWire listen. Nothing else in L7 / L8 changes.
-- **Not done:** L6's sound (above); the hardware checks (L8); hot-plugging a wheel during a drive
+- **Not done:** the hardware checks (L8); hot-plugging a wheel during a drive
   on Linux (found at the next start only); a Windows run of the third page drive (Assetto Corsa
   was running).
 - **Windows unchanged:** every Windows line of the changed files is as it was (`cfg` attributes
