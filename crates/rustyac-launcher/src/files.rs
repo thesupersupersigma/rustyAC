@@ -55,22 +55,32 @@ fn os(path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// `op` on the path, then on the disk's spelling of it when it is not there as spelled (off
+/// Windows, AC's names in another letter case: `vfs::on_disk`).
+fn found<T>(path: &str, op: impl Fn(&std::path::Path) -> Result<T>) -> Result<T> {
+    rustyac_content::vfs::or_on_disk(std::path::Path::new(&*os(path)), op)
+}
+
 impl Files for Disk {
     fn read(&self, path: &str) -> Result<Vec<u8>> {
-        std::fs::read(&*os(path))
+        found(path, |p| std::fs::read(p))
     }
     fn write(&self, path: &str, bytes: &[u8]) -> Result<()> {
         rustyac_content::guard::write(&*os(path), bytes)
     }
     fn is_file(&self, path: &str) -> bool {
-        std::path::Path::new(&*os(path)).is_file()
+        let p = os(path);
+        let p = std::path::Path::new(&*p);
+        p.is_file() || rustyac_content::vfs::on_disk(p).is_file()
     }
     fn is_dir(&self, path: &str) -> bool {
-        std::path::Path::new(&*os(path)).is_dir()
+        let p = os(path);
+        let p = std::path::Path::new(&*p);
+        p.is_dir() || rustyac_content::vfs::on_disk(p).is_dir()
     }
     fn list(&self, folder: &str) -> Result<Vec<(String, bool)>> {
         let mut out = Vec::new();
-        for entry in std::fs::read_dir(&*os(folder))? {
+        for entry in found(folder, |p| std::fs::read_dir(p))? {
             let entry = entry?;
             out.push((entry.file_name().to_string_lossy().into_owned(), entry.file_type()?.is_dir()));
         }
@@ -92,10 +102,10 @@ impl Files for Disk {
         rustyac_content::guard::remove_dir_all(&*os(path))
     }
     fn modified(&self, path: &str) -> Option<SystemTime> {
-        std::fs::metadata(&*os(path)).and_then(|m| m.modified()).ok()
+        found(path, |p| std::fs::metadata(p)).and_then(|m| m.modified()).ok()
     }
     fn created(&self, path: &str) -> Option<SystemTime> {
-        std::fs::metadata(&*os(path)).and_then(|m| m.created()).ok()
+        found(path, |p| std::fs::metadata(p)).and_then(|m| m.created()).ok()
     }
     fn copy(&self, from: &str, to: &str) -> Result<()> {
         rustyac_content::guard::copy(&*os(from), &*os(to)).map(|_| ())
@@ -105,7 +115,7 @@ impl Files for Disk {
         { rustyac_content::guard::check(std::path::Path::new(&*os(path)))?; std::fs::OpenOptions::new().append(true).open(&*os(path))? }.write_all(bytes)
     }
     fn len(&self, path: &str) -> Option<u64> {
-        std::fs::metadata(&*os(path)).map(|m| m.len()).ok()
+        found(path, |p| std::fs::metadata(p)).map(|m| m.len()).ok()
     }
 }
 

@@ -60,7 +60,9 @@ fn file_url(path: &str) -> String {
 enum Running {
     Idle,
     WaitUntil(Instant),
-    Checking { deadline: Instant, expr: String, answer: Arc<Mutex<Option<bool>>> },
+    /// `asked`: when the page was last asked (wry drops the answer of a script sent before the
+    /// first page has loaded, so a question unanswered for a second is asked again)
+    Checking { deadline: Instant, asked: Instant, expr: String, answer: Arc<Mutex<Option<bool>>> },
     Busy(Rc<RefCell<bool>>),
     GameExit(Instant, bool),
 }
@@ -294,7 +296,7 @@ impl App {
                     return self.running = Running::Busy(done);
                 }
             }
-            Running::Checking { deadline, expr, answer } => {
+            Running::Checking { deadline, asked, expr, answer } => {
                 let a = *answer.lock().unwrap();
                 match a {
                     Some(true) => self.log(&format!("ok until {expr}")),
@@ -302,9 +304,13 @@ impl App {
                     Some(false) => {
                         *answer.lock().unwrap() = None;
                         self.check(&expr, &answer);
-                        return self.running = Running::Checking { deadline, expr, answer };
+                        return self.running = Running::Checking { deadline, asked: now, expr, answer };
                     }
-                    None => return self.running = Running::Checking { deadline, expr, answer },
+                    None if now >= asked + Duration::from_secs(1) => {
+                        self.check(&expr, &answer);
+                        return self.running = Running::Checking { deadline, asked: now, expr, answer };
+                    }
+                    None => return self.running = Running::Checking { deadline, asked, expr, answer },
                 }
             }
             Running::GameExit(deadline, started) => {
@@ -337,7 +343,7 @@ impl App {
             Step::Until(ms, expr) => {
                 let answer = Arc::new(Mutex::new(None));
                 self.check(&expr, &answer);
-                self.running = Running::Checking { deadline: now + Duration::from_millis(ms), expr, answer };
+                self.running = Running::Checking { deadline: now + Duration::from_millis(ms), asked: now, expr, answer };
             }
             Step::Shot(file) => {
                 if let Err(e) = rustyac_content::guard::check(Path::new(&file)) {
@@ -370,8 +376,10 @@ impl App {
     }
 }
 
-/// Script errors and console lines back to the shell, for the log (wry's `window.ipc`).
-const REPORT_JS: &str = "(function(){var post=function(k,m){try{window.ipc.postMessage(k+' '+m)}catch(e){}};window.__acReport=post;\
+/// Script errors and console lines back to the shell, for the log: to the bridge's server
+/// ([`xhr_js`]'s `__acPost`), as wry's `window.ipc` drops every message of a `file://` page (it
+/// makes an `http::Request` of the page's address, and `http` refuses `file:///...`).
+const REPORT_JS: &str = "(function(){var post=function(k,m){try{window.__acPost(k+' '+m)}catch(e){}};window.__acReport=post;\
 window.addEventListener('error',function(e){post('error',e.message+' @ '+e.filename+':'+e.lineno)});\
 window.addEventListener('unhandledrejection',function(e){post('error','unhandled rejection '+e.reason)});\
 ['log','warn','error'].forEach(function(l){var o=console[l];console[l]=function(){post('console.'+l,Array.prototype.map.call(arguments,String).join(' '));return o.apply(console,arguments)}});})();";
@@ -379,67 +387,84 @@ window.addEventListener('unhandledrejection',function(e){post('error','unhandled
 /// The page's requests to the bridge from its XMLHttpRequests: WebKitGTK (and WKWebView) give a
 /// custom scheme no synchronous loads, and the theme makes many (`async: false`), so they go to
 /// [`serve_bridge`]'s server on this computer instead. `http://ac/...` is CEF's `ac://` POST
-/// (`OnBeforeResourceLoad`). Other `ac://` loads (a picture, say) stay on the scheme.
-fn xhr_js(port: u16, token: &str) -> String {
+/// (`OnBeforeResourceLoad`). Other `ac://` loads (a picture, say) stay on the scheme. The
+/// synchronous ones go to a port of their own: WebKit counts its connections per host and port,
+/// and ends a synchronous request after 10 s, so one must not wait behind the theme's ~2,500
+/// asynchronous `getskinmeta` on a slow disk.
+fn xhr_js([port, sync_port]: [u16; 2], token: &str) -> String {
     // a send that throws (a failed synchronous load) goes to the log with its URL
-    format!("(function(){{var o=XMLHttpRequest.prototype.open,s=XMLHttpRequest.prototype.send,b='http://127.0.0.1:{port}/{token}/';XMLHttpRequest.prototype.open=function(m,u){{if(typeof u=='string'){{if(u.indexOf('http://ac/')==0)u='ac://'+u.substring(10);if(u.indexOf('ac://')==0)arguments[1]=b+u.substring(5);this.__acUrl=u}}return o.apply(this,arguments)}};XMLHttpRequest.prototype.send=function(){{var u=this.__acUrl;if(u)this.addEventListener('loadend',function(){{if(this.status!==200&&window.__acReport)__acReport('error','XMLHttpRequest '+u+': status '+this.status)}});try{{return s.apply(this,arguments)}}catch(e){{window.__acReport&&__acReport('error','XMLHttpRequest '+this.__acUrl+': '+e.name+' '+e.message);throw e}}}}}})();")
+    format!("(function(){{var o=XMLHttpRequest.prototype.open,s=XMLHttpRequest.prototype.send,b='http://127.0.0.1:{port}/{token}/',bs='http://127.0.0.1:{sync_port}/{token}/';XMLHttpRequest.prototype.open=function(m,u,a){{if(typeof u=='string'){{if(u.indexOf('http://ac/')==0)u='ac://'+u.substring(10);if(u.indexOf('ac://')==0){{arguments[1]=(a===false?bs:b)+u.substring(5);this.__acUrl=u}}}}return o.apply(this,arguments)}};window.__acPost=function(m){{navigator.sendBeacon(bs+'__report',m)}};XMLHttpRequest.prototype.send=function(){{var u=this.__acUrl;if(u)this.addEventListener('loadend',function(){{if(this.status!==200&&window.__acReport)__acReport('error','XMLHttpRequest '+u+': status '+this.status)}});try{{return s.apply(this,arguments)}}catch(e){{window.__acReport&&__acReport('error','XMLHttpRequest '+this.__acUrl+': '+e.name+' '+e.message);throw e}}}}}})();")
 }
 
 /// A small HTTP server on 127.0.0.1 (a free port, a random token in every path) that hands each
-/// request to the main thread's [`bridge_call`] and writes its answer back. Returns the port and
-/// the token.
-fn serve_bridge() -> std::io::Result<(u16, String)> {
+/// request to the main thread's [`bridge_call`] and writes its answer back. Two ports
+/// ([`xhr_js`]: the asynchronous requests' and the synchronous ones'), and the token.
+fn serve_bridge() -> std::io::Result<([u16; 2], String)> {
     use std::io::{BufRead, BufReader, Read};
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    let port = listener.local_addr()?.port();
+    let listeners = [std::net::TcpListener::bind(("127.0.0.1", 0))?, std::net::TcpListener::bind(("127.0.0.1", 0))?];
+    let ports = [listeners[0].local_addr()?.port(), listeners[1].local_addr()?.port()];
     let token = glib::uuid_string_random().to_string();
-    let prefix = format!("/{token}/");
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let prefix = prefix.clone();
-            std::thread::spawn(move || -> std::io::Result<()> {
-                stream.set_nodelay(true)?;
-                let mut reader = BufReader::new(stream.try_clone()?);
-                let mut line = String::new();
-                reader.read_line(&mut line)?;
-                let mut parts = line.split_whitespace();
-                let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
-                let mut length = 0usize;
-                loop {
-                    let mut header = String::new();
-                    if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
-                        break;
-                    }
-                    if let Some((k, v)) = header.split_once(':') {
-                        if k.trim().eq_ignore_ascii_case("content-length") {
-                            length = v.trim().parse().unwrap_or(0);
+    for (sync, listener) in [false, true].into_iter().zip(listeners) {
+        let prefix = format!("/{token}/");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let prefix = prefix.clone();
+                std::thread::spawn(move || -> std::io::Result<()> {
+                    stream.set_nodelay(true)?;
+                    let mut reader = BufReader::new(stream.try_clone()?);
+                    let mut line = String::new();
+                    reader.read_line(&mut line)?;
+                    let mut parts = line.split_whitespace();
+                    let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
+                    let mut length = 0usize;
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((k, v)) = header.split_once(':') {
+                            if k.trim().eq_ignore_ascii_case("content-length") {
+                                length = v.trim().parse().unwrap_or(0);
+                            }
                         }
                     }
-                }
-                let mut body = vec![0; length.min(64 << 20)];
-                reader.read_exact(&mut body)?;
-                let mut out = stream;
-                let cors = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nCache-Control: no-store\r\nConnection: close\r\n";
-                let Some(rest) = target.strip_prefix(&prefix) else {
-                    return out.write_all(format!("HTTP/1.1 403 Forbidden\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
-                };
-                if method == "OPTIONS" {
-                    return out.write_all(format!("HTTP/1.1 204 No Content\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
-                }
-                let url = format!("ac://{rest}");
-                let post = (method == "POST").then(|| String::from_utf8_lossy(&body).into_owned());
-                let (tx, rx) = std::sync::mpsc::channel::<Answer>();
-                // on the main loop's thread, where the app is (invoke could run it on this one)
-                glib::idle_add_once(move || bridge_call(url, post, Box::new(move |answer| drop(tx.send(answer)))));
-                let answer = rx.recv().unwrap_or_else(|_| Answer { mime: "text/plain".into(), ok: false, body: Vec::new() });
-                // one write: headers and body apart would wait on the delayed ACK (Nagle)
-                let mut all = format!("HTTP/1.1 200 OK\r\n{cors}Content-Type: {}; charset=utf-8\r\nContent-Length: {}\r\n\r\n", answer.mime, answer.body.len()).into_bytes();
-                all.extend_from_slice(&answer.body);
-                out.write_all(&all)
-            });
-        }
-    });
-    Ok((port, token))
+                    let mut body = vec![0; length.min(64 << 20)];
+                    reader.read_exact(&mut body)?;
+                    let mut out = stream;
+                    let cors = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nCache-Control: no-store\r\nConnection: close\r\n";
+                    let Some(rest) = target.strip_prefix(&prefix) else {
+                        return out.write_all(format!("HTTP/1.1 403 Forbidden\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
+                    };
+                    if rest == "__report" {
+                        let line = String::from_utf8_lossy(&body).into_owned();
+                        glib::idle_add_once(move || {
+                            with_app(|app| app.log(&line));
+                        });
+                        return out.write_all(format!("HTTP/1.1 204 No Content\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
+                    }
+                    if method == "OPTIONS" {
+                        return out.write_all(format!("HTTP/1.1 204 No Content\r\n{cors}Content-Length: 0\r\n\r\n").as_bytes());
+                    }
+                    let url = format!("ac://{rest}");
+                    let post = (method == "POST").then(|| String::from_utf8_lossy(&body).into_owned());
+                    let (tx, rx) = std::sync::mpsc::channel::<Answer>();
+                    let (asked, shown) = (std::time::Instant::now(), url.clone());
+                    // on the main loop's thread, where the app is (invoke could run it on this one)
+                    glib::idle_add_once(move || bridge_call(url, post, sync, Box::new(move |answer| drop(tx.send(answer)))));
+                    let answer = rx.recv().unwrap_or_else(|_| Answer { mime: "text/plain".into(), ok: false, body: Vec::new() });
+                    if asked.elapsed().as_secs() >= 5 {
+                        // WebKit ends a synchronous request after 10 s: what kept one waiting
+                        eprintln!("bridge: {shown} answered after {:.1} s", asked.elapsed().as_secs_f64());
+                    }
+                    // one write: headers and body apart would wait on the delayed ACK (Nagle)
+                    let mut all = format!("HTTP/1.1 200 OK\r\n{cors}Content-Type: {}; charset=utf-8\r\nContent-Length: {}\r\n\r\n", answer.mime, answer.body.len()).into_bytes();
+                    all.extend_from_slice(&answer.body);
+                    out.write_all(&all)
+                });
+            }
+        });
+    }
+    Ok((ports, token))
 }
 
 fn drain_events() {
@@ -462,7 +487,8 @@ fn respond(responder: RequestAsyncResponder, answer: &Answer) {
 
 /// An `ac://` request, answered through `reply` (the online ones from a thread of their own,
 /// later). Its host is lower case, as Chromium (the launcher's CEF, WebView2) spells it.
-fn bridge_call(url: String, body: Option<String>, reply: Box<dyn FnOnce(Answer)>) {
+/// `sync`: the page waits for it (the synchronous port of [`serve_bridge`]).
+fn bridge_call(url: String, body: Option<String>, sync: bool, reply: Box<dyn FnOnce(Answer)>) {
     let url = match url.split_once("://") {
         Some((scheme, rest)) => {
             let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
@@ -485,6 +511,20 @@ fn bridge_call(url: String, body: Option<String>, reply: Box<dyn FnOnce(Answer)>
         });
         return;
     }
+    // a long listing off the main loop, so the page's synchronous requests meanwhile (WebKit ends
+    // them after 10 s) are answered; a synchronous one is never queued behind it
+    if let Some(Some(listing)) = with_app(|app| if sync { None } else { app.bridge.listing(&url, body.as_deref()) }) {
+        let post = body.as_ref().map_or(String::new(), |b| format!(" POST {b}"));
+        let id = LISTINGS.with(|l| {
+            let mut l = l.borrow_mut();
+            l.0 += 1;
+            let id = l.0;
+            l.1.insert(id, (url, post, reply));
+            id
+        });
+        let _ = lister().send((id, listing));
+        return;
+    }
     let answered = with_app(|app| {
         let (answer, events) = app.bridge.request(&url, body.as_deref());
         let line = format!("bridge {url}{} -> {} {} {}", body.as_ref().map_or(String::new(), |b| format!(" POST {b}")), answer.mime, answer.ok, answer.body.len());
@@ -503,9 +543,46 @@ fn bridge_call(url: String, body: Option<String>, reply: Box<dyn FnOnce(Answer)>
     glib::idle_add_local_once(drain_events);
 }
 
+type Waiting = (String, String, Box<dyn FnOnce(Answer)>);
+
+thread_local! {
+    /// The listings on [`lister`]'s thread: the last id, and each one's url, POST text and reply.
+    static LISTINGS: RefCell<(u64, std::collections::HashMap<u64, Waiting>)> = RefCell::default();
+}
+
+/// The listings' thread ([`Bridge::listing`]): one at a time in the order asked, as Windows
+/// answers them, so the log keeps their order.
+fn lister() -> &'static std::sync::mpsc::Sender<(u64, crate::bridge::Listing)> {
+    static LISTER: std::sync::OnceLock<std::sync::mpsc::Sender<(u64, crate::bridge::Listing)>> = std::sync::OnceLock::new();
+    LISTER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, crate::bridge::Listing)>();
+        std::thread::spawn(move || {
+            for (id, listing) in rx {
+                let (answer, events) = listing();
+                glib::idle_add_once(move || listed(id, answer, events));
+            }
+        });
+        tx
+    })
+}
+
+/// A listing's answer, on the main loop: logged as an answer in turn is.
+fn listed(id: u64, answer: Answer, events: Vec<Event>) {
+    let Some((url, post, reply)) = LISTINGS.with(|l| l.borrow_mut().1.remove(&id)) else { return };
+    with_app(|app| {
+        app.log(&format!("bridge {url}{post} -> {} {} {}", answer.mime, answer.ok, answer.body.len()));
+        app.queue.push_back(url);
+    });
+    reply(answer);
+    for event in events {
+        with_app(|app| app.event(event));
+    }
+    glib::idle_add_local_once(drain_events);
+}
+
 fn answer_request(request: Request<Vec<u8>>, responder: RequestAsyncResponder) {
     let body = (request.method() == "POST").then(|| String::from_utf8_lossy(request.body()).into_owned());
-    bridge_call(request.uri().to_string(), body, Box::new(move |answer| respond(responder, &answer)));
+    bridge_call(request.uri().to_string(), body, false, Box::new(move |answer| respond(responder, &answer)));
 }
 
 /// The launcher's files laid over the game's (a zip, extra cars and tracks): reads under the
@@ -778,10 +855,10 @@ pub fn run(options: Options) -> Result<i32, String> {
     // the launcher's browser keeps its data in launcherdata (CefSettings.CachePath)
     let mut context = WebContext::new(Some(PathBuf::from(crate::page::os_path(&folders.user_launcher_data_dir))));
     let scripted = options.script.is_some();
-    let (port, token) = serve_bridge().map_err(|e| format!("the bridge's server: {e}"))?;
+    let (ports, token) = serve_bridge().map_err(|e| format!("the bridge's server: {e}"))?;
     let builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_initialization_script(REPORT_JS)
-        .with_initialization_script(xhr_js(port, &token))
+        .with_initialization_script(xhr_js(ports, &token))
         .with_initialization_script(WIZARD_JS)
         .with_asynchronous_custom_protocol("ac".into(), |_, request, responder| answer_request(request, responder))
         .with_ipc_handler(|request: Request<String>| {

@@ -135,13 +135,30 @@ pub trait Host {
 pub struct Bridge {
     pub folders: AppFolder,
     pub host: Box<dyn Host>,
-    generated_css: String,
-    car_count: String,
-    event_count: String,
+    /// `generatecss`, `carcount` and `eventcount`, which the listings fill in.
+    counts: Counts,
     /// Requests whose handler is not ported (they answer "OK"); the shell logs them.
     pub not_ported: Vec<String>,
     pub lobby: Arc<Mutex<online::Lobby>>,
 }
+
+/// The state the listings fill in and other requests read (`generatecss`, `carcount`,
+/// `eventcount`), shared with a [`Bridge::listing`] on another thread.
+#[derive(Clone)]
+struct Counts {
+    css: Arc<Mutex<String>>,
+    cars: Arc<Mutex<String>>,
+    events: Arc<Mutex<String>>,
+}
+
+impl Default for Counts {
+    fn default() -> Counts {
+        Counts { css: Arc::default(), cars: Arc::default(), events: Arc::new(Mutex::new("0".into())) }
+    }
+}
+
+/// [`Bridge::listing`]'s job: the answer and what it raises.
+pub type Listing = Box<dyn FnOnce() -> (Answer, Vec<Event>) + Send>;
 
 /// One request split as `new Uri(url)` has it: host (lower case), `AbsolutePath`, `Query`.
 pub fn split_url(url: &str) -> (String, String, String) {
@@ -164,7 +181,7 @@ fn split_once_slash(s: &str) -> Vec<&str> {
 
 impl Bridge {
     pub fn new(folders: AppFolder, host: Box<dyn Host>) -> Bridge {
-        Bridge { folders, host, generated_css: String::new(), car_count: String::new(), event_count: "0".into(), not_ported: Vec::new(), lobby: Arc::new(Mutex::new(online::Lobby::new(None))) }
+        Bridge { folders, host, counts: Counts::default(), not_ported: Vec::new(), lobby: Arc::new(Mutex::new(online::Lobby::new(None))) }
     }
 
     fn params(url: &str, post: Option<&str>) -> (String, String, Params) {
@@ -181,6 +198,25 @@ impl Bridge {
     pub fn job(&self, url: &str, post: Option<&str>) -> Option<online::Job> {
         let (host, _, params) = Bridge::params(url, post);
         online::job(&host, &params, &self.lobby, || self.host.player_id(), &format!("{}launcher.ini", self.folders.user_config_dir))
+    }
+
+    /// A request the theme sends with `async=true` whose handler reads files only (the listings,
+    /// it polls `carcount` and shows messages meanwhile), as a job for a thread of its own: a
+    /// bridge without the window's host answers it there. The Linux shell runs it so, as WebKitGTK
+    /// ends a synchronous request after 10 s and a listing on a slow disk takes longer; the Windows
+    /// one answers it in turn like any request (Chromium waits).
+    pub fn listing(&self, url: &str, post: Option<&str>) -> Option<Listing> {
+        const FILES_ONLY: [&str; 8] = ["listcars", "listtracks", "listspecialevents", "listseries", "listfiles", "getiniasjson", "getachievements", "getskinmeta"];
+        let (host, _, p) = Bridge::params(url, post);
+        if !FILES_ONLY.contains(&host.as_str()) || p.get("async").is_none_or(|v| net::to_lower(&v) != "true") {
+            return None;
+        }
+        let (folders, counts, lobby) = (self.folders.clone(), self.counts.clone(), self.lobby.clone());
+        let (url, post) = (url.to_string(), post.map(str::to_string));
+        Some(Box::new(move || {
+            let mut bridge = Bridge { folders, host: Box::new(crate::transcript::Fixed), counts, not_ported: Vec::new(), lobby };
+            bridge.request(&url, post.as_deref())
+        }))
     }
 
     /// `ACSchemeHandler.DoProcess`: the answer and what the window has to do.
@@ -249,15 +285,15 @@ impl Bridge {
             }
             "utility" => Ok(self.utility()),
             "copyini" => self.copy_ini(p),
-            "generatecss" => Ok(Answer::new(true, "text/css", &self.generated_css)),
+            "generatecss" => Ok(Answer::new(true, "text/css", &self.counts.css.lock().unwrap())),
             "getiniasjson" => self.get_ini_as_json(path, p),
             "savejsontoini" => self.save_json_to_ini(path, p),
             "savetofile" => self.save_to_file(path, p),
             "getvideomodes" => Ok(self.video_modes()),
             "getcfg" => Ok(self.get_all_cfg()),
             "getskinmeta" => self.get_skin_meta(path),
-            "carcount" => Ok(Answer::message(&self.car_count)),
-            "eventcount" => Ok(Answer::message(&self.event_count)),
+            "carcount" => Ok(Answer::message(&self.counts.cars.lock().unwrap())),
+            "eventcount" => Ok(Answer::message(&self.counts.events.lock().unwrap())),
             "formatfile" => {
                 let file = path.replace('/', "");
                 self.get_file_path(&file).map(|fp| {
@@ -780,7 +816,7 @@ impl Bridge {
         for (i, text) in folders.iter().enumerate() {
             let file_name = net::file_name(text);
             let id = net::to_lower(file_name);
-            self.car_count = format!("{}%", round_even(100.0 * i as f64 / count as f64) as i64);
+            *self.counts.cars.lock().unwrap() = format!("{}%", round_even(100.0 * i as f64 / count as f64) as i64);
             let ui = format!("{text}\\ui\\");
             let mut path = format!("{text}\\ui\\ui_car.json");
             let mut dlc = false;
@@ -838,7 +874,7 @@ impl Bridge {
             if net::dir_exists(&skins_dir) {
                 for skin in dirs(&skins_dir)?.iter().map(|s| net::to_lower(s)) {
                     let name = net::file_name(&skin).to_string();
-                    self.generated_css.push_str(&format!(".skin-{id}-{name} {{\n\tbackground-image: url(\"{}/preview.jpg\") !important;\n}}\n\n", net::uri_path(&skin)));
+                    self.counts.css.lock().unwrap().push_str(&format!(".skin-{id}-{name} {{\n\tbackground-image: url(\"{}/preview.jpg\") !important;\n}}\n\n", net::uri_path(&skin)));
                     skins.push(Value::Str(name.clone()));
                     let data = Value::Object(["skinName", "driverName", "country", "number", "team"].iter().map(|k| (k.to_string(), Value::Null)).collect());
                     if !meta.add(&name, data) {
@@ -948,7 +984,7 @@ impl Bridge {
             }
             let json = appini::get_as_json(&format!("{full}\\event.ini"), false, &[], true)?;
             text.push_str(&format!("\"{name}\" : {{ \"path\" : \"{}\", \"info\":  {json} }} ", net::uri_path(full)));
-            self.event_count = format!("{}", round_even(num as f64 / n as f64 * 100.0) as i64);
+            *self.counts.events.lock().unwrap() = format!("{}", round_even(num as f64 / n as f64 * 100.0) as i64);
         }
         text.push('}');
         let cache = format!("{}\\cache_events.json", f.user_launcher_data_dir);
