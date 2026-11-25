@@ -4,9 +4,12 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a is done (below). C6b part 1 (the survey) and part 2 (CSP's car physics libraries on rustyAC's LuaJIT,
-proof case `csp lua env` 60/60 identical) are done. Next: C6b part 3, CSP's environment set-up itself
-(the plan below), then parts 4 and 5 (the natives), then C6c.
+C6a is done (below). C6b parts 1-3 are done: the survey, CSP's car physics libraries on rustyAC's
+LuaJIT, and CSP's own set-up of the state (part 3: proof case `csp lua env` 77/77 identical, `ffi.C`
+answers exactly CSP's 1,788 names). Next: C6b part 4 (the maths, type and encoding natives, each
+against CSP's), then part 5, then C6c. First step of part 4: run each of the 9 car scripts of classes
+1 and 2 in CSP in the oracle (the stand-in host of part 3, `data/script.lua` loaded by the host
+from data.acd) and log the natives each calls, so parts 4-5 port those first.
 
 ## C6b part 1: the car physics script's environment (survey, dwrite.dll build 4305)
 
@@ -48,7 +51,7 @@ What the car physics kind (`ac_common_base` 182,266 B + `ac_car_cphys` 35,299 B)
 
 163 `lj_*` names in all (lists: re/scratch/taskC6b/envnames.txt, not kept). Loading the two libraries only
 looks names up (the `lj_getTimeZone*`, `lj_binaryinput_*`, `lj_*__carc` ones); none is called before a
-script runs. The car scripts themselves are scrambled inside the cars' data.acd and are not read: what
+script runs. The car scripts were not read (their classes: part 3): what
 they call is known only when CSP runs them (C6c: log the natives CSP calls per script in the oracle).
 
 **Plan in sessions** (C6b rest about 3-5, C6c about 4-6):
@@ -63,6 +66,77 @@ they call is known only when CSP runs them (C6c: log the natives CSP calls per s
 - C6c: the state structs over rustyAC's car (ac.StateCar, physics overrides and forces), `update(dt)` /
   `reset()` from the physics step, getting the scripts' bytecode (open question: without decrypting
   anything ourselves), then the RSS 3 row.
+
+## C6b part 3: CSP's set-up of the state
+
+**CSP's car physics host** is `cphys::cphys_script::impl::cphys_script_limp` (vtable 0x182301cf8, made
+by sub_18084AC70, constructor sub_18084D7C0 over `lua::base_script_data` sub_1810DACE0 and
+`lua_updateable` sub_1813DED40). Part 1 read the generic set-up; corrections: the 23 functions go into
+`ac` (not the globals; `getTrackID` is a second name of `getTrackId`), there is no script-name global
+(the string after `__dirname__` is `__mode__`), and `ui`'s `imageState` and the `io`/`os` extras are
+added only when the set-up's last argument is 0, which car physics never passes. In order:
+
+- sub_1813E2260 (host vtable +216): `ffi` = `require 'ffi'` (into `_LOADED` and the global).
+- sub_18084A7F0 (vtable +224) = sub_1813E25E0(host, L, host+528, 1), then `__carindex__`.
+- sub_1813E25E0: vtable +0 is 1 for this host, so the script folder is the string at host+560: when
+  it is not empty, `package.path` gets `;<folder>/?.lua;<AC>\extension/internal/lua-?.lua` appended to
+  LuaJIT's own (from `LUA_PATH`, `!` = the AC folder) and `__dirname` = `__dirname__` = the folder;
+  `__mode__` = host+1200 (vtable +56); `__allowIO__` = vtable +112 (cached in host+736); tables `ac`
+  (record size 0x2ed), `__script` (9), `__util` (0x63: `result native nativf parseDate`), `ui` (0x257,
+  empty); then string extensions sub_18101E2C0 (28, in this order: `split numbers findIgnoreCase replace
+  codePointToUTF8 codePointAt nextEmoji __jsonFormat pack packsize unpack xor urlEncode urlDecode
+  startsWith endsWith alphanumCompare versionCompare urlCheck urlNext trim multiply pad regfind cspmatch
+  regmatch reggsub reggmatch`). LuaJIT's `lua_createtable(L, 0, n)` gives the same hash sizes as CSP's.
+
+**The host object, field by field** (what the set-up reads; the oracle builds it, rustyAC's
+`csp::lua_env::Host` carries the three values that vary):
+
+| Field | CSP | Stand-in |
+|---|---|---|
+| +0 | vtable 0x182301cf8 | CSP's own vtable (oracle) |
+| +528 | std::string, used only by hosts whose vtable +0 is 0 | empty |
+| +560 | std::string, the script's folder; its writer runs only in the game (not in the host's constructor or creator) | `<AC>\content\cars\stand_in\data` (`Host::dir`) |
+| +736 | `__allowIO__` cache (-1 = not asked; else the car flag of vtable +112, `*(car+1088)+904` bit 0) | 0 (`Host::allow_io` false) |
+| +1200 | std::string `car_cphys` (constructor) | the same |
+| +1232 | std::string `ac_car_cphys`, the kind's library (vtable +256) | not read by the set-up |
+| +1272 | the car; `__carindex__` = int at car+176, plus 1 | a zero block (`Host::car_index` 0) |
+| L+96 | the host (CSP's lua_State extension) | the oracle's block |
+
+`ffi.C`: CSP answers exactly the 1,788 `lj_*` names its libraries' cdefs declare, less `lj_free`
+(an old `void lj_free(void *ptr)` cdef in `lib_vector`; not answered), whatever the host. Found by
+asking CSP's state for each name of every bundle entry's string constants; the list is
+crates/rustyac-physics/src/csp/lua_names.txt.
+
+**The proof**: case `lua env` (same command as part 2), CSP's state is now CSP's own set-up on the
+stand-in host (`Vm::csp_car_physics`: CSP's vtable, sub_1813E2260, sub_18084A7F0) and rustyAC's is
+`car_physics(dwrite, &Host { .. })`; 17 new chunks: sorted keys and types of `_G`, `ac`, `__util`, `ui`,
+`__script`, `string`, `package.loaded`; which of them are C functions; `package.path` / `cpath`;
+`__mode__ __allowIO__ __dirname __dirname__ __carindex__`; `ffi == package.loaded.ffi`; and every name of
+lua_names.txt plus `lj_free lj_ lj_cshader_ lj_no_such_name_xyz GetCurrentProcessId luaL_newstate
+lua_pushnumber` through `ffi.C` (CSP: 1788 found, the 7 not). 77/77 identical under both MXCSR.
+`pairs` order is not compared: CSP's own differs between two fresh states (LuaJIT's per-state string
+hash seed), so no script can depend on it.
+
+**The 9 installed car physics scripts** (`data/script.lua` in data.acd; classes of the C6b prompt; only
+counts were looked at: lines, longest line, keyword counts, never content):
+
+| Car | Stored | Class |
+|---|---|---|
+| `pxw_sl_v4` | Lua source in data.acd, minified (one 21 KB line) | 1 |
+| `rss_formula_2010` | Lua source in data.acd | 1 (RSS: may be read) |
+| `rss_formula_rss_3_v6_2026` | Lua source in data.acd | 1 (RSS) |
+| `rss_formula_hybrid_2026` | Lua in data.acd, packed (long lines, `load`, hashed module names) | 3, handled as 2 |
+| `urd_darche_992_23` | not Lua after AC's decoding: CSP's FolderEncrypter, like all its data | 3, handled as 2 |
+| `vrc_formula_alpha_2025_csp` | Lua source in data.acd (36 files) | 2 (VRC) |
+| `vrc_formula_alpha_2026_csp` | Lua in data.acd, packed (one 345 KB line, `load`); `script.lua` twice in the archive | 2 (VRC) |
+| `vrc_formula_beta_2024_csp` | Lua source in data.acd (32 files) | 2 (VRC) |
+| `vrc_formula_lithium_2023_csp` | Lua source in data.acd | 2 (VRC) |
+
+(content_needs.md's "VRC physics scripts are scrambled" holds for alpha 2026 only.)
+
+Not done: `__script.__initbase__` (the libraries define it; CSP's host calls it after the kind's
+library, part 4 with the script itself); `ui`'s and `__script`'s keys come from the libraries, not the
+set-up; no native is ported.
 
 ## C6b part 2: CSP's car physics libraries on rustyAC's LuaJIT
 
@@ -79,7 +153,7 @@ libraries as mode 0 does, runs `PRELUDE` and the `LIBS` from the installed dwrit
 (`inipp_lua::bundle_entry`, nothing of CSP's is carried). `ffi.C` finds no Windows name (as in CSP);
 every `lj_` name resolves to a stop ("none is ported yet").
 
-Not done (shortcuts in the code): the stand-in set-up (`PRELUDE`: `ffi` and empty `ac`, `__util`,
+Not done then (part 3 replaced the first and the last): the stand-in set-up (`PRELUDE`: `ffi` and empty `ac`, `__util`,
 `__script`, `ui`, the same in both states); no native is ported, so snippets that reach one (mat4x4 `*`,
 DataLUT, ac.INIConfig, stringify) are not in the list yet; `ffi.C` answers every `lj_` name, CSP only
 its own.

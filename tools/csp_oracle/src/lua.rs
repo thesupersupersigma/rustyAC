@@ -19,6 +19,11 @@ pub struct Vm {
     pcall: Pcall,
 }
 
+/// The script folder the stand-in host carries: `<AC>\content\cars\stand_in\data`.
+pub fn stand_in_dir(dwrite: &Path) -> String {
+    dwrite.with_file_name(r"content\cars\stand_in\data").to_string_lossy().into_owned()
+}
+
 /// The chunk handed to `lua_load` once, then the end.
 extern "C" fn reader(_: *mut c_void, data: *mut c_void, size: *mut usize) -> *const u8 {
     unsafe {
@@ -46,11 +51,31 @@ impl Vm {
         Vm { l, load: std::mem::transmute::<usize, Load>(dll + 0x176_10b0), pcall: std::mem::transmute::<usize, Pcall>(dll + 0x176_0ec0) }
     }
 
-    /// Task C6b: CSP's car physics state: its opener in mode 0, then csp::lua_env's prelude and
-    /// CSP's libraries as stored in the dll (CSP's magic), loaded by its own `lua_load`.
+    /// Task C6b: CSP's car physics state: its opener in mode 0, CSP's own set-up on a stand-in
+    /// of its car physics script host (docs/csp/lua_host.md, part 3), then CSP's libraries as
+    /// stored in the dll (CSP's magic), loaded by its own `lua_load`.
     pub unsafe fn csp_car_physics(dll: usize, dwrite: &Path) -> Vm {
         let vm = Vm::csp_mode(dll, 0);
-        assert_eq!(vm.exec(lua_env::PRELUDE.as_bytes(), c"=prelude"), "nil");
+        // stand-in cphys_script_limp: only the fields the set-up reads, the rest zero
+        let host = Box::leak(vec![0u8; 0x1400].into_boxed_slice()).as_mut_ptr();
+        let car = Box::leak(vec![0u8; 0x100].into_boxed_slice()).as_mut_ptr();
+        let empty = |at: usize| *(host.add(at + 24) as *mut u64) = 15; // MSVC std::string, inline, empty
+        *(host as *mut usize) = dll + 0x230_1cf8; // the real vtable
+        empty(528);
+        let dir = stand_in_dir(dwrite);
+        *(host.add(560) as *mut *const u8) = std::ffi::CString::new(dir.clone()).unwrap().into_raw().cast(); // script folder (filled by the game)
+        *(host.add(576) as *mut usize) = dir.len();
+        *(host.add(584) as *mut usize) = dir.len().max(16);
+        *host.add(736) = 0; // __allowIO__ asked already: false (the game asks the car)
+        empty(1200); // __mode__, set by the host's constructor
+        std::ptr::copy_nonoverlapping(b"car_cphys".as_ptr(), host.add(1200), 9);
+        *(host.add(1216) as *mut u64) = 9;
+        *(host.add(1272) as *mut *mut u8) = car; // car index (car+176) 0
+        *((vm.l as *mut u8).add(96) as *mut *mut u8) = host;
+        let require_ffi: extern "C" fn(*mut u8, *mut c_void) = std::mem::transmute(dll + 0x13e_2260);
+        let set_up: extern "C" fn(*mut u8, *mut c_void, *mut u8, u8) = std::mem::transmute(dll + 0x84_a7f0);
+        require_ffi(host, vm.l);
+        set_up(host, vm.l, host.add(528), 1);
         for name in lua_env::LIBS {
             let b = inipp_lua::bundle_entry(dwrite, name).unwrap_or_else(|| panic!("{name} not in {}", dwrite.display()));
             let cname = std::ffi::CString::new(name).unwrap();
@@ -61,7 +86,7 @@ impl Vm {
 
     /// rustyAC's car physics state (csp::lua_env).
     pub unsafe fn rustyac_car_physics(dwrite: &Path) -> Vm {
-        let l = lua_env::car_physics(dwrite).unwrap_or_else(|e| panic!("rustyAC's car physics state: {e}"));
+        let l = lua_env::car_physics(dwrite, &lua_env::Host { dir: &stand_in_dir(dwrite), car_index: 0, allow_io: false }).unwrap_or_else(|e| panic!("rustyAC's car physics state: {e}"));
         Vm { l: l.cast(), ..Vm::rustyac_fns() }
     }
 
