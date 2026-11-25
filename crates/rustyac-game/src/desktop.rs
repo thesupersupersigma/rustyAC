@@ -3089,6 +3089,15 @@ pub fn main() {
     if options.documents.is_some() {
         rustyac_content::install::set_documents(options.documents.clone());
     }
+    // the launcher's choice of the game's files off Windows (a zip, or extra cars and tracks, read
+    // in place); the Windows launcher gets the chooser with Task W5
+    #[cfg(not(windows))]
+    if let Some(file) = std::env::var_os("RUSTYAC_GAME_FILES") {
+        if let Err(message) = rustyac_content::imports::Remembered::mount_file(std::path::Path::new(&file)) {
+            eprintln!("RUSTYAC_GAME_FILES: {message}");
+            std::process::exit(2);
+        }
+    }
     // the proofs (tools/proofs/lib.sh) set this: a run there never reads or writes the player's own files
     if std::env::var_os("RUSTYAC_PROOF_RUN").is_some() && (options.cfg_dir.is_none() || options.documents.is_none()) {
         eprintln!("RUSTYAC_PROOF_RUN is set: a proof run needs --cfg-dir and --documents (fresh folders of its own)");

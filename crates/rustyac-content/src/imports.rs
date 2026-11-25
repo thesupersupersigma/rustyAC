@@ -187,6 +187,39 @@ impl Layers {
         p
     }
 
+    /// Opens a choice: `root` must be the whole game (a folder or zip), each extra a folder or
+    /// zip of cars and / or tracks. `Err` is the player's message.
+    pub fn open(root: Option<&Path>, extra: &[PathBuf]) -> Result<Layers, String> {
+        let root = root.ok_or("Assetto Corsa's install folder wasn't found: choose the folder with the game files")?;
+        let name = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let base = Source::open(root).map_err(|e| format!("{}: {e}", root.display()))?;
+        let base = match detect(base, &name(root)) {
+            Some(i) if i.kind == Kind::Full => i,
+            Some(_) => return Err(format!("{} holds cars or tracks only, not the whole game: choose the folder with the game files, then add this one to the extra cars and tracks", root.display())),
+            None => return Err(format!("{} is not Assetto Corsa's folder (no content and system folders in it): choose the folder with the game files", root.display())),
+        };
+        let mut layers = Layers { root: Layers::root_of(&base), base: Some(base), extra: Vec::new() };
+        for p in extra {
+            let source = Source::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
+            layers.extra.push(detect(source, &name(p)).ok_or_else(|| format!("{} holds no cars or tracks (content/cars or content/tracks, cars/ or tracks/, or one car or track folder)", p.display()))?);
+        }
+        Ok(layers)
+    }
+
+    /// Is this just a folder on the disk, with nothing laid over it (no mount needed)?
+    pub fn is_plain(&self) -> bool {
+        self.extra.is_empty() && matches!(&self.base, Some(Import { source: Source::Folder(_), .. }))
+    }
+
+    /// Makes this the game's files for every later read ([`crate::vfs::mount`] when a zip or
+    /// extra roots are in it) and its root AC's folder ([`crate::install::set_ac_root`]).
+    pub fn mount(self) {
+        crate::install::set_ac_root(Some(self.root.clone()));
+        if !self.is_plain() {
+            crate::vfs::mount(Some(Arc::new(self)));
+        }
+    }
+
     /// Every car (`cars`) or track (`tracks`) id, the base's first, without repeats (any case).
     pub fn ids(&self, kind: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -315,6 +348,14 @@ impl Remembered {
         out
     }
 
+    /// The game's start (the launcher names its choice in `RUSTYAC_GAME_FILES`): the remembered
+    /// file read, opened and mounted.
+    pub fn mount_file(file: &Path) -> Result<(), String> {
+        let r = Remembered::load(file);
+        Layers::open(r.root.as_deref(), &r.extra)?.mount();
+        Ok(())
+    }
+
     pub fn load(file: &Path) -> Remembered {
         std::fs::read_to_string(file).map(|t| Remembered::parse(&t)).unwrap_or_default()
     }
@@ -412,6 +453,23 @@ mod tests {
         let layers = Layers { root: root.clone(), base: Some(base), extra: vec![open("mods")] };
         assert_eq!(&*layers.read(&root.join("system/data/surfaces.ini")).unwrap(), b"system/data/surfaces.ini");
         assert_eq!(&*layers.read(&root.join("content/cars/my_car/data.acd")).unwrap(), b"cars/my_car/data.acd");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_choice_opens_or_says_why_not() {
+        let dir = scratch("open");
+        tree(&dir.join("ac"), &FULL);
+        tree(&dir.join("cars_only"), &["cars/a/data.acd", "cars/a/ui/ui_car.json"]);
+        tree(&dir.join("junk"), &["readme.txt"]);
+        let layers = Layers::open(Some(&dir.join("ac")), &[dir.join("cars_only")]).unwrap();
+        assert!(!layers.is_plain() && Layers::open(Some(&dir.join("ac")), &[]).unwrap().is_plain());
+        assert_eq!(layers.ids("cars"), ["abarth500", "a"]);
+        assert!(Layers::open(None, &[]).err().unwrap().contains("wasn't found: choose the folder with the game files"));
+        assert!(Layers::open(Some(&dir.join("cars_only")), &[]).err().unwrap().contains("holds cars or tracks only"));
+        assert!(Layers::open(Some(&dir.join("junk")), &[]).err().unwrap().contains("is not Assetto Corsa's folder"));
+        assert!(Layers::open(Some(&dir.join("ac")), &[dir.join("junk")]).err().unwrap().contains("holds no cars or tracks"));
+        assert!(Layers::open(Some(&dir.join("nowhere")), &[]).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
