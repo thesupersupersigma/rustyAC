@@ -76,10 +76,37 @@ impl Vm {
         let set_up: extern "C" fn(*mut u8, *mut c_void, *mut u8, u8) = std::mem::transmute(dll + 0x84_a7f0);
         require_ffi(host, vm.l);
         set_up(host, vm.l, host.add(528), 1);
+        if let Some(pre) = std::env::var_os("CSP_ORACLE_LUA_PRE") {
+            // a chunk run between CSP's set-up and its libraries (part 4: wrappers logging the natives)
+            let pre = std::fs::read(&pre).unwrap_or_else(|e| panic!("CSP_ORACLE_LUA_PRE: {e}"));
+            assert_eq!(vm.exec(&pre, c"=pre"), "nil", "CSP_ORACLE_LUA_PRE");
+        }
         for name in lua_env::LIBS {
             let b = inipp_lua::bundle_entry(dwrite, name).unwrap_or_else(|| panic!("{name} not in {}", dwrite.display()));
             let cname = std::ffi::CString::new(name).unwrap();
             assert_eq!(vm.exec(&b, &cname), "nil", "CSP's {name}");
+        }
+        if let Some(folder) = std::env::var_os("CSP_ORACLE_LUA_CAR") {
+            // part 4: the car's scripts from its data.acd, read in memory only (classes 1 and 2 of the
+            // C6b prompt), each in package.preload under its name; the first of a repeated name wins
+            // the host's next step for a car_cphys state (dwrite+0x13e5ba0): CSP's own extra chunk and its 82 natives
+            // (dwrite+0x85ad10), which put the real ac.accessCarPhysics in place of the "not available" one
+            let cphys: extern "C" fn(*mut c_void) -> u8 = std::mem::transmute(dll + 0x85_ad10);
+            cphys(vm.l);
+            let acd = rustyac_content::acd::Acd::open(&Path::new(&folder).join("data.acd")).unwrap_or_else(|e| panic!("CSP_ORACLE_LUA_CAR: {e}"));
+            let mut seen = std::collections::HashSet::new();
+            let mut refs = std::collections::BTreeMap::new();
+            for (name, bytes) in acd.entries() {
+                let Some(module) = name.strip_suffix(".lua") else { continue };
+                // CSP's sealed form goes through dwrite+0x13d8040 in its file hook: not met in the 8 cars read so far
+                assert!(!bytes.starts_with(b"@!lua3:"), "{name}: CSP's sealed form");
+                if seen.insert(module.to_ascii_lowercase()) {
+                    api_refs(bytes, &mut refs);
+                    assert_eq!(vm.preload(module, bytes), "nil", "{name}");
+                }
+            }
+            // names only, never the source: what the scripts can reach beyond what a run with stand-ins reaches
+            println!("lua refs {}", refs.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join(" "));
         }
         vm
     }
@@ -107,9 +134,27 @@ impl Vm {
     }
 
     fn exec(&self, chunk: &[u8], name: &CStr) -> String {
+        let status = self.load(chunk, name);
+        self.result(if status == 0 { (self.pcall)(self.l, 0, 1, 0) } else { status })
+    }
+
+    fn load(&self, chunk: &[u8], name: &CStr) -> i32 {
         let mut data: &[u8] = chunk;
-        let status = (self.load)(self.l, reader, &mut data as *mut &[u8] as *mut c_void, name.as_ptr().cast(), std::ptr::null());
-        let status = if status == 0 { (self.pcall)(self.l, 0, 1, 0) } else { status };
+        (self.load)(self.l, reader, &mut data as *mut &[u8] as *mut c_void, name.as_ptr().cast(), std::ptr::null())
+    }
+
+    /// `package.preload[module]` = the chunk `source`, compiled by this VM's `lua_load` (as CSP's file
+    /// hook does for a plain source) without running it.
+    fn preload(&self, module: &str, source: &[u8]) -> String {
+        let setter = format!("package.preload[{module:?}] = ...");
+        let name = std::ffi::CString::new(format!("={module}")).unwrap();
+        let status = self.load(setter.as_bytes(), c"=preload");
+        let status = if status == 0 { self.load(source, &name) } else { status };
+        // a failed load leaves its message above the setter: the setter is left on the stack (unused)
+        self.result(if status == 0 { (self.pcall)(self.l, 1, 1, 0) } else { status })
+    }
+
+    fn result(&self, status: i32) -> String {
         unsafe {
             // lua_State (GC64): top at +40; a TValue is 8 bytes, its type in the top 17 bits
             let top = (self.l as *mut u8).add(40) as *mut *mut u64;
@@ -165,4 +210,29 @@ pub unsafe fn run(dll: usize, file: &str, dwrite: Option<&Path>) {
             println!("lua MXCSR {csr:#06x}: {} snippets, {differ} differ", chunks.len());
         }
     }
+}
+
+/// Counts `ac.<name>`, `physics.<name>`, `__util.<name>` and `C.<name>` (ffi.C) references in a Lua source, names only.
+fn api_refs(src: &[u8], refs: &mut std::collections::BTreeMap<String, u32>) {
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    for table in [&b"ac."[..], b"physics.", b"__util.", b"C."] {
+        let mut i = 0;
+        while let Some(at) = src[i..].windows(table.len()).position(|w| w == table) {
+            let start = i + at;
+            let name_at = start + table.len();
+            let end = name_at + src[name_at..].iter().take_while(|&&c| ident(c)).count();
+            if (start == 0 || !ident(src[start - 1])) && end > name_at {
+                let key = format!("{}{}", String::from_utf8_lossy(table), String::from_utf8_lossy(&src[name_at..end]));
+                *refs.entry(key).or_insert(0) += 1;
+            }
+            i = end.max(name_at);
+        }
+    }
+}
+
+#[test]
+fn api_refs_counts_names() {
+    let mut r = std::collections::BTreeMap::new();
+    api_refs(b"local s=ac.getSim() vac.x=ac.getSim().t ffi.C.lj_foo(1) physics.setGentleStop(0)", &mut r);
+    assert_eq!(r.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join(" "), "C.lj_foo=1 ac.getSim=2 physics.setGentleStop=1");
 }

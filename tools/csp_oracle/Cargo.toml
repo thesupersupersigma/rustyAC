@@ -17,6 +17,8 @@ rustyac-ode = { path = "../../crates/rustyac-ode", features = ["embree"] }
 rustyac-net = { path = "../../crates/rustyac-net" }
 # Task C6a: CSP's LuaJIT held against rustyAC's (built from source, feature `luajit`)
 rustyac-lua = { path = "../../crates/rustyac-lua", features = ["luajit"] }
+# Task C6b part 4: a car's data.acd read in memory, its physics scripts handed to CSP's state
+rustyac-content = { path = "../../crates/rustyac-content" }
 
 [profile.release]
 opt-level = 3
