@@ -23,8 +23,10 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
 - **P3c (branch `web`), section 13:** L7 done (13.1 imports, zip, the lists' checks; 13.2 the
   launcher on wry with the chooser; 13.3 the page's synchronous requests never wait on a listing,
   letter case, every read of AC's folder through `vfs`, `quickrace` against fresh Windows gold).
-  L8's pieces done (13.4 the tar.gz and `release.yml`'s Linux job, 13.5 the tester's kit), not
-  run. **Resume at 13.6** (the other seven scripts, the transcripts, the tester's results).
+  L8's pieces done (13.4 the tar.gz and `release.yml`'s Linux job, runnable by hand as "Linux
+  only", 13.5 the tester's kit), the tester's pack done and proved on WSL (13.6, with five fixes),
+  Resume 2's answers (13.7). **Resume at 13.8** (the other seven scripts, the transcripts, the
+  required-files lists without mods, the tester's results).
 
 ## 1. Plain-English summary
 
@@ -1123,37 +1125,144 @@ MPL-2.0 (file-level, GPL-compatible), and `THIRD_PARTY_NOTICES.txt` is made agai
 
 ### 13.5 The tester's kit (CachyOS)
 
-Super sends the tester a test build: `re/scratch/taskP3/l8_dist/rustyAC-v1.1.5-linux-x64.tar.gz`
-(made again with `package_linux.sh` after any change), not a release. What the tester does:
+Super sends the tester (who owns AC but cannot run Steam) one file, the test build with its own
+game files (13.6): `re/scratch/taskP3/l8_dist/rustyAC-test-linux-x64.tar.gz`, never a release,
+never CI, never a public link (`_rules.md`, "Test builds for outside testers"). What the tester
+does:
 
-1. **Install** (Arch / CachyOS): `sudo pacman -S --needed webkit2gtk-4.1 vulkan-icd-loader
-   vulkan-tools` and the GPU's Vulkan driver (`vulkan-radeon`, `vulkan-intel` or `nvidia-utils`;
-   CachyOS usually has it). `gdb` is useful but optional.
-2. **Unpack** anywhere: `tar -xzf rustyAC-v1.1.5-linux-x64.tar.gz && cd rustyAC-v1.1.5-linux-x64`.
-3. **The game files:** a Steam install of Assetto Corsa with Proton is found by itself; otherwise
-   the launcher asks for the folder, or a zip of it (step 3 of the script).
+1. **Install** (Arch / CachyOS): `sudo pacman -S --needed webkit2gtk-4.1 vulkan-icd-loader` and
+   the GPU's Vulkan driver (`vulkan-radeon`, `vulkan-intel` or `nvidia-utils`; CachyOS usually has
+   it). `vulkan-tools` (for `vulkaninfo` in step 1) is optional: without it the step lists the
+   graphics card with `lspci`.
+2. **Unpack** anywhere: `tar -xzf rustyAC-test-linux-x64.tar.gz && cd rustyAC-test-linux-x64`.
+3. **The game files** come with it (`rustyAC-test-pack.zip`, used by itself: no Steam, no AC
+   install, no chooser). Without a pack (a release), a Steam install with Proton is found by
+   itself; otherwise the launcher asks for the folder, or a zip of it.
 4. **Run** `./linux_check.sh` (about 10 minutes) and send back the `rustyac-check-<time>.tar.gz` it
    makes. Its steps: the computer (distribution, kernel, CPU, RAM, GPU and Vulkan driver, audio
-   server, the package versions, missing libraries); the game files (track count); the launcher
+   server, the package versions, missing libraries); the game files (counts only: drivable and
+   refused tracks, and without a pack which of Kunos' base-game tracks are missing; never the list,
+   which names mods); the launcher
    (choose the files if asked, Drive a short race, two y / n answers); the frame check (a screenshot
    of the BMW M3 E30 at Laguna Seca after 8 s, off screen, to compare with Windows'); frame times and
    sound (a window, the AI drives 60 s: the end report's FPS and slowest frame, "did you hear the
    engine", "did the picture look right"); the devices (`--list-devices`); driving by hand
    (keyboard, pad or wheel, with force feedback on), then the close button, **the hang check** (the
    end report printed and the process still there 20 s later is recorded as a hang and killed);
-   with a pad or wheel, two more answers (does it drive, does the force feedback pull towards the
-   centre). **It collects** only what it lists at its top: no game, settings or replay file; the
-   launcher's log without the values it sent (they can hold the driver name); home folder, user name
-   and computer name replaced by `~`, `<user>`, `<host>`.
+   with a pad or wheel (an `Xbox pad on XInput slot` or a `JOY=` line in the devices step), two more
+   answers (does it drive, does the force feedback pull towards the centre). **It collects** only
+   what it lists at its top: no game, settings or replay file; the launcher's log without the values
+   it sent (they can hold the driver name); home folder, user name and computer name replaced by
+   `~`, `<user>`, `<host>`.
+5. **The archive that comes back:** Super puts it, as received, in `ignored/linux_tester/` (made
+   for it; ignored by git, read only for tasks). The next session unpacks it into
+   `re/scratch/taskP3/tester/` and reads: `system.txt` (GPU, Vulkan driver, audio server, missing
+   libraries), `frame_laguna.png` against the same drive's frames here (`run/pack.png` of 13.6 on
+   WSL's lavapipe, and Windows' `re/scratch/taskP3/run/shots/win/laguna_m3_auto.png`, with
+   `frames.py`), `window.txt`'s frame times, `hand.txt` (a `HANG` line is the hang check failing),
+   `launcher.log` (failed requests), `devices.txt` and `answers.txt`; what fails becomes a fix with
+   a test here, and the frame, frame times and hang go into 13.8.
 
-### 13.6 Resume here (P3c)
+### 13.6 The tester's pack (Super's request, done)
 
-- **Done:** L7 (13.1 to 13.3) and L8's pieces (13.4, 13.5), committed on `web`. L7's proof ran
-  for `quickrace` (13.3).
+**What it is:** `rustyAC-test-pack.zip` beside the programs in the test tar.gz: the files the Linux
+game and launcher read for a drive of `bmw_m3_e30` on `ks_laguna_seca`, Kunos' files only.
+Made from `tools/web_pack`'s per-car and per-track lists (`files_read_by_drive`,
+`files_of_picture`, the launcher's theme, `cfg`, `system`, fonts, the sound banks):
+
+```
+tools/web_pack/target/release/web_pack.exe --config re/scratch/taskP3/tp/pack.toml --out re/scratch/taskP3/tp/web
+python re/scratch/taskP3/tp/make_pack.py "<AC folder>" re/scratch/taskP3/tp/web re/scratch/taskP3/tp/rustyAC-test-pack.zip
+TEST_PACK=re/scratch/taskP3/tp/rustyAC-test-pack.zip packaging/package_linux.sh 1.1.5 re/scratch/taskP3/l8_inputs re/scratch/taskP3/l8_dist
+```
+
+`make_pack.py` leaves out FMOD's browser build and every file Steam did not write on the day it
+wrote `acs.exe` (27 here, all in `content/fonts`: VRC's, RSS's and other mods' fonts, and two mod
+copies over Kunos names). **2,521 files, 1,103 MB, 609 MB zipped; the test tar.gz is 589 MB**
+(`package_linux.sh` with `TEST_PACK=`, which CI refuses).
+
+**The programs:** `imports::test_pack()` (portable) finds the pack beside the running program.
+The launcher (`choose_game_files`) uses it without asking and without the base-game check, its
+window titled "Assetto Corsa Launcher (test pack: bmw_m3_e30 at ks_laguna_seca)", also with a
+click script (a check); the car and track lists hold just what is in it. The game (off Windows)
+mounts it when no `RUSTYAC_GAME_FILES` names a choice and `AC_ROOT` is unset or inside the pack
+(the launcher names the pack's root there). `AC_ROOT` / `--ac-root` still override; the chooser is
+unchanged otherwise.
+
+**The proof** (`re/scratch/taskP3/tp/proof.sh`: the tar.gz unpacked into an empty folder, `AC_ROOT`
+unset, `HOME` in the run's folder, no Steam, no `LD_LIBRARY_PATH`):
+
+| | result |
+|---|---|
+| `--list-tracks` | `--track ks_laguna_seca (Laguna Seca)`, nothing else |
+| frame check (8 s, off screen) | **PNG identical** to the same drive from the real install; the same end state (step 2,667, 91.0 km/h, gear 2) |
+| sound | the pack's drive recorded, replayed with FMOD's non-real-time writer: **event log identical** to the real install's; FMOD from beside the program. The WAV repeats from the pack (twice identical) but not from AC's folder on `/mnt/c` (4,905,646 then 4,908,846 bytes: sample loading on the slow disk), so WAVs are not compared |
+| launcher (quickrace's clicks with the M3 and Laguna Seca, Xvfb) | the theme loads, the grids fill with no errors, Drive passes its check and starts the game with `AC_ROOT=<pack>.zip/assettocorsa`, exit 0, 60 s of sound written (12 MB WAV). The last step (the results tab) fails as it should: 60 s is no lap of Laguna Seca, `race_out.json` has no laps, the theme says "Invalid results" |
+| `linux_check.sh` end to end (`check_e2e.sh`: Xvfb, every answer y, the launcher and the hand drive closed with their close buttons) | exit 0 in 574 s; its frame identical to the proof's; no hang; a 1.2 MB archive with no home path, user or host name in it |
+
+**Found on the way, fixed** (each a bug of L7 / L8, not of the pack):
+
+1. **`\` between folders on the Linux disk:** a skin's `skin.ini` names the driver's suit as
+   `driver_HELMET\helmet_1985\red`; Windows and the zip reader split there, Linux's disk did not, so
+   the frame from AC's folder had no helmet or gloves textures (the pack's had them).
+   `vfs::on_disk` now reads `\` as `/` off Windows (the letter-case test has the case).
+2. **The launcher could not show its pages from a zip:** WebKit cannot open a `file://` page inside
+   a zip (an error page, "The operation is insecure"). When the game files are laid (a zip, extra
+   roots) the theme now comes from `acfile://game/<path>`, served from the layers and registered as
+   local, secure and CORS-enabled (what `file://` may do); the bridge's absolute paths in the page
+   resolve to the same scheme. A plain folder keeps `file://`.
+3. **Drive's check refused every race:** AC writes `[CAR_0] MODEL=-` (the player's car is
+   `[RACE] MODEL`), and the check took `-` for a car ("the car - is not there"). It never ran in the
+   proofs: the dev build has no `required/` beside it. Now `-` means `[RACE] MODEL`, as the game reads it.
+4. **The tar.gz held a stale launcher:** `cargo build -p rustyac-game --bin rustyac -p
+   rustyac-launcher` builds only the `rustyac` binary (`--bin` applies to both packages), so
+   `package_linux.sh` packed whatever launcher was there, and `release.yml` would have stopped at
+   "rustyac-launcher is missing" on a fresh machine. Two builds now, in both.
+5. **`linux_check.sh` asked the pad and wheel questions with no device** (`pad` matched "no Xbox pad
+   on XInput").
+
+**Found, not fixed: the required-files lists hold mods.** `base.json` (made by `web_pack
+--required` from Super's install) lists files no clean install has: the `monaco_2017` track (a mod
+whose `ui_track.json` has `"author": null`, so the catalog counts it as Kunos'), VRC and RSS suit
+textures and a VRC driver model (`shared` gathers what every car read, mods included), 27 mod
+fonts (`content/fonts` is taken whole) and mod layouts' `ui` files inside Kunos track folders
+(`monza`, `spa`, `ks_silverstone`). On a clean install the chooser would say "this folder is not a
+complete Assetto Corsa". The pack does not use the check; a release does. The fix (per-item shared
+files, Kunos' tracks by a list rather than an empty author, fonts and `ui` by what Kunos items
+read) and `--required` made again: a task of its own, before the first Linux release (13.8).
+
+### 13.7 Resume 2: the answers and the rest
+
+- **`linux-inputs`:** the pre-release's title and notes now say "Build inputs, not a release"
+  (`docs/release.md`, 3b).
+- **MPL-2.0:** none of the five crates applies Exhibit B ("Incompatible With Secondary Licenses"):
+  their source files carry Exhibit A's header only; the text appears only inside their `LICENSE`
+  copy of MPL-2.0 itself. File-level copyleft, GPL-3.0-compatible as used.
+- **`release.yml` by hand:** "Run workflow" now has **Linux only**: the `linux` job builds and tests
+  the chosen branch and packs the tar.gz with `Cargo.toml`'s version, kept as the run's artifact
+  `linux-x64` (7 days); the publishing job is skipped; no tag needed. Steps: `docs/release.md`, 3c.
+  It needs 3b's pre-release first.
+- **`linux_check.sh` step 2:** counts only (13.5), the test tar.gz made again.
+- **`career`'s failing step is Windows' too:** the Windows recording of `re/gold/launcher_p3c`
+  (`target/proofs/launcher_record/cases.log`) ends `career: exit 1, 2716 requests, 1 failed steps`,
+  on the same step, `until $('#career .series .datalist .item:not(.error)[data-id=series1]')`
+  (why the theme marks it is not looked into). Not Linux's.
+- **The seven other launcher scripts and the transcripts (13.3): not run** this session (the
+  tester pack came first, and its fixes 2 and 3 above changed the launcher); next (13.8).
+
+### 13.8 Resume here (P3c)
+
+- **Done:** L7 (13.1 to 13.3), L8's pieces (13.4, 13.5), the tester's pack (13.6) and Resume 2's
+  answers (13.7), committed on `web`.
 - **Next:** the other seven scripts of `tools/proofs/launcher/` on Linux against
   `re/gold/launcher_p3c` (`l7_run.sh <name>` with `GOLD=re/gold/launcher_p3c SETTLE=150000`, then
-  `l7_cmp.py`; about 12 minutes each in WSL), and the transcripts (every `re/gold/launcher_p3c`
-  list through `--transcript --fixed-host` on both; paths differ only by `C:/` against `/mnt/c/`).
-  Then the tester's results (13.5): a real disk, a GPU with Vulkan, PipeWire, pads and wheels.
-- **Super:** upload `linux-inputs` (`docs/release.md`, 3b) before the first Linux release; merge
-  `web` (its `platforms.yml` needs the two dev packages added here).
+  `l7_cmp.py`; about 12 minutes each in WSL; `career` should fail its one step as Windows does,
+  13.7), and the transcripts
+  (every `re/gold/launcher_p3c` list through `--transcript --fixed-host` on both; paths differ only
+  by `C:/` against `/mnt/c/`). `quickrace` again (fixes 2 and 3 of 13.6 touched the launcher; a
+  plain folder's pages are unchanged). Then the required-files lists without mods (13.6), and the
+  tester's archive (13.5, step 5).
+- **Super:** send the test tar.gz with the message of the P3c report; put the archive that comes
+  back in `ignored/linux_tester/`; upload `linux-inputs` (`docs/release.md`, 3b) and try
+  **Linux only** (3c) before the first Linux release; merge `web` (its `platforms.yml` needs the two
+  dev packages added here).
