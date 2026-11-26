@@ -704,31 +704,33 @@ pub fn choose_game_files(choose: bool) -> Result<Option<PathBuf>, String> {
     gtk::init().map_err(|e| format!("GTK: {e}"))?;
     let file = Remembered::file().ok_or("no HOME: rustyAC's settings folder is unknown")?;
     let lists = shipped_lists();
-    let check = Rc::new(move |r: &Remembered| -> Result<Layers, String> {
+    // the base game's check only warns (a Kunos patch, a regional difference or a mistake in
+    // the list must never lock a player out): the warning, unless "Continue anyway" kept this folder
+    let check = Rc::new(move |r: &Remembered| -> Result<Checked, String> {
         let layers = Layers::open(r.root.as_deref(), &r.extra)?;
-        if let Some(lists) = &lists {
-            lists.check_full(&|p| rustyac_content::vfs::Vfs::is_file(&layers, &layers.root.join(p)))?;
-        }
-        Ok(layers)
+        let warning = match &lists {
+            Some(lists) if r.accepted.is_none() || r.accepted != r.root => lists.check_full(&|p| rustyac_content::vfs::Vfs::is_file(&layers, &layers.root.join(p))).err(),
+            _ => None,
+        };
+        Ok((layers, warning))
     });
     let mut choice = Remembered::load(&file);
     if !choose && choice.root.is_some() {
-        if let Ok(layers) = check(&choice) {
+        if let Ok((layers, None)) = check(&choice) {
             return Ok(Some(use_layers(layers, Some(&file))));
         }
     }
     if choice.root.is_none() {
         choice.root = rustyac_content::install::ac_root();
     }
-    let state = Rc::new(RefCell::new((choice, None::<Layers>, false)));
+    let state = Rc::new(RefCell::new((choice, None::<Checked>, false)));
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("rustyAC: Assetto Corsa's game files");
     window.set_default_size(760, 560);
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
     window.add(&vbox);
-    let page = |c: &Remembered, status: &Result<Layers, String>| chooser_page(c, status);
     let first = check(&state.borrow().0);
-    let html = page(&state.borrow().0, &first);
+    let html = chooser_page(&state.borrow().0, &first);
     state.borrow_mut().1 = first.ok();
     let (st, win, check2) = (state.clone(), window.clone(), check.clone());
     let webview = WebViewBuilder::new()
@@ -753,6 +755,9 @@ pub fn choose_game_files(choose: bool) -> Result<Option<PathBuf>, String> {
             let mut s = st.borrow_mut();
             match verb {
                 "continue" if s.1.is_some() => {
+                    if s.1.as_ref().is_some_and(|c| c.1.is_some()) {
+                        s.0.accepted = s.0.root.clone();
+                    }
                     s.2 = true;
                     win.close();
                     return;
@@ -800,13 +805,16 @@ pub fn choose_game_files(choose: bool) -> Result<Option<PathBuf>, String> {
     CHOOSER.with(|c| c.borrow_mut().take());
     let (choice, layers, accepted) = Rc::try_unwrap(state).map_err(|_| "chooser still in use")?.into_inner();
     match (accepted, layers) {
-        (true, Some(layers)) => {
+        (true, Some((layers, _))) => {
             choice.save(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             Ok(Some(use_layers(layers, Some(&file))))
         }
         _ => Ok(None),
     }
 }
+
+/// A choice that opens: its layers, and the base game's check's warning (missing files named).
+type Checked = (Layers, Option<String>);
 
 thread_local! {
     static CHOOSER: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
@@ -838,18 +846,20 @@ fn escape(text: &str) -> String {
 }
 
 /// rustyAC's own page for the choice (not the launcher's).
-fn chooser_page(choice: &Remembered, status: &Result<Layers, String>) -> String {
+fn chooser_page(choice: &Remembered, status: &Result<Checked, String>) -> String {
     let (line, ok) = match status {
-        Ok(layers) => (format!("Assetto Corsa found in <b>{}</b>. {} cars and {} tracks.", escape(&choice.root.as_ref().map(|p| p.display().to_string()).unwrap_or_default()), layers.ids("cars").len(), layers.ids("tracks").len()), true),
+        Ok((layers, None)) => (format!("Assetto Corsa found in <b>{}</b>. {} cars and {} tracks.", escape(&choice.root.as_ref().map(|p| p.display().to_string()).unwrap_or_default()), layers.ids("cars").len(), layers.ids("tracks").len()), true),
+        Ok((_, Some(warning))) => (format!("{}. If this is your Assetto Corsa all the same, <b>Continue anyway</b> uses it as it is (not asked again for this folder).", escape(warning)), true),
         Err(why) => (escape(why), false),
     };
+    let warned = matches!(status, Ok((_, Some(_))));
     let extra: String = choice.extra.iter().enumerate().map(|(i, p)| format!("<li><span>{}</span><button onclick=\"post('remove {i}')\">Remove</button></li>", escape(&p.display().to_string()))).collect();
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>rustyAC: the game files</title><style>\
 :root{{--bg:#16181c;--panel:#20242a;--text:#e8e8e8;--dim:#9aa0a8;--accent:#e0a030;--bad:#e06050}}\
 body{{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,sans-serif}}main{{max-width:680px;margin:0 auto;padding:24px 16px}}\
 h1{{font-size:22px;margin:0 0 16px}}section{{background:var(--panel);border-radius:8px;padding:16px;margin-bottom:16px}}h2{{font-size:17px;margin:0 0 10px}}\
-p.status{{margin:0 0 12px;word-break:break-all}}p.bad{{color:var(--bad)}}p.note{{color:var(--dim);margin:0 0 10px}}ul{{list-style:none;padding:0;margin:0 0 10px}}\
+p.status{{margin:0 0 12px;overflow-wrap:anywhere}}p.bad{{color:var(--bad)}}p.note{{color:var(--dim);margin:0 0 10px}}ul{{list-style:none;padding:0;margin:0 0 10px}}\
 li{{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:6px 0;word-break:break-all}}\
 button{{background:#2e343c;color:var(--text);border:1px solid #444b55;border-radius:6px;padding:6px 14px;font:inherit;cursor:pointer}}\
 button:hover,button:focus-visible{{border-color:var(--accent)}}button.primary{{background:var(--accent);color:#111;border-color:var(--accent)}}button:disabled{{opacity:.4;cursor:default}}\
@@ -857,9 +867,10 @@ button:hover,button:focus-visible{{border-color:var(--accent)}}button.primary{{b
 <section><h2>The game</h2><p class=\"status{bad}\" role=\"status\">{line}</p><div class=\"bar\"><button onclick=\"post('root-folder')\">Change… (a folder)</button><button onclick=\"post('root-zip')\">Change… (a zip)</button></div></section>\
 <section><h2>Extra cars and tracks</h2><p class=\"note\">Folders or zips with cars and / or tracks, read where they are, added to the game's own.</p><ul>{extra}</ul>\
 <div class=\"bar\"><button onclick=\"post('add-folder')\">Add a folder…</button><button onclick=\"post('add-zip')\">Add a zip…</button></div></section>\
-<div class=\"bar\"><button class=\"primary\" onclick=\"post('continue')\"{disabled}>Continue</button></div></main>\
+<div class=\"bar\"><button class=\"primary\" onclick=\"post('continue')\"{disabled}>{go}</button></div></main>\
 <script>function post(m){{window.ipc.postMessage(m)}}</script></body></html>",
-        bad = if ok { "" } else { " bad" },
+        bad = if ok && !warned { "" } else { " bad" },
+        go = if warned { "Continue anyway" } else { "Continue" },
         disabled = if ok { "" } else { " disabled" },
     )
 }

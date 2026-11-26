@@ -327,6 +327,9 @@ pub fn test_pack() -> Option<PathBuf> {
 pub struct Remembered {
     pub root: Option<PathBuf>,
     pub extra: Vec<PathBuf>,
+    /// The full install the player kept with "Continue anyway" although the base game's check
+    /// named missing files: not asked again while `root` is this folder.
+    pub accepted: Option<PathBuf>,
 }
 
 impl Remembered {
@@ -344,13 +347,14 @@ impl Remembered {
         Some(dir.join("rustyAC").join("game_files.txt"))
     }
 
-    /// `root=<path>` and `extra=<path>` lines; anything else is skipped.
+    /// `root=<path>`, `extra=<path>` and `accepted=<path>` lines; anything else is skipped.
     pub fn parse(text: &str) -> Remembered {
         let mut r = Remembered::default();
         for line in text.lines() {
             match line.split_once('=') {
                 Some(("root", p)) if !p.is_empty() => r.root = Some(PathBuf::from(p)),
                 Some(("extra", p)) if !p.is_empty() => r.extra.push(PathBuf::from(p)),
+                Some(("accepted", p)) if !p.is_empty() => r.accepted = Some(PathBuf::from(p)),
                 _ => {}
             }
         }
@@ -359,7 +363,7 @@ impl Remembered {
 
     pub fn to_text(&self) -> String {
         let mut out = String::from("# rustyAC: where the game's files are (written by the launcher)\n");
-        for (k, p) in self.root.iter().map(|p| ("root", p)).chain(self.extra.iter().map(|p| ("extra", p))) {
+        for (k, p) in self.root.iter().map(|p| ("root", p)).chain(self.extra.iter().map(|p| ("extra", p))).chain(self.accepted.iter().map(|p| ("accepted", p))) {
             out.push_str(&format!("{k}={}\n", p.display()));
         }
         out
@@ -492,9 +496,9 @@ mod tests {
 
     #[test]
     fn the_choice_reads_back() {
-        let r = Remembered { root: Some(PathBuf::from("/games/ac.zip")), extra: vec![PathBuf::from("/mods/a"), PathBuf::from("/mods/b.zip")] };
+        let r = Remembered { root: Some(PathBuf::from("/games/ac.zip")), extra: vec![PathBuf::from("/mods/a"), PathBuf::from("/mods/b.zip")], accepted: Some(PathBuf::from("/games/ac.zip")) };
         assert_eq!(Remembered::parse(&r.to_text()), r);
-        assert_eq!(Remembered::parse("junk\nroot=\nextra=/x\n"), Remembered { root: None, extra: vec![PathBuf::from("/x")] });
+        assert_eq!(Remembered::parse("junk\nroot=\nextra=/x\n"), Remembered { root: None, extra: vec![PathBuf::from("/x")], accepted: None });
         assert!(Remembered::file().is_none_or(|f| f.ends_with("rustyAC/game_files.txt")));
     }
 }
