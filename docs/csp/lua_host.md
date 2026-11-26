@@ -4,11 +4,71 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a is done (below). C6b is done: parts 1-4, and part 5 for what the 9 car scripts use of it:
-`ac.INIConfig.parse` in the extended formats and `ac.INIConfig.carData` (`__util.nativf`, csp::lua_natives,
-proof case `csp lua env` 111/111 identical); the rest of part 5 is "on demand" (an unported
-`__util.nativf` hash names itself). Next: C6c (CSP's car_cphys step sub_18085AD10 with its 82 natives
-needs the car state; also `ac.connect`, DataLUT21, and the game's car list for other cars' carData).
+C6a and C6b are done (below). C6c part 1 is done (next section): `CSP_ORACLE_FRAMES` runs CSP's own car
+script in csp_oracle for the whole drive. 8 of the 9 script cars load and run 4,000 steps there, with
+the script's natives logged per step. URD fails on `std/ac_common` `pairs`, as it does in the game.
+Next: C6c part 2. Port the natives that table shows, in step order: `lj_getSim`/`lj_getCar` state,
+`lj_getCarPhysics`, the `cphys<i>` natives (most are each step: 66, 35, 27, 62, 9, 52, 46, 11, 21,
+50, 60, 80), `lj_binaryinput_*` (ControlButton), `lj_lut_*`/`lj_lut2d_*` (DataLUT11/21 get and
+loadcardata), `lj_set*__carc`, `lj_connect_*`, `lj_getAirPressure`, `lj_encodeHalf`,
+`lj_preciseClock__os`. Prove each in `csp lua env` against CSP on the same car state. The oracle's
+car context +0xa0 stand-in covers only the last car built; extend it before a run has two script cars.
+
+## C6c part 1: CSP's car scripts running in the oracle (dwrite.dll build 4305)
+
+`CSP_ORACLE_FRAMES=<n>` (csp_oracle `--drive`) makes CSP run the car's physics script for the whole
+drive. After the CSP command queue each step it sets CSP's frame count (+0x2820e90) to n + step. In
+the game only its frame update (+0x1223740) writes that count, once per graphics frame; the oracle
+writes it once per physics step. The script runner (+0x84c110) starts the script once the count is
+10 or more, and `n=0` starts like the game. At step 0 it puts in the stand-ins below. Every step it
+then calls CSP's per-frame "Lua/States" update (+0x10ad540, argument unused), which fills the sim
+state and one 3,280-B state per car that `lj_getSim`/`lj_getCarState` return. Without the flag
+the drive does none of this.
+
+The stand-ins are zeroed objects, put only where the pointer is null:
+
+| Where | What | Who reads it |
+|---|---|---|
+| car list end (+0x28213e0) | begin + 8 × cars (the vector the oracle's car load fills at +0x28213d8) | Lua/States update: the number of car states |
+| car context (+0x2817d90) +0xa0 | the car list's slot (last car built) | script runner via +0xf32f00 (builds a fresh slot when unset): natives such as `ac.accessExtraSwitchParams` (+0x489b00) read the runner's car, which in the game is the list's slot |
+| slot +0x440 | 4,584 B through CSP's own car data constructor (+0x7eaf10) with the car folder | `INIConfig.carData`, `getCarDataFiles` (+72 `<cars>\<car>`, +104 its data) |
+| slot +0xe8, +0x108 | the car folder as wstring / narrow string | `getCarDataFiles` (+0x13ce180), `lj_getCarID` |
+| slot +0x470 | the extra-switch object: 20 params of 72 B at +0, availability bytes at +0x5a7, objects at +0x648 and +0x650 | `accessExtraSwitchParams`, `lj_getCarExtraSwitchState` (+0x4d9460), the state fill (+0x10b1778, their +0x148) |
+| slot +0x478 | an empty hash map: shift byte +0x26 = 63, then CSP's own sizer (+0x2c4a70) | first state fill's insert (+0x10b4590, +0x2d2120) |
+| slot +0x4b0 | CSP's empty callback manager (+0x2c60e0) | the same insert (+0x2d3690) |
+| slot +0x548 | an object with +0x8d8 (vec3 at +0x2e8, -1 unset) and per wheel w: +0x520 + 0xe8w = avatar + 940 + 64w, +0x528 + 0xe8w = avatar + 684 + 64w (the rule of CSP's slot constructor +0xb2b9a0) | the state fill (+0x10ab700, +0x10af5ea) |
+| slot +0x288, +0x290 | objects with 1.0f fields | state fill tail (+0x10b1fe6) |
+| CarAvatar (slot+0) +0x210, +0xe18, +0xfd0, +0xfe8, +0x1008, +0x1010, +0x1270 | objects (+0xfc8 = +0xfd0: an empty vector) | first state fill (+0x10af8f0) and the avatar reads it makes |
+| CarAvatar +0x130 | the oracle's Sim | acs RaceManager::getBestLap → ReplayManager::isInReplaymode |
+| globals +0x2820640 (+0x470), +0x281a7b8, +0x28197b0, +0x2818870 (+0x88, +0xb0, +0xb8, +0xc0), +0x28196f8 | the game window, camera and other main-thread objects | the sim state builder (+0x10b2730, +0x10b23c0) |
+| Sim +0x118, +0x150, +0x168, +0x1b0, +0x1b8, +0x238, +0x260 | objects | the same builder; +0x118 (escMenu) by a car_cphys native (+0x858cc0, its +0x1a8), +0x1b0 by isInReplaymode |
+
+CSP's car_cphys step (+0x85ad10: its own 3,529-B chunk, a table of 82 natives, the real
+`ac.accessCarPhysics`) runs when the script's state is made: once per load (28 times for alpha 2025,
+whose script makes more states). Its natives show below as `cphys<i>` (table index i).
+
+**The 9 cars, 4,000 steps** (spa lap tape, `CSP_ORACLE_FRAMES=11`, `CSP_ORACLE_RECORD=1`, every
+native's address a breakpoint; only calls from the script are counted: LuaJIT's FFI call site
++0x196905, or JIT code). URD's data.acd is read as shipped. No decryption was needed: CSP's own
+loader reads every packed script itself.
+
+| Car | Class | CSP's log | Calls / distinct natives | Step 0 | Each later step |
+|---|---|---|---|---|---|
+| `rss_formula_rss_3_v6_2026` | 1 | loaded and ready | 28,012 / 9 | 19: getSim, getCar, lut2d_loadcardata ×2, binaryinput_new ×5, … | cphys66, binaryinput_pressedphysics ×4, lut2d_get ×2 |
+| `rss_formula_2010` | 1 | loaded and ready | 20,015 / 12 | 20 (connect_new ×2, lut_loadcardata, binaryinput_new ×4, …) | cphys35, cphys27, binaryinput_pressedphysics ×3 |
+| `pxw_sl_v4` | 1 | loaded and ready | 2 / 2 | getSim, getCar | none (offline: entitled, does nothing) |
+| `vrc_formula_alpha_2025_csp` | 2 | loaded and ready | 52,941 / 41 | 954 | cphys80, encodeHalf, lut_get ×4, setExtraSwitch__carc, cphys9 ×4, lut2d_get ×2 |
+| `vrc_formula_alpha_2026_csp` | 2 (packed) | loaded and ready | 8,029 / 14 | 13 | preciseClock__os, cphys60 (a second set-up at step 172: connectonline_*, checksumXXH, …) |
+| `vrc_formula_beta_2024_csp` | 2 | loaded and ready | 74,513 / 36 | 184 | cphys52, cphys27, cphys46, lut_get ×3, cphys11, getAirPressure, setExtraSwitch__carc ×3-4, cphys21, cphys9 ×4, lut2d_get ×2 (timers at 1977, 3976) |
+| `vrc_formula_lithium_2023_csp` | 2 | loaded and ready | 2 / 2 | getSim, getCar | none |
+| `rss_formula_hybrid_2026` | 3 as 2 (packed) | loaded and ready | 283,574 / 37 | 261 | cphys35, cphys62 ×3, binaryinput_downphysics ×16-18, lut_get, binaryinput_onpressed ×8, binaryinput_pressedphysics ×31, cphys50, lut2d_get, binaryinput_new ×8, setMGUKDelivery__carc (steps 1-2) |
+| `urd_darche_992_23` | 3 as 2 (FolderEncrypter) | failed to load: `std/ac_common:0: bad argument #1 to 'pairs' (table expected, got function)` | 7 / 6 | connect_new, getSim, getCarID, getCar ×2, random_seed, connect_gc | none |
+
+URD fails in the game the same way: the game's own CSP log has a Car physics script failing on that
+std/ac_common `pairs` error. The steps hash with the scripts running differs from the plain run's
+(RSS 3: 2094b15abe6958a1 with the flag, 08a5a823364991ca without). The script acts on CSP's car
+(cphys66 each step), and the breakpoints don't change the hash. The per-step logs are
+re/scratch/taskC6c (all.sh, names.sh), scratch only.
 
 ## C6b part 1: the car physics script's environment (survey, dwrite.dll build 4305)
 
@@ -87,7 +147,8 @@ Why CSP's own path to the script was not used: `require` gives CSP's hook full p
 bare name goes through the read-permission check sub_1813CA370, which needs the game's car list
 (qword_1828213D8) and car (+1088 path), and still said "permission denied" with stand-ins.
 
-What a run without the game reaches (natives the game must answer were stubbed: `lj_getSim`,
+What a run without the game reached before C6c (C6c part 1 has the runs with CSP's car state;
+natives the game must answer were stubbed: `lj_getSim`,
 `lj_getCar` return zeroed state_sim/state_car, `lj_getCarID` the folder name; `lj_getSim` crashes in
 sub_1810B23C0 without the game's sim):
 
@@ -183,7 +244,7 @@ the oracle's `lua refs`; the packed ones are not counted): `INIConfig.carData` (
 `ac.storageSetPath` are nil in CSP's car physics state (scripts referring to them get nil), so rustyAC
 leaves them out too. `ac.ControlButton` (`lj_binaryinput_*`), `ac.readDataFile`, `ac.getFolder`,
 `ac.getCarDataFiles` and `lj_loadINIppFile` need the game's car or input state (they crash CSP's
-stand-in or give nil): C6c.
+stand-in or give nil): C6c part 1 gives CSP that state in the oracle, part 2 ports them.
 
 **The natives** (`__util.nativf(hash, ...)`, map filled by sub_18101A9E0; the CSP side is the bundle's
 own Lua, so `get`, `set`, `serialize`, the typed reads are CSP's code on both sides):

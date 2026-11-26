@@ -1438,7 +1438,21 @@ unsafe fn load_car(acs: &Acs, car_name: &str, car_root: &str, csp: Option<usize>
         for guid in 0..count {
             let slot = acs.alloc(0x1000);
             put(slot, 0, acs.alloc(0x12a8));
-            put(slot, 0x440, acs.alloc(0x100));
+            let data = acs.alloc(4584); // CSP's size (slot constructor +0x15197e0); VRC scripts read its +0x1118 list
+            put(slot, 0x440, data);
+            // CSP's own settings::ac_car_data constructor (+0x7eaf10) moves the car folder wstring to +8 and
+            // builds +72 (<cars folder>\<car>) and +104 (+72\data): getCarDataFiles and INIConfig.carData read them
+            let car_data: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(dll + 0x7e_af10);
+            car_data(data, wstring(acs, car_name));
+            // slot+0xe8: the same as a std::wstring (constructor arg 2); getCarDataFiles (+0x13ce180) lists a
+            // data.acd's entries when <cars folder>\<it>\data.acd exists
+            std::ptr::copy_nonoverlapping(wstring(acs, car_name), slot.add(0xe8), 32);
+            // +0x108: the car folder as a narrow std::string (the constructor copies CarAvatar+312), lj_getCarID's answer
+            let name = car_name.as_bytes();
+            let text = if name.len() < 16 { slot.add(0x108) } else { let t = acs.alloc(name.len() + 1); put(slot, 0x108, t); t };
+            std::ptr::copy_nonoverlapping(name.as_ptr(), text, name.len());
+            put(slot, 0x118, name.len());
+            put(slot, 0x120, name.len().max(15));
             put(state, 8 * guid, slot);
         }
         *((dll + 0x282_13d8) as *mut *mut u8) = state;
@@ -1903,6 +1917,101 @@ extern "C" fn device_false(_this: *mut u8) -> u8 {
 extern "C" fn device_set_vibrations(_this: *mut u8, _def: *const u8) {}
 extern "C" fn device_set_engine_rpm(_this: *mut u8, _rpm: f32, _limiter: f32) {}
 
+/// Task C6c: the game objects CSP's car script sim state (+0x10b2730, +0x10b23c0) reads without a null
+/// check that the oracle never builds; each a zeroed stand-in (docs/csp/lua_host.md, C6c part 1)
+unsafe fn script_stand_ins(acs: &Acs, dll: usize, cars: usize) {
+    // the car list (0x28213d8) is a vector: its end (0x28213e0) sizes CSP's per-car script states (+0x10ad540)
+    put(dll as *mut u8, 0x282_13e0, read::<usize>(dll + 0x282_13d8) + 8 * cars);
+    // the script runner (+0x84c110) takes its car from the car context's +0xa0 (+0xf32f00, which builds a
+    // fresh slot when unset, as it has by now); in the game the car list holds that same object, so it gets the list's slot
+    // shortcut: only the current context (the last car built), upgrade when a run has more than one script car
+    let context = read::<usize>(dll + 0x281_7d90);
+    if context != 0 && cars > 0 {
+        put(context as *mut u8, 0xa0, read::<usize>(read::<usize>(dll + 0x282_13d8) + 8 * (cars - 1)));
+    }
+    // each car slot's objects the per-car state fill (+0x10b07c0) reads unchecked: (slot offset, its object's pointers)
+    let slots: [(usize, &[usize]); 1] = [(0x548, &[0x8d8])];
+    for car in 0..cars {
+        let slot = read::<usize>(read::<usize>(dll + 0x282_13d8) + 8 * car) as *mut u8;
+        for (offset, inner) in slots {
+            if read::<usize>(slot as usize + offset) == 0 {
+                let object = acs.alloc(0x1000);
+                for &field in inner {
+                    put(object, field, acs.alloc(0x800));
+                }
+                put(slot, offset, object);
+            }
+        }
+        // the CarAvatar stand-in's (slot+0) objects the state fill reads unchecked: +0x210 (init3D), +0xe18,
+        // +0x1270 (initCommonPostPhysics), +0xfe8 (initDriver), +0xfd0, +0x1008, +0x1010 (CarAvatar::CarAvatar)
+        let avatar = read::<usize>(slot as usize) as *mut u8;
+        for field in [0x210, 0xe18, 0xfd0, 0xfe8, 0x1008, 0x1010, 0x1270] {
+            if read::<usize>(avatar as usize + field) == 0 {
+                put(avatar, field, acs.alloc(0x1000));
+            }
+        }
+        // +0xfc8..+0xfd0 is a vector (CSP counts it at +0x10b2002): empty
+        put(avatar, 0xfc8, read::<usize>(avatar as usize + 0xfd0));
+        // CarAvatar+0x130: its Sim (RaceManager::getBestLap reads Sim+0x1b0 through it)
+        if read::<usize>(avatar as usize + 0x130) == 0 {
+            put(avatar, 0x130, read::<usize>(dll + 0x282_0e60));
+        }
+        // slot+0x548's per-wheel pointers into the CarAvatar, as CSP's constructor (+0xb2b9a0) sets them
+        let object = read::<usize>(slot as usize + 0x548) as *mut u8;
+        for wheel in 0..4 {
+            put(object, 0x520 + wheel * 0xe8, avatar as usize + 940 + 64 * wheel);
+            put(object, 0x528 + wheel * 0xe8, avatar as usize + 684 + 64 * wheel);
+        }
+        // slot+0x288 (32 B) and slot+0x290 (16 B) with the 1.0f fields CSP's slot constructor (+0x15197e0) writes
+        for (offset, size, ones) in [(0x288, 32, &[12, 16][..]), (0x290, 16, &[12][..])] {
+            if read::<usize>(slot as usize + offset) == 0 {
+                let object = acs.alloc(size);
+                for &one in ones {
+                    put(object, one, 1.0f32);
+                }
+                put(slot, offset, object);
+            }
+        }
+        // slot+0x470: zeroed extra-switch object: 20 params of 72 B at +0 (ac.accessExtraSwitchParams, +0x489b00),
+        // 20 availability bytes at +0x5a7 (+0x4d9460), +0x648/+0x650 objects the state fill (+0x10b1778) reads +0x148 of
+        if read::<usize>(slot as usize + 0x470) == 0 {
+            let switches = acs.alloc(0x800);
+            put(switches, 0x648, acs.alloc(0x800));
+            put(switches, 0x650, acs.alloc(0x800));
+            put(slot, 0x470, switches);
+        }
+        // slot+0x478: an empty hash map (+0x10 bucket vector, +0x20 max load, +0x26 shift byte) the first
+        // state fill (+0x10af8f0) inserts into; its buckets made by CSP's own sizer (+0x2c4a70) at 2
+        if read::<usize>(slot as usize + 0x488) == 0 {
+            *slot.add(0x478 + 0x26) = 63;
+            let buckets: extern "C" fn(*mut u8) = std::mem::transmute(dll + 0x2c_4a70);
+            buckets(slot.add(0x478));
+            // slot+0x4a0: an empty callback (+0x10 its manager, CSP's shared empty one from +0x2c60e0)
+            let empty: extern "C" fn() -> usize = std::mem::transmute(dll + 0x2c_60e0);
+            put(slot, 0x4b0, empty());
+        }
+    }
+    // (global, size, its object pointers read without a check)
+    let globals: [(usize, usize, &[usize]); 5] = [(0x282_0640, 0x800, &[0x470]), (0x281_a7b8, 0x100, &[]), (0x281_97b0, 0x800, &[]), (0x281_8870, 0x200, &[0x88, 0xb0, 0xb8, 0xc0]), (0x281_96f8, 0x100, &[])];
+    for (rva, size, inner) in globals {
+        if read::<usize>(dll + rva) == 0 {
+            let object = acs.alloc(size);
+            for &offset in inner {
+                put(object, offset, acs.alloc(0x800));
+            }
+            put(dll as *mut u8, rva, object);
+        }
+    }
+    // the Sim's objects it reads through (Sim stand-in from load_car); +0x118 escMenu: a car_cphys native
+    // (+0x858cc0) reads its +0x1a8
+    let sim = read::<usize>(dll + 0x282_0e60) as *mut u8;
+    for offset in [0x118, 0x150, 0x168, 0x1b0, 0x1b8, 0x238, 0x260] {
+        if read::<usize>(sim as usize + offset) == 0 {
+            put(sim, offset, acs.alloc(0x800));
+        }
+    }
+}
+
 /// Drives `cars` with the records of `ryin` (car_oracle's flat-road scenarios), `steps` of them at
 /// most, and writes steps.txt: per step and car the hash of the car's words and of its state.
 /// `still`: every record's pedals and wheel zero. `air` (CSP's dll, `track:ambient:road:wind`): per
@@ -2055,6 +2164,18 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
             // physics thread calls each step; this oracle has no PhysicsAvatar, so it runs that queue itself
             let run_queue: extern "C" fn(usize) = std::mem::transmute(dll + 0x15d_1ee0);
             run_queue(read::<usize>(read::<usize>(dll + 0x281_4d78)));
+            // Task C6c: CSP_ORACLE_FRAMES=<n> sets CSP's frame count (only writer: its frame update +0x1223740)
+            // to n + step; the car script runner +0x84c110 runs the script once it is 10 or more
+            if let Some(n) = std::env::var("CSP_ORACLE_FRAMES").ok().and_then(|v| v.parse::<u64>().ok()) {
+                *((dll + 0x282_0e90) as *mut u64) = n + i as u64;
+                if i == 0 {
+                    script_stand_ins(acs, dll, cars.len());
+                }
+                // CSP's per-frame Lua state update (its frame update +0x1223740 calls it): the sim and each car's
+                // script state lj_getSim / lj_getCarState return
+                let lua_states: extern "C" fn(usize) = std::mem::transmute(dll + 0x10a_d540);
+                lua_states(0);
+            }
         }
         let time = 60_000.0 + (i + 1) as f64 * 3.0;
         step(engine, 0.003, time, time);
@@ -2525,7 +2646,8 @@ fn main() {
         arguments.remove(i)
     });
     let vanilla = arguments.iter().position(|a| a == "--vanilla").map(|i| arguments.remove(i)).is_some();
-    // --car-data <folder>: the car's plain data files (default cardata/<name>), as car_oracle reads them
+    // --car-data <folder>: the car's plain data files (default cardata/<name>), as car_oracle reads them;
+    // a path ending in .acd is copied as the car's data.acd instead
     let car_data = arguments.iter().position(|a| a == "--car-data").map(|i| {
         arguments.remove(i);
         arguments.remove(i)
@@ -2612,7 +2734,13 @@ fn main() {
     let car_root = format!("{run}\\car_root");
     if let Some(car) = &car_name {
         let from = car_data.clone().unwrap_or(format!("cardata/{car}"));
-        copy_tree(std::path::Path::new(&from), std::path::Path::new(&format!("{car_root}\\content\\cars\\{car}\\data"))).expect("the car's data can be copied");
+        if from.ends_with(".acd") {
+            // a data.acd as shipped: the game's FolderEncrypter (and CSP's hooks on it) read it in memory
+            std::fs::create_dir_all(format!("{car_root}\\content\\cars\\{car}")).unwrap();
+            std::fs::copy(&from, format!("{car_root}\\content\\cars\\{car}\\data.acd")).expect("the car's data.acd can be copied");
+        } else {
+            copy_tree(std::path::Path::new(&from), std::path::Path::new(&format!("{car_root}\\content\\cars\\{car}\\data"))).expect("the car's data can be copied");
+        }
         std::fs::create_dir_all(format!("{car_root}\\system\\cfg")).unwrap();
         std::fs::write(
             format!("{car_root}\\system\\cfg\\assetto_corsa.ini"),
