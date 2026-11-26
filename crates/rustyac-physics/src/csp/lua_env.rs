@@ -145,6 +145,10 @@ unsafe fn set_up(l: *mut lua_State, root: &str, host: &Host) -> Result<(), Strin
         table(l, name, nrec, names);
         lua_setfield(l, LUA_GLOBALSINDEX, name.as_ptr());
     }
+    lua_getfield(l, LUA_GLOBALSINDEX, c"__util".as_ptr());
+    lua_pushcclosure(l, super::lua_natives::nativf, 0);
+    lua_setfield(l, -2, c"nativf".as_ptr());
+    lua_settop(l, 0);
     lua_getfield(l, LUA_GLOBALSINDEX, c"string".as_ptr());
     for name in STRING {
         set_unported(l, c"string", name);
@@ -185,7 +189,7 @@ pub unsafe fn car_physics(dwrite: &Path, host: &Host) -> Result<*mut lua_State, 
     lua_settop(l, 0);
     lj_clib_resolver = Some(resolve);
     // `ac.DataLUT11.carData`: the script folder of a car physics script is its car's data folder
-    super::lua_natives::set_car_data(host.car_index, host.dir);
+    super::lua_natives::set_car_data(host.car_index, host.dir, dwrite);
     let root = dwrite.parent().unwrap_or(Path::new("")).to_string_lossy();
     let mut r = set_up(l, &root, host);
     for name in LIBS {
@@ -234,6 +238,17 @@ mod tests {
             let l = car_physics(&dwrite, &Host { dir: "x", car_index: 2, allow_io: true }).unwrap();
             run(l, b"assert(__carindex__ == 3 and __allowIO__ and __dirname == 'x' and __mode__ == 'car_cphys')", c"=t", c"t").unwrap();
             lua_close(l);
+            // carData reads the car's data folder with INIpp's Lua on; a missing file has no sections
+            let dir = std::env::temp_dir().join(format!("rustyac_cardata_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("car.ini"), "[X]\nA=$\" 1 + 2 \"\nB=1, 2\n").unwrap();
+            let l = car_physics(&dwrite, &Host { dir: dir.to_str().unwrap(), car_index: 0, allow_io: false }).unwrap();
+            let check = b"local s = ac.INIConfig.carData(0, 'Data/CAR.ini').sections
+                assert(s.X.A[1] == '3' and s.X.B[2] == '2' and next(ac.INIConfig.carData(0, 'none.ini').sections) == nil)";
+            let r = run(l, check, c"=t", c"t");
+            lua_close(l);
+            std::fs::remove_dir_all(&dir).unwrap();
+            r.unwrap();
         }
     }
 }

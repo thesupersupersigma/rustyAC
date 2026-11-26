@@ -67,6 +67,7 @@ pub mod sys {
         pub fn lua_createtable(l: *mut lua_State, narr: c_int, nrec: c_int);
         pub fn lua_getfield(l: *mut lua_State, idx: c_int, k: *const c_char);
         pub fn lua_setfield(l: *mut lua_State, idx: c_int, k: *const c_char);
+        pub fn lua_settable(l: *mut lua_State, idx: c_int);
         pub fn lua_close(l: *mut lua_State);
     }
 }

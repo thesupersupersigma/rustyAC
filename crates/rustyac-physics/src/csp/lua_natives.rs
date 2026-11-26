@@ -6,7 +6,11 @@
 //! per thread and native, valid until that native runs again on the thread).
 
 use std::cell::RefCell;
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void, CStr};
+
+use rustyac_lua::sys::*;
+
+use super::inipp::Sections;
 
 /// The layout CSP's cdef reads for a returned `std::string` (MSVC x64): the text, or a pointer to
 /// it when the capacity is over 15, then size and capacity.
@@ -350,7 +354,8 @@ fn parse_file(text: &[u8]) -> Vec<[f32; 2]> {
 /// The car data folder of each car index whose physics state is set up (csp::lua_env).
 static CAR_DATA: std::sync::Mutex<std::collections::BTreeMap<i32, std::path::PathBuf>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
 
-pub(super) fn set_car_data(car_index: i32, dir: &str) {
+pub(super) fn set_car_data(car_index: i32, dir: &str, dwrite: &std::path::Path) {
+    *DWRITE.lock().unwrap() = Some(dwrite.into());
     CAR_DATA.lock().unwrap().insert(car_index, dir.into());
 }
 
@@ -418,6 +423,116 @@ unsafe extern "C" fn lj_lut_atvalue(lut: *const LuaLut, i: i32) -> f32 {
     (*lut).points().get(i as usize).map_or(f32::NAN, |p| p[1])
 }
 
+/// Task C6b part 5: `__util.nativf(hash, ...)`, CSP's natives called by hash (registered by
+/// sub_18101A9E0), the ported ones; any other stops, naming its hash.
+pub(super) unsafe extern "C-unwind" fn nativf(l: *mut lua_State) -> c_int {
+    match lua_tonumber(l, 1) as i64 as u32 {
+        0x14c2318e => ini_parse(l),
+        0xe8bebf1b => ini_car_data(l),
+        hash => {
+            eprintln!("CSP Lua: __util.nativf({hash:#010x}) is not ported yet (docs/csp/lua_host.md)");
+            std::process::abort();
+        }
+    }
+}
+
+unsafe fn arg_bytes<'a>(l: *mut lua_State, idx: c_int) -> &'a [u8] {
+    let mut n = 0;
+    let p = lua_tolstring(l, idx, &mut n);
+    if p.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(p.cast(), n)
+    }
+}
+
+/// sub_1813EED80: `{section = {key = {value, ...}}}` pushed.
+unsafe fn push_sections(l: *mut lua_State, sections: &Sections) -> c_int {
+    let push = |b: &[u8]| lua_pushlstring(l, b.as_ptr().cast(), b.len());
+    lua_createtable(l, 0, sections.len() as c_int);
+    for (name, keys) in sections {
+        push(name);
+        lua_createtable(l, 0, keys.len() as c_int);
+        for (key, values) in keys {
+            push(key);
+            lua_createtable(l, values.len() as c_int, 0);
+            for (i, v) in values.iter().enumerate() {
+                lua_pushnumber(l, (i + 1) as f64);
+                push(v);
+                lua_settable(l, -3);
+            }
+            lua_settable(l, -3);
+        }
+        lua_settable(l, -3);
+    }
+    1
+}
+
+/// `ac.INIConfig.parse(text, format, includeFolders)` (sub_180FECE10 -> sub_180FEAD20): the
+/// extended formats (10, 11 without include folders).
+unsafe fn ini_parse(l: *mut lua_State) -> c_int {
+    let format = lua_tonumber(l, 3) as i32;
+    if format < 10 || (format == 11 && lua_type(l, 4) == LUA_TTABLE) {
+        // shortcut: CSP's own parser of the AC formats (sub_180FE8970) and includes (sub_1815889E0) not ported; no car script parses
+        eprintln!("CSP Lua: ac.INIConfig.parse in format {format} is not ported yet (docs/csp/lua_host.md)");
+        std::process::abort();
+    }
+    push_sections(l, &super::inipp::parse(arg_bytes(l, 2)))
+}
+
+/// dwrite.dll of the car physics states set up (csp::lua_env): its INIpp Lua library.
+static DWRITE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// `ac.INIConfig.carData(carIndex, fileName)` (sub_180FECC40 -> sub_180FEA170): a file of the
+/// car's data (data.acd or the folder, name lowercased after its last slash) read by INIpp with
+/// Lua on; no sections for a file not there or a negative index.
+unsafe fn ini_car_data(l: *mut lua_State) -> c_int {
+    let index = lua_tonumber(l, 2) as i32;
+    let file = arg_bytes(l, 3);
+    if index < 0 {
+        return push_sections(l, &Vec::new());
+    }
+    let Some(dir) = CAR_DATA.lock().unwrap().get(&index).cloned() else {
+        // shortcut: only cars with a physics state set up are known here; upgrade with the game's car list (C6c)
+        eprintln!("CSP Lua: ac.INIConfig.carData of car {index} (no physics state) is not ported yet (docs/csp/lua_host.md)");
+        std::process::abort();
+    };
+    let name = data_name(file);
+    let text = crate::data::read(&dir.join(String::from_utf8_lossy(&name).as_ref())).ok().flatten().unwrap_or_default();
+    let lib = DWRITE.lock().unwrap().as_deref().and_then(super::inipp_lua::ini_std);
+    let Some(mut sections) = lib.and_then(|lib| super::inipp::parse_lua(&text, &lib)) else {
+        eprintln!("CSP Lua: ac.INIConfig.carData: no INIpp Lua library in dwrite.dll");
+        std::process::abort();
+    };
+    if name == b"tyres.ini" && !tyres_as_read(&mut sections) {
+        eprintln!("CSP Lua: ac.INIConfig.carData of tyres.ini CSP changes (sub_180914710) is not ported yet (docs/csp/lua_host.md)");
+        std::process::abort();
+    }
+    push_sections(l, &sections)
+}
+
+/// sub_180FE9E40 and the lowercasing of sub_180FEA170: the name after its last slash, lowercase.
+fn data_name(file: &[u8]) -> Vec<u8> {
+    let at = file.iter().rposition(|&c| c == b'/' || c == b'\\').map_or(0, |i| i + 1);
+    file[at..].to_ascii_lowercase()
+}
+
+/// tyres.ini as carData gives it, `false` if CSP changes it on loading: sections with
+/// `_VIRTUAL_ORIGIN` and the extra tyres it makes (sub_18090C6C0, sub_180914710; off only by
+/// `[_EXTENSION] GENERATE_EXTRA_TYRES` false); its `_EFX_` keys are left out (sub_180FEA170).
+fn tyres_as_read(sections: &mut Sections) -> bool {
+    let virt = sections.iter().any(|(_, keys)| keys.iter().any(|(k, _)| k == b"_VIRTUAL_ORIGIN"));
+    let extra = sections.iter().find(|(n, _)| n == b"_EXTENSION").and_then(|(_, keys)| keys.iter().find(|(k, _)| k == b"GENERATE_EXTRA_TYRES"));
+    // shortcut: CSP makes them only for extended physics or once the player's car is loaded (sub_18090D9F0), taken as always
+    if virt || !extra.is_some_and(|(_, v)| !super::inipp::truthy(v.first())) {
+        return false;
+    }
+    for (_, keys) in sections.iter_mut() {
+        keys.retain(|(k, _)| !k.starts_with(b"_EFX_"));
+    }
+    true
+}
+
 /// The ported natives by their `ffi.C` name.
 pub fn native(name: &[u8]) -> Option<*mut c_void> {
     Some(match name {
@@ -453,6 +568,19 @@ mod tests {
         assert_eq!(decode_base64(b"!!"), b"");
         assert_eq!(decode_base64(b"QQ"), b"A");
         assert_eq!(decode_base64(b"Q"), b"");
+    }
+
+    #[test]
+    fn car_data_glue() {
+        assert_eq!(data_name(b"a/B\\Tyres.INI"), b"tyres.ini");
+        assert_eq!(data_name(b"car.ini"), b"car.ini");
+        let ini = |t: &[u8]| super::super::inipp::parse(t);
+        let mut s = ini(b"[_EXTENSION]\nGENERATE_EXTRA_TYRES=0\n[FRONT]\nNAME=x\n_EFX_A=1\n_EF=2\n");
+        assert!(tyres_as_read(&mut s));
+        assert_eq!(s[1].1.iter().map(|(k, _)| k.as_slice()).collect::<Vec<_>>(), [&b"NAME"[..], b"_EF"]);
+        assert!(!tyres_as_read(&mut ini(b"[FRONT]\nNAME=x\n")));
+        assert!(!tyres_as_read(&mut ini(b"[_EXTENSION]\nGENERATE_EXTRA_TYRES=1\n")));
+        assert!(!tyres_as_read(&mut ini(b"[_EXTENSION]\nGENERATE_EXTRA_TYRES=0\n[FRONT_1]\n_VIRTUAL_ORIGIN=0\n")));
     }
 
     #[test]

@@ -168,6 +168,25 @@ pub fn load(path: &Path, o: Load) -> Option<Sections> {
     Some(p.resolve().into_iter().map(|s| (s.name, s.keys)).collect())
 }
 
+/// `text` as CSP reads a string with no file or include folders, Lua off: `ac.INIConfig.parse` in
+/// its extended formats (sub_181588550; ini ctor sub_181490F80 mode 0).
+pub fn parse(text: &[u8]) -> Sections {
+    parse_with(text, None)
+}
+
+/// The same with Lua on and no `read()` data: a car's data file for `ac.INIConfig.carData`
+/// (sub_181507A10, ini ctor sub_181588210 mode 0); `None` if Lua can't start.
+#[cfg(feature = "lua")]
+pub fn parse_lua(text: &[u8], std: &[u8]) -> Option<Sections> {
+    Some(parse_with(text, Some(Lua::new(std)?)))
+}
+
+fn parse_with(text: &[u8], lua: Option<Lua>) -> Sections {
+    let mut p = Parser { lua, ..Default::default() };
+    p.scan(strip_bom(text), &mut vec![Vec::new()]);
+    p.resolve().into_iter().map(|s| (s.name, s.keys)).collect()
+}
+
 /// The flattened text of resolved sections (as [`flatten`] gives).
 pub fn text(sections: &Sections) -> String {
     let secs: Vec<Section> = sections.iter().map(|(n, k)| Section { name: n.clone(), keys: k.clone(), ..Default::default() }).collect();

@@ -4,12 +4,11 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a is done (below). C6b parts 1-4 are done: what the 9 car scripts use of part 4 is ported (base64,
-the 1D DataLUT11 natives, `lj_structBytes`, `lj_random_seed`, `getPatchVersionCode`; csp::lua_natives,
-proof case `csp lua env` 98/98 identical); the rest of part 4 is "on demand" (an unported native
-names itself when called). Next: part 5 (`ac.INIConfig`, `lj_loadINIppFile`, `ac.store`, binary
-inputs, `ac.getCarDataFiles`), then C6c (CSP's car_cphys step sub_18085AD10 with its 82 natives needs
-the car state, so it is C6c's; also `ac.connect` and DataLUT21).
+C6a is done (below). C6b is done: parts 1-4, and part 5 for what the 9 car scripts use of it:
+`ac.INIConfig.parse` in the extended formats and `ac.INIConfig.carData` (`__util.nativf`, csp::lua_natives,
+proof case `csp lua env` 111/111 identical); the rest of part 5 is "on demand" (an unported
+`__util.nativf` hash names itself). Next: C6c (CSP's car_cphys step sub_18085AD10 with its 82 natives
+needs the car state; also `ac.connect`, DataLUT21, and the game's car list for other cars' carData).
 
 ## C6b part 1: the car physics script's environment (survey, dwrite.dll build 4305)
 
@@ -45,9 +44,9 @@ What the car physics kind (`ac_common_base` 182,266 B + `ac_car_cphys` 35,299 B)
 |---|---|---|---|
 | maths and types | 47 | `lj_mat_*` (20), `lj_lut_*`/`lj_lut2d_*` (DataLUT11/21, 19), `lj_rgb(m)_from_string`, `lj_random_seed`, `lj_2d_segments_intersection` | C6b part 4 |
 | encoding, noise, misc | 34 | `lj_encode/decodeBase64`, `lj_checksum*`, `lj_(de)compress`, `lj_perlin_*`, `lj_utf8To16`, `lj_structBytes`, `lj_getPatchVersion` | C6b part 4 |
-| config and data | 19 | `lj_loadINIppFile`, `lj_binaryinput_*` (11), `lj_stringToFFIStruct_inner`, `lj_parseUInt64`, `lj_memoryBarrier` | C6b part 5 |
+| config and data | 19 | `lj_loadINIppFile`, `lj_binaryinput_*` (11), `lj_stringToFFIStruct_inner`, `lj_parseUInt64`, `lj_memoryBarrier` | C6b part 5 survey; on demand (C6c: need the game's car and input) |
 | car, sim and track state, car controls | 63 | `lj_getCarState`, `lj_getCarPhysics`, `lj_getSim`, `lj_getSimState`, `lj_set*__carc` (24), `lj_getTrackDateTime`, `lj_simplex_*` | C6c |
-| `__util.nativf` keys (ac.INIConfig, stringify, ac.store, ...) | 37 hashes | INI group 0x180fec8a0..0x180fed670 (17), 0x180856170..0x1808617d0 (19) | C6b part 5 |
+| `__util.nativf` keys (ac.INIConfig, stringify, ...) | 37 hashes | INI group 0x180fec8a0..0x180fed670 (17), 0x180856170..0x1808617d0 (19) | C6b part 5 (parse, carData ported) |
 
 163 `lj_*` names in all (lists: re/scratch/taskC6b/envnames.txt, not kept). Loading the two libraries only
 looks names up (the `lj_getTimeZone*`, `lj_binaryinput_*`, `lj_*__carc` ones); none is called before a
@@ -61,8 +60,8 @@ they call is known only when CSP runs them (C6c: log the natives CSP calls per s
   set-up, which needs a script host object CSP builds only with the game (find what sub_1813E25E0 reads
   from it, or build one in the oracle).
 - C6b part 4 (1-2): the maths/type and encoding natives, each against CSP's function in the oracle.
-- C6b part 5 (1): ac.INIConfig, DataLUT `loadcardata`, `lj_loadINIppFile` (csp::inipp), ac.store,
-  binary inputs; proof: INIConfig and LUT reads of the 9 cars' files.
+- C6b part 5 (1, done): what the scripts use: `ac.INIConfig.parse` and `.carData` (below); proof: parse
+  snippets against CSP's own; the parser itself on the cars' files is the `csp inipp` case.
 - C6c: the state structs over rustyAC's car (ac.StateCar, physics overrides and forces), `update(dt)` /
   `reset()` from the physics step, getting the scripts' bytecode (open question: without decrypting
   anything ourselves), then the RSS 3 row.
@@ -174,6 +173,46 @@ keys, `add`/`refresh`, `atkey`/`atvalue` out of range, StructItem layout and val
 bytes, `lj_random_seed` range, `getPatchVersionCode`). The struct's ctype number differs by one
 (CSP's state has declared one more ctype before; layout and values are the same), so the snippet
 compares the layout, not `tostring`.
+
+## C6b part 5: ac.INIConfig (parse, carData)
+
+**What the 9 scripts use** (`INIConfig.`/`INIFormat.`/`DataLUT*.` names counted in their plain sources,
+the oracle's `lua refs`; the packed ones are not counted): `INIConfig.carData` (3 cars, 21 places),
+`DataLUT11.carData` (3, ported in part 4), `DataLUT21.carData`/`.parse` (3, on demand), `INIConfig.cspModule`
+(2), and once each `onlineExtras`, `carConfig`, `controlsConfig`, `load`. `ac.store`, `ac.storage` and
+`ac.storageSetPath` are nil in CSP's car physics state (scripts referring to them get nil), so rustyAC
+leaves them out too. `ac.ControlButton` (`lj_binaryinput_*`), `ac.readDataFile`, `ac.getFolder`,
+`ac.getCarDataFiles` and `lj_loadINIppFile` need the game's car or input state (they crash CSP's
+stand-in or give nil): C6c.
+
+**The natives** (`__util.nativf(hash, ...)`, map filled by sub_18101A9E0; the CSP side is the bundle's
+own Lua, so `get`, `set`, `serialize`, the typed reads are CSP's code on both sides):
+
+| INIConfig | hash | dwrite 4305 | Ported |
+|---|---|---|---|
+| `parse(text, format, includeFolders)` | 0x14c2318e | sub_180FECE10 -> sub_180FEAD20 | formats 10/11 without include folders: INIpp Lua off (sub_181588550, csp::inipp::parse); formats < 10 (CSP's AC parser sub_180FE8970) and 11 with folders (sub_1815889E0) on demand |
+| `carData(carIndex, fileName)` | 0xe8bebf1b | sub_180FECC40 -> sub_180FEA170 -> sub_181507A10 | yes, for the cars with a physics state (other indexes on demand) |
+| `load` | 0x9aa21a8b | sub_180FECFA0 | on demand (reads files through the game's car) |
+| the others, `onlineExtras`, `carConfig`, `controlsConfig`, `cspModule` among them (0xf5942b6f, 0xd0c262f7, 0x045b9414, 0x7d025bd2, 0xfd30fc39, 0x639c0401, 0x8c9c67da, 0x22f72a11, 0x624eff7b) | | sub_180FEC8A0..sub_180FED320 (sub_180FEC8B0 is a `REMOTE`/`PASSWORD` singleton) | on demand |
+
+- **Result shape** (sub_1813EED80): `{section = {key = {"v1", "v2", ...}}}`, values as strings; the
+  host's `lua_State` is read from host+184 (the oracle sets that cell). Extended splits values at
+  commas (quotes keep them), `$"..."` gives no value (Lua off), templates and mixins resolve,
+  `[INCLUDE]` is dropped with no folders, a lone CR is not a line break, a key without `=` is dropped.
+- **carData**: an index < 0, past the game's cars or without a car gives no sections; the name is
+  the part after the last `/` or `\`, lowercased; the text comes from data.acd or the data folder
+  (crate::data; CSP's reader sub_1805E6120/sub_181582A00 caches per car and name) and is read by
+  INIpp with Lua on (sub_181588210 mode 0, as the config loader; csp::inipp::parse_lua with the
+  `ini_std` library from dwrite.dll). `tyres.ini` is special: CSP's tyre generator (sub_180914710:
+  `_VIRTUAL_ORIGIN` sections, extra rain tyres unless `[_EXTENSION] GENERATE_EXTRA_TYRES` is false)
+  may change it, then `_EFX_` keys are left out. rustyAC gives it only when CSP would not change
+  it (generator off and no `_VIRTUAL_ORIGIN`), else stops naming sub_180914710.
+
+Proof: `csp lua env` 111/111 identical under both MXCSR (13 new snippets: plain, Lua, template,
+mixin, `[INCLUDE]`, empty, BOM/CRLF/comments/repeated sections, `$` references, quotes and escapes,
+lone CR, keys before a section, `:get`). carData has no snippet (CSP's stand-in has no car list):
+its parser is the one the `csp inipp` case proves on the cars' extension files, its read and name
+rules are a unit test (csp::lua_env car_physics_state, csp::lua_natives car_data_glue).
 
 ## C6b part 3: CSP's set-up of the state
 

@@ -110,3 +110,17 @@ local s = ac.StructItem.combine({ a = ac.StructItem.int32(), b = ac.StructItem.f
 local b = ffi.new('uint8_t[5]', {104, 0, 255, 7, 33}) local v = ffi.new('blob_view', b, b + 5) local r = ffi.C.lj_structBytes(v) return tonumber(r.p1) .. ' ' .. table.concat({ ffi.string(r.p2 > 15 and r.buf or r.ins, r.p1):byte(1, -1) }, ',')
 local b = ffi.new('uint8_t[1]') local v = ffi.new('blob_view', b, b) return tonumber(ffi.C.lj_structBytes(v).p1)
 local ok = true for i = 1, 50 do local v = ffi.C.lj_random_seed() ok = ok and v >= 0 and v <= 2147483646 and v == math.floor(v) end return ok
+-- part 5: ac.INIConfig.parse in the extended formats (__util.nativf 0x14c2318e), sections dumped sorted
+rawset(_G, '__ini', function(text, f) local o = {} for s, ks in pairs(ac.INIConfig.parse(text, f or ac.INIFormat.Extended).sections) do for k, v in pairs(ks) do o[#o + 1] = s .. '/' .. k .. '=' .. #v .. ':' .. table.concat(v, '|') end end table.sort(o) return table.concat(o, ' ; ') end)
+return __ini('[A]\nD=5\nE=1,2, 3\nF = "a,b" , c\nG=\nH= x y \n')
+return __ini('[A]\nD=$" 1 + 2 "\nG=$" 2*3 "\n[B]\nX=1\n')
+return __ini('[TEMPLATE: T]\nX=1\nZ=7\n[A : T]\nY=2\nZ=3\n[@ = T]\n')
+return __ini('')
+return __ini('\239\187\191[A]\r\nK=1\r\n; c\n// d\nL=2 ; tail\n[A]\nM=3\nK=4\n')
+return __ini('[A]\nK=1\n[INCLUDE]\nINCLUDE=common/x.ini\n[B]\nQ=2\n', ac.INIFormat.ExtendedIncludes)
+return __ini('[DEFAULTS]\nV=9\n[A]\nK=$V\nL=${V}0\n[B]\nM=$A:K\n')
+return __ini('[A]\nK="q;x" , \'y,z\'\nL=a\\,b\nM=1;2\n[ B ]\n N = 1 \n[C]\nD\n')
+return __ini('[MIXIN: M]\nX=1\n[A]\n@=M\nY=2\n[PREFIX_...]\nZ=1\n[PREFIX_...]\nZ=2\n')
+return __ini('[A]\nK=1\rL=2\r\n[B]\n')
+return __ini('K=0\n[A]\nK=1\n')
+local c = ac.INIConfig.parse('[A]\nD=5\nE=1,2\n', ac.INIFormat.Extended) return c:get('A', 'D', 0) .. ' ' .. c:get('A', 'E', 'x') .. ' ' .. tostring(c:get('B', 'D', nil))
