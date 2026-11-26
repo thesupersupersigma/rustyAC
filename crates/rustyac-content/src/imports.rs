@@ -311,6 +311,17 @@ impl Vfs for Layers {
     }
 }
 
+/// A tester's pack (`_rules.md`, "Test builds for outside testers"): a zip of the few Kunos files
+/// one test drive reads, sent with a test build.
+pub const TEST_PACK: &str = "rustyAC-test-pack.zip";
+
+/// The tester's pack beside the running program, when there is one: the game's files then,
+/// without asking and without the base game's check.
+pub fn test_pack() -> Option<PathBuf> {
+    let pack = std::env::current_exe().ok()?.parent()?.join(TEST_PACK);
+    pack.is_file().then_some(pack)
+}
+
 /// The choice kept between runs: the full install (a folder or zip) and the extra imports.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Remembered {

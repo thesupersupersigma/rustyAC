@@ -3098,6 +3098,15 @@ pub fn main() {
             eprintln!("RUSTYAC_GAME_FILES: {message}");
             std::process::exit(2);
         }
+    } else if let Some(pack) = rustyac_content::imports::test_pack().filter(|pack| std::env::var_os("AC_ROOT").is_none_or(|root| std::path::Path::new(&root).starts_with(pack))) {
+        // a tester's pack beside the program (the launcher names it in AC_ROOT, or nothing does)
+        match rustyac_content::imports::Layers::open(Some(&pack), &[]) {
+            Ok(layers) => layers.mount(),
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(2);
+            }
+        }
     }
     // the proofs (tools/proofs/lib.sh) set this: a run there never reads or writes the player's own files
     if std::env::var_os("RUSTYAC_PROOF_RUN").is_some() && (options.cfg_dir.is_none() || options.documents.is_none()) {

@@ -56,6 +56,49 @@ fn file_url(path: &str) -> String {
     net::uri_path(path).replacen("file:////", "file:///", 1)
 }
 
+/// Are the game's files laid over one another (a zip, extra cars and tracks)? Then WebKit cannot
+/// read them as `file://`: the theme's pages come from `acfile://` ([`file_request`]).
+static LAYERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The theme's page: `file://`, or `acfile://game/<path>` over laid files (a host: wry refuses
+/// an empty one). The bridge's absolute paths in the page (`/…/skins/x/livery.png`) then resolve
+/// to the same scheme.
+fn theme_url(path: &str) -> String {
+    let url = file_url(path);
+    match LAYERED.load(std::sync::atomic::Ordering::Relaxed) {
+        true => url.replacen("file:///", "acfile://game/", 1),
+        false => url,
+    }
+}
+
+/// An `acfile://game/<path>` request: the file through the launcher's files (the layers), as
+/// `file://` reads the disk.
+fn file_request(request: Request<Vec<u8>>, responder: RequestAsyncResponder) {
+    // (`+` is a name's own: url_decode would make it a space)
+    let path = crate::query::url_decode(&request.uri().path().replace('+', "%2B"));
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let mime = match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "js" => "text/javascript",
+        "css" => "text/css",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "ttf" | "otf" | "woff" | "woff2" => "font/ttf",
+        "ogg" | "ogv" => "video/ogg",
+        "mp3" => "audio/mpeg",
+        "txt" | "ini" => "text/plain",
+        _ => "application/octet-stream",
+    };
+    let response = match crate::files::with(|f| f.read(&path)) {
+        Ok(bytes) => Response::builder().status(200).header("Content-Type", mime).body(bytes),
+        Err(_) => Response::builder().status(404).body(Vec::new()),
+    };
+    responder.respond(response.expect("a response"));
+}
+
 /// Where a script is.
 enum Running {
     Idle,
@@ -193,7 +236,11 @@ impl App {
         let exists = |p: &str| rustyac_content::vfs::is_file(&root.join(p));
         let mut picks = vec![("tracks", read("RACE", "TRACK"), read("RACE", "CONFIG_TRACK"))];
         for n in 0..64 {
-            let car = read(&format!("CAR_{n}"), "MODEL");
+            // `-`: the player's car, [RACE] MODEL (as the game reads it)
+            let car = match read(&format!("CAR_{n}"), "MODEL") {
+                m if m == "-" => read("RACE", "MODEL"),
+                m => m,
+            };
             if !car.is_empty() && !picks.iter().any(|p| p.1.eq_ignore_ascii_case(&car)) {
                 picks.push(("cars", car, String::new()));
             }
@@ -235,7 +282,7 @@ impl App {
                 self.ping();
             }
             Event::Home => {
-                let _ = self.webview.load_url(&file_url(&self.theme.path));
+                let _ = self.webview.load_url(&theme_url(&self.theme.path));
             }
             Event::Exit => self.window.close(),
             Event::ContentErrors(list) => self.log(&format!("ERRORS with content: {list} view log for details")),
@@ -646,6 +693,14 @@ impl Files for LayeredFiles {
 /// and extra cars and tracks to add. Returns AC's folder as the bridge sees it; `None`: the
 /// player closed the window.
 pub fn choose_game_files(choose: bool) -> Result<Option<PathBuf>, String> {
+    // a tester's pack beside the program: its files, without asking or the base game's check
+    if let Some(pack) = rustyac_content::imports::test_pack() {
+        let layers = Layers::open(Some(&pack), &[])?;
+        let line = format!("test pack: {} at {}", layers.ids("cars").join(", "), layers.ids("tracks").join(", "));
+        eprintln!("rustyac-launcher: {line}");
+        let _ = TEST_PACK_LINE.set(line);
+        return Ok(Some(use_layers(layers, None)));
+    }
     gtk::init().map_err(|e| format!("GTK: {e}"))?;
     let file = Remembered::file().ok_or("no HOME: rustyAC's settings folder is unknown")?;
     let lists = shipped_lists();
@@ -659,7 +714,7 @@ pub fn choose_game_files(choose: bool) -> Result<Option<PathBuf>, String> {
     let mut choice = Remembered::load(&file);
     if !choose && choice.root.is_some() {
         if let Ok(layers) = check(&choice) {
-            return Ok(Some(use_layers(layers, &file)));
+            return Ok(Some(use_layers(layers, Some(&file))));
         }
     }
     if choice.root.is_none() {
@@ -747,7 +802,7 @@ pub fn choose_game_files(choose: bool) -> Result<Option<PathBuf>, String> {
     match (accepted, layers) {
         (true, Some(layers)) => {
             choice.save(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-            Ok(Some(use_layers(layers, &file)))
+            Ok(Some(use_layers(layers, Some(&file))))
         }
         _ => Ok(None),
     }
@@ -757,14 +812,21 @@ thread_local! {
     static CHOOSER: RefCell<Option<wry::WebView>> = const { RefCell::new(None) };
 }
 
-/// Mounts the choice for the launcher (its files) and names it for the game it starts.
-fn use_layers(layers: Layers, file: &Path) -> PathBuf {
+/// "test pack: <car> at <track>" when a tester's pack is the game's files (the window's title).
+static TEST_PACK_LINE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Mounts the choice for the launcher (its files) and names it for the game it starts (`file`,
+/// the remembered choice; a tester's pack has none: the game finds the pack itself).
+fn use_layers(layers: Layers, file: Option<&Path>) -> PathBuf {
     let root = layers.root.clone();
     rustyac_content::install::set_ac_root(Some(root.clone()));
     if !layers.is_plain() {
         // before any thread of the launcher starts; the game it starts inherits it
-        std::env::set_var("RUSTYAC_GAME_FILES", file);
+        if let Some(file) = file {
+            std::env::set_var("RUSTYAC_GAME_FILES", file);
+        }
         let shared = Arc::new(layers);
+        LAYERED.store(true, std::sync::atomic::Ordering::Relaxed);
         rustyac_content::vfs::mount(Some(shared.clone()));
         crate::files::mount(Some(Arc::new(LayeredFiles(shared))));
     }
@@ -833,7 +895,10 @@ pub fn run(options: Options) -> Result<i32, String> {
     let theme = current_theme(&folders, &launcher_ini);
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_title("Assetto Corsa Launcher");
+    match TEST_PACK_LINE.get() {
+        Some(line) => window.set_title(&format!("Assetto Corsa Launcher ({line})")),
+        None => window.set_title("Assetto Corsa Launcher"),
+    }
     match options.offscreen {
         Some((w, h)) => {
             // a check's window: its size, never taking the focus (run under a virtual X server)
@@ -861,6 +926,7 @@ pub fn run(options: Options) -> Result<i32, String> {
         .with_initialization_script(xhr_js(ports, &token))
         .with_initialization_script(WIZARD_JS)
         .with_asynchronous_custom_protocol("ac".into(), |_, request, responder| answer_request(request, responder))
+        .with_asynchronous_custom_protocol("acfile".into(), |_, request, responder| file_request(request, responder))
         .with_ipc_handler(|request: Request<String>| {
             let text = request.body().clone();
             with_app(|app| app.log(&text));
@@ -887,6 +953,11 @@ pub fn run(options: Options) -> Result<i32, String> {
         if let Some(context) = wk.context() {
             if let Some(security) = context.security_manager() {
                 security.register_uri_scheme_as_cors_enabled("ac");
+                // the theme's pages over laid files: what file:// pages may do (local storage,
+                // reading the game's files, the bridge)
+                security.register_uri_scheme_as_local("acfile");
+                security.register_uri_scheme_as_secure("acfile");
+                security.register_uri_scheme_as_cors_enabled("acfile");
             }
             // a scripted run (a check) reaches this computer only: the theme's news and video
             // feeds never leave it; the bridge's server on 127.0.0.1 is reached directly
@@ -901,7 +972,7 @@ pub fn run(options: Options) -> Result<i32, String> {
 
     let log = options.log.as_ref().and_then(|p| rustyac_content::guard::create(p).ok());
     let steps: VecDeque<Step> = options.script.iter().flatten().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).filter_map(|l| parse_step(l.trim())).collect();
-    let url = file_url(&theme.path);
+    let url = theme_url(&theme.path);
     let host = sys::Unix { player_name: options.player_name.clone() };
     let mut bridge = Bridge::new(folders, Box::new(host));
     bridge.lobby = Arc::new(Mutex::new(crate::online::Lobby::new(options.lobby.clone())));

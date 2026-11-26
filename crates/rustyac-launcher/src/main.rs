@@ -102,9 +102,10 @@ fn main() {
         return;
     }
     // off Windows the player chooses the game's files (remembered): unless AC_ROOT or --ac-root
-    // names them, or a check or a transcript runs
+    // names them, or a check or a transcript runs (a check with a tester's pack beside the program
+    // uses the pack)
     #[cfg(target_os = "linux")]
-    if ac_root.is_none() && std::env::var_os("AC_ROOT").is_none() && script.is_none() && transcript.is_none() {
+    if ac_root.is_none() && std::env::var_os("AC_ROOT").is_none() && transcript.is_none() && (script.is_none() || rustyac_content::imports::test_pack().is_some()) {
         match rustyac_launcher::shell::choose_game_files(choose) {
             Ok(Some(root)) => ac_root = Some(root),
             Ok(None) => return,

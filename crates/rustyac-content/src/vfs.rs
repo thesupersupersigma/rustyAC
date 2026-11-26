@@ -119,7 +119,8 @@ pub fn or_on_disk<T>(path: &Path, op: impl Fn(&Path) -> io::Result<T>) -> io::Re
 /// `Spa.kn5` from `spa.kn5`, and their code and ini files spell names in any case. Off Windows a
 /// path that is not there as spelled is looked for again ignoring ASCII case, one folder at a
 /// time from the deepest one that is there, each folder listed once and kept (what Proton gets
-/// from Wine). On Windows and in a browser: the path as it is.
+/// from Wine), with a `\` between folders read as `/`. On Windows and in a browser: the path as
+/// it is.
 pub fn on_disk(path: &Path) -> Cow<'_, Path> {
     #[cfg(not(any(windows, target_family = "wasm")))]
     if path.symlink_metadata().is_err() {
@@ -161,6 +162,9 @@ mod fold {
 
     /// `None`: nothing matches better than the path itself.
     pub fn on_disk(path: &Path) -> Option<PathBuf> {
+        // AC's files name folders with `\` too (a skin.ini's suits): a separator, as on Windows
+        let slashed = path.to_str().filter(|s| s.contains('\\')).map(|s| PathBuf::from(s.replace('\\', "/")));
+        let path = slashed.as_deref().unwrap_or(path);
         let parts: Vec<Component> = path.components().collect();
         let mut there = parts.len();
         let mut out = PathBuf::new();
@@ -188,7 +192,7 @@ mod fold {
                 }
             }
         }
-        changed.then_some(out)
+        (changed || slashed.is_some()).then_some(out)
     }
 }
 
@@ -420,6 +424,8 @@ mod tests {
         assert_eq!(read_dir(&p("content/cars/abarth500/ui")).unwrap(), vec![("ui_car.json".to_string(), false)]);
         assert_eq!(read(&p("content/cars/abarth500/ui/nothing.json")).unwrap_err().kind(), io::ErrorKind::NotFound);
         assert!(!is_file(&p("content/nowhere/x")) && File::open(&p("Content/Tracks/SPA/spa.KN5")).is_ok());
+        // a `\` between folders (a skin.ini's suit folder), as on Windows
+        assert_eq!(read(&p("content\\cars\\abarth500\\ui/ui_car.json")).unwrap(), b"Content/Cars/Abarth500/UI/ui_car.json");
         // as spelled first; two names differing only in case (only Linux has both): the smaller
         assert!(matches!(on_disk(&p("system/cfg/a.ini")), Cow::Borrowed(_)));
         if std::fs::read(p("system/cfg/a.ini")).unwrap() != b"system/cfg/a.ini" {
