@@ -4,10 +4,12 @@
 #
 #   ./linux_check.sh
 #
-# then send back the rustyac-check-<time>.tar.gz it makes. About 10 minutes; a few steps ask you
+# then send back the rustyac-check-<time>.tar.gz it makes. With a test build, the game files
+# come with it (rustyAC-test-pack.zip, used by itself). About 10 minutes; a few steps ask you
 # to drive or to answer y / n. What it collects (and nothing else): the distribution, kernel,
 # CPU, RAM, graphics card and driver, audio server and the versions of the packages rustyAC
-# needs; the output of each step (frame rates, a screenshot of a car on Laguna Seca, the
+# needs; how many tracks were found (counts only, no names but missing Kunos tracks); the output
+# of each step (frame rates, a screenshot of a car on Laguna Seca, the
 # launcher's log without the values it sends, the devices found) and your answers. Your home
 # folder, user name and computer name are replaced by ~, <user> and <host> everywhere; no file of
 # your game, your settings or your replays is copied.
@@ -30,9 +32,15 @@ run() {
     timeout --kill-after=10 "$limit" "$@" >> "$o/$name.txt" 2>&1
     echo "exit $?" >> "$o/$name.txt"
 }
-# the game files the launcher remembered (a zip or extra folders included)
+# a test build's pack of game files beside the programs, else the game files the launcher
+# remembered (a zip or extra folders included)
+pack=rustyAC-test-pack.zip
 remembered=${XDG_CONFIG_HOME:-$HOME/.config}/rustyAC/game_files.txt
-[[ -f $remembered ]] && export RUSTYAC_GAME_FILES=$remembered
+if [[ -f $pack ]]; then
+    unset AC_ROOT RUSTYAC_GAME_FILES
+elif [[ -f $remembered ]]; then
+    export RUSTYAC_GAME_FILES=$remembered
+fi
 drive=(--track ks_laguna_seca --car bmw_m3_e30)
 
 say "1/8 the computer"
@@ -51,8 +59,21 @@ say "1/8 the computer"
 cat "$o/system.txt"
 
 say "2/8 the game files (counts only)"
-run tracks 300 ./rustyac --list-tracks
-echo "$(grep -c . "$o/tracks.txt") lines; last: $(tail -2 "$o/tracks.txt" | head -1)"
+# only counts, and which of Kunos' base-game tracks are missing: never the track list (mod names)
+list=$(timeout --kill-after=10 300 ./rustyac --list-tracks 2>&1)
+{
+    [[ -f $pack ]] && echo "the test pack"
+    echo "drivable: $(grep -c '^--track ' <<< "$list")"
+    echo "refused: $(grep -c ' refused: ' <<< "$list")"
+    if [[ ! -f $pack ]]; then
+        missing=""
+        for t in $(sed -n '/^  "tracks"/,/^  "shared"/p' required/base.json | grep -o '"id": "[^"]*"' | cut -d'"' -f4 | sort -u); do
+            grep -qE "^--track $t( |$)| refused: $t[ :]" <<< "$list" || missing+=" $t"
+        done
+        echo "Kunos base-game tracks missing:${missing:- none}"
+    fi
+} > "$o/tracks.txt"
+cat "$o/tracks.txt"
 
 say "3/8 the launcher: choose the game files if it asks, then Drive a short race (any car and track), drive a bit, quit the race and close the launcher"
 ./rustyac-launcher --log "$o/launcher_full.log" > "$o/launcher.txt" 2>&1
@@ -90,7 +111,7 @@ fi
 wait "$game" 2> /dev/null
 echo "exit $?" >> "$o/hand.txt"
 ask "Did steering, throttle and brakes work?"
-if grep -qiE 'wheel|joystick|gamepad|pad' "$o/devices.txt"; then
+if grep -qE '^  (Xbox pad on XInput slot|JOY=)' "$o/devices.txt"; then
     ask "Did the pad / wheel drive the car?"
     ask "With a wheel: did force feedback pull the wheel back to the centre (not away from it)?"
 fi

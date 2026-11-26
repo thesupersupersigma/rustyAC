@@ -52,10 +52,22 @@
 
    ```
    tar -czf linux-inputs.tar.gz libfmod.so.14 libfmodstudio.so.14 required
-   gh release create linux-inputs linux-inputs.tar.gz --prerelease --title "Linux build inputs" --notes "FMOD Engine 2.03 (FMOD EULA) and the required-files lists, for the release workflow"
+   gh release create linux-inputs linux-inputs.tar.gz --prerelease --title "Build inputs, not a release" --notes "Not a release of rustyAC: the files the release workflow's Linux job packs (FMOD Engine 2.03's two libraries under the FMOD EULA, and the required-files lists: paths and sizes, no game content), the same files every Linux tar.gz ships."
    ```
 
    `packaging/package_linux.sh <version> <inputs> dist` makes the same tar.gz by hand.
+
+3c. **A test of the Linux job before a tag** (needs 3b's pre-release): Actions -> Release -> Run
+   workflow, pick the branch, tick **Linux only**, leave the tag empty, Run. The `linux` job builds
+   and tests that branch and packs `rustyAC-v<Cargo.toml's version>-linux-x64.tar.gz`; the run's
+   page keeps it as the artifact `linux-x64` for 7 days; the publishing job is skipped (nothing is
+   released, no tag is needed). Or from a terminal:
+
+   ```
+   gh workflow run release.yml --ref web -f linux_only=true
+   gh run watch
+   gh run download --name linux-x64
+   ```
 
 4. Commit and tag:
 

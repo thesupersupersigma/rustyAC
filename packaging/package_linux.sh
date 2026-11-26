@@ -3,14 +3,19 @@
 # Packs the Linux release: rustyAC-vX.Y.Z-linux-x64.tar.gz and its .sha256, from the release build
 # that is already in ${CARGO_TARGET_DIR:-target}/release, like package.ps1 does for Windows:
 #
-#   cargo build --release --locked -p rustyac-game --features wgpu --bin rustyac -p rustyac-launcher
+#   cargo build --release --locked -p rustyac-game --features wgpu --bin rustyac && cargo build --release --locked -p rustyac-launcher
 #   packaging/package_linux.sh 1.2.0 <inputs> dist
 #
 # <inputs> holds what the repository cannot: FMOD Engine 2.03's libfmod.so.14 and
 # libfmodstudio.so.14 (Firelight's, from fmod.com) and required/ (base.json and the dlc_<app>.json
 # lists, made by `web_pack --required` from a full install: paths and sizes, no content). The list
 # below is the whole content; the archive is read back and compared with it. No Assetto Corsa file
-# is ever packed.
+# is ever packed, except in a tester's build:
+#
+#   TEST_PACK=<rustyAC-test-pack.zip> packaging/package_linux.sh 1.2.0 <inputs> <out>
+#
+# makes rustyAC-test-linux-x64.tar.gz with the pack beside the programs (docs/platforms.md 13.5):
+# built here only, sent privately, never by CI, never in a release.
 set -euo pipefail
 version=${1:?the version, e.g. 1.2.0}
 inputs=${2:?the folder with libfmod.so.14, libfmodstudio.so.14 and required/}
@@ -20,6 +25,11 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 bin=${CARGO_TARGET_DIR:-$root/target}/release
 [[ $bin = /* ]] || bin=$root/$bin
 name=rustyAC-v$version-linux-x64
+pack=${TEST_PACK:-}
+if [[ -n $pack ]]; then
+    [[ -z ${CI:-} ]] || { echo "a tester's pack holds Kunos' files: never built by CI" >&2; exit 1; }
+    name=rustyAC-test-linux-x64
+fi
 # source -> name in the archive (under $name/)
 files=(
     "$bin/rustyac" rustyac
@@ -35,6 +45,7 @@ files=(
     "$root/crates/rustyac-ode/LICENSE-ODE" crates/rustyac-ode/LICENSE-ODE
     "$root/packaging/linux_check.sh" linux_check.sh
 )
+[[ -z $pack ]] || files+=("$pack" rustyAC-test-pack.zip)
 [[ -f $inputs/required/base.json ]] || { echo "$inputs/required/base.json is missing" >&2; exit 1; }
 for list in "$inputs"/required/*.json; do
     case $(basename "$list") in base.json | dlc_*.json) files+=("$list" "required/$(basename "$list")") ;; esac
