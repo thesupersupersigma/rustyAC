@@ -108,7 +108,8 @@ pc_areas=$(for a in $areas; do case " $farm_areas $queued " in *" $a "*) ;; *) p
 picked_lanes=$(pick_lanes "$pc_areas")
 # RUSTYAC_PREBUILT=1: the programs of tools/proofs/prebuild.sh (the builds below do nothing)
 . "$here/prebuilt/env.sh"
-jobs=${CARGO_BUILD_JOBS:-8}
+# 8 build jobs, 4 while the side worktree ../rustyAC-web exists (rule 13: two checkouts build at once)
+if [ -z "${CARGO_BUILD_JOBS:-}" ] && [ -d "$(git rev-parse --show-toplevel 2> /dev/null)/../rustyAC-web" ]; then jobs=4; else jobs=${CARGO_BUILD_JOBS:-8}; fi
 export CARGO_BUILD_JOBS=$jobs
 start_all=$(date +%s)
 

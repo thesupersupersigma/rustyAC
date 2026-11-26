@@ -28,7 +28,8 @@ times=$out/times.tsv
 : > "$times"
 date +%s > "$out/last_case"  # a file: verdicts in a pipe run in a subshell
 cd "$repo"
-export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
+# 8 build jobs, 4 while the side worktree ../rustyAC-web exists (rule 13: two checkouts build at once)
+if [ -z "${CARGO_BUILD_JOBS:-}" ] && [ -d "$(git rev-parse --show-toplevel 2> /dev/null)/../rustyAC-web" ]; then export CARGO_BUILD_JOBS=4; else export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}; fi
 
 # Task 46c: no proof run reads what an earlier run wrote, nor the player's own files. rustyac.exe
 # and race_proof refuse to start without folders of their own while this is set (a case that would
