@@ -350,7 +350,7 @@ Makes the pack of cars and tracks the browser page downloads, from your Assetto 
 | `--ac <folder>` | the install that is found | Assetto Corsa's folder. |
 | `--dry-run` | | Checks the list and says what would be packed; writes nothing. |
 | `--delta <manifest.json>` | | Writes only the files that are new or changed against that manifest of a live pack, plus the new manifest, into an empty `--out`. |
-| `--required <folder>` | | Writes the native builds' required-files list instead of a pack: `base.json` (Kunos' cars and tracks without the DLCs), one `dlc_<Steam app>.json` per DLC (by the key in its models' headers) and `everything.json` (DLCs and mods too), paths and sizes only. |
+| `--required <folder>` | | Writes the native builds' required-files list instead of a pack: `base.json` (Kunos' cars and tracks without the DLCs), one `dlc_<Steam app>.json` per DLC (by the key in its models' headers) and `everything.json` (DLCs and mods too), paths and sizes only. Kunos' lists hold only what Steam ships: a car or layout whose files are not all in AC's depots is left out, and each list keeps only its own depot's files (`appmanifest_244210.acf`'s installed depots, read from Steam's `depotcache`). |
 | `--help`, `-h` | | Prints the options. |
 
 ## The server kit

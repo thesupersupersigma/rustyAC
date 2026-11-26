@@ -364,4 +364,24 @@ mod tests {
         assert_eq!(lists.check_pick("cars", "ks_mazda_mx5_cup", &exists), Ok(true));
         assert_eq!(loads(&root, "cars", "abarth500", "", &lists, &exists), Ok(()));
     }
+
+    /// A clean install, when this PC has the stand-ins (`re/scratch/taskP3/base3/stubs.py`: zips of
+    /// empty files named exactly as `base.json`, and as Steam's base-game depot 244211), opened
+    /// through the zip path: the lists made from Steam's depots pass both, the old lists (mods in
+    /// them) failed the clean one, and a DLC car is still refused.
+    #[test]
+    fn a_clean_install_passes_the_base_check() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/scratch/taskP3/base3");
+        let Ok(lists) = Lists::load(&dir.join("required")) else { return };
+        for zip in ["base_json.zip", "base_depot.zip"] {
+            let Ok(layers) = crate::imports::Layers::open(Some(&dir.join(zip)), &[]) else { return };
+            let exists = |p: &str| crate::vfs::Vfs::is_file(&layers, &layers.root.join(p));
+            assert_eq!(lists.check_full(&exists), Ok(()), "{zip}");
+            assert_eq!(lists.check_pick("cars", "abarth500", &exists), Ok(true));
+            assert_eq!(lists.check_pick("cars", "ks_mazda_mx5_cup", &exists), Err("this car needs the Japanese Pack DLC".to_string()));
+            if let (Ok(old), "base_depot.zip") = (Lists::load(&dir.join("required_old")), zip) {
+                eprintln!("the old lists on a clean install: {}", old.check_full(&exists).unwrap_err());
+            }
+        }
+    }
 }

@@ -698,13 +698,132 @@ fn dlc_key(root: &Path, item: &Item) -> u32 {
     }).unwrap_or(0)
 }
 
+/// A protobuf field: number, varint value, bytes.
+type Field<'a> = (u64, u64, &'a [u8]);
+
+/// Protobuf fields of a message.
+fn proto_fields(mut b: &[u8]) -> Result<Vec<Field<'_>>, String> {
+    fn varint(b: &mut &[u8]) -> Result<u64, String> {
+        let (mut v, mut shift) = (0u64, 0);
+        loop {
+            let (&c, rest) = b.split_first().ok_or("a cut varint")?;
+            *b = rest;
+            v |= u64::from(c & 0x7f) << shift;
+            shift += 7;
+            if c < 0x80 || shift > 63 {
+                return Ok(v);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    while !b.is_empty() {
+        let key = varint(&mut b)?;
+        let len = match key & 7 {
+            0 => {
+                out.push((key >> 3, varint(&mut b)?, &b[..0]));
+                continue;
+            }
+            1 => 8,
+            2 => varint(&mut b)? as usize,
+            5 => 4,
+            t => return Err(format!("protobuf wire type {t}")),
+        };
+        let bytes = b.get(..len).ok_or("a cut field")?;
+        out.push((key >> 3, 0, bytes));
+        b = &b[len..];
+    }
+    Ok(out)
+}
+
+/// The files (lower case, `/`) of a Steam depot manifest (`depotcache/<depot>_<gid>.manifest`:
+/// sections `<magic u32><length u32><protobuf>`; the payload 0x71F617D0 holds FileMapping
+/// messages, field 1, each with its name (1) and flags (3; 64: a folder)).
+fn depot_files(bytes: &[u8]) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut files = std::collections::BTreeSet::new();
+    let mut rest = bytes;
+    while rest.len() >= 8 {
+        let magic = u32::from_le_bytes(rest[..4].try_into().unwrap());
+        let len = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
+        let section = rest.get(8..8 + len).ok_or("a cut section")?;
+        rest = &rest[8 + len..];
+        if magic == 0x1F4812BE && proto_fields(section)?.iter().any(|f| f.0 == 4 && f.1 != 0) {
+            return Err("its file names are encrypted".into());
+        }
+        if magic != 0x71F617D0 {
+            continue;
+        }
+        for (field, _, mapping) in proto_fields(section)? {
+            let fields = proto_fields(mapping)?;
+            let name = fields.iter().find(|f| f.0 == 1).map(|f| String::from_utf8_lossy(f.2));
+            let folder = fields.iter().any(|f| f.0 == 3 && f.1 & 64 != 0);
+            if let (1, Some(name), false) = (field, name, folder) {
+                files.insert(name.replace('\\', "/").to_ascii_lowercase());
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err("no files in it".into());
+    }
+    Ok(files)
+}
+
+/// Steam's own file lists of AC's installed depots (base game 244211, each DLC's depot is its
+/// app): `appmanifest_244210.acf`'s InstalledDepots, read from Steam's `depotcache`.
+// shortcut: depotcache is looked for beside the library's steamapps (true for Steam's own library); add a --depots folder if the lists are ever made from another library
+fn steam_depots(root: &Path) -> Result<BTreeMap<u32, std::collections::BTreeSet<String>>, String> {
+    let steamapps = root.parent().and_then(Path::parent).ok_or("AC's folder is not inside steamapps/common")?;
+    let acf_path = steamapps.join("appmanifest_244210.acf");
+    let acf = std::fs::read_to_string(&acf_path).map_err(|e| format!("{}: {e}", acf_path.display()))?;
+    let cache = steamapps.parent().unwrap_or(steamapps).join("depotcache");
+    let (mut depth, mut inside, mut depot) = (0, false, 0u32);
+    let mut out = BTreeMap::new();
+    for line in acf.lines().map(str::trim) {
+        match line {
+            "\"InstalledDepots\"" => inside = true,
+            "{" => depth += inside as i32,
+            "}" if inside => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ if inside => {
+                // '\x22' is the double quote: written out, it would break the flags test's count of quotes in this file
+                let words: Vec<&str> = line.split('\x22').filter(|w| !w.trim().is_empty()).collect();
+                match words[..] {
+                    [id] => depot = id.parse().map_err(|_| format!("{}: a depot {id}", acf_path.display()))?,
+                    ["manifest", gid] => {
+                        let file = cache.join(format!("{depot}_{gid}.manifest"));
+                        let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+                        out.insert(depot, depot_files(&bytes).map_err(|e| format!("{}: {e}", file.display()))?);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    if !out.contains_key(&244211) {
+        return Err(format!("{} names no base game depot (244211)", acf_path.display()));
+    }
+    Ok(out)
+}
+
 /// `--required <folder>`: the native builds' required-files list (`docs/platforms.md`, section
 /// 12.3) as manifests, paths and sizes only, nothing copied, no hashes: `base.json` (Kunos' cars
 /// and tracks of the game without DLCs, the shared files, AC's launcher's), `dlc_<Steam app>.json`
 /// for each DLC (its cars and tracks and their launcher pictures: checked when one is picked)
 /// and `everything.json` (DLCs and mods too, the shared and launcher files).
+///
+/// Kunos' lists are right by construction: Steam's own depot manifests decide. A car or track
+/// layout is in a list only when every file it reads is one that some depot of AC ships (a mod,
+/// or a mod's layout inside a Kunos track's folder, is not), and each list keeps only the files
+/// its own depot ships (base: 244211; a DLC: its app), shared and launcher files included.
 fn required(folder: &Path, root: &Path, cars: &[Item], tracks: &[Item], shared: &BTreeMap<String, u64>) -> Result<(), String> {
     std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let depots = steam_depots(root)?;
+    let steam = |path: &str| depots.values().any(|files| files.contains(&path.to_ascii_lowercase()));
+    let empty = std::collections::BTreeSet::new();
     let keys: Vec<u32> = cars.iter().chain(tracks).map(|item| dlc_key(root, item)).collect();
     if let Some((key, item)) = keys.iter().zip(cars.iter().chain(tracks)).find(|(&key, item)| key != 0 && !item.is_mod && !DLCS.iter().any(|d| d.0 == key)) {
         return Err(format!("{}'s models carry the DLC key {key:#x}, which is in no DLC of the table", item.id));
@@ -712,11 +831,14 @@ fn required(folder: &Path, root: &Path, cars: &[Item], tracks: &[Item], shared: 
     let global = launcher_files(root, &[], &[]);
     let lists = [("base".to_string(), "the base game".to_string(), Some(0))].into_iter().chain(DLCS.iter().map(|&(key, app, name)| (format!("dlc_{app}"), name.to_string(), Some(key)))).chain([("everything".to_string(), "everything".to_string(), None)]);
     for (name, title, key) in lists {
-        let in_list = |index: usize, item: &Item| key.is_none_or(|key| !item.is_mod && keys[index] == key);
+        // the files this list's own depot ships (`everything`: all of them)
+        let own = key.map(|key| depots.get(&DLCS.iter().find(|d| d.0 == key).map_or(244211, |d| d.1)).unwrap_or(&empty));
+        let shipped = |path: &str| own.is_none_or(|own| own.contains(&path.to_ascii_lowercase()));
+        let in_list = |index: usize, item: &Item| key.is_none_or(|key| !item.is_mod && keys[index] == key && item.files.iter().all(|(p, _)| steam(p)));
         let whole = key.is_none_or(|key| key == 0);
         let mut manifest = Manifest::default();
         let add = |manifest: &mut Manifest, files: &mut dyn Iterator<Item = (&String, &u64)>| -> Vec<usize> {
-            files.map(|(path, bytes)| manifest.file(PackFile { path: path.clone(), bytes: *bytes, sha256: String::new() })).collect()
+            files.filter(|(path, _)| shipped(path)).map(|(path, bytes)| manifest.file(PackFile { path: path.clone(), bytes: *bytes, sha256: String::new() })).collect()
         };
         for (items, kind, first) in [(cars, 0, 0), (tracks, 1, cars.len())] {
             for (_, item) in items.iter().enumerate().filter(|(i, item)| in_list(first + i, item)) {
@@ -912,5 +1034,17 @@ mod tests {
         assert_eq!(dlc_key(&root, &item(&["a.kn5", "b.kn5", "data.acd"])), 0x3b787);
         assert_eq!(dlc_key(&root, &item(&["a.kn5", "old.kn5"])), 0);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_depot_manifest_lists_its_files_not_its_folders() {
+        // FileMapping: name (1), flags (3)
+        let mapping = |name: &str, flags: u8| [&[0x0a, name.len() as u8][..], name.as_bytes(), &[0x18, flags]].concat();
+        let payload: Vec<u8> = [mapping("content\\cars\\Abarth500\\data.acd", 0), mapping("content\\cars", 64)].iter().flat_map(|m| [&[0x0a, m.len() as u8][..], m].concat()).collect();
+        let section = |magic: u32, body: &[u8]| [&magic.to_le_bytes()[..], &(body.len() as u32).to_le_bytes(), body].concat();
+        let manifest = [section(0x71F617D0, &payload), section(0x1F4812BE, &[0x08, 0x83, 0xf2, 0x0e, 0x20, 0x00])].concat();
+        assert_eq!(depot_files(&manifest).unwrap().into_iter().collect::<Vec<_>>(), ["content/cars/abarth500/data.acd"]);
+        let encrypted = [section(0x71F617D0, &payload), section(0x1F4812BE, &[0x20, 0x01])].concat();
+        assert!(depot_files(&encrypted).is_err());
     }
 }
