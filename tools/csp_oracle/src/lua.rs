@@ -72,6 +72,8 @@ impl Vm {
         *(host.add(1216) as *mut u64) = 9;
         *(host.add(1272) as *mut *mut u8) = car; // car index (car+176) 0
         *((vm.l as *mut u8).add(96) as *mut *mut u8) = host;
+        // host+184: a cell holding the state, where the INIConfig natives push their table (sub_1813EED80)
+        *(host.add(184) as *mut *mut *mut c_void) = Box::leak(Box::new(vm.l.cast::<c_void>()));
         let require_ffi: extern "C" fn(*mut u8, *mut c_void) = std::mem::transmute(dll + 0x13e_2260);
         let set_up: extern "C" fn(*mut u8, *mut c_void, *mut u8, u8) = std::mem::transmute(dll + 0x84_a7f0);
         require_ffi(host, vm.l);
@@ -212,11 +214,11 @@ pub unsafe fn run(dll: usize, file: &str, dwrite: Option<&Path>) {
     }
 }
 
-/// Counts `ac.<name>`, `physics.<name>`, `__util.<name>`, `C.<name>` (ffi.C) and `DataLUT11/DataLUT21/StructItem.<name>`
+/// Counts `ac.<name>`, `physics.<name>`, `__util.<name>`, `C.<name>` (ffi.C) and `DataLUT11/DataLUT21/StructItem/INIConfig/INIFormat.<name>`
 /// references in a Lua source, names only.
 fn api_refs(src: &[u8], refs: &mut std::collections::BTreeMap<String, u32>) {
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    for table in [&b"ac."[..], b"physics.", b"__util.", b"C.", b"DataLUT11.", b"DataLUT21.", b"StructItem."] {
+    for table in [&b"ac."[..], b"physics.", b"__util.", b"C.", b"DataLUT11.", b"DataLUT21.", b"StructItem.", b"INIConfig.", b"INIFormat."] {
         let mut i = 0;
         while let Some(at) = src[i..].windows(table.len()).position(|w| w == table) {
             let start = i + at;
