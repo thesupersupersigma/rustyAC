@@ -1530,7 +1530,7 @@ folder without ks_toyota_gt86 (`re/scratch/taskW5/fakebase.sh make`: junctions i
 (`w5_zipcar.txt`, quickrace's with that car) found the car in the theme's list, and Drive started
 the game on it at magione: 160 s of AI driving, exit 0, 0 failed steps, `race_out.json` written.
 Checks: clippy `-D warnings --all-targets` on Windows, on Linux (WSL), wasm32-unknown-unknown and
-wasm32-wasip1; `run_all.sh --quick`: 536 cases, 536 identical, 0 errors (every area, the launcher's and the browser's among them).
+wasm32-wasip1; `run_all.sh --quick`: 268 cases in 14 areas, all identical, 0 errors (every area, the launcher's and the browser's among them).
 
 ### 14.4 Resume here (W5)
 
