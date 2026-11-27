@@ -27,9 +27,9 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   only", 13.5 the tester's kit), the tester's pack done and proved on WSL (13.6, with five fixes),
   Resume 2's answers (13.7), Resume 3 (13.8: the required-files lists from Steam's own depot
   manifests, the test pack stored, the seven other scripts and the transcripts on Linux against
-  fresh Windows gold, a failed base check now a warning with **Continue anyway**). **Resume at
-  13.9**: on Linux the page sometimes stops answering clicks (13.8's open item), then the tester's
-  archive.
+  fresh Windows gold, a failed base check now a warning with **Continue anyway**), Resume 4 (13.9:
+  the click stall was WebKit's 6 connections to a port held by slow listings; listings now have a
+  port of their own, raceweekend and quickrace 3 of 3). **Resume at 13.10**: the tester's archive.
 
 ## 1. Plain-English summary
 
@@ -1312,7 +1312,7 @@ sending identical in-flight `getskinmeta` once) plus **order**: the page's two s
 (`listspecialevents`, then `listseries`) take 190 to 240 s on WSL's `/mnt/c` (seconds on Windows),
 so the theme's career and championship code runs earlier, while they are still going.
 
-**Open: the page stops answering clicks (Linux, intermittent).** `until #drive .tracks
+**Open: the page stops answering clicks (Linux, intermittent)** (found and fixed in 13.9). `until #drive .tracks
 .item[data-track=magione]` failed in quickrace's first run (its second passed) and in raceweekend
 every time (three runs). What is known:
 - **Not** the listings' overlap: the listings (`listspecialevents` then `listseries`, 190 to 240 s
@@ -1327,7 +1327,7 @@ every time (three runs). What is known:
   At the launcher's exit WebKit says "WebProcess didn't exit as expected after the UI process
   connection was closed": the page's web process is stuck or its event handling is.
 - The theme logs `TypeError: null is not an object (evaluating '_localized[key + "_name"]')` 28
-  times a run on Linux, never on Windows (it reads `career_neutral.ini`, 14 bytes on both, at line
+  times a run on Linux, never on Windows (wrong: Windows logs it too, in Chromium's words, 13.9) (it reads `career_neutral.ini`, 14 bytes on both, at line
   1,379 of 2,900, Windows at 2,798: its career locale code runs while the listings still go); also
   in the passing runs, so not shown to be the cause.
 - Reproduce: `GOLD=re/gold/launcher_r3 SETTLE=150000 bash re/scratch/taskP3/l7_run.sh raceweekend`
@@ -1367,17 +1367,76 @@ first try was killed from outside after 28 minutes, its one cut-off case showed 
 `gui/cases.log`). Windows: the shared code's change is the new `accepted=` line (read and written
 only by the Linux chooser) and a test; the Windows launcher and game are unchanged.
 
-### 13.9 Resume here (P3c)
+### 13.9 Resume 4: the click stall found and fixed
+
+**The `_localized` TypeError is not Linux-only.** The Windows recordings log it 28 times a run too
+(`target/proofs/launcher_record/*/run.log`, every script), in Chromium's words: `TypeError: Cannot
+read properties of null (reading 'series1_name')`; 13.8 searched for WebKit's wording only. It is the
+theme's own (`career2.js` line 484 reads `_localized[key + "_name"]` while `career_neutral.ini`
+gives no `text` section), on both, and nothing to do with the stall.
+
+**The cause: WebKit's 6 connections to a port, held by the listings.** WebKitGTK (2.52, libsoup 3.6)
+opens at most **6 connections to one host and port**; a 7th request to that port waits until one of
+the 6 is answered. Shown alone (`re/scratch/taskP3/r4/wk_conn.py`: a `file://` page, a server on two
+127.0.0.1 ports that holds `/slow` 30 s): with 5 slow requests pending a fast asynchronous one to the
+same port takes 5 ms; with 6 pending it takes **29,021 ms**, while the other port answers in 4 ms
+(asynchronous or synchronous). The launcher answered every `async=true` request of
+`Bridge::listing`'s 8 kinds (`listcars`, `listtracks`, `listspecialevents`, `listseries`,
+`listfiles`, `getiniasjson`, `getachievements`, `getskinmeta`) one at a time on the lister thread,
+on the same port as every other asynchronous request. When a 100 to 130 s listing
+(`listspecialevents`, then `listseries`, on WSL's `/mnt/c`) is at the head of that queue and 5 more
+listings wait behind it, all 6 connections are taken and every other asynchronous request waits for
+minutes: a click's `setsetting/race?CAR_0/SKIN=...` (asynchronous in the theme), and with it the
+handler's callbacks ("Summary redraw: car") and the tracks grid. Seen in a probe run (`r4/rw_probe.txt`
++ a server log of every connection): the abarth500 click's requests reached the server only the
+moment `listseries` was answered, 98 s later, all at once; in a run where `listseries` was the only
+listing waiting (5 free connections) the same click went through at once. So it hangs on timing, not
+on one step: why it was intermittent, and why a longer settle did not help (the career listings start
+late and the 2,491 `getskinmeta` queue in the same line). A real slow disk or network share would do
+the same; Windows answers a listing in seconds, so it never fills the 6.
+
+**The fix** (`shell_gtk.rs`, Linux only): the listings get a **third port** of their own
+(`serve_bridge` listens on three, `xhr_js` sends an `ac://` request whose host is in
+`bridge::LISTINGS`, now one shared list, and that carries `async=true` there). Listings now only wait
+behind listings (in their order, as before: the log keeps Windows' order); every other asynchronous
+request has its 6 connections to itself, the synchronous ones theirs. The routing was checked on
+made-up URLs (`ac://ListTracks/?async=TRUE` to the listings, `?async=trueish` and `getiniasjson`
+without `async` not).
+
+**Proof** (`re/scratch/taskP3/r4/proof.sh`: `l7_run.sh` with 13.8's settings, `GOLD=re/gold/launcher_r3
+SETTLE=150000`, then `l7_cmp.py`; results in `r4/proof/`): **raceweekend 3 of 3 and quickrace 3 of 3,
+0 failed steps**; the WebKit "WebProcess didn't exit" message is gone from all six.
+
+| run | steps failed | synchronous, in order (Windows / Linux) | asynchronous (as a set) |
+|---|---|---|---|
+| raceweekend 1, 2, 3 | 0, 0, 0 | 371 / 364, 360, 364 (was 371 / 291, stopped) | 2,507 / 2,508, 2,507, 2,508 |
+| quickrace 1, 2, 3 | 0, 0, 0 | 340 / 333, 329, 333 | 2,508 / 2,508, 2,507, 2,508 |
+
+The asynchronous differences: the personal best's save (its date; in raceweekend a save the Windows
+recording does not have, not looked into: it comes after the race, from the game's results), and in two runs `listseries`
+not yet answered when the script ended (the launcher closes at its end). The synchronous ones are
+13.3's and 13.8's (Xvfb's screen size, the random opponent, `getskinmeta` sent once, the order around
+the slow listings).
+
+**Rebuilt** with the fix (`packaging/package_linux.sh`, as `base3/lb2.sh`): the release
+`rustyAC-v1.1.5-linux-x64.tar.gz` (12,033,834 bytes) and the test `rustyAC-test-linux-x64.tar.gz`
+(609,180,521 bytes, 581 MiB) in `re/scratch/taskP3/l8_dist/`. **The test build Super sent** is
+unlikely to hit the stall: with the test pack (one car, one track) every listing takes milliseconds
+on a real disk, far from 6 waiting at once; it could on a full install on a slow disk. Sending the new
+one is optional.
+
+**Windows:** the shared change is `bridge::LISTINGS` moved out of `Bridge::listing` (the same list,
+used by the Linux shell only); the Windows launcher's code is the same. Checks: clippy `-D warnings
+--all-targets` on `rustyac-launcher`, Windows and Linux; `run_all.sh --quick launcher` on Windows:
+**IDENTICAL** (1 of 1, 0 errors).
+
+### 13.10 Resume here (P3c)
 
 - **Done:** L7 (13.1 to 13.3), L8 (13.4, 13.5), the tester's pack (13.6), Resume 2 (13.7),
-  Resume 3 (13.8), committed on `web`.
-- **Next:** the open item of 13.8: on Linux the page sometimes stops answering clicks (raceweekend
-  every time, quickrace once in two); find why (13.8 has what is ruled out and how to reproduce).
-  Then the tester's archive (13.5, step 5): Super puts it in
-  `ignored/linux_tester/`; the next session reads its summary, frame times and logs, and compares
-  its frame with this PC's.
+  Resume 3 (13.8), Resume 4 (13.9: the click stall), committed on `web`.
+- **Next:** the tester's archive (13.5, step 5): Super puts it in `ignored/linux_tester/` (in the
+  main checkout); the next session reads its summary, frame times and logs, and compares its frame
+  with this PC's. Then P3c is done.
 - **Super:** upload `re/scratch/taskP3/l8_dist/linux-inputs.tar.gz` again (`docs/release.md` 3b,
-  `--clobber`: the lists changed); try **Linux only** (3c) before the first Linux release; send the
-  new test tar.gz (581 MB) if the old one has not gone out yet (it carries the old lists, which the
-  pack does not use: the pack skips the base check, so the old one is fine to test with); merge
-  `web`.
+  `--clobber`: the lists changed); try **Linux only** (3c) before the first Linux release; the new
+  test tar.gz (581 MiB) is optional (13.9); merge `web`.
