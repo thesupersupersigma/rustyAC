@@ -439,6 +439,7 @@ For the project's tests (**checks**):
 | `?server=<address>`, `?servercars=<list>`, `?servertrack=<name>`, `?serverpass=1` | A server named in the address instead of the site's list. Only on this computer. |
 | `?ondemand=<address>` | The address of a server panel's router. Only on this computer. |
 | `?testfolder=<path>` | The Assetto Corsa folder without the folder picker. |
+| `?testimport=<url>,<url>` | Cars and / or tracks added over the pack or the folder without the pickers (Task W5): a folder over HTTP (`serve.py`'s folder listing), or a zip (a URL ending `.zip`). |
 | `?font=selawik` | The launcher's text in the Selawik font. |
 
 ### On the page

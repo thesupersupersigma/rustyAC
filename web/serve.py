@@ -6,6 +6,11 @@
     python web/serve.py --ac "C:/.../assettocorsa"        also serves that folder read-only at
                                                           /ac-test/ (the test hook of the folder
                                                           picker: ?testfolder=/ac-test/)
+    python web/serve.py --mount /parts/cars/abarth500/=C:/.../abarth500
+                                                          that folder at that prefix too; a
+                                                          folder above prefixes lists them
+                                                          (?list=1: a made-up folder of the
+                                                          install's files, ?testimport=)
     python web/serve.py --fault cut:collider.kn5          a test of the page's downloads: the
                                                           first answer for a path containing the
                                                           text goes wrong once (cut: half, then
@@ -74,6 +79,12 @@ def make_handler(mounts):
             full, query = self.resolve()
             if full is None:
                 return self.send(404, b'not found')
+            if 'list' in query and not os.path.isdir(full):
+                # a folder above --mount prefixes and no folder of its own: those prefixes' next parts
+                at = posixpath.normpath(urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)).rstrip('/') + '/'
+                names = sorted({prefix[len(at):].split('/')[0] for prefix, _ in mounts if prefix.startswith(at) and len(prefix) > len(at)})
+                if names:
+                    return self.send(200, json.dumps([{'name': n, 'dir': True, 'size': 0, 'mtime': 0} for n in names]).encode(), 'application/json')
             if 'list' in query and os.path.isdir(full):
                 # the folder picker's test hook: a folder's entries as JSON
                 entries = []
@@ -157,6 +168,7 @@ def main():
     parser.add_argument('--site', default=os.path.join(ROOT, 'dist-web', 'site'))
     parser.add_argument('--pack', default=os.path.join(ROOT, 'dist-web', 'preview'))
     parser.add_argument('--ac', help='an Assetto Corsa folder to serve read-only at /ac-test/ (test hook)')
+    parser.add_argument('--mount', action='append', default=[], help='/PREFIX/=FOLDER: that folder read-only at /PREFIX/ too (a test of the page: ?testimport=)')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--fault', action='append', default=[], help='KIND:TEXT, once each (a test of the page; see above)')
@@ -168,6 +180,11 @@ def main():
         mounts.append(('/preview/', os.path.abspath(args.pack)))
     if args.ac:
         mounts.append(('/ac-test/', os.path.abspath(args.ac)))
+    for mount in args.mount:
+        prefix, _, folder = mount.partition('=')
+        if not (prefix.startswith('/') and prefix.endswith('/') and os.path.isdir(folder)):
+            raise SystemExit(f'--mount {mount}: /PREFIX/=FOLDER with an existing folder')
+        mounts.append((prefix, os.path.abspath(folder)))
     mounts.append(('/', os.path.abspath(args.site)))
     server = Server(('127.0.0.1', args.port), make_handler(mounts))
     server.quiet = args.quiet

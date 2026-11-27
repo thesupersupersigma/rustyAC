@@ -23,6 +23,9 @@
 <div id="corner" hidden>
   <button id="source-switch" hidden></button>
   <button id="source-list" hidden>Open it as a file list</button>
+  <button id="corner-add">Add cars or tracks (a folder)</button>
+  <button id="corner-zip">Add cars or tracks (a zip)</button>
+  <button id="extras-again" hidden></button>
 </div>
 
 <div id="hud" hidden>
@@ -155,6 +158,8 @@
       <button id="reopen-folder" hidden></button>
       <button id="open-folder-list" hidden>Open it as a file list</button>
       <input id="folder-input" type="file" webkitdirectory hidden>
+      <button id="open-zip">Add cars or tracks from a zip</button>
+      <input id="zip-input" type="file" accept=".zip" hidden>
     </p>
     <p id="folder-list-hint" class="hint folder-only" hidden>
       Chrome refuses folders under Program Files: use this instead. The browser asks whether to
@@ -164,7 +169,9 @@
     <p class="hint folder-only">
       The folder is the one with <code>content</code> and <code>system</code> in it
       (<code>...\steamapps\common\assettocorsa</code>). Its files are read on this computer by
-      this page only; nothing is uploaded and nothing is changed.
+      this page only; nothing is uploaded and nothing is changed. A folder or zip with only cars
+      and / or tracks in it (<code>content/cars</code>, <code>cars</code>, <code>tracks</code>, or
+      one car or track) is added to what is open: the preview pack or your folder.
     </p>
     <p id="content-line" class="status"></p>
     <p id="refusal" class="refusal" hidden></p>

@@ -11,7 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use rustyac_content::imports;
 use rustyac_content::vfs::{self, MemFs};
+use rustyac_content::zip::{Need, Parts, Zip};
 use rustyac_game::input::bindings::key_name;
 use rustyac_game::input::ini::ControlsIni;
 use rustyac_game::input::pad::PadState;
@@ -270,6 +272,104 @@ pub fn check_car(car: &str) -> String {
     // (the check asked for the car's collider model, which a list does not need: not wanted)
     files().take_wanted();
     result
+}
+
+/// What a folder the player picked holds (Task W5): its paths (relative, a folder's ending in `/`)
+/// through `rustyac_content::imports::detect`, as [`import_json`].
+#[wasm_bindgen]
+pub fn detect_listing(name: &str, paths: &str) -> String {
+    let listing = Zip::listing(Path::new(name), paths.lines().filter(|l| !l.is_empty()));
+    import_json(imports::detect(imports::Source::Zip(Arc::new(listing)), name))
+}
+
+/// `{"kind": "full" | "content" | "car" | "track" | null, "cars": [[id, folder inside], ...], "tracks": [...]}`
+fn import_json(found: Option<imports::Import>) -> String {
+    let Some(found) = found else { return "{\"kind\": null, \"cars\": [], \"tracks\": []}".into() };
+    let kind = match found.kind {
+        imports::Kind::Full => "full",
+        imports::Kind::Content => "content",
+        imports::Kind::Car(_) => "car",
+        imports::Kind::Track(_) => "track",
+    };
+    let items = |k| found.items(k).iter().map(|(id, at)| format!("[{}, {}]", json_text(id), json_text(at))).collect::<Vec<_>>().join(", ");
+    format!("{{\"kind\": \"{kind}\", \"cars\": [{}], \"tracks\": [{}]}}", items("cars"), items("tracks"))
+}
+
+/// A zip the player picked (Task W5), read in place. The page reads the file asynchronously: a
+/// call that lacks a part of it fails, [`PickedZip::need`] names the part, the page hands it over
+/// with [`PickedZip::give`] and makes the call again.
+#[wasm_bindgen]
+pub struct PickedZip {
+    name: String,
+    parts: Arc<Parts>,
+    zip: Option<Arc<Zip>>,
+    need: Vec<f64>,
+}
+
+#[wasm_bindgen]
+impl PickedZip {
+    #[wasm_bindgen(constructor)]
+    pub fn new(name: &str, len: f64) -> PickedZip {
+        PickedZip { name: name.to_string(), parts: Arc::new(Parts::new(len as u64)), zip: None, need: Vec::new() }
+    }
+
+    pub fn give(&self, at: f64, bytes: Vec<u8>) {
+        self.parts.give(at as u64, bytes);
+    }
+
+    /// `[at, length]` of the part the last failed call lacked; empty: it failed for another reason.
+    pub fn need(&self) -> Vec<f64> {
+        self.need.clone()
+    }
+
+    fn failed(&mut self, e: std::io::Error) -> JsError {
+        self.need = Need::of(&e).map_or(Vec::new(), |n| vec![n.at as f64, n.len as f64]);
+        JsError::new(&format!("{}: {e}", self.name))
+    }
+
+    fn zip(&mut self) -> Result<Arc<Zip>, JsError> {
+        if self.zip.is_none() {
+            let zip = Zip::from_bytes(Path::new(&self.name), self.parts.clone()).map_err(|e| self.failed(e))?;
+            self.parts.forget();
+            self.zip = Some(Arc::new(zip));
+        }
+        Ok(self.zip.clone().unwrap())
+    }
+
+    /// What the zip holds, as [`detect_listing`] says it of a folder.
+    pub fn detect(&mut self) -> Result<String, JsError> {
+        let zip = self.zip()?;
+        let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(stem, _)| stem);
+        Ok(import_json(imports::detect(imports::Source::Zip(zip), stem)))
+    }
+
+    /// Every file's path in the zip, one per line.
+    pub fn files(&mut self) -> Result<String, JsError> {
+        Ok(self.zip()?.files().collect::<Vec<_>>().join("\n"))
+    }
+
+    /// One file, unpacked and checked against its CRC.
+    pub fn read(&mut self, path: &str) -> Result<Vec<u8>, JsError> {
+        // shortcut: the packed file and the unpacked one are both in memory for a moment (a big track model in a zip: twice its size); stream it if that ever runs out of memory
+        let read = self.zip()?.read(path).map_err(|e| self.failed(e))?;
+        // (only once it is read: the parts of a call made again are still wanted)
+        self.parts.forget();
+        Ok(read)
+    }
+}
+
+/// Does a car (`cars`) or track (`tracks`) the player added load? The desktop launcher's Drive
+/// check (`rustyac_content::required::loads`): `{"why": "" or the message, "wanted": [files to
+/// fetch first, then ask again]}`. The page has no DLC lists: `dlcs_here` (the player's own folder,
+/// which may hold any DLC) lets a DLC's model through, else (the preview pack, no DLC) it says
+/// which DLC the model needs.
+#[wasm_bindgen]
+pub fn check_pick(kind: &str, id: &str, layout: &str, dlcs_here: bool) -> String {
+    use rustyac_content::required::{loads, List, Lists, DLCS};
+    let lists = Lists { base: List::default(), dlcs: if dlcs_here { DLCS.iter().map(|d| (d.1, List::default())).collect() } else { Vec::new() } };
+    let why = loads(Path::new(ROOT), kind, id, layout, &lists, &|_| false).err().map(|why| why.replace(&format!("{ROOT}/"), "")).unwrap_or_default();
+    let wanted: Vec<String> = files().take_wanted().iter().map(|path| json_text(&relative(Path::new(path)))).collect();
+    format!("{{\"why\": {}, \"wanted\": [{}]}}", json_text(&why), wanted.join(", "))
 }
 
 /// The files a drive needs that are listed but not here yet, one per line. Call it again

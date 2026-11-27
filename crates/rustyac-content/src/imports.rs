@@ -434,6 +434,9 @@ mod tests {
             let zip = dir.join(format!("{name}.zip"));
             std::fs::write(&zip, make_zip(&entries, true, false)).unwrap();
             assert_eq!(kind(&zip), want, "zip {name}");
+            // the same as a listing (the browser's folders)
+            let listed = Source::Zip(Arc::new(Zip::listing(Path::new(name), files.iter().copied())));
+            assert_eq!(detect(listed, name).map(|i| (i.kind, i.at)), want, "listing {name}");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
