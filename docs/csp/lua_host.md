@@ -4,6 +4,22 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
+**Stopped at Resume 2 (rule 32), 2026-11-26.** Resume 2 is much bigger than its sizing:
+- **The RSS 3 row can't be identical before C5l.** All 9 script cars are `VERSION=extended-N`, so
+  the row needs CSP's record. Record turns on CSP's own extended tyre contact for every extended car
+  (docs/csp/core.md C5k/C5l). With record off, no script runs either. C5l is sized at 10-14 sessions.
+- **`lj_getSim` / `lj_getCar_inner`: 3-5 sessions.** The Lua/States update (+0x10ad540) fills them
+  through about 4,000 instructions: the car fill +0x10b07c0 (0x18e0) with +0x10af8f0 (0xecc), the sim
+  builder +0x10b2730 (0x14a2), and +0x10b23c0, +0x10ad930, +0x10b20a0, +0x10ad280. Many of the fields
+  come from main-thread objects (window, camera, replay, race manager).
+- **`cphys0` / `62` / `66`: about 1 session (found, below).** They live on rustyAC's script host (the
+  `state_cphys_car` view the car step fills and reads back), which is part 3's core, so they are best
+  ported with part 3.
+
+The lead chooses: C5l first, or a part 3 proof that doesn't need whole-row identity (for example the
+script's per-step effects against CSP's: cphys66's limit, the throttle and clutch maps), or
+getSim/getCar now in committed parts.
+
 C6a and C6b are done (below). C6c part 1 is done: `CSP_ORACLE_FRAMES` runs CSP's own car script in
 csp_oracle for the whole drive. C6c part 2 is under way (next section). Ported and proven so far:
 `ac.DataLUT21` (`lj_lut2d_*`) and `ac.ControlButton` (`lj_binaryinput_*`, CSP's null buttons). The
@@ -64,7 +80,20 @@ throws `runtime_error` when it is null.
 |---|---|
 | `cphys0` accessCarPhysics (+0x84f980) | returns `h + 1336`, the script's CarPhysicsState view |
 | `cphys62` getScriptSetupValue(name) (+0x857c00) | hashes the name (sub_181647300, 1 when 0) and looks it up in `h + 4544` (count at +4552, 16-B entries); returns entry+8 or null |
-| `cphys66` setEngineRPMLimit(rpm, b) (+0x859620) | car = `*(h + 1320) + 792`. If `(int)rpm` != car+1292, it writes car+1292 = `(int)rpm` and `h + 1468` = rpm. If also b and rpm > 0 and `*(h + 1328) + 88` is set, it calls sub_18059CAE0 |
+| `cphys66` setEngineRPMLimit(rpm, b) (+0x859620) | car = `*(*(h + 1320) + 792)`. First +0x85ea40 keeps the car's original limit once per script: a 4-B float `(float)car+1292` in the hash map at `*(h + 1320) + 1656` (key 0x4C87FE493AD93C12, callback manager +40, spin lock byte +64), freed by a callback, so the limit can be restored. If `(int)rpm` != car+1292, it writes car+1292 = `(int)rpm` and `h + 1468` = rpm. If also b and rpm > 0 and `*(h + 1328) + 88` is set, it calls sub_18059CAE0 |
+
+More detail:
+- **The host:** `h` is TLS +0x500 (1280).
+- **`cphys62`'s name hash** is XXH3-64 with seed 0 and the default secret (sub_181647300, secret at
+  +0x229a580). rustyac-physics already depends on twox-hash `xxhash3_64` (feature `lua`).
+- **`cphys62`'s lookup** (sub_1804F9270) is a Robin Hood map:
+  - entries are 16 B, {key u64, value pointer};
+  - the bucket mixes FNV-1a 64 over the 8 key bytes: `(f * 0x9E3779B97F4A7C15) >> 64` xor
+    `f * 0x22BFEB334B90D7AF`, then shifts right by the byte at +38;
+  - the tag is the low byte | 0x100, plus 256 per probe.
+- **The car_cphys chunk** is 3,527 B: an `ffi.cdef` of `struct __ex` with the 82 function pointers,
+  then `__util.__ex=ffi.cast("__ex*", ...)`. re/scratch/taskC6c/chunk.py decodes it.
+  csp::lua_env doesn't run it yet.
 
 ## C6c part 1: CSP's car scripts running in the oracle (dwrite.dll build 4305)
 
