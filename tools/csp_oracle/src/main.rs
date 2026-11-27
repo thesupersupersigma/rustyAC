@@ -1726,6 +1726,9 @@ unsafe fn finish_car(dll: usize, car: *mut u8, guid: usize) {
     let avatar = read::<*mut u8>(slot as usize);
     put(avatar, 0x1168, car);
     put(slot, 0xe0, guid as u32); // the list index
+    // the script runner (+0x84c110) takes its car from the car context's +0xa0 (+0xf32f00 builds a fresh slot
+    // when unset); in the game the car list holds that same object, so each car's own context gets its list slot
+    put(context as *mut u8, 0xa0, slot as usize);
     let mode = read::<usize>(dll + 0x282_1078);
     if read::<u32>(context) == 1 && read::<usize>(context + 0x10) != 0 && (mode == 0 || read::<u8>(mode + 27) != 9) {
         put(context as *mut u8, 0x10, 0usize);
@@ -1922,13 +1925,6 @@ extern "C" fn device_set_engine_rpm(_this: *mut u8, _rpm: f32, _limiter: f32) {}
 unsafe fn script_stand_ins(acs: &Acs, dll: usize, cars: usize) {
     // the car list (0x28213d8) is a vector: its end (0x28213e0) sizes CSP's per-car script states (+0x10ad540)
     put(dll as *mut u8, 0x282_13e0, read::<usize>(dll + 0x282_13d8) + 8 * cars);
-    // the script runner (+0x84c110) takes its car from the car context's +0xa0 (+0xf32f00, which builds a
-    // fresh slot when unset, as it has by now); in the game the car list holds that same object, so it gets the list's slot
-    // shortcut: only the current context (the last car built), upgrade when a run has more than one script car
-    let context = read::<usize>(dll + 0x281_7d90);
-    if context != 0 && cars > 0 {
-        put(context as *mut u8, 0xa0, read::<usize>(read::<usize>(dll + 0x282_13d8) + 8 * (cars - 1)));
-    }
     // each car slot's objects the per-car state fill (+0x10b07c0) reads unchecked: (slot offset, its object's pointers)
     let slots: [(usize, &[usize]); 1] = [(0x548, &[0x8d8])];
     for car in 0..cars {
