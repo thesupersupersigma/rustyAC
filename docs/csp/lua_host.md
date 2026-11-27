@@ -4,15 +4,67 @@ Plan: docs/csp/plan.md CSP-3 / CSP-11 / CSP-12. What CSP's Lua side does: docs/c
 
 ## Resume here
 
-C6a and C6b are done (below). C6c part 1 is done (next section): `CSP_ORACLE_FRAMES` runs CSP's own car
-script in csp_oracle for the whole drive. 8 of the 9 script cars load and run 4,000 steps there, with
-the script's natives logged per step. URD fails on `std/ac_common` `pairs`, as it does in the game.
-Next: C6c part 2. Port the natives that table shows, in step order: `lj_getSim`/`lj_getCar` state,
-`lj_getCarPhysics`, the `cphys<i>` natives (most are each step: 66, 35, 27, 62, 9, 52, 46, 11, 21,
-50, 60, 80), `lj_binaryinput_*` (ControlButton), `lj_lut_*`/`lj_lut2d_*` (DataLUT11/21 get and
-loadcardata), `lj_set*__carc`, `lj_connect_*`, `lj_getAirPressure`, `lj_encodeHalf`,
-`lj_preciseClock__os`. Prove each in `csp lua env` against CSP on the same car state. The oracle's
-car context +0xa0 stand-in covers only the last car built; extend it before a run has two script cars.
+C6a and C6b are done (below). C6c part 1 is done: `CSP_ORACLE_FRAMES` runs CSP's own car script in
+csp_oracle for the whole drive. C6c part 2 is under way (next section). Ported and proven so far:
+`ac.DataLUT21` (`lj_lut2d_*`) and `ac.ControlButton` (`lj_binaryinput_*`, CSP's null buttons). The
+Resume questions are answered there, except whether the game also does VRC 2026's second set-up.
+Next: RSS 3's remaining natives: `cphys0` accessCarPhysics, `cphys62` getScriptSetupValue and
+`cphys66` setEngineRPMLimit. All three read the script host from TLS+0x500 (below). After them come
+`lj_getSim`/`lj_getCar_inner` (the 3,280-B state the Lua/States update fills), then the other cars'
+natives in order of use: `cphys35`/`27`, `lj_lut_get`, `lj_connect_*`, `setExtraSwitch__carc`,
+`cphys9`/`80`/`52`/`46`/`11`/`21`/`50`/`60`, `lj_encodeHalf`, `lj_getAirPressure` and
+`lj_preciseClock__os`. `--lua-env` has no TLS script context (the current script at TLS+0x1f8 and the
+cphys host at TLS+0x500). A native that reads either crashes there (dwrite+0x489f8d), so it needs the
+host stand-in in `--lua-env` or a proof in the `--drive` run.
+
+## C6c part 2: the state natives (dwrite.dll build 4305)
+
+**The Resume questions**
+
+- **Frame count vs steps.** Three places read CSP's frame count (+0x2820e90) during a drive:
+  - the sim state fill (+0x10b291e), which writes it to `sim.frame` (+0x98);
+  - the per-frame cache stamp (+0x10b33a4, sim +0x1d8 through qword_18281A2A8);
+  - the script runner's "start at 10" gate (+0x84c165).
+
+  A write watch on `sim.frame` over 8 script cars found writes only; no script reads it. So the
+  count matters to a script only through the gate. Rule, the same in rustyAC and the oracle: one
+  frame per physics step (frame = n + step). It needs no tape field, because no step result depends
+  on it after the gate.
+- **The car of every car.** The car-load finisher now sets context +0xa0 to each car's own list slot,
+  not only the last car's (commit a9667a36). In a two-car RSS 3 run both scripts load and both
+  limiters read 8300. At step 1000 car 0 is at 3612 rpm and car 1 at 8208 rpm.
+- **The RSS 3 hash change is the script.** Each CarAvatar now gets its car's last-step
+  CarPhysicsState (+0x268) before the Lua state fill, so `car.rpmLimiter` is the car's 8300 and not 0
+  (commit 1d761546). Run lim5 shows the script acting:
+  - the throttle map turns full gas into 0.33;
+  - the clutch map gives a clutch of about 0 to 0.61;
+  - `setEngineRPMLimit` (`cphys66`) writes the limit each step, and the limiter first cuts in at
+    step 1586.
+
+  The steps hash is f1f71e4dbd3e04ba with or without breakpoints.
+- **VRC alpha 2026's second set-up at step 172.** It is deterministic: the same with
+  `CSP_ORACLE_FRAMES` 11 or 40, and with or without breakpoints. It follows the script's own update
+  count or accumulated dt (about 0.52 s), not the frame count or the wall clock. Whether the game does
+  it too needs a game run with that car. This is open.
+
+**Ported**
+
+| Native | CSP | rustyAC |
+|---|---|---|
+| `lj_lut2d_*` (`ac.DataLUT21`) | parse sub_1814A63E0, grid sub_1814A55E0, bilinear sub_1814A98C0, clamp sub_1814A6100 | csp::lua_natives (bicubic aborts as in CSP) |
+| `lj_binaryinput_*` (`ac.ControlButton`) | `new` (+0x489f40) returns null unless the script's car is the car controls provider's (sub_1805DDC70); every other call takes null to 0 / false / no-op | csp::lua_natives: null buttons (`// shortcut:` until rustyAC binds `__EXT_CAR_` keys) |
+
+In the oracle's drive every `pressedphysics` call gets a null button (rcx = 0 in all s_* logs), so
+the null port is what CSP does there. Proof: `csp lua env` 123/123 identical under both MXCSR.
+
+**The next three (found, not ported)**: each reads the script host `h` = TLS[TlsIndex]+0x500 and
+throws `runtime_error` when it is null.
+
+| Native | What it does |
+|---|---|
+| `cphys0` accessCarPhysics (+0x84f980) | returns `h + 1336`, the script's CarPhysicsState view |
+| `cphys62` getScriptSetupValue(name) (+0x857c00) | hashes the name (sub_181647300, 1 when 0) and looks it up in `h + 4544` (count at +4552, 16-B entries); returns entry+8 or null |
+| `cphys66` setEngineRPMLimit(rpm, b) (+0x859620) | car = `*(h + 1320) + 792`. If `(int)rpm` != car+1292, it writes car+1292 = `(int)rpm` and `h + 1468` = rpm. If also b and rpm > 0 and `*(h + 1328) + 88` is set, it calls sub_18059CAE0 |
 
 ## C6c part 1: CSP's car scripts running in the oracle (dwrite.dll build 4305)
 
