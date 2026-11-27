@@ -128,6 +128,14 @@ extern "C" fn lj_random_seed() -> i32 {
     (std::hash::RandomState::new().hash_one(std::time::Instant::now()) % 2_147_483_647) as i32
 }
 
+/// `ac.ControlButton`'s natives (`lj_binaryinput_*`, sub_180489F40 ..). `new` returns null unless the
+/// script's car is the one the car controls provider drives (sub_1805DDC70); in csp_oracle's drive
+/// it is not, and CSP passes that null to every later call, each of which then returns 0 / false.
+// shortcut: no extended-control input (null buttons), upgrade when rustyAC drives a car with __EXT_CAR_ keys bound
+extern "C" fn lj_binaryinput_none() -> usize {
+    0
+}
+
 /// CSP's `lua_lut` (its cdef): a `std::vector<vec2>` of points (null pointers when empty),
 /// bounds, the size (-1 until refreshed) and the two flags scripts set.
 #[repr(C)]
@@ -826,6 +834,14 @@ pub fn native(name: &[u8]) -> Option<*mut c_void> {
         b"lj_lut2d_add" => lj_lut2d_add as *mut c_void,
         b"lj_lut2d_refresh" => lj_lut2d_refresh as *mut c_void,
         b"lj_lut2d_get" => lj_lut2d_get as *mut c_void,
+        b"lj_binaryinput_new" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_pressedphysics" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_downphysics" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_set" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_setalwaysactive" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_setdisabled" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_onpressed" => lj_binaryinput_none as *mut c_void,
+        b"lj_binaryinput_onreleased" => lj_binaryinput_none as *mut c_void,
         _ => return None,
     })
 }

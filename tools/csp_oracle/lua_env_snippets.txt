@@ -135,3 +135,5 @@ local l = ffi.C.lj_lut2d_parse('(0,0=1|1,0=3)') for _, p in ipairs{{0, 1, 5}, {1
 local l = ffi.C.lj_lut2d_empty() ffi.C.lj_lut2d_refresh(l) return l.__size .. tostring(l.__b_min) .. tostring(l.__b_max)
 local l = ac.DataLUT21.parse('(0,0=1|2,0=3|0,4=5|2,4=11)') local a, b = l:bounds() return tostring(a) .. tostring(b) .. ' ' .. string.format('%.9g', l:get(vec2(1, 1))) .. ' ' .. string.format('%.9g', l:get(vec2(1.5, 3)))
 return __l2(ffi.C.lj_lut2d_parse('(0,0=1|5|1,0=3|0,1=5|1,1=11|abc=2|9)'), {{0.5, 0.5}, {1, 1}})
+local C = ffi.C return tostring(C.lj_binaryinput_pressedphysics(nil)) .. tostring(C.lj_binaryinput_downphysics(nil)) .. tostring(C.lj_binaryinput_set(nil)) .. tostring(C.lj_binaryinput_onpressed(nil, 1)) .. tostring(C.lj_binaryinput_onreleased(nil, 1))
+local C = ffi.C C.lj_binaryinput_setalwaysactive(nil, true) C.lj_binaryinput_setdisabled(nil, true) return 'ok'
