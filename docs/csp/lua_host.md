@@ -181,7 +181,8 @@ gives in CSP's state): strings out are a per-thread MSVC `std::string` (`const s
 | `lj_decodeBase64(const char*)` | 0x1813d2e30 (sub_181435190: stops at `=` or a byte not alnum/`+`/`/`) | yes |
 | `lj_lut_*` (add atkey atvalue empty gc get loadcardata parse refresh) | 0x180fedbb0..0x180fee320 | yes (Resume 2, below) |
 | `lj_lut_load`, `lj_lut_serialize` | 0x180fee170, 0x180fedc10 | on demand |
-| `lj_lut2d_*` (add empty gc get load loadcardata parse refresh serialize) | 0x180fee460..0x180feeba0 | on demand |
+| `lj_lut2d_*` (add empty gc get loadcardata parse refresh) | 0x180fee460..0x180feeba0 (parse sub_1814A63E0, grid sub_1814A55E0, bilinear sub_1814A98C0) | yes (C6c part 2; bicubic aborts) |
+| `lj_lut2d_load`, `lj_lut2d_serialize` | 0x180fee460.. | on demand |
 | `lj_structBytes` | 0x1813d3210 | yes |
 | `lj_getPatchVersionCode` | 0x1802fd360 (`(11078 - dword_1827FAB10) >> 1`, 4305 here) | yes (4305) |
 | `lj_getPatchVersion` | 0x1813caf80 | on demand |
@@ -213,7 +214,8 @@ memory: C6c).
 The 1D LUT (csp::lua_natives, `LuaLut` = CSP's `lua_lut` cdef, the points a `[f32; 2]` vector):
 
 - **parse** (sub_1814A3160): trimmed of `
-	 `; an `=` anywhere means the inline form
+
+	 `; an `=` anywhere means the inline form
   `(x=y|x=y)` (keys and values through csp::parse_float, a value's first `,` piece, pushed unsorted);
   else a digit, `+`, `-` or a comment means the file form (sub_1814A1B30: lines `x|y`, comments `;`,
   `#`, `//`, the value's first `,` piece; unsorted, repeated keys kept); else empty. NULL gives NULL.

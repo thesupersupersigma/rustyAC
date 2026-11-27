@@ -423,6 +423,275 @@ unsafe extern "C" fn lj_lut_atvalue(lut: *const LuaLut, i: i32) -> f32 {
     (*lut).points().get(i as usize).map_or(f32::NAN, |p| p[1])
 }
 
+/// CSP's `lua_lut2d` (its cdef): the table (null while it has no value), a float `get` returns
+/// without one, the bounds (x, y, value) as of `refresh`, the size (-1 until refreshed), the flag.
+#[repr(C)]
+pub struct LuaLut2d {
+    inner: *mut Lut2d,
+    lut1: u64,
+    b_min: [f32; 3],
+    b_max: [f32; 3],
+    size: i32,
+    bicubic: bool,
+}
+const _: () = assert!(std::mem::size_of::<LuaLut2d>() == 48);
+
+/// sub_1814A52A0's table: (x, y) keys and values in their order, the grid built on demand.
+pub struct Lut2d {
+    keys: Vec<[f32; 2]>,
+    values: Vec<f32>,
+    grid: Option<Grid>,
+}
+
+/// sub_1814A55E0's bilinear grid: the y and x axes, a cell's corner values over its area, bounds.
+struct Grid {
+    y: Vec<f32>,
+    x: Vec<f32>,
+    coefs: Vec<[f32; 4]>,
+    min: [f32; 3],
+    max: [f32; 3],
+}
+
+impl LuaLut2d {
+    fn boxed(table: Option<(Vec<[f32; 2]>, Vec<f32>)>) -> *mut LuaLut2d {
+        let inner = match table {
+            Some((keys, values)) if !values.is_empty() => Box::into_raw(Box::new(Lut2d { keys, values, grid: None })),
+            _ => std::ptr::null_mut(),
+        };
+        Box::into_raw(Box::new(LuaLut2d { inner, lut1: 0, b_min: [0.0; 3], b_max: [0.0; 3], size: -1, bicubic: false }))
+    }
+}
+
+/// CRT strtof (sub_181DAE96C): the number at the start of `text` after white space, 0 when none.
+// shortcut: no inf / nan / hex forms, upgrade when a table spells one
+fn strtof(text: &[u8]) -> f32 {
+    let t = &text[text.iter().position(|c| !b" \t\n\x0b\x0c\r".contains(c)).unwrap_or(text.len())..];
+    let digits = |from: usize| t[from.min(t.len())..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let mut n = usize::from(matches!(t.first(), Some(b'+' | b'-')));
+    let int = digits(n);
+    n += int;
+    let mut frac = 0;
+    if t.get(n) == Some(&b'.') {
+        frac = digits(n + 1);
+        n += 1 + frac;
+    }
+    if int + frac == 0 {
+        return 0.0;
+    }
+    if matches!(t.get(n), Some(b'e' | b'E')) {
+        let sign = usize::from(matches!(t.get(n + 1), Some(b'+' | b'-')));
+        let e = digits(n + 1 + sign);
+        if e > 0 {
+            n += 1 + sign + e;
+        }
+    }
+    std::str::from_utf8(&t[..n]).unwrap().parse().unwrap_or(0.0)
+}
+
+/// sub_1815FE960 over a key's `,` pieces (trimmed of ' ', '\t'): x, then y (x again for one piece).
+fn key2d(text: &[u8]) -> [f32; 2] {
+    let pieces: Vec<&[u8]> = text.split(|&c| c == b',').map(|p| trim(p, b" \t")).collect();
+    let x = float(pieces[0]);
+    [x, if pieces.len() == 1 { x } else { float(pieces[1]) }]
+}
+
+/// sub_1814A63E0: inline `(x,y=v|x,y=v)`, kept in order; a value whose key x is NaN (no key)
+/// is dropped (`ucomiss xmm6, xmm6` at 0x1814a6740 / 0x1814a697f).
+fn parse_inline2d(s: &[u8]) -> (Vec<[f32; 2]>, Vec<f32>) {
+    let (mut keys, mut values, mut key) = (Vec::new(), Vec::new(), [f32::NAN; 2]);
+    let (mut i, mut start) = (0, 0);
+    while i < s.len() {
+        match s[i] {
+            b'(' => start = i + 1,
+            b'=' => {
+                if i > start {
+                    key = key2d(&s[start..i]);
+                }
+                start = i + 1;
+            }
+            b'|' => {
+                if i > start && !key[0].is_nan() {
+                    values.push(strtof(&s[start..i]));
+                    keys.push(key);
+                    key = [f32::NAN; 2];
+                }
+                start = i + 1;
+            }
+            b')' => break,
+            _ => {}
+        }
+        i += 1;
+    }
+    if i > start && !key[0].is_nan() {
+        values.push(strtof(&s[start..i]));
+        keys.push(key);
+    }
+    (keys, values)
+}
+
+/// sub_1814A6E70: a `.2Dlut` file: lines trimmed, comment lines skipped; the first holds the xs,
+/// each other a y then a value per x. None for no header or a row of another length.
+// shortcut: the binary / encrypted forms (a magic prefix) are read as text, upgrade when a car ships one
+fn parse_file2d(text: &[u8]) -> Option<(Vec<[f32; 2]>, Vec<f32>)> {
+    let lines = text.split(|&c| c == b'\n' || c == 0).map(|l| trim(l, b"\t\r "));
+    let mut lines = lines.filter(|l| !l.is_empty() && !l.starts_with(b";") && !l.starts_with(b"#") && !l.starts_with(b"//"));
+    // sub_18142B3D0: pieces between spaces / tabs, a number when it looks like one, else NaN
+    let pieces = |l: &[u8]| -> Vec<f32> {
+        let number = |p: &[u8]| p[0].is_ascii_digit() || (matches!(p[0], b'-' | b'.') && p.len() > 1);
+        l.split(|&c| c == b' ' || c == b'\t').filter(|p| !p.is_empty()).map(|p| if number(p) { strtof(p) } else { f32::NAN }).collect()
+    };
+    let head = pieces(lines.next()?);
+    if head.is_empty() {
+        return None;
+    }
+    let (mut keys, mut values) = (Vec::new(), Vec::new());
+    for row in lines.map(pieces) {
+        if row.len() != head.len() + 1 {
+            return None;
+        }
+        for (k, &x) in head.iter().enumerate() {
+            keys.push([x, row[0]]);
+            values.push(row[k + 1]);
+        }
+    }
+    Some((keys, values))
+}
+
+/// sub_1814A55E0 (bilinear) and sub_1814A9BC0: bounds over the values that are not NaN, the row
+/// length as the leading keys sharing the first y, each cell's corners over its area.
+fn build2d(keys: &[[f32; 2]], values: &[f32]) -> Grid {
+    let n = values.len();
+    let (mut min, mut max) = ([f32::MAX; 3], [-f32::MAX; 3]);
+    let (mut ys, mut xs, mut vs) = (vec![0.0f32; n], vec![0.0f32; n], vec![0.0f32; n]);
+    for i in (0..n).rev() {
+        let ([x, y], v) = (keys[i], values[i]);
+        if v.is_nan() {
+            continue;
+        }
+        // fminf / fmaxf: the number when the other is NaN
+        // shortcut: a -0 / +0 tie may keep the other zero than CSP's, upgrade when a table has both
+        min = [min[0].min(x), y.min(min[1]), v.min(min[2])];
+        max = [max[0].max(x), y.max(max[1]), v.max(max[2])];
+        (ys[i], xs[i], vs[i]) = (y, x, v);
+    }
+    // CSP divides by zero on a table of one value (n1 = 0), so does this (a panic, an abort)
+    let n1 = (0..n - 1).take_while(|&k| { let d = (ys[k] - ys[0]).abs(); d < 1e-40_f32 || d.is_nan() }).count();
+    let ny = n / n1;
+    let (y, x): (Vec<f32>, Vec<f32>) = ((0..ny).map(|i| ys[n1 * i]).collect(), xs[..n1].to_vec());
+    let (ny1, nx1) = (ny - 1, n1 - 1);
+    let mut coefs = vec![[0.0f32; 4]; ny1 * nx1];
+    for iy in 0..ny1 {
+        for jx in 0..nx1 {
+            let p = jx + n1 * iy;
+            let inv = 1.0 / ((y[iy + 1] - y[iy]) * (x[jx + 1] - x[jx]));
+            coefs[iy + ny1 * jx] = [inv * vs[p], inv * vs[p + n1], inv * vs[p + 1], inv * vs[p + n1 + 1]];
+        }
+    }
+    Grid { y, x, coefs, min, max }
+}
+
+/// std::lower_bound as MSVC writes it: the first element not below `v` (`v <= e` goes left).
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn lower_bound(axis: &[f32], v: f32) -> usize {
+    let (mut lo, mut count) = (0, axis.len());
+    while count > 0 {
+        let half = count / 2;
+        if !(v <= axis[lo + half]) {
+            lo += half + 1;
+            count -= half + 1;
+        } else {
+            count = half;
+        }
+    }
+    lo
+}
+
+/// sub_1814A98C0: 0 off the grid, else the cell's bilinear value in CSP's operation order.
+fn eval2d(g: &Grid, y: f32, x: f32) -> f32 {
+    if y < g.y[0] || y > g.y[g.y.len() - 1] || x < g.x[0] || x > g.x[g.x.len() - 1] {
+        return 0.0;
+    }
+    let (j, k) = (lower_bound(&g.y, y).saturating_sub(1), lower_bound(&g.x, x).saturating_sub(1));
+    let (a, b, cx, d) = (g.y[j + 1] - y, y - g.y[j], g.x[k + 1] - x, x - g.x[k]);
+    let c = g.coefs[j + (g.y.len() - 1) * k];
+    ((b * c[3]) + (a * c[2])) * d + ((b * c[1]) + (a * c[0])) * cx
+}
+
+unsafe extern "C" fn lj_lut2d_empty() -> *mut LuaLut2d {
+    LuaLut2d::boxed(None)
+}
+
+unsafe extern "C" fn lj_lut2d_parse(text: *const c_char) -> *mut LuaLut2d {
+    if text.is_null() {
+        return std::ptr::null_mut();
+    }
+    LuaLut2d::boxed(Some(parse_inline2d(CStr::from_ptr(text).to_bytes())))
+}
+
+/// sub_180FEE8B0: `<car>/data/<file>` of a car whose physics state is set up as a `.2Dlut` file;
+/// NULL for a car not loaded or a file not there.
+unsafe extern "C" fn lj_lut2d_loadcardata(car_index: i32, name: *const c_char) -> *mut LuaLut2d {
+    let Some(dir) = CAR_DATA.lock().unwrap().get(&car_index).cloned() else { return std::ptr::null_mut() };
+    if name.is_null() {
+        return std::ptr::null_mut();
+    }
+    let file = dir.join(CStr::from_ptr(name).to_string_lossy().as_ref());
+    match crate::data::read(&file).ok().flatten() {
+        Some(bytes) => LuaLut2d::boxed(parse_file2d(&bytes)),
+        None => std::ptr::null_mut(),
+    }
+}
+
+unsafe extern "C" fn lj_lut2d_gc(lut: *mut LuaLut2d) {
+    if !lut.is_null() {
+        let lut = Box::from_raw(lut);
+        if !lut.inner.is_null() {
+            drop(Box::from_raw(lut.inner));
+        }
+    }
+}
+
+/// sub_1814A7EE0: appended unsorted, the grid dropped.
+unsafe extern "C" fn lj_lut2d_add(lut: *mut LuaLut2d, key: *const [f32; 2], value: f32) {
+    let lut = &mut *lut;
+    let Some(t) = lut.inner.as_mut() else {
+        // CSP divides by zero adding to a table with no value
+        eprintln!("CSP Lua: lj_lut2d_add on a table with no value crashes CSP (docs/csp/lua_host.md)");
+        std::process::abort();
+    };
+    t.keys.push(*key);
+    t.values.push(value);
+    t.grid = None;
+    lut.size = -1;
+}
+
+/// sub_180FEEBA0: the size and the grid's bounds (zeros with no value).
+unsafe extern "C" fn lj_lut2d_refresh(lut: *mut LuaLut2d) {
+    let lut = &mut *lut;
+    let Some(t) = lut.inner.as_mut() else {
+        (lut.size, lut.b_min, lut.b_max) = (0, [0.0; 3], [0.0; 3]);
+        return;
+    };
+    let g = t.grid.get_or_insert_with(|| build2d(&t.keys, &t.values));
+    (lut.size, lut.b_min, lut.b_max) = (t.keys.len() as i32, g.min, g.max);
+}
+
+/// sub_180FEEB10 over sub_1814A6100: the key clamped to the bounds (NaN to the low one), 0 for
+/// an infinite or NaN result; the float at +8 with no value.
+unsafe extern "C" fn lj_lut2d_get(lut: *mut LuaLut2d, key: *const [f32; 2]) -> f32 {
+    let lut = &mut *lut;
+    let Some(t) = lut.inner.as_mut() else { return f32::from_bits(lut.lut1 as u32) };
+    if lut.bicubic {
+        eprintln!("CSP Lua: lj_lut2d_get with useBicubicInterpolation (sub_1814A55E0 mode 1) is not ported yet (docs/csp/lua_host.md)");
+        std::process::abort();
+    }
+    let g = t.grid.get_or_insert_with(|| build2d(&t.keys, &t.values));
+    let clamp = |v: f32, lo: f32, hi: f32| if v >= lo { minss(hi, v) } else { lo };
+    let [x, y] = *key;
+    let r = eval2d(g, clamp(y, g.min[1], g.max[1]), clamp(x, g.min[0], g.max[0]));
+    if r.is_finite() { r } else { 0.0 }
+}
+
 /// Task C6b part 5: `__util.nativf(hash, ...)`, CSP's natives called by hash (registered by
 /// sub_18101A9E0), the ported ones; any other stops, naming its hash.
 pub(super) unsafe extern "C-unwind" fn nativf(l: *mut lua_State) -> c_int {
@@ -550,6 +819,13 @@ pub fn native(name: &[u8]) -> Option<*mut c_void> {
         b"lj_lut_get" => lj_lut_get as *mut c_void,
         b"lj_lut_atkey" => lj_lut_atkey as *mut c_void,
         b"lj_lut_atvalue" => lj_lut_atvalue as *mut c_void,
+        b"lj_lut2d_empty" => lj_lut2d_empty as *mut c_void,
+        b"lj_lut2d_parse" => lj_lut2d_parse as *mut c_void,
+        b"lj_lut2d_loadcardata" => lj_lut2d_loadcardata as *mut c_void,
+        b"lj_lut2d_gc" => lj_lut2d_gc as *mut c_void,
+        b"lj_lut2d_add" => lj_lut2d_add as *mut c_void,
+        b"lj_lut2d_refresh" => lj_lut2d_refresh as *mut c_void,
+        b"lj_lut2d_get" => lj_lut2d_get as *mut c_void,
         _ => return None,
     })
 }
@@ -594,5 +870,21 @@ mod tests {
         assert_eq!(lut_value(&v, 3.0, false, true), -10.0);
         assert_eq!(lut_value(&v, 1.0, true, false), 10.0);
         assert_eq!(bounds(&v), ([0.0, 0.0], [2.0, 10.0]));
+    }
+
+    #[test]
+    fn lut2d() {
+        assert_eq!([strtof(b" 1.5e1x"), strtof(b"-.5"), strtof(b"+2"), strtof(b"3e"), strtof(b"1e+2"), strtof(b".e1"), strtof(b"")], [15.0, -0.5, 2.0, 3.0, 100.0, 0.0, 0.0]);
+        let (k, v) = parse_inline2d(b"(0,0=1| 1 ,0=3|0,1=5|1,1=11|7|2=4)");
+        assert_eq!(v, [1.0, 3.0, 5.0, 11.0, 4.0]);
+        assert!(k[4] == [2.0, 2.0] && k[1] == [1.0, 0.0]);
+        assert_eq!(parse_inline2d(b"(abc)").1.len(), 0);
+        let g = build2d(&k[..4], &v[..4]);
+        assert_eq!((g.y.as_slice(), g.x.as_slice(), g.min, g.max), (&[0.0, 1.0][..], &[0.0, 1.0][..], [0.0, 0.0, 1.0], [1.0, 1.0, 11.0]));
+        assert_eq!([eval2d(&g, 0.0, 0.0), eval2d(&g, 0.0, 1.0), eval2d(&g, 1.0, 0.0), eval2d(&g, 0.5, 0.5), eval2d(&g, 2.0, 0.5)], [1.0, 3.0, 5.0, 5.0, 0.0]);
+        let (k, v) = parse_file2d(b"; c\n\t0\t10 20\n0 1 2 3\n\n1 4 5 6\n").unwrap();
+        assert_eq!((k[4], v), ([10.0, 1.0], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        assert!(parse_file2d(b"0 1\n0 1\n").is_none() && parse_file2d(b"// x\n").is_none());
+        assert!(parse_file2d(b"a -\n0 1 2\n").unwrap().0[0][0].is_nan());
     }
 }
