@@ -25,8 +25,11 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   letter case, every read of AC's folder through `vfs`, `quickrace` against fresh Windows gold).
   L8's pieces done (13.4 the tar.gz and `release.yml`'s Linux job, runnable by hand as "Linux
   only", 13.5 the tester's kit), the tester's pack done and proved on WSL (13.6, with five fixes),
-  Resume 2's answers (13.7). **Resume at 13.8** (the other seven scripts, the transcripts, the
-  required-files lists without mods, the tester's results).
+  Resume 2's answers (13.7), Resume 3 (13.8: the required-files lists from Steam's own depot
+  manifests, the test pack stored, the seven other scripts and the transcripts on Linux against
+  fresh Windows gold, a failed base check now a warning with **Continue anyway**). **Resume at
+  13.9**: on Linux the page sometimes stops answering clicks (13.8's open item), then the tester's
+  archive.
 
 ## 1. Plain-English summary
 
@@ -1250,19 +1253,131 @@ read) and `--required` made again: a task of its own, before the first Linux rel
 - **The seven other launcher scripts and the transcripts (13.3): not run** this session (the
   tester pack came first, and its fixes 2 and 3 above changed the launcher); next (13.8).
 
-### 13.8 Resume here (P3c)
+### 13.8 Resume 3: the base-game list from Steam, the safety net, the other scripts
 
-- **Done:** L7 (13.1 to 13.3), L8's pieces (13.4, 13.5), the tester's pack (13.6) and Resume 2's
-  answers (13.7), committed on `web`.
-- **Next:** the other seven scripts of `tools/proofs/launcher/` on Linux against
-  `re/gold/launcher_p3c` (`l7_run.sh <name>` with `GOLD=re/gold/launcher_p3c SETTLE=150000`, then
-  `l7_cmp.py`; about 12 minutes each in WSL; `career` should fail its one step as Windows does,
-  13.7), and the transcripts
-  (every `re/gold/launcher_p3c` list through `--transcript --fixed-host` on both; paths differ only
-  by `C:/` against `/mnt/c/`). `quickrace` again (fixes 2 and 3 of 13.6 touched the launcher; a
-  plain folder's pages are unchanged). Then the required-files lists without mods (13.6), and the
-  tester's archive (13.5, step 5).
-- **Super:** send the test tar.gz with the message of the P3c report; put the archive that comes
-  back in `ignored/linux_tester/`; upload `linux-inputs` (`docs/release.md`, 3b) and try
-  **Linux only** (3c) before the first Linux release; merge `web` (its `platforms.yml` needs the two
-  dev packages added here).
+**1. The base-game list, right by construction.** Steam keeps the file list of every installed
+depot in `Steam\depotcache\<depot>_<manifest>.manifest` (protobuf: the payload section's
+FileMappings, names in clear text here, `filenames_encrypted` 0); `appmanifest_244210.acf`'s
+`InstalledDepots` names which manifest is installed: the base game is depot **244211** (23,490
+entries, 19,614 files), each DLC is a depot of its own app id. `web_pack --required` now reads
+them (`steam_depots`, `depot_files`; a unit test on a made-up manifest): a car or track layout gets
+into a Kunos list only when every file it reads is shipped by some depot of AC, and each list keeps
+only the files its **own** depot ships (shared and launcher files included). Found on the way: the
+DLC cars' `ui/dlc_preview.png` and `dlc_ui_car.json` are in the **base** depot (the store card
+for players without the DLC), so they leave the DLC lists; 8 files of `dlc_404430` were in no depot
+(mod layouts' `ui` files in `ks_barcelona`).
+
+| list | before (files) | after (files) | what left |
+|---|---|---|---|
+| `base.json` | 11,016 (86 cars, 36 tracks / layouts, shared 1,182 MB) | **10,883** (86 cars, 35, shared 804 MB) | `monaco_2017` (29), 27 mod fonts, 65 VRC / RSS suit, helmet and glove textures, 2 VRC driver models, 10 mod layouts' `ui` files in `monza`, `spa`, `ks_silverstone` |
+| 11 `dlc_<app>.json` | 364 to 1,128 each | 358 to 1,102 each (11 to 32 fewer) | the 2 store-card files per car (base depot), `dlc_404430`'s 8 mod files |
+
+Every list now holds 0 files outside its own depot (`re/scratch/taskP3/base3/survey.py`). **The
+proof on a clean install**, through the zip path, nothing of the game copied
+(`base3/stubs.py`: zips of **empty** files, since the check only asks whether each file is
+there): `base_json.zip` (exactly `base.json`'s 10,883 names) and `base_depot.zip` (all 19,614
+files of depot 244211, a clean Steam install of the base game by name). The new lists pass both,
+`abarth500` passes, `ks_mazda_mx5_cup` is refused "this car needs the Japanese Pack DLC"; the old
+lists on `base_depot.zip`: "this folder is not a complete Assetto Corsa: 133 files of the base
+game are missing: content/tracks/monaco_2017 (29 files), content/driver (2 files), content/fonts
+(27 files), ..." (the unit test `a_clean_install_passes_the_base_check`, on Windows and on Linux).
+The new lists are in `re/scratch/taskP3/l8_inputs/required/` (both tar.gz files are made with them)
+and in `re/scratch/taskP3/l8_dist/linux-inputs.tar.gz`, ready for `docs/release.md` 3b
+(**upload it again**: the lists changed). The old lists stay in `base3/required_old/`.
+
+**2. The tester's zip stored, not deflated** (`make_pack.py` writes `ZIP_STORED`; the existing pack
+was rewritten entry by entry by `tp/restore.py`, CRCs checked, the same 2,521 files): 1,052 MB
+(was 581 MB deflated); the test tar.gz is **581 MB** (was 588 MB), the release tar.gz 12 MB.
+
+**3. The other seven scripts on Linux, quickrace again.** Super's install lost two tracks on
+2026-11-25 (69, not 71), after `re/gold/launcher_p3c` was recorded, so every list differed by them:
+fresh Windows gold for today's install, **`re/gold/launcher_r3/`** (`LAUNCHER_GOLD=launcher_r3 sh
+tools/proofs/launcher_record.sh`: career fails its one step, the seven others 0). Linux
+(`re/scratch/taskP3/base3/scripts.sh`: `l7_run.sh` with `GOLD=re/gold/launcher_r3
+SETTLE=150000`, then `l7_cmp.py`):
+
+| script | Linux steps | asynchronous requests (as a set) | synchronous, in order |
+|---|---|---|---|
+| quickrace | 0 failed (its first run: 1, below) | 2,508 = 2,508, 1 apart (the personal best's lap time) | 340 / 333 |
+| career | **1 failed, the same step as Windows** (`#career .series ... series1`) | 2,507 = 2,507 | 208 / 202 |
+| champs | 0 failed; the saved championship **identical** (its JSON but the random id) | 2,509 / 2,508: one `listfiles/champs` fewer (asked earlier, during the listings) | 528 / 405 |
+| hotlap | 0 failed | 2,508, 1 apart | 319 / 312 |
+| options | 0 failed | 2,507 / 2,506 | 244 / 233 |
+| practice | 0 failed | 2,508, 1 apart | 322 / 315 |
+| raceweekend | 1 failed (the page stops answering clicks: below) | 2,507 = 2,507 | 371 / 291 |
+| special | 0 failed | 2,507 = 2,507 | 342 / 335 |
+
+The synchronous differences are 13.3's (Xvfb's screen size, the random AI opponent, WebKit
+sending identical in-flight `getskinmeta` once) plus **order**: the page's two slow listings
+(`listspecialevents`, then `listseries`) take 190 to 240 s on WSL's `/mnt/c` (seconds on Windows),
+so the theme's career and championship code runs earlier, while they are still going.
+
+**Open: the page stops answering clicks (Linux, intermittent).** `until #drive .tracks
+.item[data-track=magione]` failed in quickrace's first run (its second passed) and in raceweekend
+every time (three runs). What is known:
+- **Not** the listings' overlap: the listings (`listspecialevents` then `listseries`, 190 to 240 s
+  on WSL's `/mnt/c`) end long before the step with `SETTLE=300000`, and it still fails.
+- **Not** the first-run language screen: both sides show it (an empty player folder) under the
+  whole script, Windows too (`target/proofs/launcher_record/quickrace/out/quickrace_setup.png`); the
+  steps click hidden elements on both.
+- In a failing run the page's last output is "setting race laps to: 5"; the next steps' clicks
+  (the cars tab, `abarth500`, the tracks tab) send **no** request and log nothing, where Windows
+  sends `setsetting/race?CAR_0/SKIN=...` and logs "Summary redraw: car" at once; `until` on the cars
+  grid still passes (the elements are there), and `js` steps' exceptions no longer reach the log.
+  At the launcher's exit WebKit says "WebProcess didn't exit as expected after the UI process
+  connection was closed": the page's web process is stuck or its event handling is.
+- The theme logs `TypeError: null is not an object (evaluating '_localized[key + "_name"]')` 28
+  times a run on Linux, never on Windows (it reads `career_neutral.ini`, 14 bytes on both, at line
+  1,379 of 2,900, Windows at 2,798: its career locale code runs while the listings still go); also
+  in the passing runs, so not shown to be the cause.
+- Reproduce: `GOLD=re/gold/launcher_r3 SETTLE=150000 bash re/scratch/taskP3/l7_run.sh raceweekend`
+  in WSL (about 10 minutes); `re/scratch/taskP3/base3/probe_rw.txt` is the script cut at the step,
+  with screenshots and probes (`SCRIPT=`). Next: why the clicks stop (a hung synchronous request
+  to the bridge's second port, or a script loop in the web process: WebKit's inspector or
+  `WEBKIT_DEBUG`, a `gdb` backtrace of `WebKitWebProcess` at the stall), then whether a real Linux
+  disk (the tester's) shows it at all.
+
+**Transcripts** (`base3/tr.sh win|linux`, every `re/gold/launcher_r3` list through `--transcript
+--fixed-host` from an empty player folder, `base3/trcmp.py`: answer for answer with the AC folder and
+the player folder written as `<AC>` / `<DOCS>`, `file:///C:/` and `file://` + `/mnt/c/` as one URL form, and each
+answer header's raw size left out, since the folder's spelling changes it): **22,831 of 22,831 answers identical**, all 12
+lists (career 2,717, champs 3,039, hotlap 2,829, options 2,753, practice 2,832, quickrace 2,850,
+raceweekend 2,880, special 2,851, probe 55, replays 15, results 7, videomodes 3). Windows answers a
+list in about 15 s, Linux on `/mnt/c` in about 9 minutes.
+
+**4. The safety net.** A failed base-game check is no longer a refusal: the chooser shows the
+message ("this folder is not a complete Assetto Corsa: 39 files of the base game are missing:
+content/tracks/monza (39 files). If this is your Assetto Corsa all the same, **Continue anyway**
+uses it as it is (not asked again for this folder).") and its button says **Continue anyway**;
+taken, `game_files.txt` gains `accepted=<folder>` (`Remembered::accepted`), and the check is not
+run again while `root` is that folder (another folder is checked anew). A folder that does not
+open, or holds no AC, is still refused; a picked DLC car or track whose DLC is missing is still
+refused for that car or track only (`check_pick`, unchanged). **Proof**
+(`re/scratch/taskP3/base3/warn.sh`: the release tar.gz unpacked into an empty folder, `AC_ROOT`
+unset, the remembered root a zip of empty files named as `base.json` without `monza`, Xvfb): run
+1 opens the chooser with the warning (screenshot `base3/warn/focused.png`), Tab to **Continue
+anyway**, Enter: the theme's window opens and `game_files.txt` has `accepted=`; run 2 with the same
+choice goes straight to the theme's window. (The status line now wraps with `overflow-wrap:
+anywhere`, not `word-break: break-all`, which split "Continue anyway" mid-word.)
+
+**Checks:** `web_pack` tests and clippy; `rustyac-content` tests on Windows and Linux (23); clippy
+`-D warnings --all-targets` on `rustyac-content` and `rustyac-launcher`, Windows and Linux; the
+launcher's tests on Linux; `run_all.sh --quick`: **every area IDENTICAL, 0 ERROR** (1 h 10; the
+first try was killed from outside after 28 minutes, its one cut-off case showed as a stale line in
+`gui/cases.log`). Windows: the shared code's change is the new `accepted=` line (read and written
+only by the Linux chooser) and a test; the Windows launcher and game are unchanged.
+
+### 13.9 Resume here (P3c)
+
+- **Done:** L7 (13.1 to 13.3), L8 (13.4, 13.5), the tester's pack (13.6), Resume 2 (13.7),
+  Resume 3 (13.8), committed on `web`.
+- **Next:** the open item of 13.8: on Linux the page sometimes stops answering clicks (raceweekend
+  every time, quickrace once in two); find why (13.8 has what is ruled out and how to reproduce).
+  Then the tester's archive (13.5, step 5): Super puts it in
+  `ignored/linux_tester/`; the next session reads its summary, frame times and logs, and compares
+  its frame with this PC's.
+- **Super:** upload `re/scratch/taskP3/l8_dist/linux-inputs.tar.gz` again (`docs/release.md` 3b,
+  `--clobber`: the lists changed); try **Linux only** (3c) before the first Linux release; send the
+  new test tar.gz (581 MB) if the old one has not gone out yet (it carries the old lists, which the
+  pack does not use: the pack skips the base check, so the old one is fine to test with); merge
+  `web`.

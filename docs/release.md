@@ -47,8 +47,10 @@
    `linux-inputs`, because neither part may come from the repository: FMOD Engine 2.03's
    `libfmod.so.14` and `libfmodstudio.so.14` (fmod.com's Linux download, `api/core/lib/x86_64/`
    and `api/studio/lib/x86_64/`, the `.so.14.15` files renamed) and `required/` (`base.json` and
-   the `dlc_<app>.json` lists, `tools/web_pack --required` on a full install: paths and sizes,
-   no content). Pack them at the top of the archive and upload it:
+   the `dlc_<app>.json` lists, `tools/web_pack --required` on a full Steam install: paths and
+   sizes, no content; it reads Steam's depot manifests in `Steam\depotcache`, so only what Steam
+   ships gets in). Pack them at the top of the archive and upload it (if `linux-inputs` already
+   exists, replace its file: `gh release upload linux-inputs linux-inputs.tar.gz --clobber`):
 
    ```
    tar -czf linux-inputs.tar.gz libfmod.so.14 libfmodstudio.so.14 required
