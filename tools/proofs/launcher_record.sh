@@ -3,14 +3,16 @@
 #
 # Makes re/gold/launcher/<name>.req again: each click script of tools/proofs/launcher/ drives the
 # port's launcher window (off screen, the theme of the AC install, rustyac.exe headless with the AI
-# driving) from an empty player folder; log2req.py turns the run's log into the request list.
+# driving) from an empty player folder, nothing read from the player's own cfg (Task 46c); log2req.py turns the run's log into the request list.
 # The hand-written lists (tools/proofs/launcher/*.req) are copied as they are.
 #   sh tools/proofs/launcher_record.sh [name ...]
+# LAUNCHER_GOLD=<folder>: into re/gold/<folder> instead (a new install's lists beside the old ones)
 area=launcher_record
 . "$(dirname "$0")/lib.sh"
 cargo build --release --locked --quiet -p rustyac-launcher -p rustyac-game || exit 2
-mkdir -p "$gold/launcher"
-cp tools/proofs/launcher/*.req "$gold/launcher/"
+dest=$gold/${LAUNCHER_GOLD:-launcher}
+mkdir -p "$dest"
+cp tools/proofs/launcher/*.req "$dest/"
 names=${*:-$(cd tools/proofs/launcher && ls *.txt | sed 's/\.txt$//')}
 for name in $names; do
     docs=$out/$name/docs
@@ -19,10 +21,10 @@ for name in $names; do
     set --
     for a in --headless --no-steam --autodrive --duration 160 --cfg-dir "$(own)/cfg" $extra; do set -- "$@" --game-arg "$a"; done
     # the script's shots land in out/ of the cwd
-    (cd "$out/$name" && "$repo/target/release/rustyac-launcher.exe" --docs "$docs" "$@" \
+    (cd "$out/$name" && "$repo/target/release/rustyac-launcher.exe" --docs "$docs" --player-cfg none --player-name "You, the player" "$@" \
         --script "$repo/tools/proofs/launcher/$name.txt" --log run.log --offscreen 1600x900) > "$out/$name/launcher.txt" 2>&1
     status=$?
-    n=$(python tools/proofs/log2req.py "$out/$name/run.log" "$gold/launcher/$name.req")
+    n=$(python tools/proofs/log2req.py "$out/$name/run.log" "$dest/$name.req")
     fails=$(grep -cE '^FAIL|nothing matches' "$out/$name/run.log")
     echo "$name: exit $status, $n, $fails failed steps" | tee -a "$log"
     # the window's browser lets go of its folder a moment after the window closes

@@ -26,6 +26,17 @@ flate2 = "1.1"
 # Microsoft's WebView2, the browser the theme runs in (the launcher has CEF 3)
 webview2-com = "0.39"
 
+# Linux: the same theme in WebKitGTK 4.1 through wry (WKWebView on macOS later), in a GTK window
+[target.'cfg(target_os = "linux")'.dependencies]
+# the player's id, Drive's checks of a picked car or track
+rustyac-game = { path = "../rustyac-game" }
+# the browser (the ac:// scheme with POST bodies needs WebKitGTK 2.40: linux-body)
+wry = { version = "0.58", default-features = false, features = ["os-webview", "linux-body"] }
+# the window, the main loop, the native file chooser and message boxes (wry's own GTK)
+gtk = "0.19"
+# the page's settings (file pages may call ac://) and its snapshot (a script's shot)
+webkit2gtk = { version = "3", features = ["v2_40"] }
+
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [

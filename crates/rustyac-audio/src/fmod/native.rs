@@ -19,7 +19,7 @@
 //! Unlike the browser's build, the native one has `Geometry::addPolygon` and runs the game's
 //! two DSP plug-ins from the banks (their 1.08 ABI is 2.03's).
 
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
@@ -82,6 +82,8 @@ struct Native {
     studio_set_advanced: unsafe extern "C" fn(RawHandle, *mut StudioAdvanced) -> i32,
     core_get_advanced: unsafe extern "C" fn(RawHandle, *mut Advanced) -> i32,
     core_set_advanced: unsafe extern "C" fn(RawHandle, *mut Advanced) -> i32,
+    studio_load_bank_file: unsafe extern "C" fn(RawHandle, *const c_char, u32, *mut RawHandle) -> i32,
+    studio_load_bank_memory: unsafe extern "C" fn(RawHandle, *const c_char, i32, i32, u32, *mut RawHandle) -> i32,
     get_listener: unsafe extern "C" fn(RawHandle, i32, *mut Attributes3d, *mut Vector) -> i32,
     set_listener: unsafe extern "C" fn(RawHandle, i32, *const Attributes3d, *const Vector) -> i32,
 }
@@ -129,6 +131,8 @@ pub(super) fn load() -> Result<(Fns, Extra), String> {
     unsafe {
         let native = Native {
             studio_create: get(studio, "FMOD_Studio_System_Create")?,
+            studio_load_bank_file: get(studio, "FMOD_Studio_System_LoadBankFile")?,
+            studio_load_bank_memory: get(studio, "FMOD_Studio_System_LoadBankMemory")?,
             cpu_usage: get(studio, "FMOD_Studio_System_GetCPUUsage")?,
             set_parameter_by_name: get(studio, "FMOD_Studio_EventInstance_SetParameterByName")?,
             set_paused: get(studio, "FMOD_Studio_EventInstance_SetPaused")?,
@@ -213,7 +217,7 @@ pub(super) fn load() -> Result<(Fns, Extra), String> {
             studio_get_event_by_id: get(studio, "FMOD_Studio_System_GetEventByID")?,
             studio_release: get(studio, "FMOD_Studio_System_Release")?,
             system_set_advanced_settings,
-            studio_load_bank_file: get(studio, "FMOD_Studio_System_LoadBankFile")?,
+            studio_load_bank_file,
         };
         let extra = Extra {
             set_output: get(core, "FMOD_System_SetOutput")?,
@@ -253,6 +257,16 @@ unsafe extern "C" fn geometry_set_polygon_attributes(this: Handle, index: i32, d
 
 unsafe extern "C" fn geometry_add_polygon(this: Handle, direct: f32, reverb: f32, double_sided: bool, count: i32, vertices: *const Vector, index: *mut i32) -> i32 {
     (n().geometry_add_polygon)(this.0, direct, reverb, double_sided as i32, count, vertices, index)
+}
+
+/// `loadBankFile`; a bank the disk does not have but the game's mounted files do (a zip of the
+/// game read in place, `rustyac_content::imports`) is handed over from memory (FMOD copies it).
+unsafe extern "C" fn studio_load_bank_file(this: Handle, file: Str, flags: u32, bank: OutHandle) -> i32 {
+    let path = if file.0.is_null() { None } else { Some(std::path::PathBuf::from(CStr::from_ptr(file.0).to_string_lossy().into_owned())) };
+    match path.filter(|p| !p.is_file()).and_then(|p| rustyac_content::vfs::read(&p).ok()) {
+        Some(bytes) => (n().studio_load_bank_memory)(this.0, bytes.as_ptr().cast(), bytes.len() as i32, 0, flags, bank.0),
+        None => (n().studio_load_bank_file)(this.0, file.0, flags, bank.0),
+    }
 }
 
 unsafe extern "C" fn event_set_paused(this: Handle, paused: bool) -> i32 {

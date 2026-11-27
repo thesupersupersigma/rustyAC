@@ -4,6 +4,7 @@
 //! What the debug view draws and from where: the car's shape as boxes, AC's chase and
 //! cockpit cameras, and the little matrix arithmetic the picture needs. No Direct3D in here.
 
+use rustyac_content::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use rustyac_physics::session::MsvcRand;
@@ -410,7 +411,7 @@ fn collider_boundaries(data_path: &Path) -> [f32; 6] {
     if let (Some(root), Some(name)) = (rustyac_content::install::ac_root(), folder.file_name()) {
         files.push(root.join("content/cars").join(name).join("collider.kn5"));
     }
-    files.iter().find(|f| f.is_file()).and_then(|f| rustyac_physics::car::colliders::model_boundaries(f).ok()).unwrap_or([0.0; 6])
+    files.iter().find(|f| f.vfs_is_file()).and_then(|f| rustyac_physics::car::colliders::model_boundaries(f).ok()).unwrap_or([0.0; 6])
 }
 
 /// The whole matrix of a car's 3D model (`CarAvatar::bodyMatrix`): its origin is the centre of

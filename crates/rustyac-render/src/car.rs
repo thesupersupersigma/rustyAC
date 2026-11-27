@@ -633,7 +633,7 @@ impl CarAvatar {
         };
         let kn5 = self.folder.join(&self.lods[0].filename);
         let ini_path = self.folder.join("data/proview_nodes.ini");
-        let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let modified = |p: &Path| rustyac_content::vfs::or_on_disk(p, |p| std::fs::metadata(p)).and_then(|m| m.modified()).ok();
         let fresh = match (modified(&ini_path), modified(&kn5)) {
             (Some(a), Some(b)) => a > b,
             _ => false,

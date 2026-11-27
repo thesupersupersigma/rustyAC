@@ -8,6 +8,7 @@
 //! The files are only read. What they give is written into the drive's [`SimSetup`], so a
 //! recorded drive replays in the same conditions wherever it is played.
 
+use rustyac_content::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use rustyac_physics::data::ini::IniReader;
@@ -441,7 +442,7 @@ pub fn over_time_mult() -> f32 {
     };
     let path = root.join("system").join("cfg").join("assetto_corsa.ini");
     match IniReader::load(&path) {
-        Ok(ini) if path.is_file() && ini.has_section("RACE") => ini.get_float("RACE", "OVER_TIME_MULT").unwrap_or(0.0),
+        Ok(ini) if path.vfs_is_file() && ini.has_section("RACE") => ini.get_float("RACE", "OVER_TIME_MULT").unwrap_or(0.0),
         _ => 1.5,
     }
 }
@@ -458,7 +459,7 @@ pub fn keyboard_driver(options: &crate::cli::Options, input_method: &str) -> boo
 /// `keyboard`: the controls are the keyboard's (`Sim::Sim` 0x140192070 gives those drivers
 /// the old mouse menu, as pitstop.ini's [SETTINGS] USE_MOUSE_PITSTOP does everyone).
 pub fn pit_header(window: (u16, u16), setup_file: Option<&std::path::Path>, keyboard: bool) -> crate::input_file::PitHeader {
-    let ini = rustyac_content::install::ac_root().map(|root| root.join("system").join("cfg").join("pitstop.ini")).filter(|path| path.is_file()).and_then(|path| IniReader::load(&path).ok());
+    let ini = rustyac_content::install::ac_root().map(|root| root.join("system").join("cfg").join("pitstop.ini")).filter(|path| path.vfs_is_file()).and_then(|path| IniReader::load(&path).ok());
     let settings = ini.as_ref().map(rustyac_physics::race::QuickMenuSettings::from_ini).unwrap_or_default();
     let mouse = keyboard || ini.is_some_and(|ini| ini.get_int("SETTINGS", "USE_MOUSE_PITSTOP").unwrap_or(0) != 0);
     let presets_ini = setup_file.map(|file| file.with_extension("sp")).filter(|file| file.is_file()).and_then(|file| std::fs::read_to_string(file).ok());

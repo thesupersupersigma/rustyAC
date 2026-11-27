@@ -143,9 +143,11 @@ pub fn files_with(folder: &str, suffix: &str) -> std::io::Result<Vec<String>> {
     Ok(list(folder, false)?.into_iter().filter(|f| to_lower(file_name(f)).ends_with(&suffix)).collect())
 }
 
-/// `new Uri(path.Replace("\\", "/")).AbsoluteUri` for a full Windows path.
+/// `new Uri(path.Replace("\\", "/")).AbsoluteUri` for a full Windows path; off Windows a full
+/// path's own leading `/` is the third one (`file:///home/...`).
 pub fn uri_path(path: &str) -> String {
     let p = path.replace('\\', "/");
+    let p = if cfg!(windows) { &p[..] } else { p.strip_prefix('/').unwrap_or(&p) };
     let mut out = String::from("file:///");
     for b in p.bytes() {
         let keep = b.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@/".contains(&b);
@@ -200,4 +202,15 @@ pub fn modified(path: &str) -> std::time::SystemTime {
 
 pub fn created(path: &str) -> std::time::SystemTime {
     files::with(|f| f.created(path)).unwrap_or(std::time::UNIX_EPOCH)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_full_path_is_a_file_url() {
+        assert_eq!(super::uri_path("C:\\Program Files (x86)\\a b"), "file:///C:/Program%20Files%20(x86)/a%20b");
+        if !cfg!(windows) {
+            assert_eq!(super::uri_path("/mnt/c/a b/ui"), "file:///mnt/c/a%20b/ui");
+        }
+    }
 }

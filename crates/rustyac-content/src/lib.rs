@@ -8,21 +8,28 @@
 //!   blocks are; a [`Kn5Reader`](kn5::Kn5Reader) fetches one block when it is wanted.
 //! * [`acd`]: a car's packed data (`data.acd`), decrypted in memory the way the game does it.
 //! * [`guard`]: every write goes through it; it refuses the game's folder and `Documents\Assetto Corsa`.
+//! * [`imports`]: what the player chose as the game's files (a full install, or a folder or zip
+//!   of cars and / or tracks) and the layered content roots read in place.
 //! * [`install`]: where Assetto Corsa is installed (`AC_ROOT`, Steam's library folders).
+//! * [`required`]: the required-files lists shipped with the native builds, and their checks.
 //! * [`track_files`]: which model files make up a track (`models.ini` / `models_<layout>.ini`)
 //!   and where its `data` and `ai` folders are.
 //! * [`vfs`]: where the files come from. The disk, unless a set of files in memory is mounted
 //!   (the browser build).
+//! * [`zip`]: a zip of the game's files, read in place.
 //!
 //! Nothing here is physics: the files that decide what the car feels (`surfaces.ini`, the AI
 //! line, the timing gates) are read by `rustyac-physics` with the game's own parsing rules.
 
 pub mod acd;
 pub mod guard;
+pub mod imports;
 pub mod install;
 pub mod kn5;
+pub mod required;
 pub mod track_files;
 pub mod vfs;
+pub mod zip;
 
 pub use kn5::{Kn5, Kn5Reader, Material, MeshInfo, Name, Node, NodeClass, TextureEntry, Vertex};
 pub use track_files::{ModelEntry, TrackFiles};

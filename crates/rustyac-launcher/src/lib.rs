@@ -12,7 +12,9 @@
 //! * [`online`]: the server list, a server's details, ping and the LAN scan.
 //! * [`pbs`]: `--import-pbs`, the personal bests of an Assetto Corsa install.
 //! * [`replays`]: the replays page's files.
-//! * [`shell`]: `MainWindow`, the window with the browser in it, and starting rustyac.exe.
+//! * [`shell`]: `MainWindow`, the window with the browser in it, and starting rustyac.exe
+//!   (WebView2 on Windows; WebKitGTK through wry on Linux, with the game-files chooser).
+//! * [`page`]: the window's pieces that do not depend on its browser.
 //! * [`transcript`]: the answers to a list of requests, as the launcher oracle writes them.
 //!
 //! The player's folder (`AppFolder.UserDataPath`, `Documents\Assetto Corsa` in the game) is
@@ -27,6 +29,7 @@ pub mod ini;
 pub mod jss;
 pub mod net;
 pub mod online;
+pub mod page;
 pub mod pbs;
 pub mod profile;
 pub mod query;
@@ -34,7 +37,14 @@ pub mod replays;
 pub mod setup;
 #[cfg(windows)]
 pub mod shell;
+/// Off Windows: the same window on WebKitGTK (wry), with the game-files chooser.
+#[cfg(target_os = "linux")]
+#[path = "shell_gtk.rs"]
+pub mod shell;
 pub mod sort;
 #[cfg(windows)]
+pub mod sys;
+#[cfg(target_os = "linux")]
+#[path = "sys_unix.rs"]
 pub mod sys;
 pub mod transcript;

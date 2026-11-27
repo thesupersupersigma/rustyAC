@@ -2,8 +2,10 @@
 
 # A pushed tag vX.Y.Z becomes a release: built and tested from scratch on GitHub's own Windows
 # machine, zipped, and published in the repo's Releases section, with the browser preview's site
-# as a second zip. See docs/release.md.
-# It can also be started by hand for a tag that exists already (Actions -> Release -> Run workflow).
+# as a second zip and the Linux x64 build (made on GitHub's Ubuntu machine) as a tar.gz. See docs/release.md.
+# It can also be started by hand for a tag that exists already (Actions -> Release -> Run workflow),
+# or with "Linux only" for any branch: the Linux tar.gz alone, built as for a release and kept as
+# the run's artifact (7 days), nothing published (docs/release.md, step 3c).
 # No Assetto Corsa file is here, is fetched or goes into the zip.
 name: Release
 
@@ -13,9 +15,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "An existing tag to release, e.g. v0.15.0"
-        required: true
+        description: "An existing tag to release, e.g. v0.15.0 (empty with Linux only)"
+        required: false
         type: string
+      linux_only:
+        description: "Linux only: build the chosen branch's Linux tar.gz as a test, publish nothing"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -31,8 +38,63 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # the Linux x64 tar.gz (packaging/package_linux.sh), handed to the release job below. What the
+  # repository cannot hold comes from the repo's pre-release "linux-inputs" (its asset
+  # linux-inputs.tar.gz: FMOD Engine 2.03's libfmod.so.14 and libfmodstudio.so.14, and required/
+  # with base.json and the dlc_<app>.json lists; docs/platforms.md 13.5)
+  linux:
+    name: build the Linux x64 tar.gz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check the tag's form
+        if: ${{ !inputs.linux_only }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' is not a tag of the form vX.Y.Z"
+            exit 1
+          fi
+
+      # Linux only: the branch the run was started on
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.linux_only && github.ref || format('refs/tags/{0}', inputs.tag || github.ref_name) }}
+          persist-credentials: false
+
+      # the launcher's browser (wry on WebKitGTK 4.1, GTK 3); SDL 3 is built into the game
+      - name: Install the launcher's libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: Install Rust
+        run: rustup toolchain install --no-self-update
+
+      - name: Build
+        run: cargo build --release --locked -p rustyac-game --features wgpu --bin rustyac && cargo build --release --locked -p rustyac-launcher
+
+      # the bit proofs that need no game files (the platforms workflow's list) and the launcher's
+      - name: Test
+        run: cargo test --release --locked -p rustyac-math -p rustyac-ode -p rustyac-physics -p rustyac-net -p rustyac-content -p rustyac-gui -p rustyac-audio -p rustyac-launcher
+
+      - name: Package
+        run: |
+          gh release download linux-inputs --pattern linux-inputs.tar.gz --dir "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/inputs"
+          tar -xzf "$RUNNER_TEMP/linux-inputs.tar.gz" -C "$RUNNER_TEMP/inputs"
+          version=${TAG#v}
+          # Linux only: the workspace's version (Cargo.toml)
+          [[ "${{ inputs.linux_only }}" != true ]] || version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          packaging/package_linux.sh "$version" "$RUNNER_TEMP/inputs" dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x64
+          path: dist/
+          retention-days: 7
+
   release:
     name: build and publish
+    needs: linux
+    if: ${{ !inputs.linux_only }}
     runs-on: windows-latest
     # the build is uncached: Embree alone is about 20 minutes
     timeout-minutes: 120
@@ -121,12 +183,18 @@ jobs:
       - name: Package the browser preview
         run: python web/build.py --zip "dist/rustyAC-$TAG-web.zip"
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: linux-x64
+          path: dist/
+
       # "Latest" only when this tag is the highest version released so far: an older tag released
       # by hand (or one that finishes after a newer one) must not take the badge from the newest
       - name: Publish the release
         run: |
           zip="dist/rustyAC-$TAG-windows-x64.zip"
           web="dist/rustyAC-$TAG-web.zip"
+          linux="dist/rustyAC-$TAG-linux-x64.tar.gz"
           highest=$( { gh release list --limit 1000 --json tagName --jq '.[].tagName'; echo "$TAG"; } \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
           if [ "$highest" = "$TAG" ]; then latest=--latest; else latest=--latest=false; fi
@@ -135,7 +203,7 @@ jobs:
           notes=--generate-notes
           if [ -f "docs/releases/$TAG.md" ]; then notes="--notes-file=docs/releases/$TAG.md"; fi
           echo "release notes: $notes"
-          gh release create "$TAG" "$zip" "$zip.sha256" "$web" "$web.sha256" \
+          gh release create "$TAG" "$zip" "$zip.sha256" "$web" "$web.sha256" "$linux" "$linux.sha256" \
             --verify-tag \
             --title "rustyAC $TAG" \
             "$notes" \

@@ -20,6 +20,16 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   Windows'). L6's sound done (12.3: FMOD Engine 2.03 native, call logs identical to the page's on
   the 18 drives and to the game's on the 3 end-to-end rows), its licence text and required-files
   list too, split into the base game and one list per DLC (12.3). **P3b done**; next is L7 (12.4).
+- **P3c (branch `web`), section 13:** L7 done (13.1 imports, zip, the lists' checks; 13.2 the
+  launcher on wry with the chooser; 13.3 the page's synchronous requests never wait on a listing,
+  letter case, every read of AC's folder through `vfs`, `quickrace` against fresh Windows gold).
+  L8's pieces done (13.4 the tar.gz and `release.yml`'s Linux job, runnable by hand as "Linux
+  only", 13.5 the tester's kit), the tester's pack done and proved on WSL (13.6, with five fixes),
+  Resume 2's answers (13.7), Resume 3 (13.8: the required-files lists from Steam's own depot
+  manifests, the test pack stored, the seven other scripts and the transcripts on Linux against
+  fresh Windows gold, a failed base check now a warning with **Continue anyway**), Resume 4 (13.9:
+  the click stall was WebKit's 6 connections to a port held by slow listings; listings now have a
+  port of their own, raceweekend and quickrace 3 of 3). **Resume at 13.10**: the tester's archive.
 
 ## 1. Plain-English summary
 
@@ -921,3 +931,512 @@ same 37.4 GB on today's install). Checks: `web_pack` clippy `-D warnings --all-t
   18 IDENTICAL on its rerun (its one difference in the first run was the flags check: `docs/flags.md`
   now lists `--required`) (`quick_l5.log`,
   `quick_l6_browser.log`).
+
+## 13. Task P3c: the launcher on wry, the game-files chooser, packaging (L7 to L8)
+
+### 13.1 L7 part 1: the portable pieces (done, `rustyac-content`)
+
+For every platform (the web build and the Windows launcher wire them in with Task W5):
+
+- **`imports`**: what a chosen folder or zip holds: the whole game (`content` with cars or
+  tracks, and `system`), cars and / or tracks (`content/cars|tracks`, `cars|tracks`), or one car
+  (`data.acd` or `data/`, and `ui/ui_car.json`) or one track (`models*.ini` or a `.kn5`, and
+  `ui/`); a folder or zip with only one folder in it is looked into (a zip of a folder).
+  **`Layers`** lays the extra imports' cars and tracks over the base's `content/cars` and
+  `content/tracks` (the base wins, then the first extra), reads every file in place, and is a
+  `vfs::Vfs`, so the game's readers need nothing new; a zip base stands at `<zip>/<folder>`.
+  `Layers::open` gives the player's messages ("Assetto Corsa's install folder wasn't found:
+  choose the folder with the game files", "… holds cars or tracks only …", "… holds no cars or
+  tracks …"). **`Remembered`**: the choice in `game_files.txt` (`root=`, `extra=`) under
+  `$XDG_CONFIG_HOME/rustyAC` (else `~/.config`), `~/Library/Application Support` on macOS,
+  `%APPDATA%` on Windows.
+- **`zip`**: only the central directory is read when the zip is opened; each file is read out of
+  the archive when asked for and checked against its CRC; zip64; stored and deflate (anything
+  else, or an encrypted entry: "unzip it and choose the folder"). `miniz_oxide` and `crc32fast`,
+  already in the tree, pure Rust.
+- **`required`**: `base.json` and the `dlc_<app>.json` lists (12.3) read back; `check_full`
+  ("this folder is not a complete Assetto Corsa: N files of the base game are missing:
+  content/cars/abarth500 (2 files), system/data (1 file), …"), `check_pick` ("this car needs the
+  Japanese Pack DLC"), `loads` for anything in no list (the car's data and the models its
+  `lods.ini` names, or the layout's models, opened as kn5; a model carrying a DLC's key needs that
+  DLC's files). The DLC table (key, app, name) moved here from `web_pack`, which uses it.
+- Tests on made-up folder trees and zips (built in the test, zip64 too): 9 kinds of folder and
+  their zips, layered reads, the messages, a mod's DLC key; and on this PC the real lists against
+  the real install (11,016 base files there, a base car loads). Linux, Windows and both wasm
+  targets clippy clean.
+
+### 13.2 L7 part 2: the launcher on Linux (built, not yet proved)
+
+- `crates/rustyac-launcher/src/shell_gtk.rs` (the module `shell` on Linux) and `sys_unix.rs` (the
+  bridge's host from GDK / GLib): a GTK window with WebKitGTK 4.1 through `wry` 0.58 (no tao, no
+  x11 feature), the same `Bridge`, theme, script steps and log as the WebView2 shell. The pieces
+  that do not depend on the browser moved verbatim from `shell.rs` to `page.rs` (theme, events,
+  steps, the wizard script, the controls page, Drive's command line, which now spells its paths
+  the system's way through `os_path`: unchanged on Windows).
+- **The bridge's synchronous requests:** WebKitGTK's custom schemes (and WKWebView's) give no
+  synchronous loads, and the theme's `$.ACCall` is `async: false`: the first synchronous request
+  failed inside WebKit ("loadResourceSynchronously … internal error") and the page hung. The
+  page's XMLHttpRequests now go to a small server of the launcher's on 127.0.0.1 (a free port, a
+  random token in every path, one write per answer: two writes waited on the delayed ACK, 50 ms a
+  request), which hands each to the main loop; `http://ac/` POSTs (CEF's
+  `OnBeforeResourceLoad`) are rewritten in the same hook. URLs are spelled as Chromium spells them
+  (host lower case, an empty path `/`), so the log matches Windows'. A scripted run's proxy
+  (127.0.0.1:9) leaves 127.0.0.1 alone.
+- **The chooser** (`choose_game_files`, before the theme unless `AC_ROOT`, `--ac-root`, a script
+  or a transcript names the folder; `--choose-files` brings it back): the remembered choice when
+  it still opens and checks out, else rustyAC's own page: "Assetto Corsa found in <folder>. N cars
+  and M tracks." or the message of 13.1, **Change… (a folder)** / **Change… (a zip)**, **Extra cars
+  and tracks** (Add a folder… / Add a zip… / Remove), **Continue** only when the choice checks out
+  against `required/base.json` beside the program. GTK's native file chooser (portals where the
+  desktop has them).
+- **Drive** checks the race's track and every distinct car (`check_pick`, else `loads`) and shows
+  the message instead of starting the game. The game gets `AC_ROOT`, or `RUSTYAC_GAME_FILES` (the
+  remembered file) when a zip or extra roots are in the choice: the game (off Windows) then mounts
+  the same layers at its start (`Remembered::mount_file`). FMOD's `loadBankFile` takes a bank the
+  disk does not have from the mounted files (`LoadBankMemory`, `fmod/native.rs`).
+- New crates (Linux only; every Windows entry of the lock file keeps its version, only second
+  versions were added): `wry`, `gtk`, `webkit2gtk` and what they pull, in `LICENSING.md`
+  (61 names, and WebKitGTK's own entry). `docs/flags.md`: `--choose-files`, `RUSTYAC_GAME_FILES`.
+
+**Measured, and where it stops.** Under Xvfb in WSL (`re/scratch/taskP3/l7_run.sh <name>`: a
+click script of `tools/proofs/launcher/`, X11, WebKit's caches in the run's folder) the theme
+loads and 2,600 to 2,700 bridge requests are answered, then the page stalls. Two causes found:
+
+1. **WSL's `/mnt/c` is 33 times slower than Windows for the bridge's listing work**:
+   `listcars` + `listtracks` + `listspecialevents` take **337 s** on Linux through 9P against
+   **10.4 s** on Windows (`l7_time.sh`, the same three requests through `--transcript`). The main
+   loop is busy that long.
+2. While it is busy, the page's synchronous requests fail in WebKit with `NetworkError: A network
+   error occurred` without reaching the server (`uimessage`, `carcount`, `uiready`, `getresults`…;
+   a lone synchronous request on a free main loop is answered with status 200). Not yet known: a
+   WebKit / libsoup limit (connections per host, a time limit) or something of the server's.
+
+On a native Linux disk the listing should take about what Windows takes; this PC cannot show it
+(the repo and AC's files are on `/mnt/c`, and files stay in the repo, rule 6).
+
+### 13.3 L7 part 3: the page never waits on a listing, letter case, every read through `vfs`, the proof
+
+**The `NetworkError`, found** (`l7_probe3.txt`: a page-side timer sends synchronous requests while
+a listing runs): **WebKitGTK ends a synchronous request after 10 s** (`TimeoutError` at 10,012 ms;
+Chromium, so the Windows launcher, waits as long as it takes). The theme sends its three listings
+with `async=true` and polls `carcount` / `uimessage` synchronously meanwhile, so any listing longer
+than 10 s on the main loop failed the polls, and the page stalled. WSL's slow disk only showed it:
+a slow HDD or a network share does the same. The fix, in three parts, all Linux-only:
+
+1. **The listings run on a thread of their own.** `Bridge::listing` (shared code, used only by the
+   Linux shell) hands every request the theme sends with `async=true` whose handler reads files
+   only (`listcars`, `listtracks`, `listspecialevents`, `listseries`, `listfiles`, `getiniasjson`,
+   `getachievements`, `getskinmeta`) to a bridge without the window's host on one worker thread,
+   in the order asked, as Windows answers them (the log keeps that order). The state they fill in
+   and other requests read (`carcount`, `eventcount`, `generatecss`) is shared (`Arc<Mutex>`); on
+   Windows every request is still answered in turn on the window's thread. Chosen over a cache or
+   answering in parts: no stale lists, and it is the theme's own `async=true`.
+2. **Synchronous requests on a port of their own.** After `listcars` the theme sends ~2,500
+   asynchronous `getskinmeta`; WebKit counts its connections per host and port and queued a
+   synchronous `uimessage` behind them past 10 s. The bridge's server now listens on two ports;
+   the hook in the page sends `async: false` requests to the second, and the server never queues
+   one of those on the listings' thread.
+3. **`until` asks again**: wry keeps a script sent before the first page has loaded and drops its
+   callback, so a script's first check never got its answer (the page sat "loading" for good in
+   the step runner's eyes). A check unanswered for a second is asked again.
+
+Also found on the way: **wry's `ipc` drops every message of a `file://` page** (it makes an
+`http::Request` of the page's address and `http` refuses `file:///...`), so the page's errors and
+console lines never reached the log (13.2's item 3): they now go to the bridge's server (a beacon
+to `__report`). **`net::uri_path` wrote `file:////mnt/...`** for a Unix path (fixed off Windows:
+the path's own `/` is the third). Requests on WSL's `/mnt/c` that still take long are printed
+(`bridge: <url> answered after <s> s`).
+
+**Letter case** (`vfs::on_disk`, `vfs::or_on_disk`): off Windows, a path that is not there as
+spelled is looked for again ignoring ASCII case, one folder at a time from the deepest folder that
+is there, each folder listed once and its names kept; two names that differ only in case: the
+smaller. The game (every `vfs` call), the launcher (`files::Disk`) and the imports' folders and
+disk fallbacks use it; the zip reader already ignored case. **Cost:** nothing for a path found as
+spelled (the call is tried first); a path not there as spelled costs one more `lstat`, one per
+folder up to the deepest one that is there, and a look-up in each kept listing below it (a folder
+is listed once: about 50 bytes a name kept). A probe for a file that really is missing (the
+game's `dlc_ui_car.json`, LODs) pays that each time. Shortcut: a file made after its folder was
+listed and asked for in another case is not found. The unit test (`vfs`, mixed-case tree, the
+"two names" case) needs a case-sensitive folder: under WSL's `/mnt/c` that is
+`target\test-scratch\case-sensitive` (`fsutil file setCaseSensitiveInfo <dir> enable`, made here;
+new folders inherit it); elsewhere it says it was not tried.
+
+**The reads that went around `vfs`** (13.2's item 4): of ~130 direct `std::fs` reads in the game's
+crates, the ones that read Assetto Corsa's folder now go through `vfs` (zips and extra roots, letter
+case): the skins of a car (`session.rs`, `desktop.rs`), `skin_available`, the track models
+(`desktop.rs`), `cfg/replay.ini`, `system/cfg/chase_cam.ini`, `pitstop.ini`,
+`assetto_corsa.ini` (twice), the apps' car-file checks (`gui_apps.rs`, `console.rs`), the car
+boundaries' model (`scene.rs`), `ppfilters` (`app_pp_filter.rs`); file times (`ai_line.rs`'s side
+files, `car.rs`'s `proview_nodes.ini`, the fake-shadow stamp) follow the case only (a zip's files
+have no time: the side files are then never "newer", `proview_nodes.ini` never fresh, as when it is
+missing). The rest read the player's own folders (Documents, cfg, setups, replays, ghosts), the
+program's folder, `/proc`, or are Windows-only (D3D11, DirectWrite, Python, YEBIS) or CSP's
+(untouched). `race/shm.rs` reads `changelog.txt` from the working folder, as the game does.
+
+**The proof** (`re/scratch/taskP3/l7_run.sh <name>`, `l7_cmp.py`): fresh Windows request lists
+for this install, recorded as new gold (`LAUNCHER_GOLD=launcher_p3c sh
+tools/proofs/launcher_record.sh`: `re/gold/launcher_p3c/`, 8 scripts, about 22,800 requests).
+`launcher_record.sh` now passes `--player-cfg none --player-name "You, the player"`: the first
+recording seeded the empty player folder from the real `Documents\Assetto Corsa\cfg` (Task 46c),
+which chose another default car. Linux, the same `quickrace` script under Xvfb (waits x3, and 150 s
+after the page is ready: WSL's listings go on for minutes, where Windows has them in seconds):
+
+| | Windows (WebView2) | Linux (WebKitGTK 4.1, Xvfb, WSL `/mnt/c`) |
+|---|---|---|
+| script steps | 0 failed | **0 failed**, Drive started the Linux game, exit 0, the results page |
+| requests | 2,849 | 2,979 (the progress polls: the page now polls while listing, as it was written to) |
+| asynchronous requests (as a set) | 2,508 | **2,508**, the same but the personal best's lap time (the race is driven in real time) |
+| synchronous requests (as a set, no polls) | 340 | 333: the same but the screen size (3072 x 1920 against Xvfb's 1600 x 900), the random AI opponent's name and nation, one `specialevents_neutral.ini` (timing), and six `getskinmeta/urd_darche_992_23/` that WebKit sends once (identical requests in flight: that car's skins start with `#`, so the URL ends before the skin) |
+| `race.ini` written | | **identical** but the random AI opponent's name and nation |
+
+The other seven scripts and the transcripts (every list through Linux's `--transcript
+--fixed-host` against Windows') are next (13.6).
+
+### 13.4 L8: the Linux tar.gz
+
+`packaging/package_linux.sh <version> <inputs> <out>` (as `package.ps1` for Windows): the archive's
+whole content is listed in the script and read back. **`rustyAC-v1.1.5-linux-x64.tar.gz`, 12 MB
+(33 MB unpacked)**, made here from the WSL build (`re/scratch/taskP3/l8_dist/`): `rustyac`
+(25 MB, SDL3 built in), `rustyac-launcher` (2.9 MB), `libfmod.so.14` and `libfmodstudio.so.14`
+(Firelight's, unchanged, 1.6 MB each), `required/` (`base.json` and the 11 DLC lists), `HOW_TO_RUN.txt`
+(`packaging/HOW_TO_RUN_LINUX.txt`: what a player needs, the FMOD credit), `linux_check.sh`, the
+README, `LICENSING.md`, `THIRD_PARTY_NOTICES.txt` and the licence files. Unpacked and run as it is
+(no `LD_LIBRARY_PATH`): no library missing (`ldd`), `--list-tracks` finds the install, a headless
+drive loads FMOD from beside the program ("Audio engine: FMOD Studio by Firelight Technologies Pty
+Ltd.") and writes its sound.
+
+**What a player needs:** Linux x64 (X11 or Wayland), Vulkan drivers (Mesa's radv / anv or
+NVIDIA's; Arch / CachyOS: `vulkan-icd-loader` and `vulkan-radeon` / `vulkan-intel` /
+`nvidia-utils`), WebKitGTK 4.1 (`webkit2gtk-4.1`; Debian / Ubuntu `libwebkit2gtk-4.1-0`), and
+their own AC files (a Steam / Proton install is found).
+
+**`release.yml`:** a `linux` job on `ubuntu-24.04` (WebKitGTK's and GTK's dev packages, the build,
+the tests that need no game files plus the launcher's, `package_linux.sh`) hands the tar.gz to the
+Windows job, which publishes it with the others. FMOD's libraries and the lists cannot come from the
+repository: the job reads `linux-inputs.tar.gz` from the pre-release `linux-inputs`, which Super
+uploads once (`docs/release.md`, step 3b). **`platforms.yml`** gets the same two dev packages: since
+L7 its Linux rows build the launcher, which needs them. Not run (no release in this task).
+
+**Licences:** `LICENSING.md`'s table had 80 crates of the lock files missing (wry's macOS, Android
+and optional-feature dependencies, which L7's check, made for Linux alone, did not see): now all
+341, by `re/scratch/taskP3/l8_lic.py` (`cargo metadata` for every platform and feature, the
+tools' lock files too). Five of them are MPL-2.0 (`cssparser`, `cssparser-macros`, `dtoa-short`,
+`selectors`: wry's optional HTML parser, not built; `option-ext`); `tools/about.toml` accepts
+MPL-2.0 (file-level, GPL-compatible), and `THIRD_PARTY_NOTICES.txt` is made again (366 crates,
+167 licence texts, 12 lock files). `tools/web_pack/Cargo.lock` had not followed L7's new crates
+(`--locked` refused it): updated offline, every version as the root lock's.
+
+### 13.5 The tester's kit (CachyOS)
+
+Super sends the tester (who owns AC but cannot run Steam) one file, the test build with its own
+game files (13.6): `re/scratch/taskP3/l8_dist/rustyAC-test-linux-x64.tar.gz`, never a release,
+never CI, never a public link (`_rules.md`, "Test builds for outside testers"). What the tester
+does:
+
+1. **Install** (Arch / CachyOS): `sudo pacman -S --needed webkit2gtk-4.1 vulkan-icd-loader` and
+   the GPU's Vulkan driver (`vulkan-radeon`, `vulkan-intel` or `nvidia-utils`; CachyOS usually has
+   it). `vulkan-tools` (for `vulkaninfo` in step 1) is optional: without it the step lists the
+   graphics card with `lspci`.
+2. **Unpack** anywhere: `tar -xzf rustyAC-test-linux-x64.tar.gz && cd rustyAC-test-linux-x64`.
+3. **The game files** come with it (`rustyAC-test-pack.zip`, used by itself: no Steam, no AC
+   install, no chooser). Without a pack (a release), a Steam install with Proton is found by
+   itself; otherwise the launcher asks for the folder, or a zip of it.
+4. **Run** `./linux_check.sh` (about 10 minutes) and send back the `rustyac-check-<time>.tar.gz` it
+   makes. Its steps: the computer (distribution, kernel, CPU, RAM, GPU and Vulkan driver, audio
+   server, the package versions, missing libraries); the game files (counts only: drivable and
+   refused tracks, and without a pack which of Kunos' base-game tracks are missing; never the list,
+   which names mods); the launcher
+   (choose the files if asked, Drive a short race, two y / n answers); the frame check (a screenshot
+   of the BMW M3 E30 at Laguna Seca after 8 s, off screen, to compare with Windows'); frame times and
+   sound (a window, the AI drives 60 s: the end report's FPS and slowest frame, "did you hear the
+   engine", "did the picture look right"); the devices (`--list-devices`); driving by hand
+   (keyboard, pad or wheel, with force feedback on), then the close button, **the hang check** (the
+   end report printed and the process still there 20 s later is recorded as a hang and killed);
+   with a pad or wheel (an `Xbox pad on XInput slot` or a `JOY=` line in the devices step), two more
+   answers (does it drive, does the force feedback pull towards the centre). **It collects** only
+   what it lists at its top: no game, settings or replay file; the launcher's log without the values
+   it sent (they can hold the driver name); home folder, user name and computer name replaced by
+   `~`, `<user>`, `<host>`.
+5. **The archive that comes back:** Super puts it, as received, in `ignored/linux_tester/` (made
+   for it; ignored by git, read only for tasks). The next session unpacks it into
+   `re/scratch/taskP3/tester/` and reads: `system.txt` (GPU, Vulkan driver, audio server, missing
+   libraries), `frame_laguna.png` against the same drive's frames here (`run/pack.png` of 13.6 on
+   WSL's lavapipe, and Windows' `re/scratch/taskP3/run/shots/win/laguna_m3_auto.png`, with
+   `frames.py`), `window.txt`'s frame times, `hand.txt` (a `HANG` line is the hang check failing),
+   `launcher.log` (failed requests), `devices.txt` and `answers.txt`; what fails becomes a fix with
+   a test here, and the frame, frame times and hang go into 13.8.
+
+### 13.6 The tester's pack (Super's request, done)
+
+**What it is:** `rustyAC-test-pack.zip` beside the programs in the test tar.gz: the files the Linux
+game and launcher read for a drive of `bmw_m3_e30` on `ks_laguna_seca`, Kunos' files only.
+Made from `tools/web_pack`'s per-car and per-track lists (`files_read_by_drive`,
+`files_of_picture`, the launcher's theme, `cfg`, `system`, fonts, the sound banks):
+
+```
+tools/web_pack/target/release/web_pack.exe --config re/scratch/taskP3/tp/pack.toml --out re/scratch/taskP3/tp/web
+python re/scratch/taskP3/tp/make_pack.py "<AC folder>" re/scratch/taskP3/tp/web re/scratch/taskP3/tp/rustyAC-test-pack.zip
+TEST_PACK=re/scratch/taskP3/tp/rustyAC-test-pack.zip packaging/package_linux.sh 1.1.5 re/scratch/taskP3/l8_inputs re/scratch/taskP3/l8_dist
+```
+
+`make_pack.py` leaves out FMOD's browser build and every file Steam did not write on the day it
+wrote `acs.exe` (27 here, all in `content/fonts`: VRC's, RSS's and other mods' fonts, and two mod
+copies over Kunos names). **2,521 files, 1,103 MB, 609 MB zipped; the test tar.gz is 589 MB**
+(`package_linux.sh` with `TEST_PACK=`, which CI refuses).
+
+**The programs:** `imports::test_pack()` (portable) finds the pack beside the running program.
+The launcher (`choose_game_files`) uses it without asking and without the base-game check, its
+window titled "Assetto Corsa Launcher (test pack: bmw_m3_e30 at ks_laguna_seca)", also with a
+click script (a check); the car and track lists hold just what is in it. The game (off Windows)
+mounts it when no `RUSTYAC_GAME_FILES` names a choice and `AC_ROOT` is unset or inside the pack
+(the launcher names the pack's root there). `AC_ROOT` / `--ac-root` still override; the chooser is
+unchanged otherwise.
+
+**The proof** (`re/scratch/taskP3/tp/proof.sh`: the tar.gz unpacked into an empty folder, `AC_ROOT`
+unset, `HOME` in the run's folder, no Steam, no `LD_LIBRARY_PATH`):
+
+| | result |
+|---|---|
+| `--list-tracks` | `--track ks_laguna_seca (Laguna Seca)`, nothing else |
+| frame check (8 s, off screen) | **PNG identical** to the same drive from the real install; the same end state (step 2,667, 91.0 km/h, gear 2) |
+| sound | the pack's drive recorded, replayed with FMOD's non-real-time writer: **event log identical** to the real install's; FMOD from beside the program. The WAV repeats from the pack (twice identical) but not from AC's folder on `/mnt/c` (4,905,646 then 4,908,846 bytes: sample loading on the slow disk), so WAVs are not compared |
+| launcher (quickrace's clicks with the M3 and Laguna Seca, Xvfb) | the theme loads, the grids fill with no errors, Drive passes its check and starts the game with `AC_ROOT=<pack>.zip/assettocorsa`, exit 0, 60 s of sound written (12 MB WAV). The last step (the results tab) fails as it should: 60 s is no lap of Laguna Seca, `race_out.json` has no laps, the theme says "Invalid results" |
+| `linux_check.sh` end to end (`check_e2e.sh`: Xvfb, every answer y, the launcher and the hand drive closed with their close buttons) | exit 0 in 574 s; its frame identical to the proof's; no hang; a 1.2 MB archive with no home path, user or host name in it |
+
+**Found on the way, fixed** (each a bug of L7 / L8, not of the pack):
+
+1. **`\` between folders on the Linux disk:** a skin's `skin.ini` names the driver's suit as
+   `driver_HELMET\helmet_1985\red`; Windows and the zip reader split there, Linux's disk did not, so
+   the frame from AC's folder had no helmet or gloves textures (the pack's had them).
+   `vfs::on_disk` now reads `\` as `/` off Windows (the letter-case test has the case).
+2. **The launcher could not show its pages from a zip:** WebKit cannot open a `file://` page inside
+   a zip (an error page, "The operation is insecure"). When the game files are laid (a zip, extra
+   roots) the theme now comes from `acfile://game/<path>`, served from the layers and registered as
+   local, secure and CORS-enabled (what `file://` may do); the bridge's absolute paths in the page
+   resolve to the same scheme. A plain folder keeps `file://`.
+3. **Drive's check refused every race:** AC writes `[CAR_0] MODEL=-` (the player's car is
+   `[RACE] MODEL`), and the check took `-` for a car ("the car - is not there"). It never ran in the
+   proofs: the dev build has no `required/` beside it. Now `-` means `[RACE] MODEL`, as the game reads it.
+4. **The tar.gz held a stale launcher:** `cargo build -p rustyac-game --bin rustyac -p
+   rustyac-launcher` builds only the `rustyac` binary (`--bin` applies to both packages), so
+   `package_linux.sh` packed whatever launcher was there, and `release.yml` would have stopped at
+   "rustyac-launcher is missing" on a fresh machine. Two builds now, in both.
+5. **`linux_check.sh` asked the pad and wheel questions with no device** (`pad` matched "no Xbox pad
+   on XInput").
+
+**Found, not fixed: the required-files lists hold mods.** `base.json` (made by `web_pack
+--required` from Super's install) lists files no clean install has: the `monaco_2017` track (a mod
+whose `ui_track.json` has `"author": null`, so the catalog counts it as Kunos'), VRC and RSS suit
+textures and a VRC driver model (`shared` gathers what every car read, mods included), 27 mod
+fonts (`content/fonts` is taken whole) and mod layouts' `ui` files inside Kunos track folders
+(`monza`, `spa`, `ks_silverstone`). On a clean install the chooser would say "this folder is not a
+complete Assetto Corsa". The pack does not use the check; a release does. The fix (per-item shared
+files, Kunos' tracks by a list rather than an empty author, fonts and `ui` by what Kunos items
+read) and `--required` made again: a task of its own, before the first Linux release (13.8).
+
+### 13.7 Resume 2: the answers and the rest
+
+- **`linux-inputs`:** the pre-release's title and notes now say "Build inputs, not a release"
+  (`docs/release.md`, 3b).
+- **MPL-2.0:** none of the five crates applies Exhibit B ("Incompatible With Secondary Licenses"):
+  their source files carry Exhibit A's header only; the text appears only inside their `LICENSE`
+  copy of MPL-2.0 itself. File-level copyleft, GPL-3.0-compatible as used.
+- **`release.yml` by hand:** "Run workflow" now has **Linux only**: the `linux` job builds and tests
+  the chosen branch and packs the tar.gz with `Cargo.toml`'s version, kept as the run's artifact
+  `linux-x64` (7 days); the publishing job is skipped; no tag needed. Steps: `docs/release.md`, 3c.
+  It needs 3b's pre-release first.
+- **`linux_check.sh` step 2:** counts only (13.5), the test tar.gz made again.
+- **`career`'s failing step is Windows' too:** the Windows recording of `re/gold/launcher_p3c`
+  (`target/proofs/launcher_record/cases.log`) ends `career: exit 1, 2716 requests, 1 failed steps`,
+  on the same step, `until $('#career .series .datalist .item:not(.error)[data-id=series1]')`
+  (why the theme marks it is not looked into). Not Linux's.
+- **The seven other launcher scripts and the transcripts (13.3): not run** this session (the
+  tester pack came first, and its fixes 2 and 3 above changed the launcher); next (13.8).
+
+### 13.8 Resume 3: the base-game list from Steam, the safety net, the other scripts
+
+**1. The base-game list, right by construction.** Steam keeps the file list of every installed
+depot in `Steam\depotcache\<depot>_<manifest>.manifest` (protobuf: the payload section's
+FileMappings, names in clear text here, `filenames_encrypted` 0); `appmanifest_244210.acf`'s
+`InstalledDepots` names which manifest is installed: the base game is depot **244211** (23,490
+entries, 19,614 files), each DLC is a depot of its own app id. `web_pack --required` now reads
+them (`steam_depots`, `depot_files`; a unit test on a made-up manifest): a car or track layout gets
+into a Kunos list only when every file it reads is shipped by some depot of AC, and each list keeps
+only the files its **own** depot ships (shared and launcher files included). Found on the way: the
+DLC cars' `ui/dlc_preview.png` and `dlc_ui_car.json` are in the **base** depot (the store card
+for players without the DLC), so they leave the DLC lists; 8 files of `dlc_404430` were in no depot
+(mod layouts' `ui` files in `ks_barcelona`).
+
+| list | before (files) | after (files) | what left |
+|---|---|---|---|
+| `base.json` | 11,016 (86 cars, 36 tracks / layouts, shared 1,182 MB) | **10,883** (86 cars, 35, shared 804 MB) | `monaco_2017` (29), 27 mod fonts, 65 VRC / RSS suit, helmet and glove textures, 2 VRC driver models, 10 mod layouts' `ui` files in `monza`, `spa`, `ks_silverstone` |
+| 11 `dlc_<app>.json` | 364 to 1,128 each | 358 to 1,102 each (11 to 32 fewer) | the 2 store-card files per car (base depot), `dlc_404430`'s 8 mod files |
+
+Every list now holds 0 files outside its own depot (`re/scratch/taskP3/base3/survey.py`). **The
+proof on a clean install**, through the zip path, nothing of the game copied
+(`base3/stubs.py`: zips of **empty** files, since the check only asks whether each file is
+there): `base_json.zip` (exactly `base.json`'s 10,883 names) and `base_depot.zip` (all 19,614
+files of depot 244211, a clean Steam install of the base game by name). The new lists pass both,
+`abarth500` passes, `ks_mazda_mx5_cup` is refused "this car needs the Japanese Pack DLC"; the old
+lists on `base_depot.zip`: "this folder is not a complete Assetto Corsa: 133 files of the base
+game are missing: content/tracks/monaco_2017 (29 files), content/driver (2 files), content/fonts
+(27 files), ..." (the unit test `a_clean_install_passes_the_base_check`, on Windows and on Linux).
+The new lists are in `re/scratch/taskP3/l8_inputs/required/` (both tar.gz files are made with them)
+and in `re/scratch/taskP3/l8_dist/linux-inputs.tar.gz`, ready for `docs/release.md` 3b
+(**upload it again**: the lists changed). The old lists stay in `base3/required_old/`.
+
+**2. The tester's zip stored, not deflated** (`make_pack.py` writes `ZIP_STORED`; the existing pack
+was rewritten entry by entry by `tp/restore.py`, CRCs checked, the same 2,521 files): 1,052 MB
+(was 581 MB deflated); the test tar.gz is **581 MB** (was 588 MB), the release tar.gz 12 MB.
+
+**3. The other seven scripts on Linux, quickrace again.** Super's install lost two tracks on
+2026-11-25 (69, not 71), after `re/gold/launcher_p3c` was recorded, so every list differed by them:
+fresh Windows gold for today's install, **`re/gold/launcher_r3/`** (`LAUNCHER_GOLD=launcher_r3 sh
+tools/proofs/launcher_record.sh`: career fails its one step, the seven others 0). Linux
+(`re/scratch/taskP3/base3/scripts.sh`: `l7_run.sh` with `GOLD=re/gold/launcher_r3
+SETTLE=150000`, then `l7_cmp.py`):
+
+| script | Linux steps | asynchronous requests (as a set) | synchronous, in order |
+|---|---|---|---|
+| quickrace | 0 failed (its first run: 1, below) | 2,508 = 2,508, 1 apart (the personal best's lap time) | 340 / 333 |
+| career | **1 failed, the same step as Windows** (`#career .series ... series1`) | 2,507 = 2,507 | 208 / 202 |
+| champs | 0 failed; the saved championship **identical** (its JSON but the random id) | 2,509 / 2,508: one `listfiles/champs` fewer (asked earlier, during the listings) | 528 / 405 |
+| hotlap | 0 failed | 2,508, 1 apart | 319 / 312 |
+| options | 0 failed | 2,507 / 2,506 | 244 / 233 |
+| practice | 0 failed | 2,508, 1 apart | 322 / 315 |
+| raceweekend | 1 failed (the page stops answering clicks: below) | 2,507 = 2,507 | 371 / 291 |
+| special | 0 failed | 2,507 = 2,507 | 342 / 335 |
+
+The synchronous differences are 13.3's (Xvfb's screen size, the random AI opponent, WebKit
+sending identical in-flight `getskinmeta` once) plus **order**: the page's two slow listings
+(`listspecialevents`, then `listseries`) take 190 to 240 s on WSL's `/mnt/c` (seconds on Windows),
+so the theme's career and championship code runs earlier, while they are still going.
+
+**Open: the page stops answering clicks (Linux, intermittent)** (found and fixed in 13.9). `until #drive .tracks
+.item[data-track=magione]` failed in quickrace's first run (its second passed) and in raceweekend
+every time (three runs). What is known:
+- **Not** the listings' overlap: the listings (`listspecialevents` then `listseries`, 190 to 240 s
+  on WSL's `/mnt/c`) end long before the step with `SETTLE=300000`, and it still fails.
+- **Not** the first-run language screen: both sides show it (an empty player folder) under the
+  whole script, Windows too (`target/proofs/launcher_record/quickrace/out/quickrace_setup.png`); the
+  steps click hidden elements on both.
+- In a failing run the page's last output is "setting race laps to: 5"; the next steps' clicks
+  (the cars tab, `abarth500`, the tracks tab) send **no** request and log nothing, where Windows
+  sends `setsetting/race?CAR_0/SKIN=...` and logs "Summary redraw: car" at once; `until` on the cars
+  grid still passes (the elements are there), and `js` steps' exceptions no longer reach the log.
+  At the launcher's exit WebKit says "WebProcess didn't exit as expected after the UI process
+  connection was closed": the page's web process is stuck or its event handling is.
+- The theme logs `TypeError: null is not an object (evaluating '_localized[key + "_name"]')` 28
+  times a run on Linux, never on Windows (wrong: Windows logs it too, in Chromium's words, 13.9) (it reads `career_neutral.ini`, 14 bytes on both, at line
+  1,379 of 2,900, Windows at 2,798: its career locale code runs while the listings still go); also
+  in the passing runs, so not shown to be the cause.
+- Reproduce: `GOLD=re/gold/launcher_r3 SETTLE=150000 bash re/scratch/taskP3/l7_run.sh raceweekend`
+  in WSL (about 10 minutes); `re/scratch/taskP3/base3/probe_rw.txt` is the script cut at the step,
+  with screenshots and probes (`SCRIPT=`). Next: why the clicks stop (a hung synchronous request
+  to the bridge's second port, or a script loop in the web process: WebKit's inspector or
+  `WEBKIT_DEBUG`, a `gdb` backtrace of `WebKitWebProcess` at the stall), then whether a real Linux
+  disk (the tester's) shows it at all.
+
+**Transcripts** (`base3/tr.sh win|linux`, every `re/gold/launcher_r3` list through `--transcript
+--fixed-host` from an empty player folder, `base3/trcmp.py`: answer for answer with the AC folder and
+the player folder written as `<AC>` / `<DOCS>`, `file:///C:/` and `file://` + `/mnt/c/` as one URL form, and each
+answer header's raw size left out, since the folder's spelling changes it): **22,831 of 22,831 answers identical**, all 12
+lists (career 2,717, champs 3,039, hotlap 2,829, options 2,753, practice 2,832, quickrace 2,850,
+raceweekend 2,880, special 2,851, probe 55, replays 15, results 7, videomodes 3). Windows answers a
+list in about 15 s, Linux on `/mnt/c` in about 9 minutes.
+
+**4. The safety net.** A failed base-game check is no longer a refusal: the chooser shows the
+message ("this folder is not a complete Assetto Corsa: 39 files of the base game are missing:
+content/tracks/monza (39 files). If this is your Assetto Corsa all the same, **Continue anyway**
+uses it as it is (not asked again for this folder).") and its button says **Continue anyway**;
+taken, `game_files.txt` gains `accepted=<folder>` (`Remembered::accepted`), and the check is not
+run again while `root` is that folder (another folder is checked anew). A folder that does not
+open, or holds no AC, is still refused; a picked DLC car or track whose DLC is missing is still
+refused for that car or track only (`check_pick`, unchanged). **Proof**
+(`re/scratch/taskP3/base3/warn.sh`: the release tar.gz unpacked into an empty folder, `AC_ROOT`
+unset, the remembered root a zip of empty files named as `base.json` without `monza`, Xvfb): run
+1 opens the chooser with the warning (screenshot `base3/warn/focused.png`), Tab to **Continue
+anyway**, Enter: the theme's window opens and `game_files.txt` has `accepted=`; run 2 with the same
+choice goes straight to the theme's window. (The status line now wraps with `overflow-wrap:
+anywhere`, not `word-break: break-all`, which split "Continue anyway" mid-word.)
+
+**Checks:** `web_pack` tests and clippy; `rustyac-content` tests on Windows and Linux (23); clippy
+`-D warnings --all-targets` on `rustyac-content` and `rustyac-launcher`, Windows and Linux; the
+launcher's tests on Linux; `run_all.sh --quick`: **every area IDENTICAL, 0 ERROR** (1 h 10; the
+first try was killed from outside after 28 minutes, its one cut-off case showed as a stale line in
+`gui/cases.log`). Windows: the shared code's change is the new `accepted=` line (read and written
+only by the Linux chooser) and a test; the Windows launcher and game are unchanged.
+
+### 13.9 Resume 4: the click stall found and fixed
+
+**The `_localized` TypeError is not Linux-only.** The Windows recordings log it 28 times a run too
+(`target/proofs/launcher_record/*/run.log`, every script), in Chromium's words: `TypeError: Cannot
+read properties of null (reading 'series1_name')`; 13.8 searched for WebKit's wording only. It is the
+theme's own (`career2.js` line 484 reads `_localized[key + "_name"]` while `career_neutral.ini`
+gives no `text` section), on both, and nothing to do with the stall.
+
+**The cause: WebKit's 6 connections to a port, held by the listings.** WebKitGTK (2.52, libsoup 3.6)
+opens at most **6 connections to one host and port**; a 7th request to that port waits until one of
+the 6 is answered. Shown alone (`re/scratch/taskP3/r4/wk_conn.py`: a `file://` page, a server on two
+127.0.0.1 ports that holds `/slow` 30 s): with 5 slow requests pending a fast asynchronous one to the
+same port takes 5 ms; with 6 pending it takes **29,021 ms**, while the other port answers in 4 ms
+(asynchronous or synchronous). The launcher answered every `async=true` request of
+`Bridge::listing`'s 8 kinds (`listcars`, `listtracks`, `listspecialevents`, `listseries`,
+`listfiles`, `getiniasjson`, `getachievements`, `getskinmeta`) one at a time on the lister thread,
+on the same port as every other asynchronous request. When a 100 to 130 s listing
+(`listspecialevents`, then `listseries`, on WSL's `/mnt/c`) is at the head of that queue and 5 more
+listings wait behind it, all 6 connections are taken and every other asynchronous request waits for
+minutes: a click's `setsetting/race?CAR_0/SKIN=...` (asynchronous in the theme), and with it the
+handler's callbacks ("Summary redraw: car") and the tracks grid. Seen in a probe run (`r4/rw_probe.txt`
++ a server log of every connection): the abarth500 click's requests reached the server only the
+moment `listseries` was answered, 98 s later, all at once; in a run where `listseries` was the only
+listing waiting (5 free connections) the same click went through at once. So it hangs on timing, not
+on one step: why it was intermittent, and why a longer settle did not help (the career listings start
+late and the 2,491 `getskinmeta` queue in the same line). A real slow disk or network share would do
+the same; Windows answers a listing in seconds, so it never fills the 6.
+
+**The fix** (`shell_gtk.rs`, Linux only): the listings get a **third port** of their own
+(`serve_bridge` listens on three, `xhr_js` sends an `ac://` request whose host is in
+`bridge::LISTINGS`, now one shared list, and that carries `async=true` there). Listings now only wait
+behind listings (in their order, as before: the log keeps Windows' order); every other asynchronous
+request has its 6 connections to itself, the synchronous ones theirs. The routing was checked on
+made-up URLs (`ac://ListTracks/?async=TRUE` to the listings, `?async=trueish` and `getiniasjson`
+without `async` not).
+
+**Proof** (`re/scratch/taskP3/r4/proof.sh`: `l7_run.sh` with 13.8's settings, `GOLD=re/gold/launcher_r3
+SETTLE=150000`, then `l7_cmp.py`; results in `r4/proof/`): **raceweekend 3 of 3 and quickrace 3 of 3,
+0 failed steps**; the WebKit "WebProcess didn't exit" message is gone from all six.
+
+| run | steps failed | synchronous, in order (Windows / Linux) | asynchronous (as a set) |
+|---|---|---|---|
+| raceweekend 1, 2, 3 | 0, 0, 0 | 371 / 364, 360, 364 (was 371 / 291, stopped) | 2,507 / 2,508, 2,507, 2,508 |
+| quickrace 1, 2, 3 | 0, 0, 0 | 340 / 333, 329, 333 | 2,508 / 2,508, 2,507, 2,508 |
+
+The asynchronous differences: the personal best's save (its date; in raceweekend a save the Windows
+recording does not have, not looked into: it comes after the race, from the game's results), and in two runs `listseries`
+not yet answered when the script ended (the launcher closes at its end). The synchronous ones are
+13.3's and 13.8's (Xvfb's screen size, the random opponent, `getskinmeta` sent once, the order around
+the slow listings).
+
+**Rebuilt** with the fix (`packaging/package_linux.sh`, as `base3/lb2.sh`): the release
+`rustyAC-v1.1.5-linux-x64.tar.gz` (12,033,834 bytes) and the test `rustyAC-test-linux-x64.tar.gz`
+(609,180,521 bytes, 581 MiB) in `re/scratch/taskP3/l8_dist/`. **The test build Super sent** is
+unlikely to hit the stall: with the test pack (one car, one track) every listing takes milliseconds
+on a real disk, far from 6 waiting at once; it could on a full install on a slow disk. Sending the new
+one is optional.
+
+**Windows:** the shared change is `bridge::LISTINGS` moved out of `Bridge::listing` (the same list,
+used by the Linux shell only); the Windows launcher's code is the same. Checks: clippy `-D warnings
+--all-targets` on `rustyac-launcher`, Windows and Linux; `run_all.sh --quick launcher` on Windows:
+**IDENTICAL** (1 of 1, 0 errors).
+
+### 13.10 Resume here (P3c)
+
+- **Done:** L7 (13.1 to 13.3), L8 (13.4, 13.5), the tester's pack (13.6), Resume 2 (13.7),
+  Resume 3 (13.8), Resume 4 (13.9: the click stall), committed on `web`.
+- **Next:** the tester's archive (13.5, step 5): Super puts it in `ignored/linux_tester/` (in the
+  main checkout); the next session reads its summary, frame times and logs, and compares its frame
+  with this PC's. Then P3c is done.
+- **Super:** upload `re/scratch/taskP3/l8_dist/linux-inputs.tar.gz` again (`docs/release.md` 3b,
+  `--clobber`: the lists changed); try **Linux only** (3c) before the first Linux release; the new
+  test tar.gz (581 MiB) is optional (13.9); merge `web`.

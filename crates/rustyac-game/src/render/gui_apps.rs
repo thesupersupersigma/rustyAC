@@ -8,6 +8,7 @@
 //! The apps are made at the first frame rather than with the GUI: some read the cars (their
 //! KERS / ERS, their engine's turbos) as the session has them.
 
+use rustyac_content::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use rustyac_gui::apps::{AppAction, AppCar, AppLink};
@@ -192,7 +193,7 @@ impl GameApps {
         };
         gui.apps.ff_upgrades = self.ff_upgrades;
         let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
-        let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
+        let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").vfs_is_file();
         // FormOpenVR: only with the HTC Vive camera
         if let Some(values) = setup.open_vr {
             let id = gui.new_open_vr_app(painter, values);
@@ -285,7 +286,7 @@ impl GameApps {
             let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
             let ini = ControlsIni::load_car_data(&setup.player_data.join("driver3d.ini")).ok().filter(|ini| ini.has_section("HEAD_MOVEMENT"));
             gui.apps.driver_model = Some(rustyac_gui::app_driver_model::DriverModelLink {
-                save_exists: setup.game.join("content/cars").join(&unix).join("data/driver3d.ini").is_file(),
+                save_exists: setup.game.join("content/cars").join(&unix).join("data/driver3d.ini").vfs_is_file(),
                 ini: ini.map(|ini| ["FILTER", "MAX_G", "ROLL_MAX_DEG", "PITCH_MAX_DEG", "YAW_MAX_DEG"].map(|key| ini.get_float("HEAD_MOVEMENT", key))),
                 unix_name: unix,
                 ..Default::default()
@@ -393,7 +394,7 @@ impl GameApps {
                     let read = |file: &str| rustyac_content::vfs::read(&setup.cfg_dir.join(file)).ok().or_else(|| rustyac_content::vfs::read(&setup.game.join(file)).ok());
                     let (ai, drivetrain) = (format!("content/cars/{car}/data/ai.ini"), format!("content/cars/{car}/data/drivetrain.ini"));
                     // (CarAvatar::openINI: m_isEncrypted when the car's data comes from data.acd)
-                    let loose = !setup.game.join(format!("content/cars/{car}/data.acd")).is_file();
+                    let loose = !setup.game.join(format!("content/cars/{car}/data.acd")).vfs_is_file();
                     let Some(old) = read(&drivetrain).filter(|_| loose) else { continue };
                     if IniReader::from_text(Path::new(&drivetrain), &String::from_utf8_lossy(&old)).has_section("AUTO_SHIFTER") {
                         continue;
@@ -776,6 +777,6 @@ pub fn camera_editor_link(unix: &str, data: &Path, shape: &crate::render::scene:
         auto_exposure_min: 0.0,
         auto_exposure_max: 0.0,
         auto_exposure_target: 0.0,
-        data_acd: data.parent().is_some_and(|car| car.join("data.acd").is_file()),
+        data_acd: data.parent().is_some_and(|car| car.join("data.acd").vfs_is_file()),
     }
 }

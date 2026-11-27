@@ -25,17 +25,22 @@ const USAGE: &str = "rustyac-launcher [options]: Assetto Corsa's launcher, with 
   --pure-ini             ini files through rustyAC's pure copy of the Win32 calls, as in the browser
   --fixed-host           with --transcript: the same screen, times and player everywhere, as the
                          transcript example does in wasm
+  --choose-files         (Linux) the game-files chooser even when a choice is remembered
   --help, -h             print this text";
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn main() {
     use rustyac_launcher::ini::IniFile;
+    #[cfg(windows)]
+    use rustyac_launcher::sys::Windows as SysHost;
+    #[cfg(target_os = "linux")]
+    use rustyac_launcher::sys::Unix as SysHost;
     use std::path::PathBuf;
 
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)).unwrap_or_default();
     let mut docs = exe_dir.clone();
     let mut ac_root = None;
-    let mut game = exe_dir.join("rustyac.exe");
+    let mut game = exe_dir.join(if cfg!(windows) { "rustyac.exe" } else { "rustyac" });
     let mut game_args = Vec::new();
     let mut player_name = None;
     let mut player_cfg = rustyac_content::install::documents().map(|d| d.join("cfg"));
@@ -46,6 +51,7 @@ fn main() {
     let mut fixed_host = false;
     let mut lobby = None;
     let mut import_pbs = None;
+    let mut choose = false;
     let mut args = std::env::args().skip(1).peekable();
     let fail = |m: String| -> ! {
         eprintln!("{m}\n{USAGE}");
@@ -75,6 +81,7 @@ fn main() {
                 let requests = value();
                 transcript = Some((requests, value()));
             }
+            "--choose-files" => choose = true,
             "--help" | "-h" => {
                 println!("{USAGE}");
                 return;
@@ -94,6 +101,18 @@ fn main() {
         }
         return;
     }
+    // off Windows the player chooses the game's files (remembered): unless AC_ROOT or --ac-root
+    // names them, or a check or a transcript runs (a check with a tester's pack beside the program
+    // uses the pack)
+    #[cfg(target_os = "linux")]
+    if ac_root.is_none() && std::env::var_os("AC_ROOT").is_none() && transcript.is_none() && (script.is_none() || rustyac_content::imports::test_pack().is_some()) {
+        match rustyac_launcher::shell::choose_game_files(choose) {
+            Ok(Some(root)) => ac_root = Some(root),
+            Ok(None) => return,
+            Err(e) => fail(format!("rustyac-launcher: {e}")),
+        }
+    }
+    let _ = choose;
     rustyac_content::install::set_ac_root(ac_root);
     let Some(root) = rustyac_content::install::ac_root() else { fail(rustyac_content::install::not_found_hint()) };
     let absolute = |p: PathBuf| std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned();
@@ -101,7 +120,7 @@ fn main() {
     if let Some((requests, out)) = transcript {
         // no Steam: GetPersonaName's own answer
         let host: Box<dyn rustyac_launcher::bridge::Host> =
-            if fixed_host { Box::new(rustyac_launcher::transcript::Fixed) } else { Box::new(rustyac_launcher::sys::Windows { player_name: "You, the player".into() }) };
+            if fixed_host { Box::new(rustyac_launcher::transcript::Fixed) } else { Box::new(SysHost { player_name: "You, the player".into() }) };
         if let Err(e) = rustyac_launcher::transcript::run(&root, &docs, &requests, &out, lobby, host) {
             fail(format!("transcript: {e}"));
         }
@@ -123,9 +142,9 @@ fn main() {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn main() {
-    eprintln!("{USAGE}\nrustyac-launcher runs on Windows only (the launcher's browser is WebView2).");
+    eprintln!("{USAGE}\nrustyac-launcher runs on Windows and Linux so far (macOS: Task M1).");
 }
 
 #[cfg(test)]

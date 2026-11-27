@@ -305,7 +305,14 @@ Assetto Corsa's launcher (its own pages, in a window), with rustyAC behind the D
 | `--transcript <requests> <out>` | | Answers a recorded list of the pages' requests into a file, without a window. **checks** |
 | `--pure-ini` | | Reads and writes ini files with rustyAC's own code only. **checks** |
 | `--fixed-host` | | With `--transcript`: fixed answers for what depends on the PC. **checks** |
+| `--choose-files` | | Linux: shows the game-files chooser (the game's folder or zip, extra cars and tracks) even when a choice is remembered. |
 | `--help`, `-h` | | Prints the list of options. |
+
+On Linux the launcher (`rustyac-launcher`) first finds the game's files: `AC_ROOT` or `--ac-root`, else the choice
+remembered in `~/.config/rustyAC/game_files.txt`, else Steam's install (Proton's too), offered with a
+**Change…** (a folder or a zip of the game, read in place) and extra cars and tracks to lay over it. A full
+install is checked against `required/base.json` beside the program; Drive checks the picked cars and track
+(a DLC's list, else whether it loads).
 
 ## rustyac-gateway
 
@@ -343,7 +350,7 @@ Makes the pack of cars and tracks the browser page downloads, from your Assetto 
 | `--ac <folder>` | the install that is found | Assetto Corsa's folder. |
 | `--dry-run` | | Checks the list and says what would be packed; writes nothing. |
 | `--delta <manifest.json>` | | Writes only the files that are new or changed against that manifest of a live pack, plus the new manifest, into an empty `--out`. |
-| `--required <folder>` | | Writes the native builds' required-files list instead of a pack: `base.json` (Kunos' cars and tracks without the DLCs), one `dlc_<Steam app>.json` per DLC (by the key in its models' headers) and `everything.json` (DLCs and mods too), paths and sizes only. |
+| `--required <folder>` | | Writes the native builds' required-files list instead of a pack: `base.json` (Kunos' cars and tracks without the DLCs), one `dlc_<Steam app>.json` per DLC (by the key in its models' headers) and `everything.json` (DLCs and mods too), paths and sizes only. Kunos' lists hold only what Steam ships: a car or layout whose files are not all in AC's depots is left out, and each list keeps only its own depot's files (`appmanifest_244210.acf`'s installed depots, read from Steam's `depotcache`). |
 | `--help`, `-h` | | Prints the options. |
 
 ## The server kit
@@ -478,6 +485,7 @@ rustyAC; `--controls` wins over it, and it wins over Assetto Corsa's controls.in
 | `RUSTYAC_MATH` | Which maths functions are used. Default: the game's own (its `MSVCR120.dll`), or rustyAC's exact copy of them when the DLL is missing. `pure`: the copy. `no-dll`: as if the DLL were missing. `std`: the standard library's; results then differ from the game's in the last digits. **checks** |
 | `RUSTYAC_PROOF_RUN` | Set by the proof scripts: rustyac.exe then refuses to start without `--cfg-dir` and `--documents`, and never asks Steam. **checks** |
 | `RUSTYAC_AUDIO_VERBOSE` | More lines from the sound engine. **checks** |
+| `RUSTYAC_GAME_FILES` | Linux: a file in the launcher's `game_files.txt` form (`root=`, `extra=` lines): the game reads its files from that folder or zip with the extra cars and tracks laid over it. The launcher sets it when the choice needs it. Without it (and without `AC_ROOT`, or with `AC_ROOT` inside the pack), a tester's pack beside the program, `rustyAC-test-pack.zip`, is the game's files, unasked and unchecked (`docs/platforms.md` 13.6). |
 | `RUSTYAC_DISPLAY_MODES` | The launcher's list of display sizes, fixed (`1920x1080,1280x720`). **checks** |
 | `RUSTYAC_ROW_DUMP`, `RUSTYAC_ALSO` | What a replay that differs from its recording prints. **checks** |
 | `CSP_CORE_TRACE` | A file: on CSP's core (`--csp --csp-core`, and `csp_oracle`'s port) every force, torque, body, joint and world step of CSP's core as one line, to compare with CSP's own (Task C5i-b). **checks** |

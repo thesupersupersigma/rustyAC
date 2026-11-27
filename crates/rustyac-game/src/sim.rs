@@ -1360,7 +1360,7 @@ pub fn physics_threading_key() -> i32 {
     let Some(file) = ac_root().map(|root| root.join("system").join("cfg").join("assetto_corsa.ini")) else {
         return -1;
     };
-    if !file.is_file() {
+    if !file.vfs_is_file() {
         return -1;
     }
     match rustyac_physics::data::ini::IniReader::load(&file) {

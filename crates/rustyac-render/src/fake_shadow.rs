@@ -61,7 +61,7 @@ pub const STAMP_FILE: &str = "stamp.txt";
 pub fn car_files_stamp(folder: &Path) -> String {
     let mut lines = Vec::new();
     for (label, dir) in [("", folder.to_path_buf()), ("data/", folder.join("data"))] {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = rustyac_content::vfs::or_on_disk(&dir, |p| std::fs::read_dir(p)) else { continue };
         for entry in entries.filter_map(|e| e.ok()) {
             let Ok(meta) = entry.metadata() else { continue };
             if !meta.is_file() {
