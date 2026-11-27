@@ -437,21 +437,26 @@ window.addEventListener('unhandledrejection',function(e){post('error','unhandled
 /// (`OnBeforeResourceLoad`). Other `ac://` loads (a picture, say) stay on the scheme. The
 /// synchronous ones go to a port of their own: WebKit counts its connections per host and port,
 /// and ends a synchronous request after 10 s, so one must not wait behind the theme's ~2,500
-/// asynchronous `getskinmeta` on a slow disk.
-fn xhr_js([port, sync_port]: [u16; 2], token: &str) -> String {
+/// asynchronous `getskinmeta` on a slow disk. The listings ([`crate::bridge::Bridge::listing`],
+/// answered one at a time) go to a third: WebKit opens at most 6 connections to a port, so six
+/// waiting behind a 2-minute `listseries` would hold up every other asynchronous request (a
+/// click's `setsetting`).
+fn xhr_js([port, sync_port, list_port]: [u16; 3], token: &str) -> String {
+    let lists = format!("{:?}", crate::bridge::LISTINGS);
     // a send that throws (a failed synchronous load) goes to the log with its URL
-    format!("(function(){{var o=XMLHttpRequest.prototype.open,s=XMLHttpRequest.prototype.send,b='http://127.0.0.1:{port}/{token}/',bs='http://127.0.0.1:{sync_port}/{token}/';XMLHttpRequest.prototype.open=function(m,u,a){{if(typeof u=='string'){{if(u.indexOf('http://ac/')==0)u='ac://'+u.substring(10);if(u.indexOf('ac://')==0){{arguments[1]=(a===false?bs:b)+u.substring(5);this.__acUrl=u}}}}return o.apply(this,arguments)}};window.__acPost=function(m){{navigator.sendBeacon(bs+'__report',m)}};XMLHttpRequest.prototype.send=function(){{var u=this.__acUrl;if(u)this.addEventListener('loadend',function(){{if(this.status!==200&&window.__acReport)__acReport('error','XMLHttpRequest '+u+': status '+this.status)}});try{{return s.apply(this,arguments)}}catch(e){{window.__acReport&&__acReport('error','XMLHttpRequest '+this.__acUrl+': '+e.name+' '+e.message);throw e}}}}}})();")
+    format!("(function(){{var o=XMLHttpRequest.prototype.open,s=XMLHttpRequest.prototype.send,b='http://127.0.0.1:{port}/{token}/',bs='http://127.0.0.1:{sync_port}/{token}/',bl='http://127.0.0.1:{list_port}/{token}/',L={lists};XMLHttpRequest.prototype.open=function(m,u,a){{if(typeof u=='string'){{if(u.indexOf('http://ac/')==0)u='ac://'+u.substring(10);if(u.indexOf('ac://')==0){{var r=u.substring(5),l=L.indexOf(r.split(/[\\/?#]/)[0].toLowerCase())>=0&&/[?&]async=true(?:[&#]|$)/i.test(r);arguments[1]=(a===false?bs:l?bl:b)+r;this.__acUrl=u}}}}return o.apply(this,arguments)}};window.__acPost=function(m){{navigator.sendBeacon(bs+'__report',m)}};XMLHttpRequest.prototype.send=function(){{var u=this.__acUrl;if(u)this.addEventListener('loadend',function(){{if(this.status!==200&&window.__acReport)__acReport('error','XMLHttpRequest '+u+': status '+this.status)}});try{{return s.apply(this,arguments)}}catch(e){{window.__acReport&&__acReport('error','XMLHttpRequest '+this.__acUrl+': '+e.name+' '+e.message);throw e}}}}}})();")
 }
 
 /// A small HTTP server on 127.0.0.1 (a free port, a random token in every path) that hands each
-/// request to the main thread's [`bridge_call`] and writes its answer back. Two ports
-/// ([`xhr_js`]: the asynchronous requests' and the synchronous ones'), and the token.
-fn serve_bridge() -> std::io::Result<([u16; 2], String)> {
+/// request to the main thread's [`bridge_call`] and writes its answer back. Three ports
+/// ([`xhr_js`]: the asynchronous requests', the synchronous ones' and the listings'), and the token.
+fn serve_bridge() -> std::io::Result<([u16; 3], String)> {
     use std::io::{BufRead, BufReader, Read};
-    let listeners = [std::net::TcpListener::bind(("127.0.0.1", 0))?, std::net::TcpListener::bind(("127.0.0.1", 0))?];
-    let ports = [listeners[0].local_addr()?.port(), listeners[1].local_addr()?.port()];
+    let bind = || std::net::TcpListener::bind(("127.0.0.1", 0));
+    let listeners = [bind()?, bind()?, bind()?];
+    let ports = [listeners[0].local_addr()?.port(), listeners[1].local_addr()?.port(), listeners[2].local_addr()?.port()];
     let token = glib::uuid_string_random().to_string();
-    for (sync, listener) in [false, true].into_iter().zip(listeners) {
+    for (sync, listener) in [false, true, false].into_iter().zip(listeners) {
         let prefix = format!("/{token}/");
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {

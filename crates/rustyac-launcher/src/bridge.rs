@@ -179,6 +179,9 @@ fn split_once_slash(s: &str) -> Vec<&str> {
     s.split('/').collect()
 }
 
+/// The requests [`Bridge::listing`] answers off the main loop (when they carry `async=true`).
+pub const LISTINGS: [&str; 8] = ["listcars", "listtracks", "listspecialevents", "listseries", "listfiles", "getiniasjson", "getachievements", "getskinmeta"];
+
 impl Bridge {
     pub fn new(folders: AppFolder, host: Box<dyn Host>) -> Bridge {
         Bridge { folders, host, counts: Counts::default(), not_ported: Vec::new(), lobby: Arc::new(Mutex::new(online::Lobby::new(None))) }
@@ -206,9 +209,8 @@ impl Bridge {
     /// ends a synchronous request after 10 s and a listing on a slow disk takes longer; the Windows
     /// one answers it in turn like any request (Chromium waits).
     pub fn listing(&self, url: &str, post: Option<&str>) -> Option<Listing> {
-        const FILES_ONLY: [&str; 8] = ["listcars", "listtracks", "listspecialevents", "listseries", "listfiles", "getiniasjson", "getachievements", "getskinmeta"];
         let (host, _, p) = Bridge::params(url, post);
-        if !FILES_ONLY.contains(&host.as_str()) || p.get("async").is_none_or(|v| net::to_lower(&v) != "true") {
+        if !LISTINGS.contains(&host.as_str()) || p.get("async").is_none_or(|v| net::to_lower(&v) != "true") {
             return None;
         }
         let (folders, counts, lobby) = (self.folders.clone(), self.counts.clone(), self.lobby.clone());
