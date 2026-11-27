@@ -223,6 +223,18 @@ impl App {
             Event::OpenControls => {
                 let _ = unsafe { self.webview.NavigateToString(&HSTRING::from(CONTROLS_PAGE)) };
             }
+            // rustyAC's settings page (Task W5): a folder or zip of cars and tracks, laid over the
+            // install from now on (the theme lists them when it is shown again), and the page again
+            Event::AddExtra(zip) => {
+                if let Some(path) = crate::sys::pick(self.hwnd, zip) {
+                    let root = rustyac_content::install::ac_root().unwrap_or_default();
+                    match crate::files::change_extras(&root, Some(path), None) {
+                        Ok(status) => self.log(&format!("extras {status:?}")),
+                        Err(e) => self.log(&format!("extras: {e}")),
+                    }
+                }
+                let _ = unsafe { self.webview.NavigateToString(&HSTRING::from(CONTROLS_PAGE)) };
+            }
             Event::StartMusic | Event::StopMusic | Event::SetVolume => {}
         }
     }

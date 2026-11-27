@@ -3090,9 +3090,8 @@ pub fn main() {
     if options.documents.is_some() {
         rustyac_content::install::set_documents(options.documents.clone());
     }
-    // the launcher's choice of the game's files off Windows (a zip, or extra cars and tracks, read
-    // in place); the Windows launcher gets the chooser with Task W5
-    #[cfg(not(windows))]
+    // the launcher's choice of the game's files (a zip, or extra cars and tracks, read in place;
+    // the Windows launcher's are extras only, over the install the game finds itself)
     if let Some(file) = std::env::var_os("RUSTYAC_GAME_FILES") {
         if let Err(message) = rustyac_content::imports::Remembered::mount_file(std::path::Path::new(&file)) {
             eprintln!("RUSTYAC_GAME_FILES: {message}");

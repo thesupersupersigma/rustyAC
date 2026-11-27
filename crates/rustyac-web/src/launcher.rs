@@ -268,6 +268,7 @@ fn event_name(e: &Event) -> String {
         Event::StopMusic => "StopMusic".into(),
         Event::SetVolume => "SetVolume".into(),
         Event::ContentErrors(text) => format!("ContentErrors:{text}"),
+        Event::AddExtra(zip) => format!("AddExtra:{zip}"),
     }
 }
 

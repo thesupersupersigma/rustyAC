@@ -370,10 +370,11 @@ impl Remembered {
     }
 
     /// The game's start (the launcher names its choice in `RUSTYAC_GAME_FILES`): the remembered
-    /// file read, opened and mounted.
+    /// file read, opened and mounted. No `root=` (the Windows launcher's: extras only): the
+    /// install the game finds itself.
     pub fn mount_file(file: &Path) -> Result<(), String> {
         let r = Remembered::load(file);
-        Layers::open(r.root.as_deref(), &r.extra)?.mount();
+        Layers::open(r.root.clone().or_else(crate::install::ac_root).as_deref(), &r.extra)?.mount();
         Ok(())
     }
 

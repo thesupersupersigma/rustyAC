@@ -127,3 +127,30 @@ impl Host for Windows {
             }
         }
     }}
+
+/// Windows' own chooser for a folder, or a `.zip` (`zip`), over the launcher's window (Task W5:
+/// extra cars and tracks). `None`: cancelled.
+pub fn pick(owner: windows::Win32::Foundation::HWND, zip: bool) -> Option<std::path::PathBuf> {
+    use windows::core::w;
+    use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+    use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH};
+    // SAFETY: COM calls on the window's thread (COM is set up for WebView2); the name is freed once copied.
+    unsafe {
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let options = dialog.GetOptions().ok()?;
+        if zip {
+            dialog.SetFileTypes(&[COMDLG_FILTERSPEC { pszName: w!("Zip files"), pszSpec: w!("*.zip") }]).ok()?;
+            dialog.SetOptions(options | FOS_FORCEFILESYSTEM).ok()?;
+            dialog.SetTitle(w!("A zip with cars and / or tracks")).ok()?;
+        } else {
+            dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM).ok()?;
+            dialog.SetTitle(w!("A folder with cars and / or tracks")).ok()?;
+        }
+        dialog.Show(Some(owner)).ok()?;
+        let name = dialog.GetResult().ok()?.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let path = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as *const _));
+        path.map(std::path::PathBuf::from)
+    }
+}
