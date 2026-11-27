@@ -2171,6 +2171,21 @@ unsafe fn drive(acs: &Acs, engine: *mut u8, cars: &[*mut u8], ryin: &str, steps:
                 if i == 0 {
                     script_stand_ins(acs, dll, cars.len());
                 }
+                // the game's PhysicsAvatar::update hands each CarAvatar (+0x268 physicsState) the last step's state
+                // once per frame; the script's `car` (the state fill +0x10b07c0) reads it there. One frame per step;
+                // before the first step a state of its own buffer (getPhysicsState smooths against the buffer it fills)
+                // shortcut: a raw copy, not CSP's setNewPhysicsState hook (EXTRAPOLATE_STATE moves only positions), upgrade if a script reads car.position
+                for (k, &car) in cars.iter().enumerate() {
+                    let avatar = read::<usize>(read::<usize>(read::<usize>(dll + 0x282_13d8) + 8 * k)) as *mut u8;
+                    let last = if i == 0 {
+                        let first = acs.alloc(0x2000);
+                        get_physics_state(car, first);
+                        first
+                    } else {
+                        states[k]
+                    };
+                    std::ptr::copy_nonoverlapping(last, avatar.add(0x268), 0xb70);
+                }
                 // CSP's per-frame Lua state update (its frame update +0x1223740 calls it): the sim and each car's
                 // script state lj_getSim / lj_getCarState return
                 let lua_states: extern "C" fn(usize) = std::mem::transmute(dll + 0x10a_d540);
