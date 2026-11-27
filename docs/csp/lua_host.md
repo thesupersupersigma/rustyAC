@@ -41,7 +41,7 @@ host stand-in in `--lua-env` or a proof in the `--drive` run.
   - `setEngineRPMLimit` (`cphys66`) writes the limit each step, and the limiter first cuts in at
     step 1586.
 
-  The steps hash is f1f71e4dbd3e04ba with or without breakpoints.
+  The single-car steps hash (f1f71e4dbd3e04ba) is the same after the every-car fix (run lim6).
 - **VRC alpha 2026's second set-up at step 172.** It is deterministic: the same with
   `CSP_ORACLE_FRAMES` 11 or 40, and with or without breakpoints. It follows the script's own update
   count or accumulated dt (about 0.52 s), not the frame count or the wall clock. Whether the game does
