@@ -26,6 +26,9 @@
   .bar { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
   #status { color: var(--dim); margin-right: auto; }
   small { color: var(--dim); display: block; margin-top: -4px; }
+  #extras ul { list-style: none; padding: 0; margin: 0 0 10px; }
+  #extras li { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin: 6px 0; overflow-wrap: anywhere; }
+  #extras li .why { color: #e06050; display: block; }
 </style>
 </head>
 <body>
@@ -47,6 +50,16 @@
       <label>Speed sensitivity</label></div>
     <div class="row" data-key="X360/STEER_SPEED" data-min="0.01" data-max="1" data-step="0.01" data-default="0.2"><label>Steering speed</label></div>
     <div class="row" data-key="X360/STEER_FILTER" data-min="0" data-max="1" data-step="0.01" data-default="0.7"><label>Steering filter</label></div>
+  </section>
+  <section id="extras" hidden>
+    <h2>Extra cars and tracks</h2>
+    <p class="note">Folders or zips with cars and / or tracks (<code>content/cars</code>, <code>cars</code>, <code>tracks</code>, or one car or track), read where they are and added to the game's own: Assetto Corsa's folder is never written. A car or track the game already has stays the game's.</p>
+    <ul id="extras-list"></ul>
+    <div class="bar">
+      <span id="extras-status" role="status"></span>
+      <button id="add-folder">Add a folder…</button>
+      <button id="add-zip">Add a zip…</button>
+    </div>
   </section>
   <div class="bar">
     <span id="status" role="status"></span>
@@ -103,6 +116,33 @@ document.getElementById('save').addEventListener('click', async () => {
 });
 document.getElementById('back').addEventListener('click', () => bridge('home'));
 load();
+
+// the extra cars and tracks (Task W5): the Windows launcher's (elsewhere the bridge answers nothing
+// here and the section stays hidden)
+async function extras(query) {
+  let answer;
+  try {
+    answer = JSON.parse(await bridge('rustyacextras' + (query || '')));
+  } catch (e) {
+    return;
+  }
+  if (!answer || !Array.isArray(answer.extras)) return;
+  document.getElementById('extras').hidden = false;
+  document.getElementById('extras-status').textContent = answer.error || (answer.extras.length ? 'The theme lists them when you go back.' : '');
+  document.getElementById('extras-list').replaceChildren(...answer.extras.map((extra, i) => {
+    const item = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = extra.path;
+    if (extra.why) name.append(Object.assign(document.createElement('span'), { className: 'why', textContent: 'Left out: ' + extra.why }));
+    const remove = Object.assign(document.createElement('button'), { textContent: 'Remove' });
+    remove.addEventListener('click', () => extras('?remove=' + i));
+    item.append(name, remove);
+    return item;
+  }));
+}
+document.getElementById('add-folder').addEventListener('click', () => extras('?add=folder'));
+document.getElementById('add-zip').addEventListener('click', () => extras('?add=zip'));
+extras();
 </script>
 </body>
 </html>

@@ -115,6 +115,14 @@ fn main() {
     let _ = choose;
     rustyac_content::install::set_ac_root(ac_root);
     let Some(root) = rustyac_content::install::ac_root() else { fail(rustyac_content::install::not_found_hint()) };
+    // the extra cars and tracks of rustyAC's settings page (Task W5), laid over the install (off
+    // Windows the chooser above did that)
+    #[cfg(windows)]
+    for (path, why) in rustyac_launcher::files::mount_extras(&root) {
+        if !why.is_empty() {
+            eprintln!("rustyac-launcher: left out: {why} ({})", path.display());
+        }
+    }
     let absolute = |p: PathBuf| std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned();
     let (root, docs) = (absolute(root), absolute(docs));
     if let Some((requests, out)) = transcript {

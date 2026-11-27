@@ -145,6 +145,10 @@ pub fn game_command(f: &AppFolder, game: &Path, game_args: &[String]) -> Command
         }
     }
     cmd.args(game_args);
+    // the extra cars and tracks laid over the install (Task W5): the game mounts the same
+    if let Some(file) = crate::files::game_files() {
+        cmd.env("RUSTYAC_GAME_FILES", file);
+    }
     if let Some(dir) = game.parent() {
         cmd.current_dir(dir);
     }

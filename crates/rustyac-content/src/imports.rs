@@ -370,10 +370,11 @@ impl Remembered {
     }
 
     /// The game's start (the launcher names its choice in `RUSTYAC_GAME_FILES`): the remembered
-    /// file read, opened and mounted.
+    /// file read, opened and mounted. No `root=` (the Windows launcher's: extras only): the
+    /// install the game finds itself.
     pub fn mount_file(file: &Path) -> Result<(), String> {
         let r = Remembered::load(file);
-        Layers::open(r.root.as_deref(), &r.extra)?.mount();
+        Layers::open(r.root.clone().or_else(crate::install::ac_root).as_deref(), &r.extra)?.mount();
         Ok(())
     }
 
@@ -434,6 +435,9 @@ mod tests {
             let zip = dir.join(format!("{name}.zip"));
             std::fs::write(&zip, make_zip(&entries, true, false)).unwrap();
             assert_eq!(kind(&zip), want, "zip {name}");
+            // the same as a listing (the browser's folders)
+            let listed = Source::Zip(Arc::new(Zip::listing(Path::new(name), files.iter().copied())));
+            assert_eq!(detect(listed, name).map(|i| (i.kind, i.at)), want, "listing {name}");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }

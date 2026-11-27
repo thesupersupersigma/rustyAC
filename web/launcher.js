@@ -266,6 +266,8 @@ export async function startLauncher(env) {
   const say = (text) => env.report('progress', text);
   if (source.kind === 'pack') await packTree(source, tree, say);
   else await walkFolder(source.root, tree, say);
+  // the cars and tracks the player laid over the pack (Task W5)
+  if (source.kind === 'pack' && source.extra) await walkFolder(source.extra, tree, say);
 
   const misses = [];
   const syncUrl = source.kind === 'pack' ? source.urlOf : source.root && source.root.url ? (p) => source.root.url + p.split('/').map(encodeURIComponent).join('/') : null;

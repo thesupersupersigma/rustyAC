@@ -30,6 +30,9 @@ version. The only code is the manual workflow `.github/workflows/platforms.yml`.
   fresh Windows gold, a failed base check now a warning with **Continue anyway**), Resume 4 (13.9:
   the click stall was WebKit's 6 connections to a port held by slow listings; listings now have a
   port of their own, raceweekend and quickrace 3 of 3). **Resume at 13.10**: the tester's archive.
+- **W5 (branch `web`), section 14:** partial imports in the browser and the Windows launcher: a
+  folder or zip of cars and / or tracks only is added over the preview pack, the player's folder or
+  the install, never replacing it.
 
 ## 1. Plain-English summary
 
@@ -1440,3 +1443,100 @@ used by the Linux shell only); the Windows launcher's code is the same. Checks: 
 - **Super:** upload `re/scratch/taskP3/l8_dist/linux-inputs.tar.gz` again (`docs/release.md` 3b,
   `--clobber`: the lists changed); try **Linux only** (3c) before the first Linux release; the new
   test tar.gz (581 MiB) is optional (13.9); merge `web`.
+
+## 14. Task W5: partial imports in the browser and the Windows launcher
+
+Super's request (2026-11-25): the browser refused a folder holding only tracks ("not Assetto
+Corsa's folder"). Every platform now takes, besides a full AC folder, `root/content/cars|tracks/...`,
+`root/cars|tracks/...`, one car or track folder, or a zip of any of those, and **adds** that content
+over what is there; a car or track the base already has stays the base's.
+
+### 14.1 The shared code (`rustyac-content`)
+
+- `zip::Zip` reads through a `zip::Bytes` source: the disk (as before), or **`zip::Parts`**, the
+  parts of a file handed over so far. The browser reads a picked file asynchronously, so a read of
+  a part not there yet fails with `zip::Need` (where, how many bytes); the page hands that part
+  over and makes the call again (three rounds to open a zip, two to read a file).
+  **`Zip::listing`**: a folder's paths as a zip with no bytes, so `imports::detect` classifies a
+  browser folder too.
+- `Remembered::mount_file`: no `root=` (the Windows launcher writes extras only) means the install
+  the game finds itself.
+- Tests: the detection test runs every case as a listing too; the zip test reads a zip64 archive
+  through `Parts` (2 rounds for a 100 kB file) and checks a listing.
+
+### 14.2 The browser (Part 1)
+
+- **What is accepted:** "Open your Assetto Corsa folder" (the folder picker, or the file list where
+  Chrome refuses the folder) now asks `imports::detect` (wasm `detect_listing`, over the folder's
+  paths three levels down, and further below a folder of a folder) what the folder is: the whole
+  game is opened as before; cars and / or tracks are **added**. New: **Add cars or tracks from a
+  zip** (`showOpenFilePicker`, else a file input; wasm `PickedZip`, the zip read in place through
+  `Parts`), and in the bar under the theme **Add cars or tracks (a folder)** / **(a zip)**. A full
+  game in a zip is taken as an extra (its cars and tracks); a partial import with nothing open yet
+  says to open the game's folder first.
+- **How it is layered:** a `Layered` folder handle (`web/app.js`) merges the base's entries with the
+  extras' `content/cars/<id>` and `content/tracks/<id>`; the base's name wins, then the first extra.
+  Over the player's folder the usual folder walk runs on the merged handle (the lists, the cars'
+  check, Full mode's extra listing, the theme's files). Over the preview pack the extras are walked
+  as a tree of their own (`scanFolder(..., true)`), listed into the wasm side beside the pack's
+  files, and the pack's source sends their paths to the player's files; the theme gets them
+  through its own folder walk (`launcher.js`). Nothing is copied into the browser's storage.
+- **Does it load:** when a drive starts with an added car or track, wasm `check_pick` runs the
+  desktop launcher's check (`required::loads`: the data, every model of `lods.ini` or the layout's,
+  opened as kn5; a model with a DLC's key: "this car needs the Japanese Pack DLC"); the files it
+  names are read first, then it is asked again. The page has no DLC lists: over the preview pack
+  (no DLC there) a DLC's model is refused with that message; over the player's own folder it is let
+  through (the folder may hold the DLC; the game's own load then decides).
+- **Remembered:** for the visit, and **across visits** where the browser's pickers were used: the
+  handles (folders and zip files) are kept in IndexedDB (`extras`); on the next visit the ones the
+  browser still grants are added at once, the others are offered in one button ("Add ... again",
+  which asks the browser's permission). The file list (`webkitdirectory`) and the file input's zip
+  cannot be kept: picked again on each visit.
+- Test hooks: `?testimport=<url>,<url>` (folders over `serve.py`, or zips); `serve.py --mount
+  /PREFIX/=FOLDER`, where a folder above prefixes lists them (made-up folders of the install's own
+  files, nothing copied).
+
+**Proof** (`tools/proofs/browser.sh`, the browser area: 246 cases, 245 IDENTICAL; the one
+DIFFERENT was a `?list=1` I wrote in `docs/flags.md`, fixed, its check run again: IDENTICAL). The
+six new cases, over the test pack: the four kinds at once (content/: ks_mazda_miata + magione;
+cars/ + tracks/: abarth500 + drift; one car: bmw_1m; a zip of ks_toyota_gt86's folder) listed
+beside the pack's; the theme's own lists (`ac://listcars`, `ac://listtracks`) hold every one; a drive
+in the zip's car (Laguna Seca, 8 s, 59.9 km/h); a drive on a track added over the install
+(`?testfolder`, a renamed magione, 32 km/h); a DLC car (ks_mazda_mx5_cup): "this car needs the
+Japanese Pack DLC"; the file list (`--pick-folder`, a copied cars/abarth500): "preview pack and
+copied: 4 cars". The existing cases are unchanged. Also tried by hand: Full mode on a track from a
+folder (it draws), and on the zip's car (the debug view: the preview pack has no
+`content/driver/driver_no_HANS.kn5`, which that car's driver needs; the pack's gap, not the
+layering's).
+
+### 14.3 The Windows launcher (Part 2)
+
+- **The option:** rustyAC's own settings page (the theme's controls button) has **Extra cars and
+  tracks**: the list (with why one is left out, when it no longer opens), **Add a folder...**,
+  **Add a zip...** (Windows' own chooser, `sys::pick`) and **Remove**. The choice is kept in
+  `%APPDATA%\rustyAC\game_files.txt` (`extra=` lines; `RUSTYAC_GAME_FILES` instead when it is set,
+  and never the player's file in a proof run) and laid over the install at once
+  (`files::mount_extras`: the bridge's reads and `vfs`); the theme lists them when it is shown
+  again. The bridge answers `rustyacextras` on Windows only (Linux has 13.2's chooser; the browser
+  hides the section).
+- **The game** gets `RUSTYAC_GAME_FILES` from Drive (`page::game_command`) and now mounts it on
+  Windows as on Linux (`desktop.rs`). AC's own folder is never written: the extras are read where
+  they are.
+- The Linux shell's `LayeredFiles` moved to `files.rs` (shared, unchanged).
+
+**Proof:** a drive in a car from a zip (`re/scratch/taskW5/zipdrive.sh`): the launcher on an AC
+folder without ks_toyota_gt86 (`re/scratch/taskW5/fakebase.sh make`: junctions into the install;
+`fakebase.sh rm` removes the links only) with that car's zip as the extra. The click script
+(`w5_zipcar.txt`, quickrace's with that car) found the car in the theme's list, and Drive started
+the game on it at magione: 160 s of AI driving, exit 0, 0 failed steps, `race_out.json` written.
+Checks: clippy `-D warnings --all-targets` on Windows, on Linux (WSL), wasm32-unknown-unknown and
+wasm32-wasip1; `run_all.sh --quick`: 268 cases in 14 areas, all identical, 0 errors (every area, the launcher's and the browser's among them).
+
+### 14.4 Resume here (W5)
+
+- **Not done:** on Windows, the theme's pictures of an added car or track (its `file://` previews
+  under AC's folder, which does not have them; the list and the drive are fine); Drive's own check
+  before the game on Windows (`check_pick` / `loads`, as on Linux: the game itself says why a car
+  does not load); in the browser a big file of a picked zip is held packed and unpacked at once
+  (twice a model's size for a moment).
+- **Super:** merge `web`. The web zip gains no new file (only files already in it changed).

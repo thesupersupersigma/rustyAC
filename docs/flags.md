@@ -439,6 +439,7 @@ For the project's tests (**checks**):
 | `?server=<address>`, `?servercars=<list>`, `?servertrack=<name>`, `?serverpass=1` | A server named in the address instead of the site's list. Only on this computer. |
 | `?ondemand=<address>` | The address of a server panel's router. Only on this computer. |
 | `?testfolder=<path>` | The Assetto Corsa folder without the folder picker. |
+| `?testimport=<url>,<url>` | Cars and / or tracks added over the pack or the folder without the pickers (Task W5): a folder over HTTP (`serve.py`'s folder listing), or a zip (a URL ending `.zip`). |
 | `?font=selawik` | The launcher's text in the Selawik font. |
 
 ### On the page
@@ -485,7 +486,7 @@ rustyAC; `--controls` wins over it, and it wins over Assetto Corsa's controls.in
 | `RUSTYAC_MATH` | Which maths functions are used. Default: the game's own (its `MSVCR120.dll`), or rustyAC's exact copy of them when the DLL is missing. `pure`: the copy. `no-dll`: as if the DLL were missing. `std`: the standard library's; results then differ from the game's in the last digits. **checks** |
 | `RUSTYAC_PROOF_RUN` | Set by the proof scripts: rustyac.exe then refuses to start without `--cfg-dir` and `--documents`, and never asks Steam. **checks** |
 | `RUSTYAC_AUDIO_VERBOSE` | More lines from the sound engine. **checks** |
-| `RUSTYAC_GAME_FILES` | Linux: a file in the launcher's `game_files.txt` form (`root=`, `extra=` lines): the game reads its files from that folder or zip with the extra cars and tracks laid over it. The launcher sets it when the choice needs it. Without it (and without `AC_ROOT`, or with `AC_ROOT` inside the pack), a tester's pack beside the program, `rustyAC-test-pack.zip`, is the game's files, unasked and unchecked (`docs/platforms.md` 13.6). |
+| `RUSTYAC_GAME_FILES` | A file in the launcher's `game_files.txt` form (`root=`, `extra=` lines): the game reads its files from that folder or zip (no `root=`, as the Windows launcher writes it: the install the game finds itself) with the extra cars and tracks laid over it. The launcher sets it when the choice needs it. The Windows launcher reads its extras from it too when it is set (a proof's own file; else `%APPDATA%ustyAC\game_files.txt`, never in a proof run, Task W5). Without it (and without `AC_ROOT`, or with `AC_ROOT` inside the pack), a tester's pack beside the program, `rustyAC-test-pack.zip`, is the game's files, unasked and unchecked (`docs/platforms.md` 13.6). |
 | `RUSTYAC_DISPLAY_MODES` | The launcher's list of display sizes, fixed (`1920x1080,1280x720`). **checks** |
 | `RUSTYAC_ROW_DUMP`, `RUSTYAC_ALSO` | What a replay that differs from its recording prints. **checks** |
 | `CSP_CORE_TRACE` | A file: on CSP's core (`--csp --csp-core`, and `csp_oracle`'s port) every force, torque, body, joint and world step of CSP's core as one line, to compare with CSP's own (Task C5i-b). **checks** |

@@ -52,7 +52,26 @@ fi
 # listed server's car and track and its own gateway address, an unlisted ?join joins nothing
 need "$gold/web/pack/manifest.json" "the test pack"
 python web/build.py > "$out/build.txt" 2>&1 || { verdict "page build" DIFFERENT "$(tail -n 1 "$out/build.txt")"; summary; exit; }
-python web/serve.py --port 8139 --pack "$gold/web/pack" --ac "$ac" > "$out/serve.txt" 2>&1 &
+# partial imports (Task W5): made-up folders of the install's own files at /parts/ (serve.py --mount,
+# read in place), and one zip and one copied car (the file list) in $out
+acm=$(cygpath -m "$ac")
+mounts=()
+for m in content_root/content/cars/ks_mazda_miata=cars/ks_mazda_miata content_root/content/tracks/magione=tracks/magione     cars_root/cars/abarth500=cars/abarth500 cars_root/tracks/drift=tracks/drift one_car/bmw_1m=cars/bmw_1m     dlc/cars/ks_mazda_mx5_cup=cars/ks_mazda_mx5_cup renamed/tracks/w5_magione=tracks/magione; do
+    mounts+=(--mount "/parts/${m%%=*}/=$acm/content/${m#*=}")
+done
+rm -rf "$out/parts"
+mkdir -p "$out/parts/zips" "$out/parts/copied/cars"
+python - "$acm/content/cars/ks_toyota_gt86" "$out/parts/zips/ks_toyota_gt86.zip" <<'PY'
+import os, sys, zipfile
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
+    for d, _, files in os.walk(src):
+        for f in files:
+            z.write(os.path.join(d, f), 'ks_toyota_gt86/' + os.path.relpath(os.path.join(d, f), src).replace(os.sep, '/'))
+PY
+cp -r "$ac/content/cars/abarth500" "$out/parts/copied/cars/"
+mounts+=(--mount "/parts/zips/=$(cygpath -m "$out/parts/zips")")
+MSYS2_ARG_CONV_EXCL=/parts python web/serve.py --port 8139 --pack "$(cygpath -m "$gold/web/pack")" --ac "$acm" "${mounts[@]}" > "$out/serve.txt" 2>&1 &
 sp=$!
 node tools/proofs/ondemand_site.mjs 8140 8139 tools/proofs/ondemand_servers.json > "$out/site.txt" 2>&1 &
 fp=$!
@@ -90,6 +109,25 @@ python tools/proofs/roundtrip_flow.py "$out/roundtrip_flow.json" 3 3 ks_ferrari_
 node web/check.mjs --url "http://127.0.0.1:8139/?" --flow "$out/roundtrip_flow.json" --profile "$out/chrome_profile_roundtrip" --port 9341 --timeout 1800 \
     --flags "--enable-features=Vulkan" > "$out/roundtrip.json" 2> "$out/roundtrip.err"
 while IFS='|' read -r name v what; do verdict "$name" "$v" "$what"; done < <(node tools/proofs/roundtrip_verdicts.mjs < "$out/roundtrip.json" | tr -d '\r')
+# partial imports (Task W5), over the test pack and over the install: both layouts, one car, a zip,
+# the file list, the theme's lists, drives, and a DLC's model without the DLC
+imp() { node web/check.mjs --url "http://127.0.0.1:8139/?$1" "${@:3}" --profile "$out/chrome_profile_imports" --port 9343 --timeout 900 > "$out/imports_$2.json" 2> "$out/imports_$2.err"
+    node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")||"{}");const s=r.script||{};console.log(JSON.stringify({state:r.state,error:r.error,kmh:r.kmh,cars:s.cars,tracks:s.tracks,theme:s.theme,picked:r.picked&&r.picked.line}))' "$out/imports_$2.json"; }
+four="testimport=/parts/content_root/,/parts/cars_root/,/parts/one_car/,/parts/zips/ks_toyota_gt86.zip"
+r=$(imp "launcher=0&$four" menu --menu --script tools/proofs/imports_page.js)
+echo "$r" | grep -qF '"cars":["ks_ferrari_f2004","bmw_z4_gt3","bmw_m3_e30","abarth500","bmw_1m","ks_mazda_miata","ks_toyota_gt86"]' && echo "$r" | grep -qF '"tracks":["spa|","ks_laguna_seca|","ks_drag|drag400","drift|","magione|"]' &&
+    verdict "partial imports over the pack (content/, cars and tracks/, one car, a zip)" IDENTICAL "$r" || verdict "partial imports over the pack (content/, cars and tracks/, one car, a zip)" DIFFERENT "$r"
+r=$(imp "launcher=1&$four" theme --launcher --script tools/proofs/imports_page.js)
+echo "$r" | grep -qF '"theme":["ks_mazda_miata","abarth500","bmw_1m","ks_toyota_gt86","magione","drift","bmw_z4_gt3"]' && verdict "the theme lists the imports" IDENTICAL "$r" || verdict "the theme lists the imports" DIFFERENT "$r"
+r=$(imp "launcher=0&testimport=/parts/zips/ks_toyota_gt86.zip&go=1&car=ks_toyota_gt86&track=ks_laguna_seca&spawn=pit&autodrive=1" zipdrive --seconds 8)
+echo "$r" | grep -qF '"state":"driving"' && verdict "a drive in a car from a zip" IDENTICAL "$r" || verdict "a drive in a car from a zip" DIFFERENT "$r"
+r=$(imp "launcher=0&testfolder=/ac-test/&testimport=/parts/renamed/&go=1&car=bmw_1m&track=w5_magione&spawn=pit&autodrive=1" folderdrive --seconds 8)
+echo "$r" | grep -qF '"state":"driving"' && verdict "a drive on a track added over the install" IDENTICAL "$r" || verdict "a drive on a track added over the install" DIFFERENT "$r"
+r=$(imp "launcher=0&testimport=/parts/dlc/&go=1&car=ks_mazda_mx5_cup&track=ks_laguna_seca&spawn=pit&autodrive=1" dlc --seconds 3)
+echo "$r" | grep -qF '"error":"this car needs the Japanese Pack DLC"' && verdict "an added car whose model needs a DLC" IDENTICAL "$r" || verdict "an added car whose model needs a DLC" DIFFERENT "$r"
+r=$(imp "launcher=0" list --menu --pick-folder "$(cygpath -w "$out/parts/copied")" --script tools/proofs/imports_page.js)
+echo "$r" | grep -qF '"picked":"preview pack and copied: 4 cars, 3 tracks and layouts"' && verdict "the file list of a folder of cars" IDENTICAL "$r" || verdict "the file list of a folder of cars" DIFFERENT "$r"
+rm -rf "$out/parts"
 kill $sp $fp 2>/dev/null
 rm -rf "$out"/chrome_profile*
 summary

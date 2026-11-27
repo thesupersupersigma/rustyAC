@@ -70,6 +70,10 @@ function freshCanvas() {
 
 const state = {
   source: null, // where the files come from: { kind, sizes: Map(path -> bytes), open(path) }
+  pack: null, // the site's pack, when it is the base the player's extras are laid over
+  baseFolder: null, // or the player's own folder (its handle)
+  extras: [], // the cars and tracks the player added: importOf's answers, the first one wins
+  remembered: [], // the handles of the extras picked with the browser's pickers (kept in IndexedDB)
   cars: [], // { id, name, refused }
   tracks: [], // { track, layout, name, refused }
   game: null,
@@ -327,9 +331,9 @@ async function children(folder) {
 
 // Walks the parts of the folder a drive can need and returns Map(path -> file handle).
 // Skins, sounds, previews and the like are never looked at.
-async function scanFolder(root, report) {
+async function scanFolder(root, report, extra = false) {
   const top = await children(root);
-  if (!top.has('content') || !top.has('system')) {
+  if (!extra && (!top.has('content') || !top.has('system'))) {
     throw new Error(`"${root.name}" is not Assetto Corsa's folder: it has no content and system folders in it. Pick the folder named assettocorsa.`);
   }
   const files = new Map();
@@ -340,7 +344,7 @@ async function scanFolder(root, report) {
       else if (depth > 0 && !skip.includes(lower)) await walk(handle, `${path}/${name}`, depth - 1, skip);
     }
   };
-  const content = await children(top.get('content').handle);
+  const content = top.has('content') ? await children(top.get('content').handle) : new Map();
   const cars = content.has('cars') ? await children(content.get('cars').handle) : new Map();
   let done = 0;
   for (const { name, handle } of cars.values()) {
@@ -364,6 +368,7 @@ async function scanFolder(root, report) {
     await walk(handle, `content/tracks/${name}`, 3, ['skins', 'extension', 'sfx', 'texture']);
     report(`reading the folder: ${cars.size} cars, ${++done} tracks`);
   }
+  if (extra) return files;
   const system = await children(top.get('system').handle);
   // (and system/data/se: the official special events' own files)
   if (system.has('data')) await walk(system.get('data').handle, 'system/data', 1, []);
@@ -410,26 +415,7 @@ async function openFolder(root) {
       sizes.set(path, file.size);
       return { size: file.size, stream: file.stream(), sha256: '', from: 'folder' };
     },
-    // Full mode: more of the folder than the first walk took ([folder, depth, folders to skip]
-    // each): AC's renderer reads the shaders, the sky's and the pits' files, a car's skins
-    async listMore(parts) {
-      const added = [];
-      const walk = async (folder, at, depth, skip) => {
-        for (const [lower, { name, handle }] of await children(folder)) {
-          const path = `${at}/${name}`;
-          if (handle.kind === 'file') {
-            if (!handles.has(path)) added.push(path);
-            handles.set(path, handle);
-          } else if (depth > 0 && !skip.includes(lower)) await walk(handle, path, depth - 1, skip);
-        }
-      };
-      for (const [path, depth, skip] of parts) {
-        let folder = root;
-        for (const name of path.split('/')) folder = folder && (await children(folder)).get(name.toLowerCase())?.handle;
-        if (folder && folder.kind === 'directory') await walk(folder, path, depth, skip);
-      }
-      if (added.length) rac.fs_list(added.join('\n'));
-    },
+    listMore: listMore(root, handles),
   };
   const index = [...handles.keys()].filter(isIndexFile);
   let read = 0;
@@ -475,6 +461,29 @@ async function openFolder(root) {
   return source;
 }
 
+// Full mode: more of the folder than the first walk took ([folder, depth, folders to skip]
+// each): AC's renderer reads the shaders, the sky's and the pits' files, a car's skins
+function listMore(root, handles) {
+  return async (parts) => {
+    const added = [];
+    const walk = async (folder, at, depth, skip) => {
+      for (const [lower, { name, handle }] of await children(folder)) {
+        const path = `${at}/${name}`;
+        if (handle.kind === 'file') {
+          if (!handles.has(path)) added.push(path);
+          handles.set(path, handle);
+        } else if (depth > 0 && !skip.includes(lower)) await walk(handle, path, depth - 1, skip);
+      }
+    };
+    for (const [path, depth, skip] of parts) {
+      let folder = root;
+      for (const name of path.split('/')) folder = folder && (await children(folder)).get(name.toLowerCase())?.handle;
+      if (folder && folder.kind === 'directory') await walk(folder, path, depth, skip);
+    }
+    if (added.length) rac.fs_list(added.join('\n'));
+  };
+}
+
 // The picked folder is remembered (IndexedDB can hold the handle itself), so the next visit
 // needs one click at most, or none where the browser kept the permission.
 function handleStore() {
@@ -505,6 +514,264 @@ async function rememberedFolder() {
     });
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------- cars and tracks the player adds (Task W5)
+
+// A folder handle made of others: the base's entries (none for the preview pack), and `more`
+// (Map lower name -> { name, handle }) beside them. A folder both have is merged (content,
+// content/cars); a name the base has wins (a car or track the base has is never replaced).
+class Layered {
+  constructor(name, base, more) {
+    this.kind = 'directory';
+    this.name = name;
+    this.base = base;
+    this.more = more;
+    // (the test hook's folder over HTTP: the launcher reads the base's files at once through it)
+    this.url = base && base.url;
+  }
+
+  async *entries() {
+    const seen = new Set();
+    if (this.base) {
+      for await (const [name, handle] of this.base.entries()) {
+        const lower = name.toLowerCase();
+        const extra = this.more.get(lower);
+        seen.add(lower);
+        yield [name, extra && extra.handle instanceof Layered && handle.kind === 'directory' ? new Layered(name, handle, extra.handle.more) : handle];
+      }
+    }
+    for (const [lower, { name, handle }] of this.more) if (!seen.has(lower)) yield [name, handle];
+  }
+}
+
+// The extras as `content/cars/<id>` and `content/tracks/<id>` (without the ids in `skip`: the
+// pack's own), for a Layered over the base.
+function extraTree(skip = { cars: new Set(), tracks: new Set() }) {
+  const content = new Map();
+  for (const kind of ['cars', 'tracks']) {
+    const items = new Map();
+    for (const extra of state.extras) {
+      for (const [id, handle] of extra[kind]) {
+        const lower = id.toLowerCase();
+        if (!skip[kind].has(lower) && !items.has(lower)) items.set(lower, { name: id, handle });
+      }
+    }
+    if (items.size) content.set(kind, { name: kind, handle: new Layered(kind, null, items) });
+  }
+  return new Map([['content', { name: 'content', handle: new Layered('content', null, content) }]]);
+}
+
+// A folder handle's shape over [path, getFile] pairs (paths relative, `/` between parts).
+function treeOf(name, files) {
+  const tree = { kind: 'directory', name, items: new Map() };
+  for (const [path, getFile] of files) {
+    const parts = path.split('/').filter(Boolean);
+    let folder = tree;
+    for (const part of parts.slice(0, -1)) {
+      if (!folder.items.has(part)) folder.items.set(part, { kind: 'directory', name: part, items: new Map() });
+      folder = folder.items.get(part);
+    }
+    if (parts.length) folder.items.set(parts[parts.length - 1], { kind: 'file', name: parts[parts.length - 1], getFile });
+  }
+  const withEntries = (folder) => {
+    folder.entries = async function* () {
+      for (const [itemName, item] of folder.items) yield [itemName, item];
+    };
+    for (const item of folder.items.values()) if (item.kind === 'directory') withEntries(item);
+    return folder;
+  };
+  return withEntries(tree);
+}
+
+// A picked zip's bytes as the wasm side asks for them (rac.PickedZip): a call that lacks a part
+// of the file fails, need() names the part, and the call is made again once it is handed over.
+async function zipCall(zip, file, call) {
+  for (;;) {
+    try {
+      return call();
+    } catch (error) {
+      const [at, length] = zip.need();
+      if (length === undefined) throw error;
+      zip.give(at, new Uint8Array(await file.slice(at, at + length).arrayBuffer()));
+    }
+  }
+}
+
+// A folder's paths for the wasm side's detect: three levels down, and three more below a folder
+// that is all its folder holds (a folder of a folder), as detect looks.
+async function listForDetect(folder) {
+  const out = [];
+  const walk = async (handle, path, levels) => {
+    const items = [...(await children(handle)).values()];
+    const only = items.length === 1;
+    for (const { name, handle: child } of items) {
+      const dir = child.kind === 'directory';
+      out.push(`${path}${name}${dir ? '/' : ''}`);
+      if (dir && (only || levels > 1)) await walk(child, `${path}${name}/`, only ? 3 : levels - 1);
+    }
+  };
+  await walk(folder, '', 3);
+  return out;
+}
+
+// What a picked folder (handle) or zip (file) holds, by rustyac_content::imports::detect in wasm:
+// its kind, and its cars' and tracks' folders as handles.
+async function importOf(handle, file) {
+  let found;
+  let root = handle;
+  if (file) {
+    const zip = new rac.PickedZip(file.name, file.size);
+    found = JSON.parse(await zipCall(zip, file, () => zip.detect()));
+    const paths = (await zipCall(zip, file, () => zip.files())).split('\n').filter(Boolean);
+    root = treeOf(file.name.replace(/\.zip$/i, ''), paths.map((path) => [path, async () => new Blob([await zipCall(zip, file, () => zip.read(path))])]));
+  } else {
+    found = JSON.parse(rac.detect_listing(handle.name, (await listForDetect(handle)).join('\n')));
+  }
+  const at = async (path) => {
+    let folder = root;
+    for (const part of path.split('/').filter(Boolean)) folder = folder && (await children(folder)).get(part.toLowerCase())?.handle;
+    return folder && folder.kind === 'directory' ? folder : null;
+  };
+  const resolve = async (items) => (await Promise.all(items.map(async ([id, path]) => [id, await at(path)]))).filter(([, folder]) => folder);
+  return { kind: found.kind, name: (file || handle).name, cars: await resolve(found.cars), tracks: await resolve(found.tracks) };
+}
+
+// A folder or zip the player picked: the whole game becomes the page's folder (as before); cars
+// and / or tracks are laid over what the page has (the preview pack or the player's folder).
+// `keep`: the picker's handle, remembered for the next visit.
+async function usePicked(handle, file, keep) {
+  $('refusal').hidden = true;
+  const base = state.pack || state.baseFolder;
+  $('content-line').textContent = `reading ${(file || handle).name} ...`;
+  const found = await importOf(handle, file);
+  if (found.kind === 'full' && handle) return useFolder(handle, !!keep);
+  if (!found.cars.length && !found.tracks.length) throw new Error(`${found.name} holds no cars or tracks (content/cars or content/tracks, cars/ or tracks/, or one car or track folder)`);
+  if (!base) throw new Error(`${found.name} holds cars or tracks only, not the whole game: open your Assetto Corsa folder first, then add this one`);
+  state.extras.push(found);
+  if (keep) {
+    state.remembered.push(keep);
+    await rememberExtras();
+  }
+  await relayer();
+}
+
+// The page's files again, with every extra laid over the base.
+async function relayer() {
+  if (state.baseFolder) return useFolder(state.baseFolder, false);
+  const source = await packWithExtras(state.pack);
+  await useSource(source, `preview pack and ${state.extras.map((e) => e.name).join(', ')}: ${source.cars.length} cars, ${source.tracks.length} tracks and layouts`);
+  if (launcherMode && !state.starting) await launcherStart();
+}
+
+// The preview pack with the extras' cars and tracks beside its own (read from the player's
+// files, the rest from the pack).
+async function packWithExtras(pack) {
+  if (!state.extras.length) return pack;
+  const ids = (list, key) => new Set(list.map((item) => item[key].toLowerCase()));
+  const root = new Layered('extra', null, extraTree({ cars: ids(pack.cars, 'id'), tracks: ids(pack.tracks, 'track') }));
+  const handles = await scanFolder(root, (text) => ($('content-line').textContent = text), true);
+  rac.fs_list([...handles.keys()].join('\n'));
+  for (const path of [...handles.keys()].filter(isIndexFile)) rac.fs_put(path, new Uint8Array(await (await handles.get(path).getFile()).arrayBuffer()));
+  const found = JSON.parse(rac.index(false));
+  const added = (list, key) => (item) => !list.some((own) => own[key].toLowerCase() === item[key].toLowerCase());
+  const find = (path) => handles.get(path) || [...handles].find(([p]) => p.toLowerCase() === path.toLowerCase())?.[1];
+  return {
+    ...pack,
+    extra: root,
+    // (the extras' part only: the pack lists everything it has)
+    listMore: listMore(root, handles),
+    cars: [...pack.cars, ...found.cars.filter(added(pack.cars, 'id'))],
+    tracks: [...pack.tracks, ...found.tracks.filter(added(pack.tracks, 'track'))],
+    async size(path) {
+      const handle = find(path);
+      return handle ? (await handle.getFile()).size : pack.sizes.get(path) || 0;
+    },
+    async open(path, options) {
+      const handle = find(path);
+      if (!handle) return pack.open(path, options);
+      const file = await handle.getFile();
+      return { size: file.size, stream: file.stream(), sha256: '', from: 'folder' };
+    },
+  };
+}
+
+// Is this car (`cars`) or track (`tracks`) one the player added?
+function isExtra(kind, id) {
+  return state.extras.some((extra) => extra[kind].some(([own]) => own.toLowerCase() === id.toLowerCase()));
+}
+
+// The extras picked with the browser's pickers are remembered (their handles in IndexedDB): the
+// next visit adds them again where the browser kept the permission, else one click asks for it.
+async function rememberExtras() {
+  try {
+    const db = await handleStore();
+    db.transaction('handles', 'readwrite').objectStore('handles').put(state.remembered, 'extras');
+  } catch {
+    // they just have to be added again next time
+  }
+}
+
+async function restoreExtras() {
+  let kept = [];
+  try {
+    const db = await handleStore();
+    kept = await new Promise((resolve) => {
+      const request = db.transaction('handles').objectStore('handles').get('extras');
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => resolve([]);
+    });
+  } catch {
+    return;
+  }
+  const add = async (handles) => {
+    for (const handle of handles) {
+      try {
+        const found = await importOf(handle.kind === 'file' ? null : handle, handle.kind === 'file' ? await handle.getFile() : null);
+        if (found.cars.length || found.tracks.length) {
+          state.extras.push(found);
+          state.remembered.push(handle);
+        }
+      } catch (error) {
+        console.warn(`${handle.name}:`, error);
+      }
+    }
+  };
+  const granted = [];
+  const asked = [];
+  for (const handle of kept) ((await handle.queryPermission({ mode: 'read' }).catch(() => 'denied')) === 'granted' ? granted : asked).push(handle);
+  await add(granted);
+  const again = $('extras-again');
+  again.hidden = !asked.length;
+  again.textContent = `Add ${asked.map((h) => h.name).join(', ')} again`;
+  again.onclick = async () => {
+    try {
+      const allowed = [];
+      for (const handle of asked) if ((await handle.requestPermission({ mode: 'read' })) === 'granted') allowed.push(handle);
+      again.hidden = true;
+      await add(allowed);
+      await rememberExtras();
+      await relayer();
+    } catch (error) {
+      fail(error);
+    }
+  };
+}
+
+// A zip of cars and / or tracks: the browser's file picker (its handle is remembered), else the
+// file input.
+async function pickZip() {
+  try {
+    if (window.showOpenFilePicker) {
+      const [handle] = await window.showOpenFilePicker({ id: 'rustyac-zip', types: [{ description: 'Zip files', accept: { 'application/zip': ['.zip'] } }] });
+      await usePicked(null, await handle.getFile(), handle);
+    } else {
+      $('zip-input').click();
+    }
+  } catch (error) {
+    if (error && error.name === 'AbortError') return;
+    fail(error);
   }
 }
 
@@ -547,7 +814,11 @@ function folderFromFiles(list) {
       if (at >= 0 && at + 1 < prefix) prefix = at + 1;
     }
   }
-  if (prefix === Infinity) throw new Error("that is not Assetto Corsa's folder: no content/cars or content/tracks in it");
+  // no game folder in it: cars or tracks only (Task W5), every file kept (detect says what they are)
+  if (prefix === Infinity) {
+    window.rustyac.listed = { files: list.length, kept: list.length };
+    return treeOf(list[0].webkitRelativePath.split('/')[0], [...list].map((file) => [file.webkitRelativePath.slice(file.webkitRelativePath.indexOf('/') + 1), async () => file]));
+  }
   // the same shape the picker's handle has
   const tree = { kind: 'directory', name: list[0].webkitRelativePath.slice(0, prefix - 1), items: new Map() };
   for (const kind of ['content', 'system']) tree.items.set(kind, { kind: 'directory', name: kind, items: new Map() });
@@ -1159,6 +1430,19 @@ async function drive(launch) {
       const wanted = wantedNow();
       if (!wanted.length) break;
       await fetchWanted(wanted);
+    }
+    // a car or track the player added (Task W5): does it load, as the desktop launcher's Drive
+    // asks (its other models read first)
+    for (const [kind, id, lay] of [...models.map((model) => ['cars', model, '']), ['tracks', track, layout]]) {
+      if (!isExtra(kind, id)) continue;
+      for (let round = 0; ; round++) {
+        const { why, wanted } = JSON.parse(rac.check_pick(kind, id, lay, !!state.baseFolder));
+        if (!wanted.length || round === 4) {
+          if (why) throw new Error(why);
+          break;
+        }
+        await fetchWanted(wanted);
+      }
     }
     if (launch) {
       // what the session reads of the game's folder besides the car and the track
@@ -2562,7 +2846,7 @@ async function pickFolder() {
   try {
     if (window.showDirectoryPicker) {
       const handle = await window.showDirectoryPicker({ id: 'assettocorsa', mode: 'read' });
-      await useFolder(handle, true);
+      await usePicked(handle, null, handle);
     } else {
       $('folder-input').click();
     }
@@ -2576,7 +2860,8 @@ async function useFolder(handle, remember) {
   $('refusal').hidden = true;
   setStatus('');
   $('content-line').textContent = 'reading the folder ...';
-  const source = await openFolder(handle);
+  state.baseFolder = handle;
+  const source = await openFolder(state.extras.length ? new Layered(handle.name, handle, extraTree()) : handle);
   if (remember) await rememberFolder(handle);
   await useSource(source, `${handle.name}: ${source.cars.length} cars, ${source.tracks.length} tracks and layouts`);
   if (launcherMode && !state.starting) {
@@ -2623,6 +2908,9 @@ function showCorner() {
   // start page)
   $('source-list').hidden = !onPack || !window.showDirectoryPicker;
   $('source-list').onclick = () => $('folder-input').click();
+  // (Task W5: cars and / or tracks laid over what is open; the folder picker classifies its folder)
+  $('corner-add').onclick = pickFolder;
+  $('corner-zip').onclick = pickZip;
   $('corner').hidden = false;
 }
 
@@ -2808,6 +3096,14 @@ async function main() {
     showControls();
   }
   $('open-folder').addEventListener('click', pickFolder);
+  $('open-zip').addEventListener('click', pickZip);
+  $('zip-input').addEventListener('change', async (event) => {
+    try {
+      if (event.target.files.length) await usePicked(null, event.target.files[0], null);
+    } catch (error) {
+      fail(error);
+    }
+  });
   // Chrome and Edge have the folder picker, and it refuses a folder under Program Files
   // (where Steam puts the game): the file-list way is offered beside it
   if (window.showDirectoryPicker) {
@@ -2823,9 +3119,9 @@ async function main() {
       await nextPaint();
       const folder = folderFromFiles(event.target.files);
       state.fromList = true;
-      window.rustyac.listed.tree_ms = performance.now() - started;
-      await useFolder(folder, false);
-      window.rustyac.listed.ready_ms = performance.now() - started;
+      if (window.rustyac.listed) window.rustyac.listed.tree_ms = performance.now() - started;
+      await usePicked(folder, null, null);
+      if (window.rustyac.listed) window.rustyac.listed.ready_ms = performance.now() - started;
     } catch (error) {
       fail(error);
     }
@@ -2912,6 +3208,7 @@ async function main() {
         : `content pack: ${pack.cars.length} cars, ${pack.tracks.length} tracks and layouts`;
       $('pack-line').hidden = false;
       $('pack-line').textContent = `A ${few ? 'preview' : 'content'} pack is on this server (${megabytes(pack.manifest.bytes)} in all; only the chosen car and track are fetched, and kept in this browser for the next visit).`;
+      state.pack = pack;
       await useSource(pack, line);
       ready = true;
     } else {
@@ -2940,6 +3237,19 @@ async function main() {
         $('content-line').textContent = 'no preview pack on this server: open your own Assetto Corsa folder';
       }
     }
+  }
+  if (ready) {
+    // the cars and tracks the player added before (Task W5); ?testimport=<url>,<url>: folders
+    // over HTTP (the test hook's way) or zips (a URL ending .zip), added as the pickers add them
+    if (window.showDirectoryPicker) await restoreExtras();
+    for (const url of (params.get('testimport') || '').split(',').filter(Boolean)) {
+      const name = decodeURIComponent(url.replace(/\/+$/, '').split('/').pop());
+      const found = /\.zip$/i.test(url) ? await importOf(null, new File([await (await fetch(url)).blob()], name)) : await importOf(new HttpFolder(url, name), null);
+      state.extras.push(found);
+    }
+    if (state.extras.length) await relayer().catch(fail);
+    // (what a test waits for: every extra added)
+    window.rustyac.imports = state.extras.map((extra) => extra.name);
   }
   await loadServers();
   state.starting = false;

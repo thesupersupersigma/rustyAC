@@ -67,6 +67,31 @@ fn files_with(path: &str, suffix: &str) -> Result<Vec<String>, Thrown> {
     net::files_with(path, suffix).map_err(|_| dir_missing(path))
 }
 
+/// `rustyacextras`: `{"extras": [{"path": ..., "why": "" or why it is left out}, ...]}`.
+fn extras(p: &Params, ev: &mut Vec<Event>) -> Answer {
+    let root = rustyac_content::install::ac_root().unwrap_or_default();
+    let status = match (p.get("add"), p.get("remove").and_then(|i| i.parse().ok())) {
+        (Some(kind), _) => {
+            ev.push(Event::AddExtra(kind == "zip"));
+            Ok(crate::files::mount_extras(&root))
+        }
+        (_, Some(i)) => crate::files::change_extras(&root, None, Some(i)),
+        _ => Ok(crate::files::mount_extras(&root)),
+    };
+    let q = |text: &str| {
+        let mut out = String::new();
+        jss::quote(text, &mut out);
+        out
+    };
+    match status {
+        Ok(status) => {
+            let item = |(path, why): &(std::path::PathBuf, String)| format!("{{\"path\": {}, \"why\": {}}}", q(&path.display().to_string()), q(why));
+            Answer::json(&format!("{{\"extras\": [{}]}}", status.iter().map(item).collect::<Vec<_>>().join(", ")))
+        }
+        Err(e) => Answer::json(&format!("{{\"extras\": [], \"error\": {}}}", q(&e.to_string()))),
+    }
+}
+
 /// `ACRequestData`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Answer {
@@ -109,6 +134,9 @@ pub enum Event {
     SetVolume,
     /// `ListCars` / `ListTracks` found content it could not read ("ERRORS with content: ...").
     ContentErrors(String),
+    /// rustyAC's settings page: add an extra folder (`false`) or zip (`true`) of cars and tracks
+    /// (the window asks which one; Task W5).
+    AddExtra(bool),
 }
 
 /// What the window and the Steam calls answer, which the bridge cannot know by itself.
@@ -247,6 +275,10 @@ impl Bridge {
                 ev.push(Event::Home);
                 Ok(Answer::plain(true))
             }
+            // rustyAC's own (Task W5; the Windows launcher's settings page): the extra cars and
+            // tracks, `?add=folder|zip` (the window's chooser) or `?remove=<n>`; off Windows the
+            // game-files chooser has them, and this answers nothing
+            "rustyacextras" if cfg!(windows) => Ok(extras(p, ev)),
             "listcars" => self.list_cars(ev),
             "listtracks" => self.list_tracks(p, ev),
             "listseasons" => self.list_seasons(),

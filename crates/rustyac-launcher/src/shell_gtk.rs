@@ -31,7 +31,6 @@ use rustyac_content::imports::{Layers, Remembered};
 use rustyac_content::required::Lists;
 
 use crate::bridge::{split_url, Answer, Bridge, Event};
-use crate::files::Files;
 use crate::folders::AppFolder;
 use crate::ini::IniFile;
 use crate::page::{current_theme, js_event, parse_step, Step, Theme, CONTROLS_PAGE, WIZARD_JS};
@@ -289,7 +288,8 @@ impl App {
             Event::OpenControls => {
                 let _ = self.webview.load_html(CONTROLS_PAGE);
             }
-            Event::StartMusic | Event::StopMusic | Event::SetVolume => {}
+            // (the game-files chooser has the extras here: the bridge never asks for this off Windows)
+            Event::StartMusic | Event::StopMusic | Event::SetVolume | Event::AddExtra(_) => {}
         }
     }
 
@@ -637,61 +637,6 @@ fn answer_request(request: Request<Vec<u8>>, responder: RequestAsyncResponder) {
     bridge_call(request.uri().to_string(), body, false, Box::new(move |answer| respond(responder, &answer)));
 }
 
-/// The launcher's files laid over the game's (a zip, extra cars and tracks): reads under the
-/// game's folder go through the layers, everything else (the player's folder) is the disk.
-struct LayeredFiles(Arc<Layers>);
-
-impl LayeredFiles {
-    fn under(&self, path: &str) -> Option<PathBuf> {
-        let p = PathBuf::from(path.replace('\\', "/"));
-        p.starts_with(&self.0.root).then_some(p)
-    }
-}
-
-impl Files for LayeredFiles {
-    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
-        use rustyac_content::vfs::Vfs;
-        match self.under(path) {
-            Some(p) => self.0.read(&p).map(|b| b.to_vec()),
-            None => crate::files::Disk.read(path),
-        }
-    }
-    fn write(&self, path: &str, bytes: &[u8]) -> std::io::Result<()> {
-        crate::files::Disk.write(path, bytes)
-    }
-    fn is_file(&self, path: &str) -> bool {
-        use rustyac_content::vfs::Vfs;
-        self.under(path).map_or_else(|| crate::files::Disk.is_file(path), |p| self.0.is_file(&p))
-    }
-    fn is_dir(&self, path: &str) -> bool {
-        use rustyac_content::vfs::Vfs;
-        self.under(path).map_or_else(|| crate::files::Disk.is_dir(path), |p| self.0.is_dir(&p))
-    }
-    fn list(&self, folder: &str) -> std::io::Result<Vec<(String, bool)>> {
-        use rustyac_content::vfs::Vfs;
-        self.under(folder).map_or_else(|| crate::files::Disk.list(folder), |p| self.0.read_dir(&p))
-    }
-    fn create_dir_all(&self, path: &str) -> std::io::Result<()> {
-        crate::files::Disk.create_dir_all(path)
-    }
-    fn rename(&self, from: &str, to: &str) -> std::io::Result<()> {
-        crate::files::Disk.rename(from, to)
-    }
-    fn remove_file(&self, path: &str) -> std::io::Result<()> {
-        crate::files::Disk.remove_file(path)
-    }
-    fn remove_dir_all(&self, path: &str) -> std::io::Result<()> {
-        crate::files::Disk.remove_dir_all(path)
-    }
-    fn modified(&self, path: &str) -> Option<std::time::SystemTime> {
-        // shortcut: a file inside a zip has no time here (zip times are not read); read them if the theme ever sorts the game's own files by date
-        self.under(path).map_or_else(|| crate::files::Disk.modified(path), |_| None)
-    }
-    fn created(&self, path: &str) -> Option<std::time::SystemTime> {
-        self.under(path).map_or_else(|| crate::files::Disk.created(path), |_| None)
-    }
-}
-
 /// The game's files chosen and mounted for the launcher and the game it starts: the remembered
 /// choice when it still opens and checks out (unless `choose`), else the chooser page, with
 /// Steam's install (or the remembered one) offered and a **Change…** for another folder or a zip,
@@ -841,7 +786,7 @@ fn use_layers(layers: Layers, file: Option<&Path>) -> PathBuf {
         let shared = Arc::new(layers);
         LAYERED.store(true, std::sync::atomic::Ordering::Relaxed);
         rustyac_content::vfs::mount(Some(shared.clone()));
-        crate::files::mount(Some(Arc::new(LayeredFiles(shared))));
+        crate::files::mount(Some(Arc::new(crate::files::LayeredFiles(shared))));
     }
     root
 }

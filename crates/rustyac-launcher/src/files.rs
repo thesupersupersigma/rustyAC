@@ -7,9 +7,12 @@
 //! launcher's own (`\` or `/`, any case, as Windows takes them).
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use rustyac_content::imports::{Layers, Remembered};
 
 pub trait Files: Send + Sync {
     fn read(&self, path: &str) -> Result<Vec<u8>>;
@@ -118,6 +121,115 @@ impl Files for Disk {
         found(path, |p| std::fs::metadata(p)).map(|m| m.len()).ok()
     }
 }
+
+// ---------------------------------------------------------------- the game's files laid over (Task W5)
+
+/// The launcher's files laid over the game's (a zip, extra cars and tracks): reads under the
+/// game's folder go through the layers, everything else (the player's folder) is the disk.
+pub struct LayeredFiles(pub Arc<Layers>);
+
+impl LayeredFiles {
+    fn under(&self, path: &str) -> Option<PathBuf> {
+        let p = PathBuf::from(path.replace('\\', "/"));
+        p.starts_with(&self.0.root).then_some(p)
+    }
+}
+
+impl Files for LayeredFiles {
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        use rustyac_content::vfs::Vfs;
+        match self.under(path) {
+            Some(p) => self.0.read(&p).map(|b| b.to_vec()),
+            None => Disk.read(path),
+        }
+    }
+    fn write(&self, path: &str, bytes: &[u8]) -> std::io::Result<()> {
+        Disk.write(path, bytes)
+    }
+    fn is_file(&self, path: &str) -> bool {
+        use rustyac_content::vfs::Vfs;
+        self.under(path).map_or_else(|| Disk.is_file(path), |p| self.0.is_file(&p))
+    }
+    fn is_dir(&self, path: &str) -> bool {
+        use rustyac_content::vfs::Vfs;
+        self.under(path).map_or_else(|| Disk.is_dir(path), |p| self.0.is_dir(&p))
+    }
+    fn list(&self, folder: &str) -> std::io::Result<Vec<(String, bool)>> {
+        use rustyac_content::vfs::Vfs;
+        self.under(folder).map_or_else(|| Disk.list(folder), |p| self.0.read_dir(&p))
+    }
+    fn create_dir_all(&self, path: &str) -> std::io::Result<()> {
+        Disk.create_dir_all(path)
+    }
+    fn rename(&self, from: &str, to: &str) -> std::io::Result<()> {
+        Disk.rename(from, to)
+    }
+    fn remove_file(&self, path: &str) -> std::io::Result<()> {
+        Disk.remove_file(path)
+    }
+    fn remove_dir_all(&self, path: &str) -> std::io::Result<()> {
+        Disk.remove_dir_all(path)
+    }
+    fn modified(&self, path: &str) -> Option<std::time::SystemTime> {
+        // shortcut: a file inside a zip has no time here (zip times are not read); read them if the theme ever sorts the game's own files by date
+        self.under(path).map_or_else(|| Disk.modified(path), |_| None)
+    }
+    fn created(&self, path: &str) -> Option<std::time::SystemTime> {
+        self.under(path).map_or_else(|| Disk.created(path), |_| None)
+    }
+}
+
+/// The file that names the extra cars and tracks: `RUSTYAC_GAME_FILES` (a proof's own), else
+/// rustyAC's settings file ([`Remembered::file`]; never in a proof run, Task 46c).
+pub fn extras_file() -> Option<PathBuf> {
+    std::env::var_os("RUSTYAC_GAME_FILES").map(PathBuf::from).or_else(|| std::env::var_os("RUSTYAC_PROOF_RUN").is_none().then(Remembered::file).flatten())
+}
+
+/// The remembered file while extras are mounted: the game is given it (`RUSTYAC_GAME_FILES`).
+static GAME_FILES: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+pub fn game_files() -> Option<PathBuf> {
+    GAME_FILES.read().unwrap().clone()
+}
+
+/// Lays the remembered extra cars and tracks over the install at `root` for the launcher's reads
+/// (and names them for the game), or takes them away when there are none. Each extra with why it
+/// is left out ("": it is in); one that no longer opens (moved, deleted) is left out, not fatal.
+pub fn mount_extras(root: &Path) -> Vec<(PathBuf, String)> {
+    let file = extras_file();
+    let extra = file.as_deref().map(Remembered::load).unwrap_or_default().extra;
+    let status: Vec<(PathBuf, String)> = extra.iter().map(|p| (p.clone(), Layers::open(Some(root), std::slice::from_ref(p)).err().unwrap_or_default())).collect();
+    let good: Vec<PathBuf> = status.iter().filter(|s| s.1.is_empty()).map(|s| s.0.clone()).collect();
+    let layers = (!good.is_empty()).then(|| Layers::open(Some(root), &good).ok()).flatten();
+    *GAME_FILES.write().unwrap() = layers.as_ref().and(file);
+    match layers {
+        Some(layers) => {
+            let shared = Arc::new(layers);
+            rustyac_content::vfs::mount(Some(shared.clone()));
+            mount(Some(Arc::new(LayeredFiles(shared))));
+        }
+        None => {
+            rustyac_content::vfs::mount(None);
+            mount(None);
+        }
+    }
+    status
+}
+
+/// Adds (`Some`) or removes (`index`) an extra in the remembered file, then mounts again.
+pub fn change_extras(root: &Path, add: Option<PathBuf>, remove: Option<usize>) -> std::io::Result<Vec<(PathBuf, String)>> {
+    let file = extras_file().ok_or_else(|| Error::other("rustyAC's settings folder is unknown (no APPDATA)"))?;
+    let mut r = Remembered::load(&file);
+    if let Some(p) = add.filter(|p| !r.extra.contains(p)) {
+        r.extra.push(p);
+    }
+    if let Some(i) = remove.filter(|&i| i < r.extra.len()) {
+        r.extra.remove(i);
+    }
+    r.save(&file)?;
+    Ok(mount_extras(root))
+}
+
 
 static MOUNTED: RwLock<Option<Arc<dyn Files>>> = RwLock::new(None);
 
