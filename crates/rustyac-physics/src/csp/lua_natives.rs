@@ -575,7 +575,7 @@ fn build2d(keys: &[[f32; 2]], values: &[f32]) -> Grid {
         (ys[i], xs[i], vs[i]) = (y, x, v);
     }
     // CSP divides by zero on a table of one value (n1 = 0), so does this (a panic, an abort)
-    let n1 = (0..n - 1).take_while(|&k| { let d = (ys[k] - ys[0]).abs(); d < 1e-40_f32 || d.is_nan() }).count();
+    let n1 = (0..n - 1).take_while(|&k| { let d = (ys[k] - ys[0]).abs(); (d as f64) < 1e-40 || d.is_nan() }).count();
     let ny = n / n1;
     let (y, x): (Vec<f32>, Vec<f32>) = ((0..ny).map(|i| ys[n1 * i]).collect(), xs[..n1].to_vec());
     let (ny1, nx1) = (ny - 1, n1 - 1);
