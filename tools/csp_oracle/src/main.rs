@@ -1727,8 +1727,11 @@ unsafe fn finish_car(dll: usize, car: *mut u8, guid: usize) {
     put(avatar, 0x1168, car);
     put(slot, 0xe0, guid as u32); // the list index
     // the script runner (+0x84c110) takes its car from the car context's +0xa0 (+0xf32f00 builds a fresh slot
-    // when unset); in the game the car list holds that same object, so each car's own context gets its list slot
-    put(context as *mut u8, 0xa0, slot as usize);
+    // when unset); in the game the car list holds that same object, so each car's own context gets its list slot.
+    // Only with CSP_ORACLE_FRAMES: without the script stand-ins the row drive faults on it (dwrite+0x8cc6d3)
+    if std::env::var_os("CSP_ORACLE_FRAMES").is_some() {
+        put(context as *mut u8, 0xa0, slot as usize);
+    }
     let mode = read::<usize>(dll + 0x282_1078);
     if read::<u32>(context) == 1 && read::<usize>(context + 0x10) != 0 && (mode == 0 || read::<u8>(mode + 27) != 9) {
         put(context as *mut u8, 0x10, 0usize);
